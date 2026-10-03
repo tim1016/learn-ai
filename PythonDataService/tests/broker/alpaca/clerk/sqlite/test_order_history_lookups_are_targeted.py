@@ -15,7 +15,7 @@ the row instead.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,30 @@ async def _an_order_with_history(repo: ClerkSqliteRepository) -> str:
     )
     assert submission.order_ref is not None
     return submission.order_ref
+
+
+def _plan_of_what_it_runs(repo: ClerkSqliteRepository, run: Callable[[], object], *, reading: str) -> str:
+    """How SQLite plans the one statement ``run`` executes that reads ``reading``.
+
+    The statement is taken from the connection as the method under test runs
+    it, so the plan is that method's own and not a copy of its SQL.
+    """
+    conn = repo._conn
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        run()
+    finally:
+        conn.set_trace_callback(None)
+    (statement,) = [sql for sql in statements if reading in sql]
+    return " | ".join(str(row[-1]) for row in conn.execute("EXPLAIN QUERY PLAN " + statement))
+
+
+def _tables_scanned(plan: str) -> list[str]:
+    """The steps of a plan that read a whole table; a pass over a subquery's own rows is not one."""
+    return [
+        step for step in plan.split(" | ") if step.startswith("SCAN") and "subquery" not in step.lower()
+    ]
 
 
 @pytest.mark.asyncio
@@ -207,11 +231,65 @@ async def test_counting_a_kind_reads_no_row_into_python_and_stops_at_its_bound(
 async def test_the_count_walks_the_orders_index(repo: ClerkSqliteRepository) -> None:
     """The count is bounded by the order's own index, never a scan of the ledger (#2854)."""
     order_ref = await _an_order_with_history(repo)
-    plan = repo._conn.execute(
-        "EXPLAIN QUERY PLAN SELECT COUNT(*) AS matches FROM (SELECT 1 FROM custody_transitions "
-        "WHERE order_ref = ? AND transition_kind = ? LIMIT ?)",
-        (order_ref, "ORDER_SUBMIT_REQUESTED", 4),
-    ).fetchall()
-    detail = " ".join(str(row[-1]) for row in plan)
 
-    assert "ix_custody_transitions_order_ref" in detail, detail
+    plan = _plan_of_what_it_runs(
+        repo,
+        lambda: repo.count_order_transitions(
+            order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED", at_most=4
+        ),
+        reading="FROM custody_transitions",
+    )
+
+    assert "ix_custody_transitions_order_ref" in plan, plan
+    assert "SCAN custody_transitions" not in plan, plan
+
+
+def test_the_failed_exit_lookup_worklist_starts_from_the_days_failed_exits_and_scans_nothing(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Every pass that reads a symbol as drifted lists the failed EXITs' closing orders to look up (#2854).
+
+    The list scanned the whole ledger for the one transition that names an
+    order's symbol. It now starts from the operations updated inside the
+    lookup window, off their own index, and reaches each order and its
+    transitions through theirs: no table is scanned.
+    """
+    plan = _plan_of_what_it_runs(
+        repo,
+        lambda: repo.failed_exit_orders_unproven_at_broker(
+            symbols=frozenset({"SPY"}),
+            exclude_client_order_ids=frozenset({"an-order-in-the-open-snapshot"}),
+            rested_since_ms=1_700_000_000_000 - 30_000,
+            failed_since_ms=1_700_000_000_000 - 24 * 60 * 60 * 1000,
+            limit=5,
+        ),
+        reading="AS last_lookup_ms",
+    )
+
+    for index in (
+        "ix_effect_operations_updated_at",
+        "ix_orders_effect_operation_id",
+        "ix_custody_transitions_order_ref",
+        "ix_custody_transitions_strategy_sequence",
+    ):
+        assert index in plan, plan
+    assert _tables_scanned(plan) == [], plan
+
+
+def test_the_failed_enter_lookup_worklist_reaches_the_ledger_through_each_orders_index(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The failed ENTERs' list is read the same way (#2348): the ledger is reached order by order, never scanned."""
+    plan = _plan_of_what_it_runs(
+        repo,
+        lambda: repo.terminal_entry_orders_unproven_at_broker(
+            symbols=frozenset({"SPY"}),
+            exclude_client_order_ids=frozenset({"an-order-in-the-open-snapshot"}),
+            rested_since_ms=1_700_000_000_000 - 30_000,
+            limit=5,
+        ),
+        reading="AS last_lookup_ms",
+    )
+
+    assert "ix_orders_effect_operation_id" in plan and "ix_custody_transitions_order_ref" in plan, plan
+    assert _tables_scanned(plan) == [], plan
