@@ -559,9 +559,10 @@ async def _lake_statuses(row: StudyRow) -> dict[date, str] | str:
 
 async def plan_step_charts(study_id: str) -> dict[str, Any]:
     """The Plan step's charts for a locked study: its frozen windows, search space, workload, trade minimums and data coverage."""
-    row = await get_row(study_id)
-    rows_by_step = await with_connection(repo.evaluation_rows_by_step, row.id)
-    proof = await with_connection(repo.consumed_outside_evaluator, row.id, "proof")
+    snapshot = await with_connection(repo.workload_snapshot, study_id)
+    if snapshot is None:
+        raise _not_found(study_id)
+    row, rows_by_step, proof = snapshot
     return plan_charts(row, used=runs_used(rows_by_step, proof), statuses=await _lake_statuses(row))
 
 
