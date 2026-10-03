@@ -774,6 +774,16 @@ def failed_exit_orders_unproven_at_broker(
     broker itself ended is proven; both are excluded. Narrowed to ``symbols``
     (matched on the immutable ``EXIT_REDUCING_ORDER_CREATED`` facts).
 
+    An order leaves the list for good once an operator discharged its
+    strategy's position in its symbol (``ATTRIBUTED_RESIDUE_DISCHARGED``)
+    after the order was created. The discharge wrote off whatever the order
+    did to that position, so a fill found afterwards would be credited on top
+    of it and leave the strategy attributed a position the broker does not
+    hold. A discharge is refused while any operation on the symbol is
+    unfinished, so one recorded after the order's creation was made after its
+    EXIT failed. Read from the transitions themselves, so it holds for a
+    discharge made before this list existed.
+
     Only an EXIT that failed at or after ``failed_since_ms`` is listed, so an
     old one is not asked about for ever. The rotation is
     :func:`terminal_entry_orders_unproven_at_broker`'s: least recently looked
@@ -803,6 +813,11 @@ def failed_exit_orders_unproven_at_broker(
         f"({_TERMINAL_BROKER_STATES_SQL})) "
         "AND EXISTS (SELECT 1 FROM custody_transitions s WHERE s.order_ref = o.order_ref "
         "AND s.transition_kind = 'ORDER_SUBMIT_REQUESTED') "
+        "AND NOT EXISTS (SELECT 1 FROM custody_transitions d "
+        "WHERE d.strategy_instance_id = e.strategy_instance_id AND d.sequence > t.sequence "
+        "AND d.transition_kind = 'ATTRIBUTED_RESIDUE_DISCHARGED' "
+        "AND UPPER(json_extract(d.facts_json, '$.symbol')) "
+        "= UPPER(json_extract(t.facts_json, '$.symbol'))) "
         f"AND UPPER(json_extract(t.facts_json, '$.symbol')) IN ({symbol_marks}) "
         f"{exclude_clause}"
         ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "

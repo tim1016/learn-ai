@@ -188,15 +188,25 @@ class _NoReconciler:
         raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
 
 
-async def _held_position(repo: ClerkSqliteRepository, *, side: str = "buy") -> str:
+async def _held_position(
+    repo: ClerkSqliteRepository,
+    *,
+    side: str = "buy",
+    decision_id: str = "enter-1",
+    lifecycle_run_id: str = RUN_ID,
+    execution_id: str = "exec-1",
+) -> str:
     """Filled 10-share SPY entry with an exact execution slice -> attributed +10
-    (or -10 for ``side="sell"``)."""
+    (or -10 for ``side="sell"``).
+
+    A bot's later entry, in a later run, names its own decision, run and execution.
+    """
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
-        decision_id="enter-1",
-        lifecycle_run_id=RUN_ID,
+        decision_id=decision_id,
+        lifecycle_run_id=lifecycle_run_id,
         leg=_leg(quantity=10, side=side),
         trade=_FakeTrade(),
     )
@@ -213,9 +223,9 @@ async def _held_position(repo: ClerkSqliteRepository, *, side: str = "buy") -> s
         client_order_id=submission.order_ref,
         event=BrokerOrderEvent(
             event_type="fill", occurred_at_ms=1_700_000_000_600,
-            price=100, quantity=10, execution_id="exec-1",
+            price=100, quantity=10, execution_id=execution_id,
         ),
-        event_key="execution:exec-1",
+        event_key=f"execution:{execution_id}",
         order=filled,
         recovery_source=None,
         recovery_window_limit=None,

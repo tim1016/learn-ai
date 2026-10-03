@@ -22,11 +22,14 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reconcile as reconcile_module
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import flatten_send_refusal
 from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_BROKER
+from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionError
+from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import POSITION_DRIFT_REASON_CODE
@@ -46,11 +49,12 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
     _exit_not_flat,
     _flatten,
-    _flatten_exit,
     _stopped_bot_offered_its_flatten,
 )
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
+    ACCOUNT_ID,
     SID,
+    _held_position,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
 )
 
@@ -58,6 +62,8 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 REST_BETWEEN_LOOKUPS_MS = 30_000
 # How long after its EXIT failed a closing order is still looked up.
 A_DAY_MS = 24 * 60 * 60 * 1000
+# The run a bot is started in again after its first was stopped.
+A_LATER_RUN_ID = "run-crashed-bot-2"
 
 
 def _position_drift(repo: ClerkSqliteRepository) -> dict | None:
@@ -82,22 +88,43 @@ async def _one_pass(repo: ClerkSqliteRepository, facade: SqliteAlpacaClerkFacade
     return await facade.reconcile_account(trigger="AUTOMATIC")
 
 
+def _closing_orders(repo: ClerkSqliteRepository) -> list[OrderResource]:
+    """Every closing order the bot's EXITs have created."""
+    return [order for order in repo.orders_for_strategy(SID) if order.role == "REDUCING"]
+
+
 async def _a_flatten_failed_after_its_own_order_filled_unseen(
     repo: ClerkSqliteRepository, clock: _TestClock
 ) -> tuple[_Alpaca, SqliteAlpacaClerkFacade, str]:
+    """A stopped bot's first Flatten, failed as :func:`_its_flatten_fails_after_its_own_order_fills_unseen` fails it.
+
+    Returns Alpaca, the account's facade and the failed EXIT.
+    """
+    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    closing = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, current_context)
+    return alpaca, facade, closing.effect_operation_id
+
+
+async def _its_flatten_fails_after_its_own_order_fills_unseen(
+    repo: ClerkSqliteRepository,
+    alpaca: _Alpaca,
+    facade: SqliteAlpacaClerkFacade,
+    current_context: Callable[[], Awaitable[RecoveryPolicyContext]],
+) -> OrderResource:
     """An operator's Flatten told "nothing was sent" while its own lost order sold the position.
 
     Its send's answer is lost and the order reaches Alpaca. Two passes on,
     the account read made to send it again lists it, so it is held. It then
     fills: no open order, no shares, and an exact lookup that still answers
     absent. The next pass's check before the send fails the EXIT. Returns
-    Alpaca, the account's facade and the failed EXIT.
+    the closing order, which names its failed EXIT.
     """
-    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
-    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    earlier = {order.order_ref for order in _closing_orders(repo)}
+    sent_before = len(alpaca.sent)
     await _flatten(facade, current_context)
-    exit_id = _flatten_exit(repo)
-    closing = _closing_order(repo)
+    (closing,) = [order for order in _closing_orders(repo) if order.order_ref not in earlier]
+    exit_id = closing.effect_operation_id
     alpaca.lists_among_its_open_orders(closing.client_order_id)
 
     async def the_exit_is_driven() -> object:
@@ -117,9 +144,9 @@ async def _a_flatten_failed_after_its_own_order_filled_unseen(
     refusal = flatten_send_refusal(repo, exit_id)
     assert refusal is not None and refusal.reason_code == FLATTEN_NOT_COVERED_AT_BROKER
     assert "nothing was sent" in refusal.explanation
-    assert len(alpaca.sent) == 1
+    assert len(alpaca.sent) == sent_before + 1
     assert repo.position(SID, "SPY") == 10
-    return alpaca, facade, exit_id
+    return closing
 
 
 async def test_a_failed_flattens_own_order_that_filled_unseen_is_found_and_credited_once(
@@ -171,6 +198,102 @@ async def test_a_failed_flattens_own_order_that_filled_unseen_is_found_and_credi
     assert len(repo.fills_for_order(closing.order_ref)) == 1
     assert alpaca.looked_up.count(closing.client_order_id) == looked_up_when_found
     assert len(alpaca.sent) == 1
+
+
+async def test_a_closing_order_whose_position_the_operator_discharged_is_not_credited_a_second_time(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The regression (#2854 review): a discharge wrote the position off, and the lookup then sold it again on paper.
+
+    The Flatten failed after its lost order filled unseen: the bot holds 10
+    on the Clerk's record and Alpaca holds none. The operator discharges the
+    10, which is the remedy for exactly that, and the account reads clean.
+    The closing order is still unproven, and stayed on the lookup worklist
+    for its day. So when the symbol next read as drifted -- for any reason --
+    and Alpaca's lookup answered, its SELL 10 was credited on top of the
+    discharge: the bot was attributed -10 against a flat account.
+
+    The discharge already accounted for whatever that order did, so the order
+    is asked about no more: the bot stays at 0 and no fill is credited.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca, facade, _exit_id = await _a_flatten_failed_after_its_own_order_filled_unseen(repo, clock)
+    closing = _closing_order(repo)
+    assert (await _one_pass(repo, facade)).verdict == "position_drift"
+
+    await facade.discharge_attributed_residue(
+        strategy_instance_id=SID, symbol="SPY", reason="Checked Alpaca: SPY is flat."
+    )
+
+    assert repo.position(SID, "SPY") == 0
+    assert (await _one_pass(repo, facade)).verdict == "clean"
+
+    # Later the symbol reads as drifted for a reason of its own -- shares no bot
+    # holds -- and Alpaca's lookup now answers for the order that filled.
+    alpaca.holds = 3.0
+    alpaca.answers_its_lookup(closing.client_order_id)
+    _walk_clock_to(repo, repo.clock() + REST_BETWEEN_LOOKUPS_MS)
+    looked_up_before = alpaca.looked_up.count(closing.client_order_id)
+    drifted = [await _one_pass(repo, facade) for _ in range(3)]
+
+    assert [result.verdict for result in drifted] == ["position_drift"] * 3
+    assert repo.position(SID, "SPY") == 0
+    assert repo.fills_for_order(closing.order_ref) == []
+    assert alpaca.looked_up.count(closing.client_order_id) == looked_up_before
+
+    alpaca.holds = 0.0
+    assert (await _one_pass(repo, facade)).verdict == "clean"
+    assert repo.position(SID, "SPY") == 0
+    assert len(alpaca.sent) == 1
+
+
+async def test_a_discharge_does_not_end_the_lookups_of_a_closing_order_created_after_it(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A discharge accounts for the orders that came before it, and for no later one.
+
+    The bot's Flatten failed after its lost order filled unseen, and the
+    operator discharged the position. The bot runs again, buys 10 and is
+    stopped, and its next Flatten fails the same way. That second closing
+    order is looked up as any other is: its fill is found and credited once,
+    and the first order's, which the discharge wrote off, is not credited.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered", "arrives_unanswered"))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    discharged = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, current_context)
+    await facade.discharge_attributed_residue(
+        strategy_instance_id=SID, symbol="SPY", reason="Checked Alpaca: SPY is flat."
+    )
+    assert (await _one_pass(repo, facade)).verdict == "clean"
+
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    await _held_position(
+        repo, decision_id="enter-2", lifecycle_run_id=A_LATER_RUN_ID, execution_id="exec-2"
+    )
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=A_LATER_RUN_ID, operator_reason="operator_stop",
+    )
+    alpaca.holds = 10.0
+    _walk_clock_to(repo, repo.clock() + 5_000)
+    assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+    later = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, current_context)
+
+    alpaca.answers_its_lookup(discharged.client_order_id)
+    alpaca.answers_its_lookup(later.client_order_id)
+    asked_before = len(alpaca.looked_up)
+    found = await _one_pass(repo, facade)
+
+    assert found.verdict == "clean"
+    assert repo.position(SID, "SPY") == 0
+    assert repo.fills_for_order(discharged.order_ref) == []
+    assert [(fill["side"], fill["qty"], fill["price"]) for fill in repo.fills_for_order(later.order_ref)] == [
+        ("SELL", 10.0, 100.0)
+    ]
+    asked = alpaca.looked_up[asked_before:]
+    assert later.client_order_id in asked and discharged.client_order_id not in asked
+    assert len(alpaca.sent) == 2
 
 
 async def test_a_failed_exits_closing_order_is_not_looked_up_for_ever(
