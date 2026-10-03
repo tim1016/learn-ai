@@ -3,7 +3,7 @@ import { ButtonModule } from 'primeng/button';
 
 import { extractServerMessage } from '../broker/operation-error';
 import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
-import { CHART_GUIDES, type GoldenSearchChartId } from './charts/golden-search-chart-guides';
+import type { GoldenSearchChartId } from './charts/golden-search-chart-guides';
 import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
@@ -168,7 +168,7 @@ export class GoldenSearchCompareStepComponent {
   /** A summary row's evidence: one of this step's tabs or charts, or the study step that holds it. */
   protected follow(link: SummaryLink): void {
     if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
-    else if (link.kind === 'chart' && isChartId(link.target)) this.panels().find((panel) => panel.chart() === link.target)?.focusHeading();
+    else if (link.kind === 'chart' && isOwnPanel(link.target)) this.panels().find((panel) => panel.chart() === link.target)?.focusHeading();
     else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
   }
 
@@ -195,8 +195,11 @@ function isEvidenceTab(target: string): target is EvidenceTab {
   return EVIDENCE_TABS.some((tab) => tab.id === target);
 }
 
-function isChartId(target: string): target is GoldenSearchChartId {
-  return Object.hasOwn(CHART_GUIDES, target);
+/** The chart panels this step's own template holds, which a summary link can focus. */
+const OWN_PANELS: readonly GoldenSearchChartId[] = ['side-by-side', 'neighbor-tornado', 'cost-stress'];
+
+function isOwnPanel(target: string): target is GoldenSearchChartId {
+  return OWN_PANELS.some((chart) => chart === target);
 }
 
 function isStudyStep(target: string): target is StudyStep {

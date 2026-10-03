@@ -273,7 +273,8 @@ function loses(row: NeighborRow | null): boolean {
 function sideText(row: NeighborRow | null): string {
   if (row === null) return NOT_RECORDED;
   if ((row.status === 'tested' || row.status === 'center') && row.metrics?.status === 'completed') return signedPercentText(row.metrics.total_return_pct);
-  return NEIGHBOR_STATUS[row.status];
+  // The center row keeps status `center` even when the candidate's own run failed.
+  return NEIGHBOR_STATUS[row.metrics?.status === 'failed' ? 'failed' : row.status];
 }
 
 /**
