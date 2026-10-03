@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { signedCentsText } from './golden-search-display';
 import type { CandidateTrade } from './golden-search.types';
 
 interface TradeRow {
@@ -13,8 +14,6 @@ interface TradeRow {
 }
 
 const PRICE = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
-/** A trade's P&L to the cent: a one-share trade often moves less than a dollar. */
-const SIGNED_CENTS = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: 'exceptZero' });
 
 /**
  * The decisions behind a candidate's result (#2696): each development trade
@@ -42,7 +41,8 @@ export class GoldenSearchTradesComponent {
         key: `${trade.entry_ms}|${trade.exit_ms}`,
         trade,
         rsi: typeof rsi === 'number' ? rsi.toFixed(1) : null,
-        pnlText: SIGNED_CENTS.format(trade.pnl),
+        // To the cent: a one-share trade often moves less than a dollar.
+        pnlText: signedCentsText(trade.pnl),
         loss: trade.pnl < 0,
       };
     }),

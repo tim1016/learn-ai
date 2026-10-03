@@ -3,14 +3,16 @@
 Formula (candidate run detail): from a detail run's session-close daily
 equity ``E_t`` and starting capital ``C``: cumulative return
 ``E_t / C − 1``; drawdown ``E_t / max_{s<=t} E_s − 1``; performance by month
-as ``evidence.monthly_results``. Everything else here re-shapes stored
-stage output and attaches the closed copy of ``guidance``; no number is
-computed in the browser.
+as ``evidence.monthly_results``; the development run's concentration curve
+as ``concentration.concentration_curve``. Everything else here re-shapes
+stored stage output and attaches the closed copy of ``guidance``; no number
+is computed in the browser.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Compare
   candidates and weaknesses"; the series math is
   ``app/research/golden_search/evidence.py``.
 Canonical implementation: this file (shapes); evidence.py (series math);
-  compare_measures.py (the Compare charts' measures).
+  compare_measures.py (the Compare charts' measures); concentration.py (the
+  concentration curve).
 Validated against: tests/research/golden_search/test_views.py.
 """
 
@@ -22,6 +24,12 @@ from typing import Any
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
+from app.research.golden_search.concentration import (
+    NOT_MEASURED,
+    concentration_curve,
+    missing_curve,
+    stored_concentration,
+)
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
@@ -348,6 +356,7 @@ def evidence_view(
                 "stress": [stress_view(result, item["development_metrics"]) for result in item["stress"]],
                 "trades_per_year": trades_per_year(item["development_metrics"], years),
                 "stress_tally": stress_tally(item["stress"]),
+                "concentration": stored_concentration(item),
                 "edge_hits": list(item["edge_hits"]),
                 "guidance": candidate_guidance(
                     key=item["key"],
@@ -452,11 +461,21 @@ def run_detail(record: EvaluationRecord) -> dict[str, Any]:
 
 
 def candidate_detail(
-    key: str, point: Mapping[str, Any], *, development: EvaluationRecord | None, exam: EvaluationRecord | None
+    stored: Mapping[str, Any], *, development: EvaluationRecord | None, exam: EvaluationRecord | None, commission_per_order: float
 ) -> dict[str, Any]:
+    """The stored candidate's development run, with its concentration curve, and its final-test run."""
+    run = None
+    if development is not None:
+        # Held back with the stored measure for evidence recorded before the evidence stage measured it.
+        curve = (
+            concentration_curve(metrics_of(development), development.detail_json, commission_per_order=commission_per_order)
+            if "concentration" in stored
+            else missing_curve(NOT_MEASURED)
+        )
+        run = {**run_detail(development), "concentration_curve": curve}
     return {
-        "candidate_key": key,
-        "point": dict(point),
-        "development": None if development is None else run_detail(development),
-        "exam": None if exam is None else run_detail(exam),
+        "candidate_key": stored["key"],
+        "point": dict(stored["point"]),
+        "development": run,
+        "exam": None if exam is None else {**run_detail(exam), "concentration_curve": None},
     }

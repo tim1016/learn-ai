@@ -322,6 +322,8 @@ class StudyEvaluator:
     new_runs: int = 0
     cache_hits: int = 0
     _warmups: dict[int, date] = field(default_factory=dict)
+    # Each detail run's bounded evidence, by evaluation key, as recorded or read back from the cache.
+    _details: dict[str, Mapping[str, Any] | None] = field(default_factory=dict)
 
     def warmup_for(self, window_start_ms: int) -> date:
         if window_start_ms not in self._warmups:
@@ -376,6 +378,8 @@ class StudyEvaluator:
                 assert reservation.record is not None
                 self.cache_hits += reservation.counted_as_cache_hit
                 results[key] = repo.metrics_of(reservation.record)
+                if detail:
+                    self._details[key] = reservation.record.detail_json
                 self.on_evaluated(self.new_runs + self.cache_hits)
                 continue
             try:
@@ -402,8 +406,15 @@ class StudyEvaluator:
             )
             self.new_runs += 1
             results[key] = outcome.metrics
+            if detail:
+                self._details[key] = outcome.detail
             self.on_evaluated(self.new_runs + self.cache_hits)
         return [results[key] for key, _, _ in keyed]
+
+    def detail_of(self, point: Mapping[str, Any], *, window: Window) -> Mapping[str, Any] | None:
+        """The detail payload of ``point``'s base-scenario detail run over ``window`` that this evaluator evaluated; None without one."""
+        digest = hash_point(self.strategy_key, dict(point))
+        return self._details.get(evaluation_key(self.context_digest, digest, window, BASE_SCENARIO, True))
 
     def _run(self, request: EvaluationRequest) -> EvaluationResult:
         try:

@@ -165,11 +165,18 @@ export class GoldenSearchCompareStepComponent {
     return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.select_candidate ?? 'This study cannot lock a candidate now.' };
   });
 
-  /** A summary row's evidence: one of this step's tabs or charts, or the study step that holds it. */
+  /** A summary row's evidence: one of this step's tabs or charts (in its own grid or inside a tab), or the study step that holds it. */
   protected follow(link: SummaryLink): void {
     if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
-    else if (link.kind === 'chart' && isOwnPanel(link.target)) this.panels().find((panel) => panel.chart() === link.target)?.focusHeading();
+    else if (link.kind === 'chart') this.showChart(link.target);
     else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
+  }
+
+  private showChart(target: string): void {
+    const chart = LINKED_CHARTS.find((linked) => linked.chart === target);
+    if (chart === undefined) return;
+    if (chart.home === 'step') this.panels().find((panel) => panel.chart() === chart.chart)?.focusHeading();
+    else this.tabs()?.showChart(chart.chart, chart.home);
   }
 
   protected retryDetails(): void {
@@ -195,12 +202,14 @@ function isEvidenceTab(target: string): target is EvidenceTab {
   return EVIDENCE_TABS.some((tab) => tab.id === target);
 }
 
-/** The chart panels this step's own template holds, which a summary link can focus. */
-const OWN_PANELS: readonly GoldenSearchChartId[] = ['side-by-side', 'neighbor-tornado', 'cost-stress'];
-
-function isOwnPanel(target: string): target is GoldenSearchChartId {
-  return OWN_PANELS.some((chart) => chart === target);
-}
+/** Each chart a summary row links to, and where it lives: this step's own grid, or an evidence tab. */
+const LINKED_CHARTS: readonly { readonly chart: GoldenSearchChartId; readonly home: 'step' | EvidenceTab }[] = [
+  { chart: 'side-by-side', home: 'step' },
+  { chart: 'neighbor-tornado', home: 'step' },
+  { chart: 'cost-stress', home: 'step' },
+  { chart: 'concentration-curve', home: 'months' },
+  { chart: 'without-best', home: 'months' },
+];
 
 function isStudyStep(target: string): target is StudyStep {
   return STUDY_STEPS.some((step) => step.id === target);

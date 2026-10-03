@@ -5,9 +5,9 @@ link to the evidence it summarizes. A result the study did not record is
 ``missing``, never a pass, and a row computes no new statistic: it classifies
 what the stages already stored against the frozen plan's own rules (the
 development and recent trade floors, the procedure's verdict, the neighbor and
-stress runs, the final interval's recorded exposure). No stage measures how
-much of a result comes from a few trades or months yet, so that row is always
-``missing``.
+stress runs, the concentration measure, the final interval's recorded
+exposure). A study whose evidence ran before the evidence stage measured
+concentration reads ``missing`` there: its evidence is not rewritten.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.compare_measures import completed_net
+from app.research.golden_search.concentration import stored_concentration
+from app.research.golden_search.guidance import usd
 
 Status = Literal["meets", "concern", "missing"]
 Window = tuple[int, int]
@@ -42,15 +44,16 @@ def decision_summaries(
     evidence = results.get("evidence")
     if evidence is None:
         return []
-    shared = [_test_over_time(results.get("validation")), _concentration(), _final_exposure(results.get("exam"), exposure)]
+    test_over_time = _test_over_time(results.get("validation"))
+    final_exposure = _final_exposure(results.get("exam"), exposure)
     summaries = []
     for item in evidence["candidates"]:
         rows = [_development_activity(item, floors.at(development))]
         if item["key"] == "recent":
             rows.append(_recent_activity(results.get("recent"), floors))
         if item["key"] != "incumbent":
-            rows.append(shared[0])
-        rows += [_neighbors(item), _stress(item), *shared[1:]]
+            rows.append(test_over_time)
+        rows += [_neighbors(item), _stress(item), _concentration(item), final_exposure]
         summaries.append({"candidate_key": item["key"], "rows": rows})
     return summaries
 
@@ -141,14 +144,19 @@ def _stress(item: Mapping[str, Any]) -> dict[str, Any]:
     return _row("stress", label, "meets", "Every stressed run still makes money.", link)
 
 
-def _concentration() -> dict[str, Any]:
-    return _row(
-        "concentration",
-        "Concentration",
-        "missing",
-        "Not measured: no stage yet checks how much of the result comes from a few trades or months.",
-        ("tab", "months"),
-    )
+def _concentration(item: Mapping[str, Any]) -> dict[str, Any]:
+    label, link = "Concentration", ("chart", "without-best")
+    measure = stored_concentration(item)
+    if measure["status"] == "missing":
+        return _row("concentration", label, "missing", str(measure["reason"]), link)
+    count = len(measure["best_trades"])
+    without = [
+        (f"its best month ({usd(measure['without_best_month'])})", measure["without_best_month"]),
+        (f"its best {'trade' if count == 1 else f'{count} trades'} ({usd(measure['without_best_trades'])})", measure["without_best_trades"]),
+    ]
+    if measure["status"] == "concern":
+        return _row("concentration", label, "concern", f"Not profitable without {' or '.join(text for text, net in without if net <= 0)}.", link)
+    return _row("concentration", label, "meets", f"Still profitable without {' or '.join(text for text, _ in without)}.", link)
 
 
 def _final_exposure(exam: Mapping[str, Any] | None, preview: Mapping[str, Any] | None) -> dict[str, Any]:

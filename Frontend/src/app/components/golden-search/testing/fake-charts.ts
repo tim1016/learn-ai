@@ -25,6 +25,7 @@ export const FAKE_CHART_THEME: ChartTheme = {
   stepBelow: '#4fc3f7',
   stepAbove: '#2962ff',
   stressed: '#26a69a',
+  withoutBest: '#26a69a',
   candidates: { incumbent: '#b2b5be', all_period: '#2962ff', recent: '#ffb300' },
 };
 

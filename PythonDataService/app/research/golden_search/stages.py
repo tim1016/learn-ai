@@ -28,6 +28,7 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import EXAM_EVALUATIONS, PROOF_EVALUATIONS
+from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
     EvaluationCapability,
@@ -487,6 +488,10 @@ def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) ->
                 "neighbors_audited": audit,
                 "stress": [{"scenario": item.scenario, "label": item.label, "metrics": _metrics_dict(item.metrics)} for item in stress],
                 "edge_hits": list(edges),
+                # Informs the decision summary only (ADR 0074 decision 11).
+                "concentration": concentration(
+                    metrics, evaluator.detail_of(point, window=ctx.development), commission_per_order=ctx.protocol.execution.commission_per_order
+                ),
             }
         )
     advice = recommendation(evidences, verdict, ctx.floors.policy(ctx.development))

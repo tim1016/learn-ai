@@ -1,7 +1,14 @@
 import type { HighlightTarget } from './golden-search-chart-spec';
 
 /** Every chart with a guide section; the id is that section's anchor in the Golden Search guide. */
-export type GoldenSearchChartId = 'candidate-cards' | 'equity-and-fall' | 'side-by-side' | 'neighbor-tornado' | 'cost-stress';
+export type GoldenSearchChartId =
+  | 'candidate-cards'
+  | 'equity-and-fall'
+  | 'side-by-side'
+  | 'neighbor-tornado'
+  | 'cost-stress'
+  | 'concentration-curve'
+  | 'without-best';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -76,6 +83,26 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Each bar below reruns the same settings with one harsher cost or fill.', target: { kind: 'series', group: 'stress' } },
       { text: 'Find the stressed bar with the lowest return. That stress is the one the result is most sensitive to.', target: { kind: 'point', group: 'stress', at: 'lowest' } },
       { text: 'A bar left of 0% marks a stress that turns the result into a loss.', target: null },
+    ],
+  },
+  'concentration-curve': {
+    title: 'Profit concentration curve',
+    question: 'With the trades counted best first, how fast does the net profit pile up?',
+    steps: [
+      { text: 'A steep climb at the left means the best few trades carry much of the profit.', target: { kind: 'series', group: 'curve' } },
+      { text: 'The marked dot shows the share of net profit the best 5% of trades make.', target: { kind: 'series', group: 'best' } },
+      { text: 'The peak is where the winning trades end. Its height is all the winners added together.', target: null },
+      { text: 'The fall from the peak back to 100% is all the losing trades added together.', target: { kind: 'series', group: 'curve' } },
+    ],
+  },
+  'without-best': {
+    title: 'Without its best',
+    question: 'Does the result stay profitable without its best month or its best 5% of trades?',
+    steps: [
+      { text: 'Start from the top bar: the development net profit with every trade.', target: { kind: 'series', group: 'all' } },
+      { text: 'Compare the middle bar with it. The gap is what the best month made.', target: { kind: 'series', group: 'month' } },
+      { text: 'Compare the bottom bar with it. The gap is what the best 5% of trades made together.', target: { kind: 'series', group: 'trades' } },
+      { text: 'A bar at $0 or less turns red. That is the concern the decision summary reports.', target: null },
     ],
   },
 };

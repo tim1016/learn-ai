@@ -18432,6 +18432,28 @@
         "title": "GoldenSearchActivityYear",
         "type": "object"
       },
+      "GoldenSearchBestMonth": {
+        "additionalProperties": false,
+        "properties": {
+          "month_start_ms": {
+            "description": "The month's start at ET midnight.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Month Start Ms",
+            "type": "integer"
+          },
+          "net_profit": {
+            "title": "Net Profit",
+            "type": "number"
+          }
+        },
+        "required": [
+          "month_start_ms",
+          "net_profit"
+        ],
+        "title": "GoldenSearchBestMonth",
+        "type": "object"
+      },
       "GoldenSearchCandidateDetail": {
         "additionalProperties": false,
         "properties": {
@@ -18748,6 +18770,132 @@
         "title": "GoldenSearchCommandRequest",
         "type": "object"
       },
+      "GoldenSearchConcentrationCurve": {
+        "additionalProperties": false,
+        "properties": {
+          "best_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many trades make the best 5%, rounded up; null when no curve is drawn.",
+            "title": "Best Count"
+          },
+          "points": {
+            "description": "From no trades to every trade; empty when no curve is drawn.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchCurvePoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why no curve is drawn; null when it is.",
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "points",
+          "best_count",
+          "reason"
+        ],
+        "title": "GoldenSearchConcentrationCurve",
+        "type": "object"
+      },
+      "GoldenSearchConcentrationMeasured": {
+        "additionalProperties": false,
+        "description": "How much of the development result rests on its best month or its best trades (#2815). It never gates.",
+        "properties": {
+          "best_month": {
+            "$ref": "#/components/schemas/GoldenSearchBestMonth"
+          },
+          "best_trades": {
+            "description": "The best 5% of the trades, rounded up, best first.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchRankedTrade"
+            },
+            "title": "Best Trades",
+            "type": "array"
+          },
+          "best_trades_net_profit": {
+            "description": "The best trades' net profit together.",
+            "title": "Best Trades Net Profit",
+            "type": "number"
+          },
+          "net_profit": {
+            "description": "The development run's net profit.",
+            "title": "Net Profit",
+            "type": "number"
+          },
+          "status": {
+            "description": "Concern when either result without its best is $0 or less.",
+            "enum": [
+              "meets",
+              "concern"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          },
+          "without_best_month": {
+            "description": "Net profit less the best month's, to the cent.",
+            "title": "Without Best Month",
+            "type": "number"
+          },
+          "without_best_trades": {
+            "description": "Net profit less the best trades', to the cent.",
+            "title": "Without Best Trades",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "net_profit",
+          "trades",
+          "best_month",
+          "without_best_month",
+          "best_trades",
+          "best_trades_net_profit",
+          "without_best_trades"
+        ],
+        "title": "GoldenSearchConcentrationMeasured",
+        "type": "object"
+      },
+      "GoldenSearchConcentrationMissing": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Why nothing was measured, including evidence recorded before the evidence stage measured it.",
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "missing",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "GoldenSearchConcentrationMissing",
+        "type": "object"
+      },
       "GoldenSearchConstraint": {
         "additionalProperties": false,
         "properties": {
@@ -18852,6 +19000,39 @@
           "value"
         ],
         "title": "GoldenSearchCumulativeReturnPoint",
+        "type": "object"
+      },
+      "GoldenSearchCurvePoint": {
+        "additionalProperties": false,
+        "properties": {
+          "net_profit": {
+            "description": "Their running net profit.",
+            "title": "Net Profit",
+            "type": "number"
+          },
+          "share_of_profit": {
+            "description": "Their running net profit as a fraction of the run's.",
+            "title": "Share Of Profit",
+            "type": "number"
+          },
+          "share_of_trades": {
+            "description": "A fraction of all the run's trades.",
+            "title": "Share Of Trades",
+            "type": "number"
+          },
+          "trades": {
+            "description": "Trades counted so far, best first.",
+            "title": "Trades",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trades",
+          "share_of_trades",
+          "share_of_profit",
+          "net_profit"
+        ],
+        "title": "GoldenSearchCurvePoint",
         "type": "object"
       },
       "GoldenSearchDecision": {
@@ -19480,6 +19661,25 @@
       "GoldenSearchEvidenceCandidate": {
         "additionalProperties": false,
         "properties": {
+          "concentration": {
+            "discriminator": {
+              "mapping": {
+                "concern": "#/components/schemas/GoldenSearchConcentrationMeasured",
+                "meets": "#/components/schemas/GoldenSearchConcentrationMeasured",
+                "missing": "#/components/schemas/GoldenSearchConcentrationMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchConcentrationMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchConcentrationMissing"
+              }
+            ],
+            "title": "Concentration"
+          },
           "development_metrics": {
             "anyOf": [
               {
@@ -19610,6 +19810,7 @@
           "stress",
           "trades_per_year",
           "stress_tally",
+          "concentration",
           "edge_hits",
           "guidance",
           "flags",
@@ -21423,6 +21624,35 @@
         "title": "GoldenSearchQualificationView",
         "type": "object"
       },
+      "GoldenSearchRankedTrade": {
+        "additionalProperties": false,
+        "properties": {
+          "entry_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Entry Ms",
+            "type": "integer"
+          },
+          "exit_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Exit Ms",
+            "type": "integer"
+          },
+          "net_profit": {
+            "description": "The trade's P&L less its entry and exit commission.",
+            "title": "Net Profit",
+            "type": "number"
+          }
+        },
+        "required": [
+          "entry_ms",
+          "exit_ms",
+          "net_profit"
+        ],
+        "title": "GoldenSearchRankedTrade",
+        "type": "object"
+      },
       "GoldenSearchReceiptSummary": {
         "additionalProperties": false,
         "properties": {
@@ -21660,6 +21890,17 @@
       "GoldenSearchRunDetail": {
         "additionalProperties": false,
         "properties": {
+          "concentration_curve": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchConcentrationCurve"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The development run's; null on a final-test run."
+          },
           "cumulative_return": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchCumulativeReturnPoint"
@@ -21709,7 +21950,8 @@
           "daily_equity",
           "drawdown",
           "monthly",
-          "trades"
+          "trades",
+          "concentration_curve"
         ],
         "title": "GoldenSearchRunDetail",
         "type": "object"

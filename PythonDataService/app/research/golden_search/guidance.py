@@ -349,6 +349,11 @@ _FILL_MODE_COPY = {
 }
 
 
+def usd(value: float) -> str:
+    """Dollars and cents with the sign before the dollar sign (``-$12.50``)."""
+    return f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}"
+
+
 def costs_sentence(execution: ExecutionAssumptions) -> str:
     """Flat stated costs, never a historical broker fee schedule."""
     return (

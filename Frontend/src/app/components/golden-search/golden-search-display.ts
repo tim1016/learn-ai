@@ -143,6 +143,7 @@ const SIGNED_PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimu
 const PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const RATIO = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const SIGNED_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0, signDisplay: 'exceptZero' });
+const SIGNED_CENTS = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: 'exceptZero' });
 
 /** A server fraction as a signed percent (`0.087` → `+8.7%`); undefined reads "—", never zero. */
 export function signedPercentText(fraction: number | null | undefined): string {
@@ -162,6 +163,11 @@ export function ratioText(value: number | null | undefined): string {
 /** A dollar result with its sign (`+$186`, `−$92`). */
 export function signedUsdText(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : SIGNED_USD.format(value);
+}
+
+/** A dollar result to the cent with its sign (`+$0.40`, `−$92.15`): a trade, or a result judged at $0. */
+export function signedCentsText(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : SIGNED_CENTS.format(value);
 }
 
 /** A run's four comparison figures as text, and why they read "—" when its run failed. */

@@ -264,6 +264,11 @@ export type MonthlyResult = Schemas['GoldenSearchMonthlyResult'];
 export type CandidateTrade = Schemas['GoldenSearchTrade'];
 /** `value` is a fraction of starting capital. */
 export type CumulativeReturnPoint = Schemas['GoldenSearchCumulativeReturnPoint'];
+/** The development run's running share of net profit, trades best first; `reason` says why none is drawn. */
+export type ConcentrationCurve = Schemas['GoldenSearchConcentrationCurve'];
+/** The concentration measure the evidence stage stored (#2815), or why there is none — evidence recorded before it included. */
+export type Concentration = Schemas['GoldenSearchEvidenceCandidate']['concentration'];
+export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured'];
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */

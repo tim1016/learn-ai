@@ -154,19 +154,25 @@ def fake_detail(window: tuple[int, int], sharpe: float) -> dict[str, Any]:
     days = expected_sessions(et_date_at_ms(window[0]), et_date_at_ms(window[1] - 1))
     final = CAPITAL * (1.0 + sharpe / 100.0)
     daily = [[session_close_ms_utc(day), CAPITAL + (final - CAPITAL) * (index + 1) / len(days)] for index, day in enumerate(days)]
-    exit_ms = session_close_ms_utc(days[-1]) - 60_000
-    trade = {
-        "entry_ms": exit_ms - 3_600_000,
-        "exit_ms": exit_ms,
-        "entry_price": 500.0,
-        "exit_price": 501.0,
-        "quantity": 10,
-        "pnl": 10.0,
-        "pnl_pct": 0.002,
-        "indicators": {"ema5": 1.0, "ema10": 0.5, "rsi": 55.0},
-        "exit_reason": None,
-    }
-    return {"initial_cash": CAPITAL, "daily_equity": daily, "trades": [trade]}
+    # Two trades that add up to the run's net profit (1,000 x Sharpe at no commission), as the engine's do.
+    net = final - CAPITAL
+    trades = []
+    for index, share in enumerate((0.7, 0.3)):
+        exit_ms = session_close_ms_utc(days[-1 - index]) - 60_000
+        trades.append(
+            {
+                "entry_ms": exit_ms - 3_600_000,
+                "exit_ms": exit_ms,
+                "entry_price": 500.0,
+                "exit_price": 501.0,
+                "quantity": 10,
+                "pnl": net * share,
+                "pnl_pct": 0.002,
+                "indicators": {"ema5": 1.0, "ema10": 0.5, "rsi": 55.0},
+                "exit_reason": None,
+            }
+        )
+    return {"initial_cash": CAPITAL, "daily_equity": daily, "trades": trades[::-1]}
 
 
 # ── A fake of the approval workflow's interface ──────────────────────────
