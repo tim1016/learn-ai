@@ -290,7 +290,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Each small chart is one knob: its result at every value tried, every other knob held.', target: { kind: 'series', group: 'profile' } },
       { text: 'The blue dot is the value kept. Hollow dots fail a rule.', target: null },
-      { text: 'A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbours is not.', target: null },
+      { text: 'A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbors is not.', target: null },
       { text: 'Hover a dot to see what the other knobs were held at: for Zoom, their values when this knob was searched, not the final winner.', target: null },
     ],
   },

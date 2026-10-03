@@ -1,3 +1,4 @@
+import { DOCUMENT } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, contentChild, effect, ElementRef, inject, input, signal, untracked, viewChild } from '@angular/core';
 
 import { MarkdownDrawerService } from '../../../shared/markdown-drawer/markdown-drawer.service';
@@ -5,6 +6,9 @@ import { GoldenSearchChartComponent, reducedMotion } from './golden-search-chart
 import { CHART_GUIDES, type GoldenSearchChartId } from './golden-search-chart-guides';
 import { GoldenSearchReviewTour } from './golden-search-review-tour';
 import { GoldenSearchWalkthroughComponent } from './golden-search-walkthrough.component';
+
+/** How long a panel the review reached keeps its place while the charts above it finish drawing. */
+const SETTLE_MS = 2000;
 
 /**
  * A chart panel (#2821): the chart's title and the question it answers, the
@@ -31,6 +35,7 @@ export class GoldenSearchPanelComponent {
   private readonly drawer = inject(MarkdownDrawerService);
   private readonly review = inject(GoldenSearchReviewTour, { optional: true });
   private readonly element = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly document = inject(DOCUMENT);
   private readonly host = contentChild(GoldenSearchChartComponent);
   private readonly walkButton = viewChild.required<ElementRef<HTMLButtonElement>>('walk');
   private readonly heading = viewChild.required<ElementRef<HTMLHeadingElement>>('heading');
@@ -58,8 +63,19 @@ export class GoldenSearchPanelComponent {
       if (host !== undefined) untracked(() => host.highlight(step === null ? null : this.guide().steps[step].target));
     });
     // A panel the review reaches comes into view, including one that appears after the review got there (its read still loading).
-    effect(() => {
-      if (this.reviewed()) untracked(() => this.element.nativeElement.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' }));
+    // Charts above it may still be drawing, so it keeps its place while the page settles.
+    effect((onCleanup) => {
+      if (!this.reviewed()) return;
+      const host = this.element.nativeElement;
+      untracked(() => host.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' }));
+      if (typeof ResizeObserver === 'undefined') return;
+      const observer = new ResizeObserver(() => host.scrollIntoView({ block: 'start', behavior: 'auto' }));
+      observer.observe(this.document.body);
+      const settled = setTimeout(() => observer.disconnect(), SETTLE_MS);
+      onCleanup(() => {
+        clearTimeout(settled);
+        observer.disconnect();
+      });
     });
   }
 

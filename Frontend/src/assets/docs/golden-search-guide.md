@@ -7,7 +7,7 @@ This guide explains the charts on the Golden Search pages. For each chart it cov
 Every chart panel has two buttons:
 
 - **About this chart** opens this guide at that chart's section, in a drawer beside the live chart, so you can read and look at the same time.
-- **Walk me through it** steps through the chart's "How to read it" list on the chart itself. Each step lights up the part of the chart it talks about. Use Back and Next, or the arrow keys; Esc leaves the walkthrough.
+- **Walk me through it** steps through the chart's "How to read it" list on the chart itself. Where a step names a mark on the chart, that mark lights up. Use Back and Next, or the arrow keys; Esc leaves the walkthrough.
 
 **Review this study**, beside the step tabs, walks the reading path below on your own study: it opens each step in turn, brings the chart into view and asks the chart's question. It skips what the study has not reached yet: a step still ahead, the search path of a Grid search, and the final test before it has a result.
 
@@ -54,12 +54,18 @@ To review a study end to end, read these charts in this order, one question at e
 - **Net profit** and **net return**: a run's result after the study's commission and slippage, in dollars and as a share of its starting capital.
 - **Objective**: the measure the search ranks eligible runs by: Sharpe, unless the plan names another.
 - **Retention**: a fold's test Sharpe divided by its training Sharpe. See [Training against test Sharpe](#train-test-sharpe).
+- **Recent fit**: the same search run on only the last few months of the development period, when the plan asks for it.
 - **Run-up**: the data loaded before the development period so the indicators start warmed up. Nothing is judged on it.
 - **Session**: one trading day on the exchange calendar. Half-days count; weekends and holidays do not.
 - **Sharpe**: the engine's ratio of the average daily return to its spread, scaled to a year of 252 sessions, with no risk-free rate. It is not defined for fewer than two daily returns or returns that never vary.
 
 $$\text{Sharpe} = \frac{\text{mean of the daily returns}}{\text{standard deviation of the daily returns}} \times \sqrt{252}$$
 
+$$\text{daily return} = \frac{\text{equity at the day's last bar}}{\text{equity at the previous day's last bar}} - 1$$
+
+The first day is measured against the starting capital, and the standard deviation is the sample one.
+
+- **Starting point**: where a Zoom search starts, the plan's seed: often the current settings. When nothing meets the rules, the search keeps it.
 - **Trade minimum**, also called the trade floor: the trades a window must reach for its result to count. See [Trade minimums](#trade-minimums).
 - **Trading years**: a window's length in years, counted on the calendar: for each year, the window's sessions in it divided by all that year's sessions, added up.
 - **Worst fall**: the deepest drop from a peak in equity, as the engine measures it bar by bar. The charts' session-close fall lines can be shallower.
@@ -322,7 +328,7 @@ Hover a dot for its numbers and the values the other knobs were held at.
 
 1. Each small chart is one knob: its result at every value tried, every other knob held.
 2. The blue dot is the value kept. Hollow dots fail a rule.
-3. A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbours is not.
+3. A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbors is not.
 4. Hover a dot to see what the other knobs were held at: for Zoom, their values when this knob was searched, not the final winner.
 
 #### Good signs and warning signs
@@ -1089,7 +1095,7 @@ Hover a cell for its trade count, average and total net profit.
 
 #### Good signs and warning signs
 
-- Good: no strong pattern, or one that holds across several neighbouring cells with plenty of trades.
+- Good: no strong pattern, or one that holds across several neighboring cells with plenty of trades.
 - Warning: most cells grey. The development period has too few trades to say anything about timing.
 - Warning: one bright cell among grey and pale ones. Treat it as luck until more data says otherwise.
 

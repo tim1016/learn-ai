@@ -43,7 +43,7 @@ function monthTooltip(month: MonthlyResult, theme: ChartTheme): string {
         { label: 'Net return', values: [signedPercentText(month.return_fraction)] },
         { label: 'Trades closed', values: [String(month.trades)] },
       ],
-      notes: [`The month from ${monthFrom(month)} (ET). A trade counts in the month it exits.`, DEVELOPMENT_NOTE],
+      notes: [`The month from ${monthFrom(month)} (ET). Net profit is the change in equity, so a position open at a month end splits its profit; trades closed count in the month they exit.`, DEVELOPMENT_NOTE],
     },
     theme,
   );

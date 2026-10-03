@@ -1,4 +1,5 @@
-:host { display: grid; gap: var(--space-3); align-content: start; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); }
+// Scrolled into view (the study review), the panel stops clear of the app bar.
+:host { display: grid; gap: var(--space-3); align-content: start; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); scroll-margin-top: 72px; }
 p, h3 { margin: 0; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; }
 .titles { display: grid; gap: var(--space-1); min-width: 0; }
