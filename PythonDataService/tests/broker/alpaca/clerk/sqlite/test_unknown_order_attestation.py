@@ -19,6 +19,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from uuid import UUID, uuid5
 
 import pytest
 
@@ -60,7 +61,7 @@ from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
     UnknownOrderSettlementRefused,
     settle_unknown_exit_order,
 )
-from app.broker.contract.errors import BrokerError, BrokerUnavailable
+from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerPosition
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
@@ -100,6 +101,14 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 SETTLE = "settle_unknown_exit_order"
 OPERATOR = "ops-desk"
 ABSENT = OrderOutcomeAttestation(kind="absent")
+# Where this Alpaca's order ids come from: one UUID per client order id.
+_ALPACA_ORDER_IDS = UUID("6f1c2a0e-3b5d-4c7e-8f90-a1b2c3d4e5f6")
+# Alpaca order ids of orders that are not the bot's closing order.
+NO_SUCH_ORDER_ID = "0d9f3a52-7c1e-4b68-9f0a-2e4c6a8b0d1f"
+UNREADABLE_ORDER_ID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+BY_HAND_ORDER_ID = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+UNNAMED_ORDER_ID = "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e7f"
+ANOTHER_BOTS_ORDER_ID = "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f80"
 
 type _Context = Callable[[], Awaitable[object]]
 
@@ -118,6 +127,11 @@ class _AlpacaAccount(_Alpaca):
     its exact lookup by client order id does not show -- the state an
     operator who can see the order at Alpaca settles. ``by_broker_id`` states
     what any other id answers.
+
+    Alpaca names every order with a UUID, and the read by order id takes
+    nothing else: an id that is not one is refused before Alpaca is asked,
+    exactly as ``AlpacaTradingClient.get_order_by_broker_order_id`` refuses
+    it.
     """
 
     def __init__(
@@ -159,7 +173,14 @@ class _AlpacaAccount(_Alpaca):
         return await super().get_order_by_client_order_id(client_order_id)
 
 
+    def _alpaca_order_id(self, client_order_id: str) -> str:
+        return str(uuid5(_ALPACA_ORDER_IDS, client_order_id))
+
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        try:
+            UUID(order_id)
+        except ValueError as exc:
+            raise BrokerRequestInvalid(f"{order_id!r} is not an Alpaca order id.") from exc
         self.reads.append("by-id")
         stated = self.by_broker_id.get(order_id)
         if isinstance(stated, BrokerError):
@@ -639,31 +660,38 @@ async def test_an_order_that_ended_unfilled_at_alpaca_fails_its_exit_and_the_pos
 
 
 def _no_order_has_that_id(_alpaca: _AlpacaAccount, _ours: BrokerOrder) -> str:
-    return "no-such-order"
+    return NO_SUCH_ORDER_ID
 
 
 def _the_read_fails(alpaca: _AlpacaAccount, _ours: BrokerOrder) -> str:
-    alpaca.by_broker_id["unreadable"] = BrokerUnavailable("alpaca timed out")
-    return "unreadable"
+    alpaca.by_broker_id[UNREADABLE_ORDER_ID] = BrokerUnavailable("alpaca timed out")
+    return UNREADABLE_ORDER_ID
+
+
+def _alpaca_cannot_take_the_id(alpaca: _AlpacaAccount, _ours: BrokerOrder) -> str:
+    alpaca.by_broker_id[NO_SUCH_ORDER_ID] = BrokerRequestInvalid("order_id is invalid")
+    return NO_SUCH_ORDER_ID
 
 
 def _a_sell_placed_at_alpaca_by_hand(alpaca: _AlpacaAccount, ours: BrokerOrder) -> str:
-    alpaca.by_broker_id["by-hand"] = ours.model_copy(
-        update={"order_id": "by-hand", "client_order_id": "f3b1c2d4-alpaca-generated"}
+    alpaca.by_broker_id[BY_HAND_ORDER_ID] = ours.model_copy(
+        update={"order_id": BY_HAND_ORDER_ID, "client_order_id": "f3b1c2d4-alpaca-generated"}
     )
-    return "by-hand"
+    return BY_HAND_ORDER_ID
 
 
 def _an_order_that_names_no_client_order_id(alpaca: _AlpacaAccount, ours: BrokerOrder) -> str:
-    alpaca.by_broker_id["unnamed"] = ours.model_copy(update={"order_id": "unnamed", "client_order_id": None})
-    return "unnamed"
+    alpaca.by_broker_id[UNNAMED_ORDER_ID] = ours.model_copy(
+        update={"order_id": UNNAMED_ORDER_ID, "client_order_id": None}
+    )
+    return UNNAMED_ORDER_ID
 
 
 def _another_bots_order(alpaca: _AlpacaAccount, ours: BrokerOrder) -> str:
-    alpaca.by_broker_id["another-bots"] = ours.model_copy(
-        update={"order_id": "another-bots", "client_order_id": "learn-ai/another-bot/v1:close"}
+    alpaca.by_broker_id[ANOTHER_BOTS_ORDER_ID] = ours.model_copy(
+        update={"order_id": ANOTHER_BOTS_ORDER_ID, "client_order_id": "learn-ai/another-bot/v1:close"}
     )
-    return "another-bots"
+    return ANOTHER_BOTS_ORDER_ID
 
 
 def _our_id_on_another_quantity(alpaca: _AlpacaAccount, ours: BrokerOrder) -> str:
@@ -697,6 +725,7 @@ def _our_order_filled_at_no_price(alpaca: _AlpacaAccount, ours: BrokerOrder) -> 
     ("alpaca_answers", "reason_code"),
     [
         pytest.param(_no_order_has_that_id, "NO_SUCH_BROKER_ORDER", id="no-order-under-that-id"),
+        pytest.param(_alpaca_cannot_take_the_id, "NO_SUCH_BROKER_ORDER", id="alpaca-cannot-take-the-id"),
         pytest.param(_the_read_fails, "BROKER_UNREADABLE", id="the-read-fails"),
         pytest.param(_a_sell_placed_at_alpaca_by_hand, "NOT_THIS_ORDER", id="a-sell-placed-by-hand"),
         pytest.param(_an_order_that_names_no_client_order_id, "NOT_THIS_ORDER", id="no-client-order-id"),
@@ -744,6 +773,32 @@ async def test_an_alpaca_order_that_is_not_provably_this_order_is_refused_and_no
     assert _exit_state(repo, exit_id) == "unknown"
     assert repo.position(SID, "SPY") == 10.0
     assert len(alpaca.sent) == 1
+
+
+@pytest.mark.parametrize(
+    "not_an_order_id",
+    [
+        "learn-ai/spy-bot/v1:close-1",
+        "0D9F3A52-7C1E-4B68-9F0A-2E4C6A8B0D1F",
+        "0d9f3a527c1e4b689f0a2e4c6a8b0d1f",
+        " 0d9f3a52-7c1e-4b68-9f0a-2e4c6a8b0d1f",
+        "",
+    ],
+    ids=["a-client-order-id", "upper-case", "no-hyphens", "a-space-before-it", "empty"],
+)
+def test_an_attestation_names_an_alpaca_order_id_only_as_alpaca_spells_it(not_an_order_id: str) -> None:
+    """An Alpaca order id is a UUID, lower case with hyphens; the request boundary brings any other spelling to it.
+
+    The Clerk checks the order Alpaca returns carries the id it asked for,
+    and records that id on the order, so no other spelling is ever carried
+    past the boundary.
+    """
+    with pytest.raises(ValueError, match="names its Alpaca order id"):
+        OrderOutcomeAttestation(kind="exists", broker_order_id=not_an_order_id)
+
+    assert OrderOutcomeAttestation(kind="exists", broker_order_id=NO_SUCH_ORDER_ID).broker_order_id == (
+        NO_SUCH_ORDER_ID
+    )
 
 
 # ── The claim, the commit's own re-read, and replay ──────────────────────────
@@ -912,7 +967,7 @@ async def test_the_same_settlement_asked_for_again_returns_its_receipt_and_does_
     # Another attestation of the same order is not that settlement: its token is spent.
     with pytest.raises(StaleRecoveryTokenError):
         await _settle(
-            facade, current_context, OrderOutcomeAttestation(kind="exists", broker_order_id="some-id"),
+            facade, current_context, OrderOutcomeAttestation(kind="exists", broker_order_id=NO_SUCH_ORDER_ID),
             presented=presented,
         )
     assert repo.custody_transitions() == ledger

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
@@ -526,12 +527,22 @@ class UnknownOrderAttestationRequest(BaseModel):
     ``absent``: Alpaca has no such order. ``exists``: it is the order under
     ``broker_order_id``, the id Alpaca shows for it. The Clerk reads Alpaca
     itself before it acts on either; an attestation is never taken on trust.
+
+    An Alpaca order id is a UUID, and anything else is refused here: the
+    order's client order id, pasted by mistake, names no order Alpaca could
+    be asked for. It is taken in any spelling of a UUID and carried in the
+    one Alpaca itself answers with, lower case with hyphens.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: SettlementAttestation
-    broker_order_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"\S")
+    broker_order_id: UUID | None = None
+
+    @field_validator("broker_order_id", mode="before")
+    @classmethod
+    def _an_id_pasted_with_spaces_around_it_is_still_that_id(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _an_order_shown_is_named_by_its_id(self) -> UnknownOrderAttestationRequest:
@@ -544,7 +555,7 @@ class UnknownOrderAttestationRequest(BaseModel):
     def to_attestation(self) -> OrderOutcomeAttestation:
         return OrderOutcomeAttestation(
             kind=self.kind,
-            broker_order_id=None if self.broker_order_id is None else self.broker_order_id.strip(),
+            broker_order_id=None if self.broker_order_id is None else str(self.broker_order_id),
         )
 
 

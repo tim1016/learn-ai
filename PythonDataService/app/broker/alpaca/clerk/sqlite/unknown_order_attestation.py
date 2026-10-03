@@ -60,6 +60,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
+from uuid import UUID
 
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
     broker_order_in_flight,
@@ -95,7 +96,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     POSITION_DRIFT_REASON_CODE,
     PositionDriftCause,
 )
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerRequestInvalid
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.utils.et_words import et_when_words
@@ -129,10 +130,27 @@ class OrderOutcomeAttestation:
     broker_order_id: str | None = None
 
     def __post_init__(self) -> None:
-        if self.kind == "exists" and not (self.broker_order_id or "").strip():
-            raise ValueError("An attestation that Alpaca shows the order names its Alpaca order id")
+        if self.kind == "exists" and not _is_alpaca_order_id(self.broker_order_id):
+            raise ValueError(
+                "An attestation that Alpaca shows the order names its Alpaca order id: a UUID, "
+                "lower case with hyphens, as Alpaca answers with it"
+            )
         if self.kind == "absent" and self.broker_order_id is not None:
             raise ValueError("An attestation that Alpaca has no such order names no Alpaca order id")
+
+
+def _is_alpaca_order_id(broker_order_id: str | None) -> bool:
+    """Whether ``broker_order_id`` is a UUID as Alpaca spells an order id.
+
+    The spelling matters: the Clerk checks that the order Alpaca returns
+    carries the id it asked for, and records that id on the order.
+    """
+    if broker_order_id is None:
+        return False
+    try:
+        return str(UUID(broker_order_id)) == broker_order_id
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -313,7 +331,7 @@ async def _attest(
                 repo,
                 strategy_instance_id=strategy_instance_id,
                 presented=presented,
-                observed=await _read_order(broker, attestation.broker_order_id.strip()),
+                observed=await _read_order(broker, attestation.broker_order_id),
                 observed_at_ms=repo.clock(),
                 commit=commit,
             )
@@ -730,9 +748,10 @@ def _settled(
 async def _read_order(broker: ClaimedBrokerIO, broker_order_id: str) -> BrokerOrder:
     """The order Alpaca has under ``broker_order_id``, read under the claim; refuses when it has none."""
     observed = await broker.observe_broker_order(broker_order_id)
-    if isinstance(observed, BrokerError):
+    # An id Alpaca could not take as an order id names no order it has.
+    if isinstance(observed, BrokerError) and not isinstance(observed, BrokerRequestInvalid):
         raise _broker_unreadable(observed)
-    if observed is None:
+    if not isinstance(observed, BrokerOrder):
         raise UnknownOrderSettlementRefused(
             "NO_SUCH_BROKER_ORDER",
             f"Alpaca has no order with the id {broker_order_id!r}. Check the id at Alpaca. "

@@ -439,7 +439,7 @@ async def test_a_draining_lane_routes_the_settling_of_an_uncertain_order_with_it
             "action_id": "settle_unknown_exit_order",
             "revision": 1,
             "concurrency_token": "tok",
-            "attestation": {"kind": "exists", "broker_order_id": "alpaca-order-1"},
+            "attestation": {"kind": "exists", "broker_order_id": "61e69015-8549-4bfd-b9c3-01e75843f47d"},
         }
 
         await _route(
@@ -450,8 +450,8 @@ async def test_a_draining_lane_routes_the_settling_of_an_uncertain_order_with_it
         assert delivery.bodies == [{**settle, "idempotency_key": "settle-1"}]
         admitted = PanelQuiesceActionRequest.model_validate(delivery.bodies[0])
         assert admitted.attestation is not None
-        assert (admitted.attestation.kind, admitted.attestation.broker_order_id) == (
-            "exists", "alpaca-order-1",
+        assert (admitted.attestation.kind, str(admitted.attestation.broker_order_id)) == (
+            "exists", "61e69015-8549-4bfd-b9c3-01e75843f47d",
         )
         await close_fleet_lane(boot)
     finally:

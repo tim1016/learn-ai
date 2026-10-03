@@ -24056,6 +24056,11 @@ export interface components {
          *     ``absent``: Alpaca has no such order. ``exists``: it is the order under
          *     ``broker_order_id``, the id Alpaca shows for it. The Clerk reads Alpaca
          *     itself before it acts on either; an attestation is never taken on trust.
+         *
+         *     An Alpaca order id is a UUID, and anything else is refused here: the
+         *     order's client order id, pasted by mistake, names no order Alpaca could
+         *     be asked for. It is taken in any spelling of a UUID and carried in the
+         *     one Alpaca itself answers with, lower case with hyphens.
          */
         UnknownOrderAttestationRequest: {
             /** Broker Order Id */

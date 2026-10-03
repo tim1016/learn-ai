@@ -195,13 +195,17 @@ class _Alpaca(_Account):
         # What happens, once, while the account's positions are next read.
         self.while_positions_are_read: Callable[[], Awaitable[None]] | None = None
 
+    def _alpaca_order_id(self, client_order_id: str) -> str:
+        """The order id Alpaca gives the order sent under ``client_order_id``."""
+        return f"alpaca-{client_order_id}"
+
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.sent.append(_Sent(client_order_id, leg, self._clock()))
         self.reads.append("submit")
         if client_order_id in self._has:
             raise ALPACA_HAS_THIS_CLIENT_ORDER_ID.as_the_clerk_receives_it()
         order = safe_flatten._broker_order(
-            client_order_id, order_id=f"alpaca-{client_order_id}", status="new",
+            client_order_id, order_id=self._alpaca_order_id(client_order_id), status="new",
             side=leg.side, quantity=leg.quantity,
         )
         if not self._fates:
@@ -261,7 +265,8 @@ class _Alpaca(_Account):
     def now_has(self, client_order_id: str) -> None:
         """Alpaca has a working order under this id after all, and every read shows it."""
         self._has[client_order_id] = safe_flatten._broker_order(
-            client_order_id, order_id=f"alpaca-{client_order_id}", status="new", side="sell", quantity=10.0,
+            client_order_id, order_id=self._alpaca_order_id(client_order_id), status="new", side="sell",
+            quantity=10.0,
         )
         self.shows(client_order_id)
 
