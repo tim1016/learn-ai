@@ -219,6 +219,14 @@ def fence_fills_on_terminal_enters(
     recorded at its current effective quantity is answered, so a fence a
     flatten cleared stays cleared until the order fills further.
 
+    An entry whose fills an operator's discharge wrote off is not fenced
+    (#2854): each was credited before the discharge, or recorded without
+    credit after it (``ClerkSqliteRepository.append_fill``), so the bot holds
+    none of it and the fence would tell the operator it does. A fill credited
+    after the discharge is a position the bot holds, and is fenced like any
+    other. Which it was is read from the fills' own records
+    (``reads.fills_written_off_by_residue_discharge``).
+
     Caller must hold the Clerk's intake lock (the raise is a read-merge-write).
     """
     for candidate_ref, strategy_instance_id in repo.terminal_entry_orders_with_fills(
@@ -233,6 +241,10 @@ def fence_fills_on_terminal_enters(
         ):
             continue
         symbol = entry_order_symbol(repo, candidate_ref)
+        if repo.fills_written_off_by_residue_discharge(
+            order_ref=candidate_ref, strategy_instance_id=strategy_instance_id, symbol=symbol
+        ):
+            continue
         outcome = raise_failed_enter_filled_uncertainty(
             repo,
             strategy_instance_id=strategy_instance_id,
@@ -353,7 +365,9 @@ def fold_order_evidence(
             avg_price=order.filled_avg_price,
             is_correction=False,
         )
-        repo.append_transition(
+        # Recorded either way; a total is never credited once the position
+        # was discharged after this order was created (#2854).
+        repo.append_fill(
             TransitionInput(
                 strategy_instance_id=effect.strategy_instance_id,
                 run_id=effect.run_id,
@@ -368,7 +382,8 @@ def fold_order_evidence(
                 clerk_observed_at_ms=repo.clock(),
                 summary_code="ORDER_FILL_OBSERVED",
                 facts_json=fill_facts.to_facts_json(),
-            )
+            ),
+            symbol=order.symbol,
         )
 
     if credit_only:
