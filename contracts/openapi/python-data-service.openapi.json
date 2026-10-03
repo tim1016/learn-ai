@@ -19371,6 +19371,146 @@
         "title": "GoldenSearchDrawdownPoint",
         "type": "object"
       },
+      "GoldenSearchEntryRsiMeasured": {
+        "additionalProperties": false,
+        "properties": {
+          "bands": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchRsiBand"
+            },
+            "title": "Bands",
+            "type": "array"
+          },
+          "gate_high": {
+            "title": "Gate High",
+            "type": "number"
+          },
+          "gate_low": {
+            "title": "Gate Low",
+            "type": "number"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          },
+          "unbanded": {
+            "description": "Trades with no RSI recorded at entry or one outside the gates.",
+            "title": "Unbanded",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "gate_low",
+          "gate_high",
+          "bands",
+          "unbanded"
+        ],
+        "title": "GoldenSearchEntryRsiMeasured",
+        "type": "object"
+      },
+      "GoldenSearchEntryRsiMissing": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "missing",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "GoldenSearchEntryRsiMissing",
+        "type": "object"
+      },
+      "GoldenSearchEntryTimeCell": {
+        "additionalProperties": false,
+        "properties": {
+          "half_hour": {
+            "description": "Index into the half hours.",
+            "title": "Half Hour",
+            "type": "integer"
+          },
+          "mean_net_profit": {
+            "title": "Mean Net Profit",
+            "type": "number"
+          },
+          "too_few": {
+            "description": "Fewer trades than the minimum, so its average means little.",
+            "title": "Too Few",
+            "type": "boolean"
+          },
+          "total_net_profit": {
+            "title": "Total Net Profit",
+            "type": "number"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          },
+          "weekday": {
+            "description": "Index into the weekdays.",
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "weekday",
+          "half_hour",
+          "trades",
+          "mean_net_profit",
+          "total_net_profit",
+          "too_few"
+        ],
+        "title": "GoldenSearchEntryTimeCell",
+        "type": "object"
+      },
+      "GoldenSearchEntryTimes": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "description": "Only the cells a trade entered in.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchEntryTimeCell"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "half_hours": {
+            "description": "The columns: the ET half hours the sessions cover, as HH:MM.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Half Hours",
+            "type": "array"
+          },
+          "min_trades": {
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "weekdays": {
+            "description": "The rows: ET weekdays the sessions hold, Monday first.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Weekdays",
+            "type": "array"
+          }
+        },
+        "required": [
+          "weekdays",
+          "half_hours",
+          "min_trades",
+          "cells"
+        ],
+        "title": "GoldenSearchEntryTimes",
+        "type": "object"
+      },
       "GoldenSearchEquityPoint": {
         "additionalProperties": false,
         "properties": {
@@ -20237,6 +20377,79 @@
         "title": "GoldenSearchGuidance",
         "type": "object"
       },
+      "GoldenSearchHistogram": {
+        "additionalProperties": false,
+        "properties": {
+          "bin_width": {
+            "description": "0 when every trade nets the same.",
+            "title": "Bin Width",
+            "type": "number"
+          },
+          "bins": {
+            "description": "From the lowest to the highest, with $0 as an edge; empty bins between are kept.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchHistogramBin"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "rule": {
+            "description": "What set the width: Freedman\u2013Diaconis; Sturges when the middle half of the trades net the same; the bin cap; one bin when every trade does.",
+            "enum": [
+              "freedman_diaconis",
+              "sturges",
+              "capped",
+              "single"
+            ],
+            "title": "Rule",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bin_width",
+          "rule",
+          "bins"
+        ],
+        "title": "GoldenSearchHistogram",
+        "type": "object"
+      },
+      "GoldenSearchHistogramBin": {
+        "additionalProperties": false,
+        "properties": {
+          "high": {
+            "description": "Exclusive, except for a single bin of trades that all net the same.",
+            "title": "High",
+            "type": "number"
+          },
+          "losses": {
+            "description": "Trades in the bin that netted less than $0.",
+            "title": "Losses",
+            "type": "integer"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          },
+          "wins": {
+            "description": "Trades in the bin that netted more than $0.",
+            "title": "Wins",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "trades",
+          "wins",
+          "losses"
+        ],
+        "title": "GoldenSearchHistogramBin",
+        "type": "object"
+      },
       "GoldenSearchImportanceScale": {
         "additionalProperties": false,
         "description": "How important each knob is to its owner; the more important, the earlier the search moves it.",
@@ -20749,6 +20962,13 @@
       "GoldenSearchMonthlyResult": {
         "additionalProperties": false,
         "properties": {
+          "month": {
+            "description": "The month's ET calendar month, 1 for January.",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Month",
+            "type": "integer"
+          },
           "month_start_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -20773,10 +20993,17 @@
           "trades": {
             "title": "Trades",
             "type": "integer"
+          },
+          "year": {
+            "description": "The month's ET calendar year.",
+            "title": "Year",
+            "type": "integer"
           }
         },
         "required": [
           "month_start_ms",
+          "year",
+          "month",
           "net_profit",
           "return_fraction",
           "trades"
@@ -21887,6 +22114,44 @@
         "title": "GoldenSearchResults",
         "type": "object"
       },
+      "GoldenSearchRsiBand": {
+        "additionalProperties": false,
+        "properties": {
+          "high": {
+            "description": "Exclusive, except for the last band, which ends at the upper gate.",
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "mean_net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a band no trade entered in.",
+            "title": "Mean Net Profit"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "trades",
+          "mean_net_profit"
+        ],
+        "title": "GoldenSearchRsiBand",
+        "type": "object"
+      },
       "GoldenSearchRunDetail": {
         "additionalProperties": false,
         "properties": {
@@ -21932,12 +22197,31 @@
             "title": "Monthly",
             "type": "array"
           },
-          "trades": {
-            "items": {
-              "$ref": "#/components/schemas/GoldenSearchTrade"
-            },
-            "title": "Trades",
-            "type": "array"
+          "trade_charts": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "measured": "#/components/schemas/GoldenSearchTradeChartsMeasured",
+                    "missing": "#/components/schemas/GoldenSearchTradeChartsMissing"
+                  },
+                  "propertyName": "status"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/GoldenSearchTradeChartsMeasured"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GoldenSearchTradeChartsMissing"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The development run's; null on a final-test run.",
+            "title": "Trade Charts"
           },
           "window": {
             "$ref": "#/components/schemas/GoldenSearchWindow"
@@ -21950,8 +22234,8 @@
           "daily_equity",
           "drawdown",
           "monthly",
-          "trades",
-          "concentration_curve"
+          "concentration_curve",
+          "trade_charts"
         ],
         "title": "GoldenSearchRunDetail",
         "type": "object"
@@ -23045,9 +23329,116 @@
         "title": "GoldenSearchSummaryRow",
         "type": "object"
       },
-      "GoldenSearchTrade": {
+      "GoldenSearchTradeChartsMeasured": {
         "additionalProperties": false,
         "properties": {
+          "bar_span_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The strategy's decision bar, in ms (a day or longer means one bar per session); null when hold times are not counted.",
+            "title": "Bar Span Ms"
+          },
+          "entry_rsi": {
+            "discriminator": {
+              "mapping": {
+                "measured": "#/components/schemas/GoldenSearchEntryRsiMeasured",
+                "missing": "#/components/schemas/GoldenSearchEntryRsiMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchEntryRsiMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchEntryRsiMissing"
+              }
+            ],
+            "title": "Entry Rsi"
+          },
+          "entry_times": {
+            "$ref": "#/components/schemas/GoldenSearchEntryTimes"
+          },
+          "histogram": {
+            "$ref": "#/components/schemas/GoldenSearchHistogram"
+          },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why hold times are not counted; null when they are.",
+            "title": "Hold Reason"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          },
+          "trades": {
+            "description": "In exit order.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchTradeRecord"
+            },
+            "title": "Trades",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "bar_span_ms",
+          "hold_reason",
+          "trades",
+          "histogram",
+          "entry_rsi",
+          "entry_times"
+        ],
+        "title": "GoldenSearchTradeChartsMeasured",
+        "type": "object"
+      },
+      "GoldenSearchTradeChartsMissing": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "missing",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "GoldenSearchTradeChartsMissing",
+        "type": "object"
+      },
+      "GoldenSearchTradeRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "bars_held": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Decision bars that closed after the entry and by the exit, on the trading calendar; null when hold times are not counted.",
+            "title": "Bars Held"
+          },
           "entry_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -23057,6 +23448,26 @@
           "entry_price": {
             "title": "Entry Price",
             "type": "number"
+          },
+          "entry_rsi": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RSI the strategy recorded when it decided to enter; null when it recorded none.",
+            "title": "Entry Rsi"
+          },
+          "exit_kind": {
+            "enum": [
+              "strategy",
+              "window_end"
+            ],
+            "title": "Exit Kind",
+            "type": "string"
           },
           "exit_ms": {
             "maximum": 253402300799999.0,
@@ -23069,42 +23480,27 @@
             "type": "number"
           },
           "exit_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exit Reason"
+            "title": "Exit Reason",
+            "type": "string"
           },
-          "indicators": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Indicators",
-            "type": "object"
+          "net_profit": {
+            "description": "P&L before fees less the entry and exit commission.",
+            "title": "Net Profit",
+            "type": "number"
           },
           "pnl": {
             "description": "Price change times filled quantity, before fees.",
             "title": "Pnl",
             "type": "number"
           },
-          "pnl_pct": {
-            "title": "Pnl Pct",
-            "type": "number"
-          },
           "quantity": {
             "title": "Quantity",
             "type": "integer"
+          },
+          "running_net_profit": {
+            "description": "Net profit of this trade and every trade that exited before it.",
+            "title": "Running Net Profit",
+            "type": "number"
           }
         },
         "required": [
@@ -23114,11 +23510,14 @@
           "exit_price",
           "quantity",
           "pnl",
-          "pnl_pct",
-          "indicators",
+          "net_profit",
+          "running_net_profit",
+          "bars_held",
+          "entry_rsi",
+          "exit_kind",
           "exit_reason"
         ],
-        "title": "GoldenSearchTrade",
+        "title": "GoldenSearchTradeRecord",
         "type": "object"
       },
       "GoldenSearchValidationFold": {

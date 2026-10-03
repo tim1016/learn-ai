@@ -3,7 +3,7 @@ import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, seriesIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import type { CandidateRow } from './golden-search-compare';
-import { knobsByName, metricTexts, percentText, ratioText, signedPercentText } from './golden-search-display';
+import { DEVELOPMENT_NOTE, knobsByName, metricTexts, percentText, ratioText, signedPercentText } from './golden-search-display';
 import type { CandidateKey, CumulativeReturnPoint, EvidenceCandidate, EvidenceCellStatus, Metrics, NeighborRow, StrategyCapability, StressResult } from './golden-search.types';
 
 /**
@@ -15,7 +15,6 @@ import type { CandidateKey, CumulativeReturnPoint, EvidenceCandidate, EvidenceCe
  * out of the drawing (`'-'`) and reads "not recorded", never zero.
  */
 
-const DEVELOPMENT = 'Development data, used for choosing.';
 
 export const NEIGHBOR_STATUS: Readonly<Record<EvidenceCellStatus, string>> = {
   center: 'This candidate',
@@ -57,7 +56,7 @@ export function sparklineSpec(key: CandidateKey, label: string, points: readonly
             const index = dataIndexOf(params);
             if (index === null) return '';
             const rows = [{ label, swatch: { color, dashed: false }, values: [signedPercentText(values[index])] }];
-            return tooltipHtml({ title: `${dates[index]} · at the session close`, columns: ['Return'], rows, notes: [DEVELOPMENT] }, theme);
+            return tooltipHtml({ title: `${dates[index]} · at the session close`, columns: ['Return'], rows, notes: [DEVELOPMENT_NOTE] }, theme);
           },
         },
         xAxis: { type: 'category', data: dates, show: false, boundaryGap: false },
@@ -207,7 +206,7 @@ function sideBySideOption(rows: readonly CandidateRow[], featured: CandidateKey,
           const value = measure.value(row) === null ? NOT_RECORDED : cellText(measure, row);
           return { label: row.candidate.label, swatch: { color: theme.candidates[row.key], dashed: false }, values: [value] };
         });
-        return tooltipHtml({ title: measure.label, columns: ['Value'], rows: lines, notes: [measure.note, DEVELOPMENT] }, theme);
+        return tooltipHtml({ title: measure.label, columns: ['Value'], rows: lines, notes: [measure.note, DEVELOPMENT_NOTE] }, theme);
       },
     },
     xAxis: MEASURES.map((measure, i) => ({
@@ -399,7 +398,7 @@ function tornadoTooltip(side: KnobSides, theme: ChartTheme): string {
       title: `${side.label} · one step either side`,
       columns: ['Value', 'Net return', 'Change'],
       rows: [row('One step below', theme.stepBelow, side.below), row('Candidate', null, side.center), row('One step above', theme.stepAbove, side.above)],
-      notes: [...reasons, 'Every other knob is held at the candidate’s value.', DEVELOPMENT],
+      notes: [...reasons, 'Every other knob is held at the candidate’s value.', DEVELOPMENT_NOTE],
     },
     theme,
   );
@@ -539,5 +538,5 @@ function stressTooltip(rung: Rung, theme: ChartTheme): string {
   ];
   const what = rung.base ? 'The study’s own costs and fills.' : 'The same settings rerun in the engine with this scenario’s costs and fills.';
   const failed = figures.failure === null ? [] : [`The run failed: ${figures.failure}`];
-  return tooltipHtml({ title: rung.label, columns: ['Value'], rows, notes: [...failed, what, DEVELOPMENT] }, theme);
+  return tooltipHtml({ title: rung.label, columns: ['Value'], rows, notes: [...failed, what, DEVELOPMENT_NOTE] }, theme);
 }

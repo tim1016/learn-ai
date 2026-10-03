@@ -12,8 +12,13 @@ export interface ChartTheme {
   readonly gridLine: string;
   readonly tooltipBackground: string;
   readonly warn: string;
-  /** A result that loses money. */
+  /** A result that loses money, and one that makes it. */
   readonly loss: string;
+  readonly gain: string;
+  /** A calendar cell at $0, the middle of the scale between a loss and a gain. */
+  readonly neutral: string;
+  /** A cell with too few trades to judge. */
+  readonly tooFew: string;
   /** One step below a candidate's value, and one step above it. */
   readonly stepBelow: string;
   readonly stepAbove: string;
@@ -34,6 +39,9 @@ export function chartTheme(element: HTMLElement): ChartTheme {
     tooltipBackground: themeColor(element, '--bg-elevated'),
     warn: themeColor(element, '--warn'),
     loss: themeColor(element, '--bear'),
+    gain: themeColor(element, '--bull'),
+    neutral: themeColor(element, '--bg-elevated'),
+    tooFew: themeColor(element, '--border'),
     stepBelow: themeColor(element, '--chart-series-sky'),
     stepAbove: themeColor(element, '--chart-series-blue'),
     stressed: themeColor(element, '--chart-series-teal'),

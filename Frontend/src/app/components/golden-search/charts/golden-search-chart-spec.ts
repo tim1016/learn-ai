@@ -83,9 +83,10 @@ function seriesRefs(option: ChartOption): SeriesRef[] {
   return series.map((entry, index) => ({ index, id: String(entry.id ?? ''), values: Array.isArray(entry.data) ? entry.data.map(numberOrNull) : [] }));
 }
 
-/** A plotted value, or null for ECharts' empty point (`'-'`). */
+/** A plotted value — a number, or a data pair's last coordinate — or null for ECharts' empty point (`'-'`). */
 function numberOrNull(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const plotted: unknown = Array.isArray(value) ? value.at(-1) : value;
+  return typeof plotted === 'number' && Number.isFinite(plotted) ? plotted : null;
 }
 
 function lastIndex(values: readonly (number | null)[]): number | null {

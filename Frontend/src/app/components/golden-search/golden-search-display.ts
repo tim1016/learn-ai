@@ -144,6 +144,11 @@ const PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimumFracti
 const RATIO = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const SIGNED_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0, signDisplay: 'exceptZero' });
 const SIGNED_CENTS = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: 'exceptZero' });
+const CENTS = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const COMPACT_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+
+/** The note every development chart's tooltip carries: these runs chose the candidates, so they are in-sample. */
+export const DEVELOPMENT_NOTE = 'Development data, used for choosing.';
 
 /** A server fraction as a signed percent (`0.087` → `+8.7%`); undefined reads "—", never zero. */
 export function signedPercentText(fraction: number | null | undefined): string {
@@ -168,6 +173,16 @@ export function signedUsdText(value: number | null | undefined): string {
 /** A dollar result to the cent with its sign (`+$0.40`, `−$92.15`): a trade, or a result judged at $0. */
 export function signedCentsText(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : SIGNED_CENTS.format(value);
+}
+
+/** An axis tick or bin edge as short signed dollars (`+$1.1K`, `-$43.8`). */
+export function compactUsdText(value: number): string {
+  return COMPACT_USD.format(value);
+}
+
+/** A dollar amount to the cent with no sign (`$590.10`): a price or a width, not a result. */
+export function centsText(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : CENTS.format(value);
 }
 
 /** A run's four comparison figures as text, and why they read "—" when its run failed. */

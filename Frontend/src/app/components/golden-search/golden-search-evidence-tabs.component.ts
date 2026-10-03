@@ -2,15 +2,15 @@ import { afterNextRender, ChangeDetectionStrategy, Component, computed, inject, 
 
 import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
 import type { GoldenSearchChartId } from './charts/golden-search-chart-guides';
-import { sameChart } from './charts/golden-search-chart-spec';
+import { sameChart, type ChartSpec } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import type { CandidateRow } from './golden-search-compare';
 import { concentrationCurveSpec, withoutBestSpec } from './golden-search-concentration-charts';
-import { GoldenSearchMonthlyComponent } from './golden-search-monthly.component';
+import { monthCalendarSpec, monthlyNetSpec } from './golden-search-month-charts';
 import { GoldenSearchPairMapComponent } from './golden-search-pair-map.component';
-import { GoldenSearchTradesComponent } from './golden-search-trades.component';
-import type { CandidateDetail, CandidateKey, PairMap, Point, StrategyCapability } from './golden-search.types';
+import { entryRsiSpec, entryTimeSpec, histogramSpec, holdTimeSpec, tradeTimelineSpec } from './golden-search-trade-charts';
+import type { CandidateDetail, CandidateKey, MeasuredTradeCharts, PairMap, Point, StrategyCapability } from './golden-search.types';
 
 export type EvidenceTab = 'map' | 'months' | 'trades';
 
@@ -22,22 +22,16 @@ export const EVIDENCE_TABS: readonly { id: EvidenceTab; label: string }[] = [
 
 
 /**
- * The Compare step's evidence (#2696): the parameter map and the selected
- * candidate's months — with how much of its result rests on its best month
- * or trades (#2815, #2821) — and its trades. The detail runs come from the
- * step, which reads them for its charts. Everything shown is development
- * evidence, used to choose.
+ * The Compare step's evidence (#2696): the parameter map; the selected
+ * candidate's months, with how much of its result rests on its best month or
+ * trades (#2815); and its trades over time, in bins, by hold, by RSI at entry
+ * and by entry time (#2821). The detail runs come from the step, which reads
+ * them for its charts. Everything shown is development evidence, used to
+ * choose.
  */
 @Component({
   selector: 'app-golden-search-evidence-tabs',
-  imports: [
-    GoldenSearchChartComponent,
-    GoldenSearchGridComponent,
-    GoldenSearchMonthlyComponent,
-    GoldenSearchPairMapComponent,
-    GoldenSearchPanelComponent,
-    GoldenSearchTradesComponent,
-  ],
+  imports: [GoldenSearchChartComponent, GoldenSearchGridComponent, GoldenSearchPairMapComponent, GoldenSearchPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-evidence-tabs.component.html',
   styleUrl: './golden-search-evidence-tabs.component.scss',
@@ -61,7 +55,49 @@ export class GoldenSearchEvidenceTabsComponent {
   readonly active = signal<EvidenceTab>('map');
 
   protected readonly selectedRun = computed(() => this.details()?.get(this.selected().key)?.development ?? null);
-  // Equal while they draw the same values, so a study poll does not redraw them.
+  // Each chart is equal while it draws the same values, so a study poll does not redraw it.
+  protected readonly monthCalendar = computed(
+    () => {
+      const months = this.selectedRun()?.monthly ?? [];
+      return months.length === 0 ? null : monthCalendarSpec(this.selected().candidate, months);
+    },
+    { equal: sameChart },
+  );
+  /** A row per year of the calendar. */
+  protected readonly calendarHeight = computed(() => 40 + 34 * new Set((this.selectedRun()?.monthly ?? []).map((month) => month.year)).size);
+  protected readonly monthlyNet = computed(
+    () => {
+      const months = this.selectedRun()?.monthly ?? [];
+      return months.length === 0 ? null : monthlyNetSpec(this.selected().candidate, months);
+    },
+    { equal: sameChart },
+  );
+  /** The trade charts when the server drew them; `tradesNote` says why not. */
+  private readonly tradeCharts = computed(() => {
+    const charts = this.selectedRun()?.trade_charts;
+    return charts?.status === 'measured' ? charts : null;
+  });
+  protected readonly tradesNote = computed(() => {
+    const charts = this.selectedRun()?.trade_charts;
+    return charts?.status === 'missing' ? charts.reason : null;
+  });
+  protected readonly timeline = computed(() => this.tradeChart(tradeTimelineSpec), { equal: sameChart });
+  protected readonly histogram = computed(() => this.tradeChart(histogramSpec), { equal: sameChart });
+  protected readonly holdTime = computed(() => this.tradeChart(holdTimeSpec), { equal: sameChart });
+  protected readonly entryTime = computed(() => this.tradeChart(entryTimeSpec), { equal: sameChart });
+  /** Why hold times are not counted, in the server's words. */
+  protected readonly holdNote = computed(() => this.tradeCharts()?.hold_reason ?? null);
+  protected readonly entryRsi = computed(
+    () => {
+      const charts = this.tradeCharts();
+      return charts?.entry_rsi.status === 'measured' ? entryRsiSpec(this.selected().candidate, charts, charts.entry_rsi) : null;
+    },
+    { equal: sameChart },
+  );
+  protected readonly entryRsiNote = computed(() => {
+    const rsi = this.tradeCharts()?.entry_rsi;
+    return rsi?.status === 'missing' ? rsi.reason : null;
+  });
   protected readonly curve = computed(
     () => {
       const curve = this.selectedRun()?.concentration_curve;
@@ -82,6 +118,11 @@ export class GoldenSearchEvidenceTabsComponent {
     const measure = this.selected().candidate.concentration;
     return measure.status === 'missing' ? measure.reason : null;
   });
+
+  private tradeChart(spec: (candidate: CandidateRow['candidate'], charts: MeasuredTradeCharts) => ChartSpec | null): ChartSpec | null {
+    const charts = this.tradeCharts();
+    return charts === null ? null : spec(this.selected().candidate, charts);
+  }
 
   open(tab: EvidenceTab): void {
     this.active.set(tab);

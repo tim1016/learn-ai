@@ -1,11 +1,25 @@
 import { InjectionToken } from '@angular/core';
-import type { BarSeriesOption, LineSeriesOption, ScatterSeriesOption } from 'echarts/charts';
-import type { AxisPointerComponentOption, GridComponentOption, MarkLineComponentOption, TooltipComponentOption } from 'echarts/components';
+import type { BarSeriesOption, HeatmapSeriesOption, LineSeriesOption, ScatterSeriesOption } from 'echarts/charts';
+import type {
+  AxisPointerComponentOption,
+  GridComponentOption,
+  MarkLineComponentOption,
+  TooltipComponentOption,
+  VisualMapComponentOption,
+} from 'echarts/components';
 import type { ComposeOption } from 'echarts/core';
 
 /** The ECharts option shape the Golden Search charts may use; a chart type joins it when its loader registers it. */
 export type ChartOption = ComposeOption<
-  LineSeriesOption | BarSeriesOption | ScatterSeriesOption | GridComponentOption | TooltipComponentOption | AxisPointerComponentOption | MarkLineComponentOption
+  | LineSeriesOption
+  | BarSeriesOption
+  | ScatterSeriesOption
+  | HeatmapSeriesOption
+  | GridComponentOption
+  | TooltipComponentOption
+  | AxisPointerComponentOption
+  | MarkLineComponentOption
+  | VisualMapComponentOption
 >;
 
 /** An ECharts action (`highlight`, `downplay`, `showTip`, `hideTip`). */

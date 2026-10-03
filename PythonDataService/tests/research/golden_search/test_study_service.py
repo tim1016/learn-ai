@@ -1021,7 +1021,11 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
 
     chosen = await service.candidate(row.id, "all_period")
     assert chosen["development"]["window"] == {"start_ms": row.protocol["development_start_ms"], "end_ms": row.protocol["development_end_ms"]}
-    assert chosen["development"]["cumulative_return"] and chosen["development"]["monthly"] and chosen["development"]["trades"]
+    assert chosen["development"]["cumulative_return"] and chosen["development"]["monthly"]
+    # Each fake trade enters an hour before it exits a minute before the close: four 15-minute bars close in between.
+    charts = chosen["development"]["trade_charts"]
+    assert charts["status"] == "measured" and [trade["bars_held"] for trade in charts["trades"]] == [4, 4]
+    assert charts["entry_rsi"]["status"] == "measured" and chosen["exam"]["trade_charts"] is None
     assert chosen["exam"]["window"] == {"start_ms": row.protocol["final_start_ms"], "end_ms": row.protocol["final_end_ms"]}
     assert (await service.candidate(row.id, "recent"))["exam"] is not None  # the same point
     assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark

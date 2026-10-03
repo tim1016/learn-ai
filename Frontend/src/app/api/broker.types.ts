@@ -13705,6 +13705,79 @@ export interface components {
             /** Ms */
             ms: number;
         };
+        /** GoldenSearchEntryRsiMeasured */
+        GoldenSearchEntryRsiMeasured: {
+            /** Bands */
+            bands: components["schemas"]["GoldenSearchRsiBand"][];
+            /** Gate High */
+            gate_high: number;
+            /** Gate Low */
+            gate_low: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+            /**
+             * Unbanded
+             * @description Trades with no RSI recorded at entry or one outside the gates.
+             */
+            unbanded: number;
+        };
+        /** GoldenSearchEntryRsiMissing */
+        GoldenSearchEntryRsiMissing: {
+            /** Reason */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "missing";
+        };
+        /** GoldenSearchEntryTimeCell */
+        GoldenSearchEntryTimeCell: {
+            /**
+             * Half Hour
+             * @description Index into the half hours.
+             */
+            half_hour: number;
+            /** Mean Net Profit */
+            mean_net_profit: number;
+            /**
+             * Too Few
+             * @description Fewer trades than the minimum, so its average means little.
+             */
+            too_few: boolean;
+            /** Total Net Profit */
+            total_net_profit: number;
+            /** Trades */
+            trades: number;
+            /**
+             * Weekday
+             * @description Index into the weekdays.
+             */
+            weekday: number;
+        };
+        /** GoldenSearchEntryTimes */
+        GoldenSearchEntryTimes: {
+            /**
+             * Cells
+             * @description Only the cells a trade entered in.
+             */
+            cells: components["schemas"]["GoldenSearchEntryTimeCell"][];
+            /**
+             * Half Hours
+             * @description The columns: the ET half hours the sessions cover, as HH:MM.
+             */
+            half_hours: string[];
+            /** Min Trades */
+            min_trades: number;
+            /**
+             * Weekdays
+             * @description The rows: ET weekdays the sessions hold, Monday first.
+             */
+            weekdays: string[];
+        };
         /** GoldenSearchEquityPoint */
         GoldenSearchEquityPoint: {
             /** Equity */
@@ -13994,6 +14067,47 @@ export interface components {
             /** Headline */
             headline: string;
         };
+        /** GoldenSearchHistogram */
+        GoldenSearchHistogram: {
+            /**
+             * Bin Width
+             * @description 0 when every trade nets the same.
+             */
+            bin_width: number;
+            /**
+             * Bins
+             * @description From the lowest to the highest, with $0 as an edge; empty bins between are kept.
+             */
+            bins: components["schemas"]["GoldenSearchHistogramBin"][];
+            /**
+             * Rule
+             * @description What set the width: Freedman–Diaconis; Sturges when the middle half of the trades net the same; the bin cap; one bin when every trade does.
+             * @enum {string}
+             */
+            rule: "freedman_diaconis" | "sturges" | "capped" | "single";
+        };
+        /** GoldenSearchHistogramBin */
+        GoldenSearchHistogramBin: {
+            /**
+             * High
+             * @description Exclusive, except for a single bin of trades that all net the same.
+             */
+            high: number;
+            /**
+             * Losses
+             * @description Trades in the bin that netted less than $0.
+             */
+            losses: number;
+            /** Low */
+            low: number;
+            /** Trades */
+            trades: number;
+            /**
+             * Wins
+             * @description Trades in the bin that netted more than $0.
+             */
+            wins: number;
+        };
         /**
          * GoldenSearchImportanceScale
          * @description How important each knob is to its owner; the more important, the earlier the search moves it.
@@ -14179,6 +14293,11 @@ export interface components {
         };
         /** GoldenSearchMonthlyResult */
         GoldenSearchMonthlyResult: {
+            /**
+             * Month
+             * @description The month's ET calendar month, 1 for January.
+             */
+            month: number;
             /** Month Start Ms */
             month_start_ms: number;
             /** Net Profit */
@@ -14187,6 +14306,11 @@ export interface components {
             return_fraction: number | null;
             /** Trades */
             trades: number;
+            /**
+             * Year
+             * @description The month's ET calendar year.
+             */
+            year: number;
         };
         /** GoldenSearchNeighborRow */
         GoldenSearchNeighborRow: {
@@ -14540,6 +14664,23 @@ export interface components {
             search: components["schemas"]["GoldenSearchSearchView"] | null;
             validation: components["schemas"]["GoldenSearchValidationView"] | null;
         };
+        /** GoldenSearchRsiBand */
+        GoldenSearchRsiBand: {
+            /**
+             * High
+             * @description Exclusive, except for the last band, which ends at the upper gate.
+             */
+            high: number;
+            /** Low */
+            low: number;
+            /**
+             * Mean Net Profit
+             * @description Null for a band no trade entered in.
+             */
+            mean_net_profit: number | null;
+            /** Trades */
+            trades: number;
+        };
         /** GoldenSearchRunDetail */
         GoldenSearchRunDetail: {
             /** @description The development run's; null on a final-test run. */
@@ -14553,8 +14694,11 @@ export interface components {
             metrics: components["schemas"]["GoldenSearchMetrics"];
             /** Monthly */
             monthly: components["schemas"]["GoldenSearchMonthlyResult"][];
-            /** Trades */
-            trades: components["schemas"]["GoldenSearchTrade"][];
+            /**
+             * Trade Charts
+             * @description The development run's; null on a final-test run.
+             */
+            trade_charts: (components["schemas"]["GoldenSearchTradeChartsMeasured"] | components["schemas"]["GoldenSearchTradeChartsMissing"]) | null;
             window: components["schemas"]["GoldenSearchWindow"];
         };
         /** GoldenSearchRunUp */
@@ -14920,31 +15064,87 @@ export interface components {
             /** Text */
             text: string;
         };
-        /** GoldenSearchTrade */
-        GoldenSearchTrade: {
+        /** GoldenSearchTradeChartsMeasured */
+        GoldenSearchTradeChartsMeasured: {
+            /**
+             * Bar Span Ms
+             * @description The strategy's decision bar, in ms (a day or longer means one bar per session); null when hold times are not counted.
+             */
+            bar_span_ms: number | null;
+            /** Entry Rsi */
+            entry_rsi: components["schemas"]["GoldenSearchEntryRsiMeasured"] | components["schemas"]["GoldenSearchEntryRsiMissing"];
+            entry_times: components["schemas"]["GoldenSearchEntryTimes"];
+            histogram: components["schemas"]["GoldenSearchHistogram"];
+            /**
+             * Hold Reason
+             * @description Why hold times are not counted; null when they are.
+             */
+            hold_reason: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+            /**
+             * Trades
+             * @description In exit order.
+             */
+            trades: components["schemas"]["GoldenSearchTradeRecord"][];
+        };
+        /** GoldenSearchTradeChartsMissing */
+        GoldenSearchTradeChartsMissing: {
+            /** Reason */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "missing";
+        };
+        /** GoldenSearchTradeRecord */
+        GoldenSearchTradeRecord: {
+            /**
+             * Bars Held
+             * @description Decision bars that closed after the entry and by the exit, on the trading calendar; null when hold times are not counted.
+             */
+            bars_held: number | null;
             /** Entry Ms */
             entry_ms: number;
             /** Entry Price */
             entry_price: number;
+            /**
+             * Entry Rsi
+             * @description RSI the strategy recorded when it decided to enter; null when it recorded none.
+             */
+            entry_rsi: number | null;
+            /**
+             * Exit Kind
+             * @enum {string}
+             */
+            exit_kind: "strategy" | "window_end";
             /** Exit Ms */
             exit_ms: number;
             /** Exit Price */
             exit_price: number;
             /** Exit Reason */
-            exit_reason: string | null;
-            /** Indicators */
-            indicators: {
-                [key: string]: number | null;
-            };
+            exit_reason: string;
+            /**
+             * Net Profit
+             * @description P&L before fees less the entry and exit commission.
+             */
+            net_profit: number;
             /**
              * Pnl
              * @description Price change times filled quantity, before fees.
              */
             pnl: number;
-            /** Pnl Pct */
-            pnl_pct: number;
             /** Quantity */
             quantity: number;
+            /**
+             * Running Net Profit
+             * @description Net profit of this trade and every trade that exited before it.
+             */
+            running_net_profit: number;
         };
         /** GoldenSearchValidationFold */
         GoldenSearchValidationFold: {
