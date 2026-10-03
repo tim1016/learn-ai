@@ -19113,6 +19113,10 @@
             "title": "Sessions",
             "type": "integer"
           },
+          "stale": {
+            "title": "Stale",
+            "type": "integer"
+          },
           "year": {
             "title": "Year",
             "type": "integer"
@@ -19125,6 +19129,7 @@
           "sessions",
           "complete",
           "fetching",
+          "stale",
           "failed",
           "missing"
         ],
@@ -22064,6 +22069,29 @@
             "title": "Searched",
             "type": "boolean"
           },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where Zoom starts (the seed's value), which it keeps in every round; null for Grid.",
+            "title": "Start"
+          },
+          "start_position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Position"
+          },
           "step": {
             "anyOf": [
               {
@@ -22107,7 +22135,9 @@
           "domain_high",
           "low_position",
           "high_position",
-          "current_position"
+          "current_position",
+          "start",
+          "start_position"
         ],
         "title": "GoldenSearchPlanKnob",
         "type": "object"
@@ -23837,25 +23867,25 @@
             "type": "string"
           },
           "planned": {
-            "description": "The receipt's planned maximum evaluations.",
+            "description": "The receipt's planned maximum evaluations: an upper bound, never a stopping point.",
             "title": "Planned",
-            "type": "integer"
-          },
-          "reserved": {
-            "description": "Evaluations the stage has reserved so far.",
-            "title": "Reserved",
             "type": "integer"
           },
           "stage": {
             "title": "Stage",
             "type": "string"
+          },
+          "used": {
+            "description": "Engine runs used so far, runs in flight included; the stages' together equal the study's consumed evaluations.",
+            "title": "Used",
+            "type": "integer"
           }
         },
         "required": [
           "stage",
           "label",
           "planned",
-          "reserved"
+          "used"
         ],
         "title": "GoldenSearchStageWorkload",
         "type": "object"

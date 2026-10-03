@@ -288,16 +288,16 @@ export function planCharts(overrides: Partial<PlanCharts> = {}): PlanCharts {
       { key: 'final', label: 'Final test', kind: 'final', start_ms: FINAL_START_MS, end_ms: etMidnightMs('2026-07-01'), sessions: 125, minimum_trades: 25 },
     ],
     search_space: [
-      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', searched: true, low: 3, high: 12, step: 1, values: 10, importance: 8, current: 5, domain_low: 1, domain_high: 50, low_position: 2 / 49, high_position: 11 / 49, current_position: 4 / 49 },
-      { name: 'rsi_min', label: 'RSI lower gate', unit: 'RSI points', searched: false, low: 50, high: 50, step: null, values: 1, importance: null, current: 50, domain_low: 0, domain_high: 100, low_position: 0.5, high_position: 0.5, current_position: 0.5 },
+      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', searched: true, low: 3, high: 12, step: 1, values: 10, importance: 8, current: 5, domain_low: 1, domain_high: 50, low_position: 2 / 49, high_position: 11 / 49, current_position: 4 / 49, start: 5, start_position: 4 / 49 },
+      { name: 'rsi_min', label: 'RSI lower gate', unit: 'RSI points', searched: false, low: 50, high: 50, step: null, values: 1, importance: null, current: 50, domain_low: 0, domain_high: 100, low_position: 0.5, high_position: 0.5, current_position: 0.5, start: 50, start_position: 0.5 },
     ],
     workload: {
       cap: 5000,
       consumed: 420,
       planned_total: 900,
       stages: [
-        { stage: 'search', label: 'Search the development period', planned: 400, reserved: 380 },
-        { stage: 'validation', label: 'Test the procedure over time', planned: 300, reserved: 40 },
+        { stage: 'search', label: 'Search the development period', planned: 400, used: 380 },
+        { stage: 'validation', label: 'Test the procedure over time', planned: 300, used: 40 },
       ],
     },
     minimums: {
@@ -307,8 +307,8 @@ export function planCharts(overrides: Partial<PlanCharts> = {}): PlanCharts {
     coverage: {
       status: 'measured',
       months: [
-        { month_start_ms: etMidnightMs('2024-06-01'), year: 2024, month: 6, sessions: 19, complete: 18, fetching: 0, failed: 0, missing: 1 },
-        { month_start_ms: etMidnightMs('2024-07-01'), year: 2024, month: 7, sessions: 22, complete: 22, fetching: 0, failed: 0, missing: 0 },
+        { month_start_ms: etMidnightMs('2024-06-01'), year: 2024, month: 6, sessions: 19, complete: 18, fetching: 0, stale: 0, failed: 0, missing: 1 },
+        { month_start_ms: etMidnightMs('2024-07-01'), year: 2024, month: 7, sessions: 22, complete: 22, fetching: 0, stale: 0, failed: 0, missing: 0 },
       ],
     },
     ...overrides,

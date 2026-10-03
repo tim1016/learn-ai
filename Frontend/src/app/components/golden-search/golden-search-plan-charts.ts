@@ -9,7 +9,7 @@ import type { CoverageMonth, MinimumWindow, PlanCharts, PlanKnob, PlanWindow } f
 /**
  * The Plan step's charts (#2821): every window the frozen plan evaluates
  * (V2), each knob's searched range in its legal domain (V3), each stage's
- * planned against reserved engine runs (V4), each window's trade minimum and
+ * planned against used engine runs (V4), each window's trade minimum and
  * its arithmetic (V5), and the lake's coverage of the data span month by
  * month (V6). Every value is the server's, from the protocol and receipt the
  * study froze at lock.
@@ -122,14 +122,15 @@ export function windowMapHeight(count: number): number {
 export function searchSpaceSpec(charts: PlanCharts): ChartSpec {
   const knobs = charts.search_space;
   const searched = knobs.filter((knob) => knob.searched).map((knob) => knob.label);
+  const zoom = knobs.some((knob) => knob.start_position !== null);
   return {
     label: 'Search space',
-    summary: `${searched.length === 0 ? 'No knob is searched' : `${searched.join(', ')} searched`}; every knob drawn in its legal range, the current settings marked.`,
+    summary: `${searched.length === 0 ? 'No knob is searched' : `${searched.join(', ')} searched`}; every knob drawn in its legal range, the current settings marked${zoom ? ', and where Zoom starts' : ''}.`,
     featured: null,
     option: (theme) => searchSpaceOption(knobs, theme),
     table: {
-      caption: 'Every knob in search order: its range, step, values and importance, and the current settings',
-      columns: ['Knob', 'Range', 'Step', 'Values', 'Importance', 'Current', 'Legal range'],
+      caption: `Every knob in search order: its range, step, values and importance, the current settings${zoom ? ' and where Zoom starts' : ''}`,
+      columns: ['Knob', 'Range', 'Step', 'Values', 'Importance', 'Current', ...(zoom ? ['Zoom starts at'] : []), 'Legal range'],
       rows: knobs.map((knob) => ({
         key: knob.name,
         cells: [
@@ -139,6 +140,7 @@ export function searchSpaceSpec(charts: PlanCharts): ChartSpec {
           knob.values === null ? 'not valid' : String(knob.values),
           knob.importance === null ? '—' : String(knob.importance),
           String(knob.current),
+          ...(zoom ? [knob.start === null ? '—' : String(knob.start)] : []),
           `${knob.domain_low} to ${knob.domain_high}`,
         ],
       })),
@@ -163,8 +165,13 @@ function searchSpaceOption(knobs: readonly PlanKnob[], theme: ChartTheme): Chart
               { label: 'Importance', values: [knob.importance === null ? '—' : String(knob.importance)] },
             ]
           : [{ label: 'Held at', values: [String(knob.low)] }];
-        const current = { label: 'Current settings', values: [String(knob.current)] };
-        return tooltipHtml({ title: `${knob.label} (${knob.unit})`, columns: ['Value'], rows: [...rows, current], notes: [`Legal range ${knob.domain_low} to ${knob.domain_high}. Higher importance is searched first.`] }, theme);
+        const marks: TooltipRow[] = [
+          { label: 'Current settings', values: [String(knob.current)] },
+          ...(knob.start === null ? [] : [{ label: 'Zoom starts at', values: [String(knob.start)] }]),
+        ];
+        const notes = [`Legal range ${knob.domain_low} to ${knob.domain_high}. Higher importance is searched first.`];
+        if (knob.start !== null && knob.searched) notes.push('Zoom keeps its starting value in every round, so it can end there even outside the band.');
+        return tooltipHtml({ title: `${knob.label} (${knob.unit})`, columns: ['Value'], rows: [...rows, ...marks], notes }, theme);
       },
     },
     xAxis: { type: 'value', min: 0, max: 1, splitNumber: 2, axisLine: { lineStyle: { color: theme.axis } }, axisLabel: { ...axisText(theme), formatter: (value: number) => (value === 0 ? 'legal low' : value === 1 ? 'legal high' : '') }, splitLine: { lineStyle: { color: theme.gridLine } } },
@@ -191,6 +198,20 @@ function searchSpaceOption(knobs: readonly PlanKnob[], theme: ChartTheme): Chart
         itemStyle: { color: theme.text },
         emphasis: { focus: 'series', blurScope: 'global' },
       },
+      ...(knobs.some((knob) => knob.start_position !== null)
+        ? [
+            {
+              id: 'start:space',
+              name: 'Zoom starts',
+              type: 'scatter' as const,
+              symbol: 'emptyCircle',
+              symbolSize: 13,
+              data: knobs.map((knob, i) => [knob.start_position ?? '-', i]),
+              itemStyle: { color: theme.text, borderWidth: 1.5 },
+              emphasis: { focus: 'series' as const, blurScope: 'global' as const },
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -202,7 +223,7 @@ export function searchSpaceHeight(count: number): number {
 
 // ---------------------------------------------------------------- V4 workload
 
-/** Each stage's planned engine runs against those it has reserved so far. */
+/** Each stage's planned engine runs against those it has used so far. */
 export function workloadSpec(charts: PlanCharts): ChartSpec {
   const load = charts.workload;
   return {
@@ -211,9 +232,9 @@ export function workloadSpec(charts: PlanCharts): ChartSpec {
     featured: null,
     option: (theme) => workloadOption(charts, theme),
     table: {
-      caption: 'Engine runs per stage: planned and reserved so far',
-      columns: ['Stage', 'Planned at most', 'Reserved so far'],
-      rows: load.stages.map((stage) => ({ key: stage.stage, cells: [stage.label, String(stage.planned), String(stage.reserved)] })),
+      caption: 'Engine runs per stage: planned at most and used so far',
+      columns: ['Stage', 'Planned at most', 'Used so far'],
+      rows: load.stages.map((stage) => ({ key: stage.stage, cells: [stage.label, String(stage.planned), String(stage.used)] })),
     },
   };
 }
@@ -222,7 +243,7 @@ function workloadOption(charts: PlanCharts, theme: ChartTheme): ChartOption {
   const stages = charts.workload.stages;
   const bars = [
     { group: 'planned', name: 'Planned at most', values: stages.map((stage) => stage.planned), color: theme.tooFew },
-    { group: 'reserved', name: 'Reserved so far', values: stages.map((stage) => stage.reserved), color: theme.candidates.all_period },
+    { group: 'used', name: 'Used so far', values: stages.map((stage) => stage.used), color: theme.candidates.all_period },
   ];
   return {
     grid: { left: 150, right: 24, top: 8, bottom: 28 },
@@ -235,9 +256,9 @@ function workloadOption(charts: PlanCharts, theme: ChartTheme): ChartOption {
         if (stage === undefined) return '';
         const rows: TooltipRow[] = [
           { label: 'Planned at most', values: [String(stage.planned)] },
-          { label: 'Reserved so far', values: [String(stage.reserved)] },
+          { label: 'Used so far', values: [String(stage.used)] },
         ];
-        const note = `The study’s cap is ${charts.workload.cap} engine runs; ${charts.workload.consumed} used so far. A cached answer reuses a run without spending the cap.`;
+        const note = `Planned at most is an upper bound, not a stop. The study’s cap is ${charts.workload.cap} engine runs; ${charts.workload.consumed} used so far. A cached answer reuses a run without spending the cap.`;
         return tooltipHtml({ title: stage.label, columns: ['Engine runs'], rows, notes: [note] }, theme);
       },
     },
@@ -340,6 +361,7 @@ export function minimumsHeight(count: number): number {
 const COVERAGE_PARTS = [
   { key: 'complete', name: 'Complete' },
   { key: 'fetching', name: 'Still fetching' },
+  { key: 'stale', name: 'Stale' },
   { key: 'failed', name: 'Failed' },
   { key: 'missing', name: 'Missing' },
 ] as const;
@@ -359,14 +381,14 @@ export function coverageSpec(months: readonly CoverageMonth[]): ChartSpec {
     option: (theme) => coverageOption(months, theme),
     table: {
       caption: 'Sessions per month by lake status',
-      columns: ['Month', 'Sessions', 'Complete', 'Still fetching', 'Failed', 'Missing'],
-      rows: months.map((month) => ({ key: String(month.month_start_ms), cells: [monthName(month), String(month.sessions), String(month.complete), String(month.fetching), String(month.failed), String(month.missing)] })),
+      columns: ['Month', 'Sessions', ...COVERAGE_PARTS.map((part) => part.name)],
+      rows: months.map((month) => ({ key: String(month.month_start_ms), cells: [monthName(month), String(month.sessions), ...COVERAGE_PARTS.map((part) => String(month[part.key]))] })),
     },
   };
 }
 
 function coverageOption(months: readonly CoverageMonth[], theme: ChartTheme): ChartOption {
-  const colors: Readonly<Record<(typeof COVERAGE_PARTS)[number]['key'], string>> = { complete: theme.gain, fetching: theme.warn, failed: theme.loss, missing: theme.tooFew };
+  const colors: Readonly<Record<(typeof COVERAGE_PARTS)[number]['key'], string>> = { complete: theme.gain, fetching: theme.warn, stale: theme.withoutBest, failed: theme.loss, missing: theme.tooFew };
   return {
     grid: { left: 40, right: 12, top: 12, bottom: 28 },
     tooltip: {

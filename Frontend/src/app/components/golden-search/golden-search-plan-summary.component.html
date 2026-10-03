@@ -52,11 +52,11 @@
       </app-golden-search-panel>
       <app-golden-search-panel chart="search-space" data-span="8">
         @if (searchSpace(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().space" /> }
-        <p caption class="caption">Each knob in its legal range: the band is what the search may try; the diamond, the current settings.</p>
+        <p caption class="caption">Each knob in its legal range: the band is what the search may try; the diamond, the current settings; the ring, where Zoom starts.</p>
       </app-golden-search-panel>
       <app-golden-search-panel chart="workload" data-span="4">
         @if (workload(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().workload" /> }
-        <p caption class="caption">Planned at most against reserved so far; a cached answer spends no run.</p>
+        <p caption class="caption">Planned at most against used so far; a cached answer spends no run.</p>
       </app-golden-search-panel>
       <app-golden-search-panel chart="trade-minimums" data-span="4">
         @if (minimums(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().minimums" /> }

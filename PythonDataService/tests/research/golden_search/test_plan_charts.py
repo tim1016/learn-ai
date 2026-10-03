@@ -12,7 +12,7 @@ from app.research.golden_search.activity import TradeFloors, activity_plan
 from app.research.golden_search.budget import review_protocol
 from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.models import StudyRow
-from app.research.golden_search.plan_charts import coverage, minimums, search_space, windows, workload
+from app.research.golden_search.plan_charts import coverage, minimums, runs_used, search_space, windows, workload
 from app.research.golden_search.planning import fold_windows, protocol_from_request
 from app.research.golden_search.protocol import GoldenSearchProtocol
 from app.utils.session_anchors import et_midnight_ms
@@ -60,6 +60,14 @@ def test_every_window_counts_its_sessions_and_takes_the_floor_the_stages_use() -
     assert [window["kind"] for window in found.values()][:2] == ["run_up", "development"]
 
 
+def test_a_window_counts_the_calendars_sessions_by_hand() -> None:
+    protocol = _protocol()
+    # The run-up from Mon 2 Dec 2024 to the development start (1 Jan 2025): 21 sessions in December (Christmas closed).
+    row = _row(protocol, intervals={"data_start_ms": et_midnight_ms(date(2024, 12, 2))})
+    run_up = windows(row, protocol, TradeFloors(protocol, row.receipt))[0]
+    assert (run_up["key"], run_up["sessions"], run_up["minimum_trades"]) == ("run_up", 21, None)
+
+
 def test_the_search_space_places_each_range_and_the_incumbent_in_its_legal_domain() -> None:
     protocol = _protocol()
     knobs = {knob["name"]: knob for knob in search_space(_row(protocol), protocol)}
@@ -72,17 +80,29 @@ def test_the_search_space_places_each_range_and_the_incumbent_in_its_legal_domai
     rsi = knobs["rsi_min"]
     assert (rsi["searched"], rsi["values"], rsi["low"], rsi["high"], rsi["low_position"]) == (False, 1, 50.0, 50.0, pytest.approx(0.5, abs=1e-9))
     assert list(knobs) == [plan.name for plan in protocol.knobs]
+    # Zoom starts at the seed, the current settings here; Grid has no start.
+    assert (gap["start"], gap["start_position"]) == (pytest.approx(0.2, abs=1e-12), pytest.approx(0.1, abs=1e-9, rel=0))
+    grid = replace(protocol, method="grid")
+    assert {knob["start"] for knob in search_space(_row(grid), grid)} == {None}
 
 
-def test_workload_sets_each_stages_plan_beside_what_it_reserved() -> None:
+def test_workload_counts_each_steps_runs_under_the_stage_that_planned_them() -> None:
     protocol = _protocol()
     row = _row(protocol)
-    load = workload(row, {"search": 31, "validation": 4})
+    # The search plans its pair audits too; the proof draws its units outside the evaluator.
+    used = runs_used({"search": 10, "pair_audit": 25, "validation": 4, "evidence": 6, "exam": 2}, 3)
+    load = workload(row, used)
 
     stages = {stage["stage"]: stage for stage in load["stages"]}
-    assert (stages["search"]["reserved"], stages["validation"]["reserved"], stages["evidence"]["reserved"]) == (31, 4, 0)
+    assert {key: stage["used"] for key, stage in stages.items()} == {"search": 35, "recent": 0, "validation": 4, "evidence": 6, "exam": 2, "proof": 3}
+    assert sum(stage["used"] for stage in load["stages"]) == 10 + 25 + 4 + 6 + 2 + 3
     assert stages["search"]["planned"] == next(item["max_evaluations"] for item in row.receipt["estimate"]["stages"] if item["stage"] == "search")
     assert (load["cap"], load["consumed"]) == (5000, 120)
+
+
+def test_an_evaluation_step_the_estimate_does_not_plan_fails_loudly() -> None:
+    with pytest.raises(ValueError, match="no row in the study's estimate"):
+        runs_used({"rehearsal": 1}, 0)
 
 
 def test_a_frequency_plan_shows_its_yearly_terms_and_a_fixed_plan_its_two_floors() -> None:
@@ -101,12 +121,14 @@ def test_a_frequency_plan_shows_its_yearly_terms_and_a_fixed_plan_its_two_floors
 def test_coverage_counts_each_months_sessions_by_lake_status_and_missing_rows_as_missing() -> None:
     row = _row(_protocol(), intervals={"data_start_ms": et_midnight_ms(date(2024, 6, 3))})
     protocol = replace(_protocol(), final_end_ms=et_midnight_ms(date(2024, 8, 1)))
-    statuses = {date(2024, 6, 3): "complete", date(2024, 6, 4): "failed", date(2024, 7, 1): "fetching"}
+    statuses = {date(2024, 6, 3): "complete", date(2024, 6, 4): "failed", date(2024, 6, 5): "stale", date(2024, 7, 1): "fetching"}
 
     months = coverage(row, protocol, statuses)["months"]
     # June 2024 from the 3rd: 19 sessions (Juneteenth closed); July: 22 (the 4th closed).
-    assert [(m["year"], m["month"], m["sessions"], m["complete"], m["fetching"], m["failed"], m["missing"]) for m in months] == [
-        (2024, 6, 19, 1, 0, 1, 17),
-        (2024, 7, 22, 0, 1, 0, 21),
+    assert [(m["year"], m["month"], m["sessions"], m["complete"], m["fetching"], m["stale"], m["failed"], m["missing"]) for m in months] == [
+        (2024, 6, 19, 1, 0, 1, 1, 16),
+        (2024, 7, 22, 0, 1, 0, 0, 21),
     ]
     assert coverage(row, protocol, "catalog down") == {"status": "missing", "reason": "catalog down"}
+    with pytest.raises(ValueError, match="does not know"):
+        coverage(row, protocol, {date(2024, 6, 3): "archived"})

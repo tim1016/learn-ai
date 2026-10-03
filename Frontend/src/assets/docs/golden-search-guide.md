@@ -82,7 +82,7 @@ How much of each knob's legal range does the search explore?
 
 #### What you're looking at
 
-A row for each knob, drawn across its whole legal range, in the order the search takes them. The blue band is the range the search may try; a held knob is a single grey mark at its value. The diamond is the current settings. Hover a knob for its step, how many values it can take, and its importance.
+A row for each knob, drawn across its whole legal range, in the order the search takes them. The blue band is the range the search may try; a held knob is a single grey mark at its value. The diamond is the current settings. On a Zoom plan, the ring is where Zoom starts: the plan's seed, which is the current settings unless the plan names another. Hover a knob for its step, how many values it can take, and its importance.
 
 $$\text{position} = \frac{\text{value} - \text{legal low}}{\text{legal high} - \text{legal low}}$$
 
@@ -90,13 +90,13 @@ $$\text{position} = \frac{\text{value} - \text{legal low}}{\text{legal high} - \
 
 1. Each row is a knob, drawn across its whole legal range.
 2. The band is the range the search may try; a held knob is a single grey mark.
-3. The diamond is the current settings. A diamond outside a band means the search cannot return to today’s value.
+3. The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom keeps its starting value in every round, so it can end there even outside the band.
 4. Hover a knob for its step, how many values it can take and its importance: higher importance is searched first.
 
 #### Good signs and warning signs
 
-- Good: bands that include the current settings, so the search can keep them.
-- Warning: a narrow band far from the current settings. The search can only move away.
+- Good: bands that include the current settings, so the search weighs today's values against the alternatives.
+- Warning: a narrow band far from the current settings. Grid can only move away; Zoom moves into the band only when a value there does strictly better than where it starts.
 
 #### An everyday comparison
 
@@ -110,19 +110,19 @@ How many engine runs does each stage plan, and how many has it used?
 
 #### What you're looking at
 
-A row for each stage. The grey bar is the most engine runs the plan allows the stage, frozen at lock; the blue bar is how many it has reserved so far. A cached answer reuses an earlier run without spending the cap.
+A row for each stage. The grey bar is the most engine runs the stage could need, frozen at lock: an upper bound, not a stop. The blue bar is how many it has used so far, runs still in flight included; the search's include its pair audits, and together the bars add up to the runs the study has used. A cached answer reuses an earlier run without spending the cap.
 
 #### How to read it
 
 1. Each row is a stage of the study.
 2. The grey bar is the most runs the plan allows the stage.
-3. The blue bar is how many it has reserved so far.
-4. A stage that reaches its plan may stop short; the study notes it as incomplete.
+3. The blue bar is how many it has used so far, runs in flight included.
+4. The plan is an upper bound, not a stop. A stage stops short only when the study’s cap runs out; the study then notes it as incomplete.
 
 #### Good signs and warning signs
 
-- Good: blue bars inside their grey bars.
-- Warning: a stage at its limit. Its results may be incomplete.
+- Good: blue bars inside their grey bars, and runs used well under the study's cap.
+- Warning: runs used close to the cap. A stage that runs out of the cap stops short, and its results are incomplete.
 
 #### An everyday comparison
 
@@ -166,7 +166,7 @@ Does the lake hold the minute bars the study's data span needs?
 
 #### What you're looking at
 
-A bar for each month of the study's data span, from the run-up's start to the final test's end, as tall as the month's trading sessions. Each bar is split by what the data lake holds for those sessions: complete in green, still fetching in amber, failed in red, and not in the lake at all in grey. Weekends and holidays are not sessions, so they never count as missing.
+A bar for each month of the study's data span, from the run-up's start to the final test's end, as tall as the month's trading sessions. Each bar is split by what the data lake holds for those sessions: complete in green, still fetching in amber, stale (held but due to be fetched again) in teal, failed in red, and not in the lake at all in grey. Weekends and holidays are not sessions, so they never count as missing.
 
 This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.
 
@@ -174,7 +174,7 @@ This is the lake now. The study ran on the data snapshot frozen at lock, which t
 
 1. Each bar is a month of the study’s data span, as tall as its trading sessions.
 2. Green sessions are complete in the lake.
-3. Amber is still fetching, red failed, and grey not in the lake at all.
+3. Amber is still fetching, teal stale, red failed, and grey not in the lake at all.
 4. This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.
 
 #### Good signs and warning signs
