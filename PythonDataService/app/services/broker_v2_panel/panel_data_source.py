@@ -42,7 +42,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.ibkr.config import live_artifacts_root
-from app.broker.v2panel.action_policy import RehearsalRecords, archive_action
+from app.broker.v2panel.action_policy import sealed_account_archive_action
 from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
     BotRunView,
@@ -998,19 +998,12 @@ def _sealed_account_archive(registry: BotTaskRegistry, broker: str, sid: str) ->
     if foreign is None:
         return None
     status = registry.status(broker, sid)
-    return archive_action(
+    return sealed_account_archive_action(
         running=status.running,
         phase=status.phase,
-        freeze_active=False,
-        exposure={},
-        working_order_count=0,
+        keeps_records=is_shadow_account_id(foreign.sealed_account_id),
         account_id=foreign.sealed_account_id,
         strategy_instance_id=sid,
-        revision=0,
-        custody_account_foreign=True,
-        rehearsal=(
-            RehearsalRecords(readable=True) if is_shadow_account_id(foreign.sealed_account_id) else None
-        ),
     )
 
 

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.idempotency import UnknownStrategyInstanceError
 from app.broker.alpaca.clerk.sqlite.order_evidence import unresolved_order_refs, working_order_refs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
@@ -90,7 +91,13 @@ def read_recorded_custody(
 
     ``open_book_orders`` is the store's second witness, counted by whoever
     owns its order book (``shadow_broker.open_book_orders``).
+
+    Raises ``UnknownStrategyInstanceError`` for a bot the store never
+    registered: every count below reads zero for it, and those zeros would
+    prove nothing.
     """
+    if repository.strategy_instance(strategy_instance_id) is None:
+        raise UnknownStrategyInstanceError(strategy_instance_id)
     subject_id = bot_subject_id(strategy_instance_id)
     return RecordedCustody(
         positions={

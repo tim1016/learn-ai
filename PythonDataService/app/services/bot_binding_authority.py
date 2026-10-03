@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.shadow_authority import open_graduated_shadow_store
 from app.broker.alpaca.clerk.shadow_broker import ShadowBookUnreadable, open_book_orders
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.idempotency import UnknownStrategyInstanceError
 from app.broker.alpaca.clerk.sqlite.recorded_custody import RecordedCustody, read_recorded_custody
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,
@@ -570,9 +571,16 @@ class RehearsalRecordsUnavailable(Exception):
 
 #: What keeps a sealed store's records from being read: its lease is held or
 #: its file fails a startup check (``ClerkSqliteError``), its activation
-#: record is missing or names another store, its order book cannot be parsed,
-#: or the files themselves fail.
-_RECORDS_UNREADABLE = (ClerkSqliteError, IsolatedActivationInvalid, ShadowBookUnreadable, sqlite3.Error, OSError)
+#: record is missing or names another store, it never registered the bot,
+#: its order book cannot be parsed, or the files themselves fail.
+_RECORDS_UNREADABLE = (
+    ClerkSqliteError,
+    IsolatedActivationInvalid,
+    UnknownStrategyInstanceError,
+    ShadowBookUnreadable,
+    sqlite3.Error,
+    OSError,
+)
 
 
 @dataclass(frozen=True)

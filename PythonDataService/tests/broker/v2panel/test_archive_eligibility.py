@@ -23,6 +23,7 @@ from app.broker.v2panel.action_policy import (
     RehearsalRecords,
     archive_action,
     evaluate_archive,
+    evaluate_rehearsal_custody,
 )
 from app.schemas.broker_v2_panel import PanelAction
 
@@ -100,54 +101,25 @@ def test_archive_refuses_a_bot_sealed_on_an_account_the_clerk_does_not_hold(phas
     assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_SEALED_ACCOUNT_CUSTODY")
 
 
-def _rehearsal(*, phase: str = "OFF_DUTY", running: bool = False, records: RehearsalRecords) -> ArchiveVerdict:
-    """The rule for a bot sealed on a graduated Shadow store: the installed custody facts are not read."""
-    return evaluate_archive(
-        running=running,
-        phase=phase,
-        custody_account_foreign=True,
-        has_exposure=False,
-        working_order_count=0,
-        outstanding_effect_count=0,
-        custody_provable=False,
-        rehearsal=records,
-    )
-
-
-def test_a_settled_rehearsal_bot_is_eligible_on_shadow_records_that_show_nothing_held() -> None:
+def test_shadow_records_that_show_nothing_held_make_a_rehearsal_bot_eligible() -> None:
     """#2694: a graduated Shadow store keeps the one proof a bot sealed on
     another account can offer, so such a bot is no longer refused for its
     account."""
-    assert _rehearsal(records=RehearsalRecords(readable=True)) == ArchiveVerdict(eligible=True)
+    assert evaluate_rehearsal_custody(RehearsalRecords(readable=True)) == ArchiveVerdict(eligible=True)
 
 
 def test_a_rehearsal_bot_is_refused_for_what_its_shadow_records_show_it_holds() -> None:
-    verdict = _rehearsal(records=RehearsalRecords(readable=True, held="10 SPY"))
+    verdict = evaluate_rehearsal_custody(RehearsalRecords(readable=True, held="10 SPY"))
 
     assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_STILL_HOLDS", held="10 SPY")
 
 
 def test_shadow_records_that_could_not_be_read_prove_nothing() -> None:
     """A held lease, a mismatched identity or an unreadable file is never an
-    eligible Clear -- whatever the unread records would have said."""
-    verdict = _rehearsal(records=RehearsalRecords(readable=False))
+    eligible Clear."""
+    verdict = evaluate_rehearsal_custody(RehearsalRecords(readable=False))
 
     assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE")
-
-
-@pytest.mark.parametrize(
-    ("facts", "cause"),
-    [
-        ({"running": True, "phase": "ON_DUTY"}, "BOT_STILL_RUNNING"),
-        ({"phase": "ON_DUTY"}, "BOT_DUTY_NOT_SETTLED"),
-    ],
-)
-def test_a_rehearsal_bots_duty_record_answers_before_its_shadow_records(facts: dict[str, Any], cause: str) -> None:
-    """Its dead run is settled through the same store (#2589), so "not yet
-    settled" is a promise that holds for it -- and it is answered without the
-    records, which the commit then never opens."""
-    for records in (RehearsalRecords(readable=False), RehearsalRecords(readable=True, held="10 SPY")):
-        assert _rehearsal(records=records, **facts) == ArchiveVerdict(eligible=False, cause=cause)
 
 
 def test_archive_refuses_while_an_effect_is_still_unresolved() -> None:

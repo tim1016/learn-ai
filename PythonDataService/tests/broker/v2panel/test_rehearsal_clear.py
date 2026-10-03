@@ -38,6 +38,7 @@ from app.broker.contract.registry import reset_broker_registry_for_testing
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_v2_panel import BotClearRequest, PanelActionRequest
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_lifecycle_projection import AlpacaLifecycleProjector
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.broker_v2_panel import bot_clear, bot_history, panel_data_source, panel_scope, sqlite_roster_status
 from app.services.broker_v2_panel.action_execution_service import (
@@ -56,6 +57,8 @@ _FLAT = "spy-rehearsal-flat"
 _HELD = "spy-rehearsal-held"
 #: Sealed on another real account, which keeps no records this lane can read.
 _ELSEWHERE = "spy-sealed-elsewhere"
+#: Bound to the Shadow store by the runner, but never registered in it.
+_UNREGISTERED = "spy-rehearsal-unregistered"
 #: What the panel read answered for such a bot, and what no Clear may answer now.
 _RAW_PANEL_TEXT = "No custody record exists"
 #: The Clear a stopped, settled bot presents (``test_archive_eligibility``).
@@ -217,6 +220,55 @@ async def test_a_clear_naming_a_holding_rehearsal_bot_is_refused_with_a_code_and
     assert _RAW_PANEL_TEXT not in f"{refused.message} {refused.why}"
     assert lane.runner.status("alpaca", _HELD).phase == "OFF_DUTY"
     assert lane.retired_at_ms(_HELD) is None
+
+
+async def test_a_bot_the_shadow_store_never_registered_is_refused_for_its_records_every_time(lane: _Lane) -> None:
+    """The store has never heard of the bot, so its silence proves nothing:
+    the Clear is refused by code before anything is written, and a resend
+    under the same key is answered the same way, not as a burned key."""
+    _bound(lane.runner, _UNREGISTERED, sealed_account_id=_SEALED)
+
+    for _attempt in range(2):
+        result = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_UNREGISTERED), operator_identity="owner")
+
+        refused = result.legs[0].error
+        assert refused is not None
+        assert (result.legs[0].outcome, refused.reason_code, refused.message) == (
+            "refused", "ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE", "This bot's Shadow records could not be read.",
+        )
+    assert lane.runner.status("alpaca", _UNREGISTERED).phase == "OFF_DUTY"
+
+
+async def test_a_clear_that_retired_the_bot_but_failed_to_record_it_is_finished_from_home(
+    lane: _Lane, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Shadow store took the retirement, then the runner's own record of
+    it failed to write. The bot is neither cleared nor gone: it stays in
+    Home's Finished fold, and clearing it again completes the record."""
+    real_refresh = AlpacaLifecycleProjector.refresh
+    failed: list[str] = []
+
+    def _first_record_fails(self: AlpacaLifecycleProjector, **kwargs: object):
+        if not failed:
+            failed.append(str(kwargs["strategy_instance_id"]))
+            raise OSError("disk full while recording the retirement")
+        return real_refresh(self, **kwargs)
+
+    monkeypatch.setattr(AlpacaLifecycleProjector, "refresh", _first_record_fails)
+
+    first = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_FLAT), operator_identity="owner")
+
+    assert [leg.outcome for leg in first.legs] == ["unknown"]
+    assert lane.retired_at_ms(_FLAT) is not None
+    assert lane.runner.status("alpaca", _FLAT).phase == "OFF_DUTY"
+    home = await panel_data_source.get_catalog("alpaca", _LIVE, home=True)
+    assert [row.strategy_instance_id for row in home] == [_FLAT]
+
+    again = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_FLAT, key="clear-2"), operator_identity="owner")
+
+    assert [leg.outcome for leg in again.legs] == ["applied"]
+    assert lane.runner.status("alpaca", _FLAT).phase == "RETIRED"
+    assert await panel_data_source.get_catalog("alpaca", _LIVE, home=True) == []
 
 
 async def test_a_clear_naming_a_bot_sealed_on_another_real_account_is_refused_for_its_account(lane: _Lane) -> None:

@@ -16,6 +16,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.idempotency import UnknownStrategyInstanceError
 from app.broker.alpaca.clerk.sqlite.recorded_custody import RecordedCustody, read_recorded_custody
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, raise_uncertainty
@@ -68,6 +69,13 @@ def test_a_stopped_bot_that_never_traded_holds_nothing(repo: ClerkSqliteReposito
 
     assert custody.holds_nothing
     assert custody.held_phrase == ""
+
+
+def test_a_bot_the_store_never_registered_has_no_proof_to_read(repo: ClerkSqliteRepository) -> None:
+    """Every count reads zero for a bot the store has never heard of. That is
+    the store's silence, not the bot's flatness, so the read refuses to answer."""
+    with pytest.raises(UnknownStrategyInstanceError):
+        read_recorded_custody(repo, "never-registered", open_book_orders=0)
 
 
 def test_a_run_the_store_still_holds_active_is_a_holding(repo: ClerkSqliteRepository) -> None:

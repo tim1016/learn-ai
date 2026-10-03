@@ -57,6 +57,8 @@ from app.broker.v2panel.action_policy import (
     ArchiveVerdict,
     RehearsalRecords,
     evaluate_archive,
+    evaluate_archive_duty,
+    evaluate_rehearsal_custody,
 )
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
@@ -388,22 +390,6 @@ def _archive_refusal(verdict: ArchiveVerdict) -> BotRunnerError:
     """The commit-time refusal an ineligible verdict is answered with."""
     headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
     return BotRunnerError(headline.format(held=verdict.held), detail=detail, reason_code=verdict.cause)
-
-
-def _rehearsal_verdict(status: BotStatusView, records: RehearsalRecords) -> ArchiveVerdict:
-    """The shared archive rule for a bot sealed on a graduated ``shadow:`` store (#2694)."""
-    return evaluate_archive(
-        running=status.running,
-        phase=status.phase,
-        custody_account_foreign=True,
-        # The installed Clerk holds no custody for it: the store's own
-        # records are the proof, and these facts are not read.
-        has_exposure=False,
-        working_order_count=0,
-        outstanding_effect_count=0,
-        custody_provable=False,
-        rehearsal=records,
-    )
 
 
 #: One lane-level start gate: raises :class:`RunAdmissionRefusedError` when
@@ -1067,49 +1053,62 @@ class BotTaskRegistry:
 
         The installed Clerk holds no custody for it, so the proof that it
         holds nothing is read from the store it rehearsed on, and the
-        retirement is written there: one opening, so one execution lease
-        covers both, and the installed authority writes nothing (ADR 0050).
-        The duty record answers first, without the store being opened.
+        retirement is written there; the installed authority writes nothing
+        (ADR 0050). The duty record answers first, and then the store is
+        never opened.
         """
         sid = status.strategy_instance_id
-        unread = _rehearsal_verdict(status, RehearsalRecords(readable=False))
-        verdict = unread
-        if unread.cause == "ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE":
-            # Only the records stand between this bot and a clear: read them.
-            try:
-                async with authority.custody_for_clear() as (custody, projector):
-                    verdict = _rehearsal_verdict(
-                        status,
-                        RehearsalRecords(
-                            readable=True, held=None if custody.holds_nothing else custody.held_phrase
-                        ),
-                    )
-                    if verdict.eligible:
-                        projector.retire(
-                            strategy_instance_id=sid,
-                            now_ms=self._now_ms(),
-                            updated_by=updated_by,
-                            reason=reason or f"Panel archive by {updated_by}",
-                        )
-            except (RehearsalRecordsUnavailable, ExecutionLeaseLost) as exc:
-                # A lease lost at the retirement applied nothing: a mutation
-                # renews the lease before it writes. Unread records, like a
-                # lost lease, prove nothing, and the bot stays as it is.
-                logger.warning(
-                    "A rehearsal bot's Shadow records could not be read or leased; it is not cleared",
-                    extra={
-                        "action": "archive_rehearsal_records_unavailable",
-                        "strategy_instance_id": sid,
-                        "sealed_account_id": authority.account_id,
-                        "error": str(exc),
-                    },
-                )
-                verdict = unread
+        verdict = evaluate_archive_duty(running=status.running, phase=status.phase)
+        if verdict is None:
+            verdict = await self._retire_on_shadow_records(
+                sid, authority, updated_by=updated_by, reason=reason or f"Panel archive by {updated_by}"
+            )
         if verdict.already_retired:
             return status
         if not verdict.eligible:
             raise _archive_refusal(verdict)
         return self.status(broker, sid)
+
+    async def _retire_on_shadow_records(
+        self,
+        strategy_instance_id: str,
+        authority: SealedShadowBindingAuthority,
+        *,
+        updated_by: str,
+        reason: str,
+    ) -> ArchiveVerdict:
+        """What the sealed store's records prove of the bot, retiring it there when they prove it holds nothing.
+
+        One opening, so one execution lease covers the proof and the
+        retirement it permits.
+        """
+        try:
+            async with authority.custody_for_clear() as (custody, projector):
+                verdict = evaluate_rehearsal_custody(
+                    RehearsalRecords(readable=True, held=None if custody.holds_nothing else custody.held_phrase)
+                )
+                if verdict.eligible:
+                    projector.retire(
+                        strategy_instance_id=strategy_instance_id,
+                        now_ms=self._now_ms(),
+                        updated_by=updated_by,
+                        reason=reason,
+                    )
+                return verdict
+        except (RehearsalRecordsUnavailable, ExecutionLeaseLost) as exc:
+            # A lease lost at the retirement applied nothing: a mutation
+            # renews the lease before it writes. Unread records, like a lost
+            # lease, prove nothing, and the bot stays as it is.
+            logger.warning(
+                "A rehearsal bot's Shadow records could not be read or leased; it is not cleared",
+                extra={
+                    "action": "archive_rehearsal_records_unavailable",
+                    "strategy_instance_id": strategy_instance_id,
+                    "sealed_account_id": authority.account_id,
+                    "error": str(exc),
+                },
+            )
+            return evaluate_rehearsal_custody(RehearsalRecords(readable=False))
 
     async def _archive_verdict(
         self,

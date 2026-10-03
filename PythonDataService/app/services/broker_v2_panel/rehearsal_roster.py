@@ -21,7 +21,7 @@ from typing import NamedTuple
 
 from app.broker.alpaca.clerk.account_authority import is_shadow_account_id
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.schemas.bot_history import BotHistoryBot
+from app.schemas.bot_history import BotHistoryBot, BotHistoryStatus
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -31,6 +31,12 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     CatalogEconomicRollup,
     compose_catalog_view,
 )
+
+#: What History says of a rehearsal bot Home lists. Cleared is the store's
+#: word for a retirement the runner's own record does not show yet: a Clear
+#: that retired the bot there and then failed to record it. The row stays
+#: until the runner says the bot is cleared, so Clear can finish the job.
+_LISTED: tuple[BotHistoryStatus, ...] = ("finished", "cleared")
 
 
 class _Rehearsal(NamedTuple):
@@ -46,7 +52,7 @@ async def finished_rehearsal_rows(
     registry: BotTaskRegistry,
     bindings: Sequence[BrokerBotBinding],
 ) -> list[BotCatalogView]:
-    """One Finished row per rehearsal bot whose Shadow records show it stopped and flat."""
+    """One Finished row per rehearsal bot whose Shadow records show it stopped and flat, until it is cleared."""
     if is_shadow_account_id(facade.account_id):
         # The installed authority is the Shadow world itself: its bots are
         # its own, on its own pages.
@@ -60,7 +66,7 @@ async def finished_rehearsal_rows(
     return [
         _finished_row(rehearsals[bot.strategy_instance_id], bot)
         for bot in bots
-        if bot.status == "finished"
+        if bot.status in _LISTED
     ]
 
 

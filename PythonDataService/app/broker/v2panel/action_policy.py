@@ -97,6 +97,28 @@ class ArchiveVerdict:
     held: str | None = None
 
 
+def evaluate_archive_duty(*, running: bool, phase: str) -> ArchiveVerdict | None:
+    """The duty half of the archive rule: what the runner's own record refuses before any custody is read.
+
+    ``None`` when it refuses nothing, and custody decides.
+
+    ``running`` and ``phase`` are two different facts and both are required.
+    ``running`` is process liveness; ``phase`` is the durable duty record. They
+    disagree in exactly the window that matters -- a task that has died before
+    its stop transition committed reads ``running=False`` while the authority
+    still holds an ACTIVE run -- and archiving there would stamp
+    ``retired_at_ms`` on a registration whose run never ended. The fold that
+    writes it states there is no active run; this is what makes that true.
+    """
+    if phase == "RETIRED":
+        return ArchiveVerdict(eligible=False, already_retired=True)
+    if running:
+        return ArchiveVerdict(eligible=False, cause="BOT_STILL_RUNNING")
+    if phase != "OFF_DUTY":
+        return ArchiveVerdict(eligible=False, cause="BOT_DUTY_NOT_SETTLED")
+    return None
+
+
 def evaluate_archive(
     *,
     running: bool,
@@ -106,7 +128,6 @@ def evaluate_archive(
     working_order_count: int,
     outstanding_effect_count: int,
     custody_provable: bool,
-    rehearsal: RehearsalRecords | None = None,
 ) -> ArchiveVerdict:
     """Decide archive eligibility, nearest obstacle first (ADR 0052).
 
@@ -120,27 +141,15 @@ def evaluate_archive(
     enabling one. The custody guard *is* the proof, so it must be believable
     before it is believed.
 
-    ``running`` and ``phase`` are two different facts and both are required.
-    ``running`` is process liveness; ``phase`` is the durable duty record. They
-    disagree in exactly the window that matters -- a task that has died before
-    its stop transition committed reads ``running=False`` while the authority
-    still holds an ACTIVE run -- and archiving there would stamp
-    ``retired_at_ms`` on a registration whose run never ended. The fold that
-    writes it states there is no active run; this is what makes that true.
+    The duty half answers first (``evaluate_archive_duty``); the rest is the
+    installed Clerk's reconciled custody.
 
     ``custody_account_foreign`` is a registration sealed on an account the
-    installed Clerk does not custody (#2589). With no ``rehearsal`` nothing
-    can prove it holds nothing, and no wait changes that, so it is refused
-    before its duty settles: a not-yet-settled refusal would promise a clear
-    that never comes.
-
-    ``rehearsal`` is that proof for the one such account that keeps one: a
-    live account's Shadow store after graduation (#2694). No broker stands
-    behind it and nothing reconciles it again, so its own records are the last
-    word, and they stand in for the installed custody facts below. Its duty is
-    settled through the same store (#2589), so the not-yet-settled promise
-    holds for it. Records that could not be read prove nothing; records that
-    show a holding refuse and name it.
+    installed Clerk does not custody (#2589). Nothing here can prove it holds
+    nothing, and no wait changes that, so it is refused before its duty
+    settles: a not-yet-settled refusal would promise a clear that never
+    comes. The one such account that keeps a proof of its own, a graduated
+    Shadow store, is answered by ``evaluate_rehearsal_custody`` instead.
 
     ``outstanding_effect_count`` is bot-scoped and asymmetric by design: the
     commit-time caller reads it from a freshly reconciled custody snapshot,
@@ -151,20 +160,11 @@ def evaluate_archive(
     refused at commit, rather than committing and letting the effect create
     broker custody for a terminal registration.
     """
-    if phase == "RETIRED":
-        return ArchiveVerdict(eligible=False, already_retired=True)
-    if running:
-        return ArchiveVerdict(eligible=False, cause="BOT_STILL_RUNNING")
-    if custody_account_foreign and rehearsal is None:
+    duty = evaluate_archive_duty(running=running, phase=phase)
+    if custody_account_foreign and (duty is None or duty.cause == "BOT_DUTY_NOT_SETTLED"):
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_SEALED_ACCOUNT_CUSTODY")
-    if phase != "OFF_DUTY":
-        return ArchiveVerdict(eligible=False, cause="BOT_DUTY_NOT_SETTLED")
-    if rehearsal is not None:
-        if not rehearsal.readable:
-            return ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE")
-        if rehearsal.held is not None:
-            return ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_STILL_HOLDS", held=rehearsal.held)
-        return ArchiveVerdict(eligible=True)
+    if duty is not None:
+        return duty
     if not custody_provable:
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_CUSTODY_UNPROVABLE")
     if has_exposure or working_order_count or outstanding_effect_count:
@@ -172,7 +172,24 @@ def evaluate_archive(
     return ArchiveVerdict(eligible=True)
 
 
-#: The two rehearsal refusals (#2694), worded once for the page's blocker and
+def evaluate_rehearsal_custody(records: RehearsalRecords) -> ArchiveVerdict:
+    """The custody half for a bot sealed on a graduated Shadow store (#2694).
+
+    Answered once the duty half refuses nothing. No broker stands behind
+    that store and nothing reconciles it again, so its own records are the
+    last word and stand in for the installed Clerk's reconciled custody. The
+    bot's duty is settled through the same store (#2589), so a not-yet-settled
+    refusal is a promise that holds for it. Records that could not be read
+    prove nothing; records that show a holding refuse and name it.
+    """
+    if not records.readable:
+        return ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE")
+    if records.held is not None:
+        return ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_STILL_HOLDS", held=records.held)
+    return ArchiveVerdict(eligible=True)
+
+
+#: The two rehearsal refusals (#2694), worded once for a presented blocker and
 #: the commit's refusal alike. ``{held}`` is the verdict's ``held``.
 REHEARSAL_RECORDS_UNAVAILABLE_COPY = (
     "This bot's Shadow records could not be read.",
@@ -228,33 +245,97 @@ def archive_action(
     account_id: str,
     strategy_instance_id: str,
     revision: int,
-    custody_account_foreign: bool = False,
-    rehearsal: RehearsalRecords | None = None,
 ) -> PanelAction:
     """Present the shared archive rule on one bot's page (ADR 0052).
 
     ``exposure`` is the bot's attributed net exposure per symbol; any nonzero
     quantity blocks archive while the bot still holds a position.
-
-    A page is built from the installed Clerk's custody record, which a bot
-    sealed on another account does not have -- its page is not found (#2589).
-    Only a Clear request presents one for such a bot, from the runner's own
-    duty record (``custody_account_foreign``, ``rehearsal``; #2694).
     """
-    has_exposure = any(abs(qty) > 0 for qty in exposure.values())
     verdict = evaluate_archive(
         running=running,
         phase=phase,
-        custody_account_foreign=custody_account_foreign,
-        has_exposure=has_exposure,
+        # A page is built from the installed Clerk's custody record, which a
+        # bot sealed on another account does not have -- its page is not
+        # found -- so a page's archive is never for one (#2589). A Clear
+        # request presents such a bot's (``sealed_account_archive_action``).
+        custody_account_foreign=False,
+        has_exposure=any(abs(qty) > 0 for qty in exposure.values()),
         working_order_count=working_order_count,
         # The panel has no bot-scoped effect count; the commit does, and it is
         # what enforces this. See `evaluate_archive` on why that asymmetry is
         # safe here and is the action's existing contract, not a gap in it.
         outstanding_effect_count=0,
         custody_provable=not freeze_active,
-        rehearsal=rehearsal,
     )
+    return _presented_archive(
+        verdict,
+        running=running,
+        phase=phase,
+        freeze_active=freeze_active,
+        exposure=exposure,
+        working_order_count=working_order_count,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        revision=revision,
+    )
+
+
+def sealed_account_archive_action(
+    *,
+    running: bool,
+    phase: str,
+    keeps_records: bool,
+    account_id: str,
+    strategy_instance_id: str,
+) -> PanelAction:
+    """Present Clear for a bot sealed on an account the installed Clerk does not custody (#2694).
+
+    No page is built for such a bot, so a Clear request presents this from
+    the runner's own duty record. ``keeps_records`` is a graduated Shadow
+    store: what its records show the bot holds is the commit's to read
+    (``evaluate_rehearsal_custody``), so nothing is presented in the way --
+    the asymmetry ``evaluate_archive`` describes for an effect only the
+    commit can see. A bot sealed on any other account is refused for it.
+    """
+    verdict = (
+        evaluate_archive_duty(running=running, phase=phase) or ArchiveVerdict(eligible=True)
+        if keeps_records
+        else evaluate_archive(
+            running=running,
+            phase=phase,
+            custody_account_foreign=True,
+            has_exposure=False,
+            working_order_count=0,
+            outstanding_effect_count=0,
+            custody_provable=False,
+        )
+    )
+    return _presented_archive(
+        verdict,
+        running=running,
+        phase=phase,
+        freeze_active=False,
+        exposure={},
+        working_order_count=0,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        revision=0,
+    )
+
+
+def _presented_archive(
+    verdict: ArchiveVerdict,
+    *,
+    running: bool,
+    phase: str,
+    freeze_active: bool,
+    exposure: Mapping[str, float],
+    working_order_count: int,
+    account_id: str,
+    strategy_instance_id: str,
+    revision: int,
+) -> PanelAction:
+    """One verdict as the action a Clear runs under: enablement, blockers, confirmation and token."""
     copy = copy_for("archive")
     return PanelAction(
         action_id="archive",
@@ -275,7 +356,7 @@ def archive_action(
         concurrency_token=_archive_concurrency_token(
             phase=phase,
             running=running,
-            has_exposure=has_exposure,
+            has_exposure=any(abs(qty) > 0 for qty in exposure.values()),
             exposure=exposure,
             working_order_count=working_order_count,
             freeze_active=freeze_active,

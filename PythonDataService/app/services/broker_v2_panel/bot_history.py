@@ -157,6 +157,10 @@ class _Source:
     #: Why its bots' pages cannot open: the account's workspace reads its own
     #: world and its Dry Runs, never its other world (``_sibling_sources``).
     page_unavailable_reason: str | None = None
+    #: No Clerk will ever reconcile it again: a live account's Shadow world
+    #: after graduation. What its records say can still change never will, so
+    #: a retired bot of it is cleared (#2694).
+    dormant: bool = False
 
 
 async def account_bot_history(
@@ -185,7 +189,7 @@ async def account_bot_history(
                 read_custody_history, source.path, now_ms=now_ms, fee_evidence_checked_at_ms=None,
                 strategy_instance_ids=only if source.strategy_instance_id is None else (source.strategy_instance_id,),
                 memo=_SOURCE_MEMOS.setdefault(source.path, RevisionMemo()),
-            ), page_unavailable_reason=source.page_unavailable_reason)
+            ), page_unavailable_reason=source.page_unavailable_reason, dormant=source.dormant)
             for source in (*_sibling_sources(facade), *_dry_run_sources(broker, only=strategy_instance_id))
         ),
     ]
@@ -219,7 +223,7 @@ async def shadow_rehearsal_bots(
         read = _Read(source.world, None, partial(
             read_custody_history, source.path, now_ms=now_ms, fee_evidence_checked_at_ms=None,
             strategy_instance_ids=only, memo=_REHEARSAL_MEMOS.setdefault(source.path, RevisionMemo()),
-        ), page_unavailable_reason=source.page_unavailable_reason)
+        ), page_unavailable_reason=source.page_unavailable_reason, dormant=source.dormant)
         read_bots, _gaps = await _read_source(read, account_id=account_id, limit=asyncio.Semaphore(1))
         bots.extend(read_bots)
     return tuple(bots)
@@ -234,6 +238,8 @@ class _Read(NamedTuple):
     read: Callable[[], CustodyHistory]
     #: Set for a world the account's workspace does not read (``_Source``).
     page_unavailable_reason: str | None = None
+    #: A database nothing reconciles again (``_Source.dormant``).
+    dormant: bool = False
 
 
 async def _read_source(
@@ -256,7 +262,7 @@ async def _read_source(
             return (), (_gap_for(source.world, source.dry_run_sid, why=_UNREADABLE_WHY),)
         return await asyncio.to_thread(
             compose_bots, history, authority_world=source.world, account_id=account_id,
-            page_unavailable_reason=source.page_unavailable_reason,
+            page_unavailable_reason=source.page_unavailable_reason, dormant=source.dormant,
         )
 
 
@@ -276,7 +282,7 @@ def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
         return ()
     world = authority_kind_for_account(sibling, account_mode="live")
     return (_Source(
-        path=path, world=world,
+        path=path, world=world, dormant=world == "shadow",
         page_unavailable_reason=(
             f"This bot ran in the account's {_OTHER_WORLD_NAMES[world]} world, which the account's pages "
             "don't open, so it has no page of its own. History keeps its record."
@@ -313,7 +319,7 @@ def _gap_for(world: AuthorityKind, dry_run_sid: str | None, *, why: str) -> BotH
 
 def compose_bots(
     history: CustodyHistory, *, authority_world: AuthorityKind, account_id: str,
-    page_unavailable_reason: str | None = None,
+    page_unavailable_reason: str | None = None, dormant: bool = False,
 ) -> tuple[tuple[BotHistoryBot, ...], tuple[BotHistoryGap, ...]]:
     """Word one custody database's bots, each on its own: one it cannot read is a gap.
 
@@ -326,6 +332,7 @@ def compose_bots(
             bots.append(_bot(
                 facts, authority_world=authority_world, account_id=account_id,
                 money_unavailable=history.money_unavailable, page_unavailable_reason=page_unavailable_reason,
+                dormant=dormant,
             ))
         except _BOT_UNREADABLE:
             logger.warning(
@@ -340,7 +347,7 @@ def compose_bots(
 
 def _bot(
     facts: BotFacts, *, authority_world: AuthorityKind, account_id: str, money_unavailable: str | None,
-    page_unavailable_reason: str | None,
+    page_unavailable_reason: str | None, dormant: bool,
 ) -> BotHistoryBot:
     sid = facts.strategy_instance_id
     if facts.config is None:
@@ -349,7 +356,9 @@ def _bot(
     runs = _runs(sid, facts.runs, retired_at_ms=facts.retired_at_ms)
     running = bool(runs) and runs[0].running
     status = bot_status(
-        retired=facts.retired_at_ms is not None, live_custody=facts.live_custody,
+        # In a dormant database nothing is live: a filled ENTER's effect, which
+        # no fold ends, would otherwise keep a cleared bot "finished" for good.
+        retired=facts.retired_at_ms is not None, live_custody=facts.live_custody and not dormant,
         running=running, holds_money=facts.holds_money,
     )
     return BotHistoryBot(

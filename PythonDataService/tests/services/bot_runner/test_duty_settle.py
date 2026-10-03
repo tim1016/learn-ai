@@ -575,6 +575,23 @@ async def test_a_rehearsal_bot_whose_shadow_records_show_a_holding_is_refused_an
 
 
 @pytest.mark.asyncio
+async def test_an_unsettled_rehearsal_bot_is_refused_on_its_duty_record_with_its_store_unopened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before the sweep settles it, the bot's own duty record refuses the
+    Clear, in the words that promise one once it settles. The store is not
+    opened for that answer: held elsewhere here, it would have refused the
+    Clear for its records instead."""
+    registry = await _rehearse_until_the_bot_dies(tmp_path, monkeypatch)
+
+    async with _graduated(tmp_path, monkeypatch, registry):
+        with _sealed_store(tmp_path / "runner"), pytest.raises(BotRunnerError) as refused:
+            await registry.archive("alpaca", _SID, updated_by="operator")
+
+        assert refused.value.reason_code == "BOT_DUTY_NOT_SETTLED"
+
+
+@pytest.mark.asyncio
 async def test_a_rehearsal_bot_whose_shadow_store_another_process_holds_is_not_cleared(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
