@@ -339,6 +339,11 @@ async def _latest_pass_vouches_flat(clerk: ActiveAlpacaClerk | None, sid: str) -
     saw the bot's every transition (``published_custody``, #2607) and finds
     it flat with nothing working (``proves_flat``, what a stop at the bot's
     end records as STOPPED_FLAT), that pass is the check the line asks for.
+
+    The pass may predate the exit itself. That is still proof: the exit is a
+    lifecycle record, not a custody transition, and no order of the bot's
+    reaches Alpaca without its effect's transition first (``ClaimedBrokerIO``).
+    A pass that saw them all saw everything the bot could have left there.
     """
     proof = None if clerk is None else await clerk.published_custody(sid)
     return proof is not None and proof.proves_flat
