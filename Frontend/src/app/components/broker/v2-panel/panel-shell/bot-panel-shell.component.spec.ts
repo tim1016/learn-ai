@@ -675,8 +675,6 @@ function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActi
   };
 }
 
-/** Renders the shell with a single unconfirmed command (Reconcile now) in its
- * header, so the fence tests only need to click one button. */
 /** The workspace's header as production gives it to the bot page: the slot's controls drawn above the page. */
 @Component({
   selector: 'app-header-slot-host',
@@ -695,6 +693,8 @@ class HeaderSlotHostComponent {
   protected readonly slot = inject(WorkspaceHeaderSlot);
 }
 
+/** Renders the shell with a single unconfirmed command (Reconcile now) in its
+ * header, so the fence tests only need to click one button. */
 async function renderShell(
   overrides: {
     directory?: FleetDirectoryDouble;

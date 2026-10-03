@@ -172,6 +172,24 @@ describe('BotToolbarComponent (#2794)', () => {
     expect(within(menu).getByRole('button', { name: 'Build proof' }).textContent?.trim()).toBe('Build proof');
   });
 
+  it('keeps an Inspect action on the bar when the backend makes it the primary', async () => {
+    const panel = runningPanel();
+    await renderToolbar({
+      ...panel,
+      bot_page: {
+        ...fakeBotPage(panel),
+        toolbar: [
+          toolbarEntry({ action_id: 'open_custody_timeline', label: 'Custody timeline', group: 'inspect', primary: true }),
+          toolbarEntry({ action_id: 'build_proof', label: 'Build proof', group: 'inspect' }),
+        ],
+      },
+    });
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+    expect(within(toolbar).getByRole('button', { name: 'Custody timeline' }).textContent?.trim()).toBe('Custody timeline');
+    expect(within(toolbar).getByRole('button', { name: 'More actions, 1 not on the bar' })).toBeTruthy();
+  });
+
   it('keeps a blocked Manual order where it is, saying why, and an entry it does not know inert', async () => {
     const user = userEvent.setup();
     const panel = runningPanel();

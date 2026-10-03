@@ -57,12 +57,16 @@ const ICONS: Readonly<Record<ToolbarActionId, string>> = {
 /** Money moves keep their words, whatever the Labels setting (#2794 story 15). */
 const ALWAYS_LABELLED: ReadonlySet<ToolbarActionId> = new Set(['stop_bot_decisions', 'prepare_safe_flatten']);
 
-/** Bot's and Fix's actions sit on the bar; Inspect's wait under More. A
- * place follows the action's group alone, never which other actions are
- * offered, so a poll cannot move a button -- and a confirmation open on it --
- * between the bar and More. */
-const BAR_GROUPS: readonly ToolbarGroupKey[] = ['bot', 'fix'];
-const MORE_GROUP: ToolbarGroupKey = 'inspect';
+/** Bot's and Fix's actions sit on the bar; Inspect's wait under More, unless
+ * the backend makes one the primary. A place follows the action's group and
+ * that word alone, never which other actions are offered, so a poll cannot
+ * move a button -- and a confirmation open on it -- between the bar and More. */
+const GROUP_ORDER: readonly ToolbarGroupKey[] = ['bot', 'fix', 'inspect'];
+const BAR_GROUPS: ReadonlySet<ToolbarGroupKey> = new Set(['bot', 'fix']);
+
+function onBar(entry: ToolbarActionView): boolean {
+  return BAR_GROUPS.has(entry.group) || entry.primary === true;
+}
 
 const AVAILABILITY_WORDS: Readonly<Record<ToolbarActionView['availability'], string>> = {
   available: 'Available',
@@ -137,7 +141,8 @@ function storedLabels(): boolean {
  * The bot page's toolbar (#2794 R2, R6), in the account workspace's header:
  * every action the owner can take on this bot right now, as icon buttons in
  * untitled groups -- Bot, Fix -- in the backend's order, with its plain
- * names, tones and primary. Inspect's actions wait under More, named, with
+ * names, tones and primary. Inspect's actions wait under More, named (a
+ * primary one stays on the bar), with
  * All actions -- every action, its availability, the backend's reason and its
  * system name -- and the Labels setting, which names every icon. Stop and Sell
  * are always named.
@@ -185,17 +190,17 @@ export class BotToolbarComponent {
   private readonly offered = computed(() => this.entries().filter((entry) => entry.availability !== 'not_needed'));
 
   protected readonly groups = computed((): readonly ToolbarGroup[] =>
-    BAR_GROUPS
+    GROUP_ORDER
       .map((key) => ({
         key,
         label: GROUP_LABELS[key],
-        entries: this.offered().filter((entry) => entry.group === key),
+        entries: this.offered().filter((entry) => entry.group === key && onBar(entry)),
       }))
       .filter((group) => group.entries.length > 0),
   );
 
   /** Inspect's offered actions, named, under More. */
-  protected readonly more = computed(() => this.offered().filter((entry) => entry.group === MORE_GROUP));
+  protected readonly more = computed(() => this.offered().filter((entry) => !onBar(entry)));
 
   /** More's name says how many actions wait in it, not only its icon's count. */
   protected readonly moreLabel = computed(() => {
