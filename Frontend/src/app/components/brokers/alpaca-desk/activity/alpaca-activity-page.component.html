@@ -83,6 +83,7 @@
         [window]="recordsWindow()"
         [windowReading]="activities.isLoading()"
         [timelineQuery]="timelineQuery()"
+        [focusAction]="recoverAction()"
         (retry)="activities.reload()"
       />
     }

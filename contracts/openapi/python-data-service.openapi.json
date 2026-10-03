@@ -26983,6 +26983,7 @@
             "enum": [
               "bot",
               "activity",
+              "reconcile",
               "settings"
             ],
             "title": "Destination",

@@ -9,6 +9,7 @@ import type {
   ActivityPeriodRead,
   BrokerActivity,
   PortfolioHistoryProof,
+  SqliteClerkProjection,
   TodayStatement,
 } from '../../../../api/alpaca.types';
 import type { components } from '../../../../api/broker.types';
@@ -102,6 +103,31 @@ function brokers() {
     getSqliteClerkProjection: vi.fn().mockRejectedValue(new Error('records offline')),
     getSqliteClerkTimeline: vi.fn().mockRejectedValue(new Error('records offline')),
     accountTransactions: vi.fn().mockRejectedValue(new Error('records offline')),
+  };
+}
+
+/** A healthy account whose one recovery action is Reconcile now. */
+function projectionWithReconcileNow(): SqliteClerkProjection {
+  return {
+    account_id: 'PA1', strategy_instance_id: null, authority_generation: 1, db_identity_token: 'db-1',
+    authority_health: 'healthy', authority_health_reason: null, control_revision: 3, custody_owner: 'ACCOUNT_CLERK',
+    runs: [], commands: [], operations: [], positions: [], holds: [], uncertainties: [],
+    latest_reconciliation: null, terminal_receipts: [],
+    guidance: {
+      headline: 'Account Clerk custody is healthy', explanation: 'No unresolved uncertainty.',
+      scope: 'ACCOUNT_CLERK', impact: 'Normal controls remain available.', custody_owner: 'ACCOUNT_CLERK',
+      may_create_exposure: true, available_safety_actions: ['Reconcile now'], action_required: false,
+      next_step: 'No recovery action is required.',
+    },
+    recovery_actions: [{
+      action_id: 'reconcile_now', label: 'Reconcile now',
+      explanation: 'Compare durable Clerk custody with a fresh Alpaca account observation.',
+      available: true, unavailable_reason_code: null, unavailable_reason: null, scope: 'ACCOUNT_CLERK',
+      freshness: 'not_required', evidence: [], reduction_plan: null, confirmation: null,
+      next_step: 'Run the account comparison now.', concurrency_token: 'token-3', execution_ref: null,
+      mutation: true, primary: true,
+    }],
+    generated_at_ms: OBSERVED_AT_MS,
   };
 }
 
@@ -357,6 +383,18 @@ describe('AlpacaActivityPageComponent', () => {
     await waitFor(() => expect(broker.getSqliteClerkProjection).toHaveBeenCalled());
     expect(await screen.findByText(/Order records are unavailable right now/)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/SQLite|control boundary|data-plane|lens/i);
+  });
+
+  it("opens the fold at Reconcile now on the bell's reconcile link", async () => {
+    const broker = brokers();
+    broker.getSqliteClerkProjection.mockResolvedValue(projectionWithReconcileNow());
+
+    await renderActivity({ query: { recover: 'reconcile_now' }, broker });
+
+    const fold = (await screen.findByText('Order records and recovery')).closest('details');
+    await waitFor(() => expect(fold?.open).toBe(true));
+    const reconcile = await screen.findByRole('button', { name: 'Reconcile now' });
+    await waitFor(() => expect(document.activeElement).toBe(reconcile));
   });
 
   it('passes an AXE check', async () => {

@@ -71,7 +71,9 @@
       @for (action of custody.recovery_actions; track trackAction($index, action)) {
         <div class="sqlite-action">
           <button
+            #recoveryButton
             type="button"
+            [attr.data-recovery-action]="action.action_id"
             [disabled]="!action.available || busyActionId() !== null"
             (click)="runAction(action)"
           >{{ busyActionId() === action.action_id ? 'Working…' : action.label }}</button>
