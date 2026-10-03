@@ -941,12 +941,6 @@ def position_quantity_is_nonzero(quantity: float) -> bool:
     return abs(quantity) >= POSITION_QTY_EPSILON
 
 
-#: The summary code a fill is recorded under when its position credit is
-#: withheld (#2854): the strategy's position in the symbol was discharged
-#: after the order was created, so the discharge already accounts for it.
-FILL_CREDIT_WITHHELD_BY_DISCHARGE = "FILL_CREDIT_WITHHELD_RESIDUE_DISCHARGED"
-
-
 def _fill_credit_is_withheld(conn: sqlite3.Connection, *, payload: dict[str, Any], symbol: str) -> bool:
     """Whether this fill stays on the record without moving the position (#2854).
 
@@ -955,24 +949,35 @@ def _fill_credit_is_withheld(conn: sqlite3.Connection, *, payload: dict[str, Any
     fill's summary code. It is not decided here from the ledger alone: a
     fill recorded before this rule was credited, and must fold as it did, or
     a ledger in which the residue it left was discharged again would no
-    longer replay.
+    longer replay. So a fill without the mark is a credit.
 
-    What the append recorded is proven again here from the transitions before
-    this one, which a replay holds in the same order. A fill marked withheld
-    with no such discharge behind it fails instead of dropping a credit.
+    What the append recorded is proven again here by the append's own rule
+    (``reads.discharge_accounts_for_fill``), from the transitions before this
+    one, which a replay holds in the same order. A fill marked withheld with
+    no discharge behind it, or one that executed after that discharge's
+    broker read, fails instead of dropping a credit.
     """
-    if payload["summary_code"] != FILL_CREDIT_WITHHELD_BY_DISCHARGE:
+    if payload["summary_code"] != reads.FILL_CREDIT_WITHHELD_BY_DISCHARGE:
         return False
-    discharged_at = reads.residue_discharge_since_order_created(
+    discharge = reads.residue_discharge_since_order_created(
         conn,
         order_ref=payload["order_ref"],
         strategy_instance_id=payload["strategy_instance_id"],
         symbol=symbol,
     )
-    if discharged_at is None:
+    if discharge is None:
         raise ValueError(
             "a fill's position credit is withheld for a residue discharge the ledger does not hold: "
             f"order {payload['order_ref']!r} in {symbol.upper()!r}"
+        )
+    if not reads.discharge_accounts_for_fill(
+        discharge,
+        transition_kind=payload["transition_kind"],
+        source_event_at_ms=payload["source_event_at_ms"],
+    ):
+        raise ValueError(
+            "a fill's position credit is withheld, but it executed after the broker read of the "
+            f"residue discharge before it: order {payload['order_ref']!r} in {symbol.upper()!r}"
         )
     return True
 

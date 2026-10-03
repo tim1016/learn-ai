@@ -570,15 +570,15 @@ class ClerkSqliteRepositoryReadApi:
                 limit=limit,
             )
 
-    def residue_discharge_since_order_created(
+    def fills_written_off_by_residue_discharge(
         self: ClerkSqliteRepository,
         *,
         order_ref: str,
         strategy_instance_id: str | None,
         symbol: str,
-    ) -> int | None:
+    ) -> bool:
         with self._write_lock:
-            return reads.residue_discharge_since_order_created(
+            return reads.fills_written_off_by_residue_discharge(
                 self._conn,
                 order_ref=order_ref,
                 strategy_instance_id=strategy_instance_id,

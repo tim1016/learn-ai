@@ -760,9 +760,9 @@ def failed_exit_orders_unproven_at_broker(
 
     An order leaves the list for good once an operator discharged its
     strategy's position in its symbol after the order was created
-    (:func:`residue_discharge_since_order_created` states the rule). The
-    discharge wrote off whatever the order did to that position, and a fill
-    of it found afterwards moves no position, so no lookup is spent on it.
+    (:func:`discharge_accounts_for_fill` states the rule). A lookup answers
+    with the order's total, and a total found after such a discharge is
+    never credited, so no lookup is spent on it.
 
     Only an EXIT that failed at or after ``failed_since_ms`` is listed, so an
     old one is not asked about for ever. The rotation is
@@ -814,40 +814,127 @@ def _residue_discharges_after(*, strategy: str, sequence: str, symbol: str) -> s
     )
 
 
+#: The summary code a fill is recorded under when its position credit is
+#: withheld (#2854): :func:`discharge_accounts_for_fill` states when.
+FILL_CREDIT_WITHHELD_BY_DISCHARGE = "FILL_CREDIT_WITHHELD_RESIDUE_DISCHARGED"
+
+#: The most the broker's clock and the Clerk's are taken to differ (#2854).
+#: Inside it the Clerk cannot tell whether an execution came before a
+#: discharge's broker read or after, and withholding sends nothing.
+DISCHARGE_READ_CLOCK_ALLOWANCE_MS = 5_000
+
+
+class ResidueDischarge(NamedTuple):
+    """One recorded discharge: where it sits in the ledger, and the Clerk's clock as its broker reads returned."""
+
+    sequence: int
+    broker_observed_at_ms: int
+
+
 def residue_discharge_since_order_created(
     conn: sqlite3.Connection,
     *,
     order_ref: str,
     strategy_instance_id: str | None,
     symbol: str,
-) -> int | None:
+) -> ResidueDischarge | None:
     """The newest discharge of this strategy's position in ``symbol`` since the order was created (#2854).
 
-    Its ledger sequence, or ``None`` when the position was not discharged
-    after the order's first transition.
-
-    A discharge is admitted only when nothing is working on the symbol, at
-    the broker or in the Clerk, and it sets the strategy's position to what
-    the broker then held. So it already accounts for whatever an order
-    created before it had done, on either side and whether the order opened
-    the position or closed it. A fill of that order credited afterwards is
-    counted twice, and leaves the strategy attributed a position the broker
-    does not hold.
-
-    A manual order has no strategy, and no discharge is ever its own.
+    ``None`` when the position was not discharged after the order's first
+    transition. A manual order has no strategy, and no discharge is ever its
+    own.
     """
     if strategy_instance_id is None:
         return None
     row = conn.execute(
-        "SELECT MAX(d.sequence) AS sequence "
+        "SELECT d.sequence, json_extract(d.facts_json, '$.broker_observed_at_ms') AS broker_observed_at_ms "
         + _residue_discharges_after(
             strategy="?",
             sequence="(SELECT MIN(c.sequence) FROM custody_transitions c WHERE c.order_ref = ?)",
             symbol="?",
-        ),
+        )
+        + " ORDER BY d.sequence DESC LIMIT 1",
         (strategy_instance_id, order_ref, symbol),
     ).fetchone()
-    return row["sequence"]
+    return ResidueDischarge(**dict(row)) if row is not None else None
+
+
+def discharge_accounts_for_fill(
+    discharge: ResidueDischarge, *, transition_kind: str, source_event_at_ms: int | None
+) -> bool:
+    """Whether ``discharge`` already counted this fill of an order created before it (#2854).
+
+    ``discharge`` is the newest one of the order's strategy in its symbol
+    (:func:`residue_discharge_since_order_created`). It was admitted only
+    with nothing working on the symbol, at the broker or in the Clerk, and it
+    zeroed the strategy's residue after two broker reads proved the broker's
+    position equal to the account's attribution less that residue. Whatever
+    the order had executed by those reads is in the position they showed, so
+    crediting it afterwards counts it twice.
+
+    An execution made after the reads is not in them: its shares are real,
+    and they are the strategy's. An exact execution slice carries the
+    broker's time on the execution, so it is credited as any other when that
+    time is later than the reads returned by more than
+    :data:`DISCHARGE_READ_CLOCK_ALLOWANCE_MS`. Every other slice is counted
+    as the discharge's.
+
+    A cumulative total carries the order's last update, not an execution
+    time, so it proves nothing about when the shares traded and is always
+    counted as the discharge's. That is an accepted gap: an order that fills
+    after the discharge and is first seen only as a total stays uncredited
+    and stands as a position drift for the operator. Nothing is sent.
+
+    Both times are hashed facts, so the append and the fold's proof of it
+    make the same comparison here.
+    """
+    return not (
+        transition_kind == "EXECUTION_SLICE_FILLED"
+        and source_event_at_ms is not None
+        and source_event_at_ms > discharge.broker_observed_at_ms + DISCHARGE_READ_CLOCK_ALLOWANCE_MS
+    )
+
+
+def fills_written_off_by_residue_discharge(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+    strategy_instance_id: str | None,
+    symbol: str,
+) -> bool:
+    """Whether a discharge wrote off every fill the order has on record (#2854).
+
+    Read from what each fill's own transition recorded, never decided again
+    from times: a fill is withheld when it carries
+    :data:`FILL_CREDIT_WITHHELD_BY_DISCHARGE`, and credited otherwise. The
+    order's fills are written off when none was credited, or when the
+    strategy's position in ``symbol`` was discharged after the last one that
+    was. A fill credited after the newest discharge is a position the
+    strategy holds.
+
+    The first read is the order's own transitions. The second walks the
+    strategy's from the last credited fill forward and stops at the first
+    discharge, so neither grows with the ledger once the order is written
+    off: the reconciliation pass asks this of every such order each time.
+    """
+    row = conn.execute(
+        "SELECT MAX(CASE WHEN summary_code = ? THEN sequence END) AS withheld, "
+        "MAX(CASE WHEN summary_code != ? THEN sequence END) AS credited "
+        "FROM custody_transitions WHERE order_ref = ? "
+        "AND transition_kind IN ('EXECUTION_SLICE_FILLED', 'ORDER_FILL_OBSERVED')",
+        (FILL_CREDIT_WITHHELD_BY_DISCHARGE, FILL_CREDIT_WITHHELD_BY_DISCHARGE, order_ref),
+    ).fetchone()
+    if row["credited"] is None:
+        return row["withheld"] is not None
+    if strategy_instance_id is None:
+        return False
+    discharged_since = conn.execute(
+        "SELECT 1 "
+        + _residue_discharges_after(strategy="?", sequence="?", symbol="?")
+        + " ORDER BY d.sequence ASC LIMIT 1",
+        (strategy_instance_id, row["credited"], symbol),
+    ).fetchone()
+    return discharged_since is not None
 
 
 def _failed_operation_orders_unproven_at_broker(
