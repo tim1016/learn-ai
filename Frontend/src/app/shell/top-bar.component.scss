@@ -19,12 +19,20 @@
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-3);
-  background:
-    radial-gradient(circle at 50% -170%, rgba(255, 152, 0, 0.2), transparent 56%),
-    linear-gradient(90deg, #111620 0%, #1b1720 50%, #111620 100%);
+  background: #111620;
   border-bottom: 2px solid $border-light;
   box-shadow: 0 5px 18px rgba(0, 0, 0, 0.28);
   transition: background $t-ui, border-color $t-ui;
+}
+
+.top-bar--paper {
+  background: #0d2a39;
+  border-bottom-color: #2d9bc1;
+}
+
+.top-bar--live {
+  background: #45151e;
+  border-bottom-color: #d94c4a;
 }
 
 .top-bar__left,

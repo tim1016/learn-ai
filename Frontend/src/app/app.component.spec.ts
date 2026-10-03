@@ -94,27 +94,33 @@ describe('AppComponent', () => {
     expect(TestBed.inject(Title).getTitle()).toBe('Botasur');
   });
 
-  it('renders the shell mode-neutral for every verdict — the per-lane pills own the mode signal', () => {
+  it('tints the header paper only when every lane is paper, live otherwise', () => {
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
+    const header = () => fixture.nativeElement.querySelector('.top-bar') as HTMLElement;
 
-    for (const finalVerdict of ['paper', 'shadow', 'live'] as const) {
+    service.setState(TEST_CLERK_ID, fakeVerdictState('paper'));
+    fixture.detectChanges();
+    expect(header().classList.contains('top-bar--paper')).toBe(true);
+    expect(header().classList.contains('top-bar--live')).toBe(false);
+
+    // Shadow rides real custody and Live is Live: both read live at the
+    // frame level; the per-lane pills carry each lane's own mode.
+    for (const finalVerdict of ['shadow', 'live'] as const) {
       service.setState(TEST_CLERK_ID, fakeVerdictState(finalVerdict));
       fixture.detectChanges();
-
-      const header = fixture.nativeElement.querySelector('.top-bar');
-      expect(header?.classList.contains('top-bar--live')).toBe(false);
-      expect(header?.classList.contains('top-bar--paper')).toBe(false);
+      expect(header().classList.contains('top-bar--live')).toBe(true);
+      expect(header().classList.contains('top-bar--paper')).toBe(false);
     }
   });
 
-  it('keeps the header neutral for a lane whose mode cannot be determined — the badge carries the warning', () => {
+  it('tints the header live for a lane whose mode cannot be determined — fail-closed beside the badge warning', () => {
     const service = TestBed.inject(AlpacaLiveVerdictService) as unknown as FakeAlpacaLiveVerdictService;
 
     service.setState(TEST_CLERK_ID, { verdict: null, lastError: new Error('down') });
     fixture.detectChanges();
 
     const header = fixture.nativeElement.querySelector('.top-bar');
-    expect(header?.classList.contains('top-bar--live')).toBe(false);
+    expect(header?.classList.contains('top-bar--live')).toBe(true);
     expect(header?.classList.contains('top-bar--paper')).toBe(false);
     const badge = fixture.nativeElement.querySelector('app-alpaca-live-banner [role="status"]');
     expect(badge?.textContent).toContain('assume real money');
@@ -147,11 +153,11 @@ describe('AppComponent', () => {
     expect(badges[1].textContent).toContain('assume real money');
   });
 
-  it('renders a loud lanes-unknown badge while the header stays neutral when the roster is empty', async () => {
+  it('renders a loud lanes-unknown badge and tints the header live when the roster is empty', async () => {
     // Every boot until /api/broker-clerks resolves, and indefinitely after a
-    // failed load. Zero badges plus a silent shell is the calm-while-real-
+    // failed load. Zero badges plus a calm shell is the calm-while-real-
     // money-trades failure this anchor exists to kill (#2110 D2) — the badge
-    // is the loud surface now, not the header tint.
+    // says it and the header tint paints it.
     directory.rebind({ observed_at_ms: 3, clerks: [] });
     // `rebind()` only stages the replacement; `refresh()` promotes it to
     // what `lanesOf()` reports, like the real service's next load.
@@ -163,7 +169,7 @@ describe('AppComponent', () => {
     expect(badges[0].className).toContain('is-undetermined');
     expect(badges[0].textContent).toContain('Alpaca lanes unknown');
     expect(badges[0].textContent).toContain('assume real money');
-    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(false);
+    expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
     expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--paper')).toBe(false);
   });
 

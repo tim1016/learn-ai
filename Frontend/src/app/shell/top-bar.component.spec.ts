@@ -28,12 +28,27 @@ describe('TopBarComponent', () => {
     );
   });
 
-  it('renders the header mode-neutral — the per-lane pills own the account-mode signal', async () => {
-    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
+  it('paints the solid paper tint for accountMode paper', async () => {
+    const paper = await render(TopBarComponent, {
+      providers: [provideRouter([])],
+      componentInputs: { accountMode: 'paper' },
+    });
+    expect(paper.container.querySelector('.top-bar')?.classList.contains('top-bar--paper')).toBe(true);
+  });
 
-    expect(screen.getByRole('banner').classList.contains('top-bar--paper')).toBe(false);
-    expect(screen.getByRole('banner').classList.contains('top-bar--live')).toBe(false);
-    expect(container.querySelector('.top-bar--paper, .top-bar--live')).toBeNull();
+  it('paints the solid live tint for accountMode live', async () => {
+    const live = await render(TopBarComponent, {
+      providers: [provideRouter([])],
+      componentInputs: { accountMode: 'live' },
+    });
+    expect(live.container.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
+  });
+
+  it('paints no mode tint for an unknown accountMode', async () => {
+    const unknown = await render(TopBarComponent, { providers: [provideRouter([])] });
+    const unknownClasses = unknown.container.querySelector('.top-bar')?.classList;
+    expect(unknownClasses?.contains('top-bar--paper')).toBe(false);
+    expect(unknownClasses?.contains('top-bar--live')).toBe(false);
   });
 
   it('provides named regions for shell extensions', async () => {
