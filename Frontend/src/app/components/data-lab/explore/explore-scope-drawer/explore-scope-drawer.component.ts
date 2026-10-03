@@ -1,4 +1,6 @@
-import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, input, output } from '@angular/core';
+
+import { ProviderBoundsService } from '../../../../shared/date-picker';
 
 import {
   TickerRangePickerComponent,
@@ -26,6 +28,13 @@ export class ExploreScopeDrawerComponent {
     resolution: 'minute',
     autoFetch: false,
   });
+
+  /**
+   * Data Lab charts the session still forming and takes any calendar day, so
+   * its dates run from the provider's oldest day with no last day, and need
+   * not be sessions.
+   */
+  protected readonly dateBounds = inject(ProviderBoundsService).openEnded;
 
   readonly openChange = output<boolean>();
   readonly rangeChange = output<TickerRange>();

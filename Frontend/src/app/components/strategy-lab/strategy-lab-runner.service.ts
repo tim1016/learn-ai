@@ -233,6 +233,10 @@ export class StrategyLabRunner {
       );
       return;
     }
+    if (this.config.datesMissing()) {
+      this.fail("Pick the dates to run over", "A date field in the time window holds no usable date.");
+      return;
+    }
     const engine = this.config.engine();
     if (engine !== "python") {
       if (this.config.leanValidationTemplate() === null) {

@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+import app.broker.alpaca.clerk.sqlite.decision_receipts as decision_receipts_module
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    CRASH_CANDIDATE_OUTCOME,
     MAX_DECISION_RECEIPT_READ,
     MAX_DECISION_RECEIPTS_PER_STRATEGY,
+    QUARANTINE_OUTCOME,
+    DecisionOutcome,
     DecisionReceiptConflictError,
     SqliteDecisionReceipts,
+    rotated_out_before_ms,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
@@ -211,6 +217,131 @@ def test_candidate_uncaptured_at_crash_survives_retention_pruning(
     survivor = retained_by_seq[crash_receipt.seq]
     assert survivor.outcome == "candidate_uncaptured_at_crash"
     assert json.loads(survivor.facts_json)["retention_class"] == "protected_crash_evidence"
+
+
+# ---------------------------------------------------------------------------
+# How far back the retained window reaches once it has dropped a receipt (#2850).
+# ---------------------------------------------------------------------------
+
+_SHORT_WINDOW = 3
+_MINUTE_MS = 60_000
+_FIRST_CLOSE_MS = 1_790_000_060_000
+
+
+@pytest.fixture()
+def short_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep and read three receipts, so a fourth drops the first."""
+    monkeypatch.setattr(decision_receipts_module, "MAX_DECISION_RECEIPTS_PER_STRATEGY", _SHORT_WINDOW)
+
+
+def _close_ms(minute: int) -> int:
+    return _FIRST_CLOSE_MS + minute * _MINUTE_MS
+
+
+def _receipt_bucket(
+    receipts: SqliteDecisionReceipts,
+    minute: int,
+    *,
+    outcome: DecisionOutcome = "no_action",
+    records_close: bool = True,
+) -> None:
+    """Receipt the bucket that closed at ``minute``, the way a runner or the Clerk does.
+
+    A quarantine row names no evaluation. Every row's wall-clock
+    ``observed_at_ms`` is far from any bar close, so a boundary read from it
+    would be plainly wrong.
+    """
+    facts: dict[str, str | int] = {"bar_ref": f"SPY@{minute}"}
+    if records_close:
+        facts["decision_bar_close_ms"] = _close_ms(minute)
+    receipts.append(
+        outcome=outcome,
+        symbol="SPY",
+        observed_at_ms=9_000_000_000_000 + minute,
+        intent_id=None if outcome == QUARANTINE_OUTCOME else f"evaluation-{minute}",
+        facts=facts,
+    )
+
+
+@pytest.mark.usefixtures("short_window")
+def test_the_rotation_boundary_is_the_oldest_retained_decision_s_bar_close(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """A window that still opens at sequence 1 has dropped nothing, so a bucket
+    missing from it was never receipted and no boundary is named. Once the
+    prune drops a receipt, a bucket that closed before the oldest decision
+    still retained may have lost its own: the boundary is that decision's bar
+    close, not the later wall clock its receipt was written at."""
+    for minute in range(_SHORT_WINDOW):
+        _receipt_bucket(receipts, minute)
+    assert rotated_out_before_ms(receipts.retained_window()) is None
+
+    _receipt_bucket(receipts, _SHORT_WINDOW)
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [2, 3, 4]
+    assert rotated_out_before_ms(window) == _close_ms(1)
+
+
+@pytest.mark.usefixtures("short_window")
+def test_the_rotation_boundary_passes_over_rows_not_written_when_their_bucket_was_decided(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """Crash evidence is written by a later Resume for an older bucket, and a
+    quarantine row names no decision. Neither says how far back the retained
+    decisions reach: reading the crash evidence's own (older) bar close as
+    the boundary would leave every rotated-out bucket after it flaggable."""
+    _receipt_bucket(receipts, 5)
+    _receipt_bucket(receipts, 2, outcome=CRASH_CANDIDATE_OUTCOME)
+    _receipt_bucket(receipts, 6, outcome=QUARANTINE_OUTCOME, records_close=False)
+    _receipt_bucket(receipts, 7)
+
+    window = receipts.retained_window()
+    assert [receipt.outcome for receipt in window] == [CRASH_CANDIDATE_OUTCOME, QUARANTINE_OUTCOME, "no_action"]
+    assert rotated_out_before_ms(window) == _close_ms(7)
+
+
+@pytest.mark.usefixtures("short_window")
+def test_the_rotation_boundary_is_not_read_from_a_later_decision_when_the_oldest_records_no_close(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """A later decision's close is a later boundary, and a later boundary
+    exempts more: a bucket a crash left staged between the oldest decision and
+    that later one would never be named. So when the oldest retained decision
+    records no close there is no boundary at all, even though the decisions
+    after it record theirs."""
+    _receipt_bucket(receipts, 0)
+    _receipt_bucket(receipts, 1, records_close=False)
+    _receipt_bucket(receipts, 2)
+    _receipt_bucket(receipts, 3)
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [2, 3, 4]
+    assert rotated_out_before_ms(window) is None
+
+
+@pytest.mark.usefixtures("short_window")
+def test_a_rotated_window_that_records_no_bar_close_names_no_boundary_and_says_so(
+    receipts: SqliteDecisionReceipts, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The boundary is never guessed from when a receipt was written: a bucket
+    decided late closed before that wall clock, so a real crash candidate
+    could fall under it and go unflagged. With no close to read nothing is
+    exempt, and the log says why the Resume that follows may fail."""
+    for minute in range(_SHORT_WINDOW + 1):
+        _receipt_bucket(receipts, minute, records_close=False)
+
+    with caplog.at_level(logging.WARNING, logger=decision_receipts_module.__name__):
+        boundary = rotated_out_before_ms(receipts.retained_window())
+
+    assert boundary is None
+    [record] = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "decision_receipt_rotation_boundary_unknown"
+    ]
+    assert record.strategy_instance_id == "spy-bot"
+    assert (record.first_retained_seq, record.last_retained_seq) == (2, 4)
 
 
 def test_receipts_do_not_advance_custody_transition_or_control_revision(

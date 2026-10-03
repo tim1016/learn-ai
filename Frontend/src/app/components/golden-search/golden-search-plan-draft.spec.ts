@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, byImportance, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import { etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
+import { applyPlanEdit, byImportance, dateProblemKey, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
 import importanceOrder from '@repo-contracts/fixtures/golden-search-importance-order-v1.json';
 import { defaults, emaCapability, protocol } from './testing/fixtures';
 
@@ -21,6 +21,22 @@ describe('applyPlanEdit', () => {
     const next = applyPlanEdit(draft(), { kind: 'date', field: 'final_end', raw: '2026-03-31' }, emaCapability());
 
     expect(next.protocol.final_end_ms).toBe(etMidnightMs('2026-04-01'));
+  });
+
+  it('does not move a date on a half-typed year: the keys 1 1 0 1 2 0 2 2 end at 2022-11-01 (#2858)', () => {
+    // A date field reports each keystroke of the year as a whole date.
+    const start = draft();
+    const key = dateProblemKey('development_start');
+    let current = start;
+    for (const raw of ['0002-11-01', '0020-11-01', '0202-11-01']) {
+      current = applyPlanEdit(current, { kind: 'date', field: 'development_start', raw }, emaCapability());
+      expect(current.protocol.development_start_ms).toBe(start.protocol.development_start_ms);
+      expect(current.problems.get(key)).toBe('Enter a four-digit year.');
+    }
+    current = applyPlanEdit(current, { kind: 'date', field: 'development_start', raw: '2022-11-01' }, emaCapability());
+
+    expect(etIsoDate(current.protocol.development_start_ms)).toBe('2022-11-01');
+    expect(current.problems.has(key)).toBe(false);
   });
 
   it('never reads a blank or unreadable number as zero: the protocol keeps its value and a problem is recorded', () => {

@@ -47,36 +47,12 @@ export interface TickerOption {
   lastHeld?: string | null;
 }
 
-export type AvailabilityStatus =
-  | "complete"
-  | "partial"
-  | "missing"
-  | "hole"
-  | "weekend";
-
-export interface AvailabilityCell {
-  date: string;
-  status: AvailabilityStatus;
-}
-
-export interface AvailabilitySummary {
-  complete: number;
-  partial: number;
-  hole: number;
-  missing: number;
-  weekdays: number;
-}
-
-export type AdvisoryKind = "suggest" | "warn" | "bad" | "info";
+export type AdvisoryKind = "suggest" | "bad";
 
 export interface AdvisoryAction {
   label: string;
-  /** Partial patch to apply to the ``TickerRange`` value on click. */
-  patch?: Partial<TickerRange>;
-  /** Side-effect flags that the host component interprets (the picker
-   *  itself only changes ``TickerRange`` fields). */
-  triggerRun?: boolean;
-  refetchHoles?: boolean;
+  /** Partial patch applied to the ``TickerRange`` value on click. */
+  patch: Partial<TickerRange>;
 }
 
 export interface Advisory {
@@ -90,90 +66,10 @@ export interface Advisory {
   action?: AdvisoryAction;
 }
 
-/**
- * Pick the single state that should be emphasized in the smart legend.
- * Priority: hole > partial > complete > missing > none. Empty summary
- * (no weekdays inspected) falls through to ``none``.
- *
- * The dominant chip renders tinted-bold; everything else renders as a
- * dim outline so the user sees the verdict at a glance.
- */
-export type DominantState =
-  | "complete"
-  | "partial"
-  | "hole"
-  | "missing"
-  | "none";
-
-export function dominantState(s: AvailabilitySummary): DominantState {
-  if (s.weekdays === 0) return "none";
-  if (s.hole > 0) return "hole";
-  if (s.partial > 0) return "partial";
-  if (s.missing > 0) return "missing";
-  if (s.complete > 0) return "complete";
-  return "none";
-}
-
-export function summarizeAvailability(
-  cells: readonly AvailabilityCell[]
-): AvailabilitySummary {
-  let complete = 0;
-  let partial = 0;
-  let hole = 0;
-  let missing = 0;
-  let weekdays = 0;
-  for (const c of cells) {
-    if (c.status === "weekend") continue;
-    weekdays++;
-    if (c.status === "complete") complete++;
-    else if (c.status === "partial") partial++;
-    else if (c.status === "hole") hole++;
-    else missing++;
-  }
-  return { complete, partial, hole, missing, weekdays };
-}
-
 export function daysBetween(a: string, b: string): number {
   return Math.round(
     (new Date(b).getTime() - new Date(a).getTime()) / 86_400_000
   );
-}
-
-/**
- * Count the weekdays (Mon–Fri) between two YYYY-MM-DD dates, inclusive on
- * both ends. Returns 0 when ``to`` is before ``from``. Used as a fallback
- * for the span-display "Nbd" readout when the caller has not supplied
- * availability cells (the cell-driven summary counts only weekdays with
- * non-weekend status).
- *
- * All arithmetic is in UTC so the result doesn't shift with the runtime's
- * local timezone — ``new Date('2026-04-25').getDay()`` returns Friday in
- * any TZ west of UTC, which mis-classifies that Saturday as a weekday.
- */
-export function weekdaysBetween(from: string, to: string): number {
-  const start = parseIsoDateUtc(from);
-  const end = parseIsoDateUtc(to);
-  if (start === null || end === null) return 0;
-  if (end < start) return 0;
-  let count = 0;
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    const d = cursor.getUTCDay();
-    if (d !== 0 && d !== 6) count++;
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return count;
-}
-
-function parseIsoDateUtc(s: string): Date | null {
-  const parts = s.split("-").map(Number);
-  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
-  const [y, m, d] = parts;
-  return new Date(Date.UTC(y, m - 1, d));
-}
-
-export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -184,16 +80,12 @@ export function isoDate(d: Date): string {
  * one-click patch the user applies by clicking the action button.
  *
  * Advisories are classified by severity so they render in the right
- * colour: ``suggest`` (blue), ``warn`` (amber), ``bad`` (red), ``info``
- * (cyan).
+ * colour: ``suggest`` (blue) and ``bad`` (red).
  */
-export function computeAdvisories(
-  state: Readonly<TickerRange>,
-  summary: AvailabilitySummary
-): Advisory[] {
+export function computeAdvisories(state: Readonly<TickerRange>): Advisory[] {
   const out: Advisory[] = [];
+  if (state.from === "" || state.to === "") return out;
   const spanDays = daysBetween(state.from, state.to);
-  const missingTotal = summary.missing + summary.hole;
 
   if (state.resolution === "minute" && spanDays > 90) {
     const rows = (spanDays * 390).toLocaleString();
@@ -211,41 +103,6 @@ export function computeAdvisories(
       icon: "pi pi-forward",
       body: `<strong>${spanDays} days</strong> × hour bars is large. <strong>Daily</strong> bars render instantly.`,
       action: { label: "Switch to daily", patch: { resolution: "daily" } },
-    });
-  }
-
-  if (missingTotal > 0 && !state.autoFetch) {
-    const plural = missingTotal === 1 ? "" : "s";
-    out.push({
-      kind: "warn",
-      icon: "pi pi-exclamation-triangle",
-      body: `<span class="mono">${missingTotal}</span> weekday${plural} not on disk. Enable auto-fetch to pull from Polygon before running.`,
-      action: {
-        label: "Enable auto-fetch & run",
-        patch: { autoFetch: true },
-        triggerRun: true,
-      },
-    });
-  }
-
-  if (summary.hole > 2) {
-    out.push({
-      kind: "bad",
-      icon: "pi pi-times-circle",
-      body: `<span class="mono">${summary.hole}</span> days cached but incomplete (likely halted or partial bars). Refetch recommended.`,
-      action: { label: "Refetch holes", refetchHoles: true },
-    });
-  }
-
-  if (
-    summary.complete === 0 &&
-    summary.partial === 0 &&
-    summary.weekdays > 0
-  ) {
-    out.push({
-      kind: "info",
-      icon: "pi pi-info-circle",
-      body: `No local cache for <strong>${state.symbol}</strong> in this range. First run will fetch everything from Polygon.`,
     });
   }
 

@@ -588,7 +588,11 @@ def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_c
     """``deployment_validation`` decides every minute, so a one-day warmup is
     ~780 buckets -- more than ``MAX_DECISION_RECEIPT_READ``. Reading only the
     presentation cap would make the earliest replayed bucket that staged an
-    intent look like the crash-recreated candidate (#1740)."""
+    intent look like the crash-recreated candidate (#1740).
+
+    This store has dropped no receipt, so the read names no rotation
+    boundary: a bucket missing from it was never receipted, and stays a
+    crash candidate however old it is (#2850)."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     try:
         repo.register_strategy_instance(
@@ -615,8 +619,9 @@ def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_c
     finally:
         repo.close()
 
-    assert captured["0:ENTER"] == "entered"
-    assert len(captured) == MAX_DECISION_RECEIPT_READ + 1
+    assert captured.outcomes["0:ENTER"] == "entered"
+    assert len(captured.outcomes) == MAX_DECISION_RECEIPT_READ + 1
+    assert captured.rotated_out_before_ms is None
 
 
 _EXP_001_INPUT = (

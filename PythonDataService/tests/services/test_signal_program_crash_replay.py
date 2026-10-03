@@ -96,7 +96,7 @@ from app.engine.strategy.signal_program import (
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import _build_signal_strategy
-from app.services.bot_trade_strategy_warmup import replay_warmup_bars
+from app.services.bot_trade_strategy_warmup import CapturedDecisions, replay_warmup_bars
 from tests._helpers.signal_program import (
     SEALED_KEYS,
     BarBody,
@@ -487,7 +487,11 @@ async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
     recovered = await replay_warmup_bars(
-        runtime, context, _StaticWarmupFeed(replay_bars), binding, captured_decisions=captured
+        runtime,
+        context,
+        _StaticWarmupFeed(replay_bars),
+        binding,
+        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
     )
 
     assert recovered is None, f"'{key}' re-flagged an already-captured (blocked) candidate as a crash window"
@@ -541,7 +545,11 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
     recovered = await replay_warmup_bars(
-        runtime, context, _StaticWarmupFeed(warmup_bars), binding, captured_decisions=captured
+        runtime,
+        context,
+        _StaticWarmupFeed(warmup_bars),
+        binding,
+        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
     )
     assert recovered is None, f"'{key}' flagged a crash candidate in a fully-captured warmup window"
     assert runtime.program is not None
@@ -619,7 +627,11 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
     recovered: tuple[MarketDataBar, EvaluationStage] | None = await replay_warmup_bars(
-        runtime, context, _StaticWarmupFeed(replay_bars), binding, captured_decisions=captured
+        runtime,
+        context,
+        _StaticWarmupFeed(replay_bars),
+        binding,
+        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
     )
 
     assert recovered is not None, (
@@ -639,3 +651,97 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
         f"'{key}' silently re-executed the uncaptured crash candidate instead of only naming it: "
         f"{contacts}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. A bucket whose receipt has rotated out is retention, not a crash (#2850).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", SEALED_KEYS)
+async def test_replay_warmup_bars_does_not_flag_a_bucket_that_closed_before_the_rotation_boundary(
+    key: str,
+) -> None:
+    """A Resume replays every retained bar back to its warm floor (#2314), and
+    a long-lived instance has decided more buckets over that span than its
+    receipt window retains. A bucket whose receipt rotated out is missing from
+    ``captured_decisions`` for that reason alone; flagging it is not crash
+    evidence, and its own protected receipt may still be on file to conflict
+    with (#2850).
+
+    Modelled by a retained window that opens one bucket AFTER the first staged
+    candidate: everything from there on is captured, everything before it has
+    rotated out, and the window's oldest decision closes at the boundary.
+    """
+    registration = _STRATEGY_REGISTRY[key]
+    symbol = registration.param_schema().symbol
+    resolution_minutes = _resolution_minutes(key)
+
+    reference_traces = await _reference_traces(key, symbol, resolution_minutes)
+    target_index = next(i for i, trace in enumerate(reference_traces) if trace.staged_candidate is not None)
+    retained = reference_traces[target_index + 1 :]
+    assert retained, (
+        f"'{key}' staged its first candidate on its last bucket, leaving no retained window -- "
+        "widen _RANDOM_WALK_CLOSES rather than let this test pass vacuously"
+    )
+    captured = {trace.evaluation_id: "no_action" for trace in retained}
+
+    replay_bars = _minute_bars_for_closes(symbol, resolution_minutes, _RANDOM_WALK_CLOSES)
+    runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
+    binding = _binding(strategy_key=key, symbol=symbol)
+    recovered = await replay_warmup_bars(
+        runtime,
+        context,
+        _StaticWarmupFeed(replay_bars),
+        binding,
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=retained[0].bar_close_ms
+        ),
+    )
+
+    assert recovered is None, (
+        f"'{key}' flagged a crash candidate whose receipt had rotated out of the retained window"
+    )
+    assert _broker_contacts(executor, context) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", SEALED_KEYS)
+async def test_replay_warmup_bars_still_flags_a_bucket_that_closed_at_the_rotation_boundary(
+    key: str,
+) -> None:
+    """Only a bucket that closed BEFORE the boundary can have lost its
+    receipt. One that closed at it, or after, is inside the retained window:
+    no receipt there means none was ever written, which is the crash window.
+    """
+    registration = _STRATEGY_REGISTRY[key]
+    symbol = registration.param_schema().symbol
+    resolution_minutes = _resolution_minutes(key)
+
+    reference_traces = await _reference_traces(key, symbol, resolution_minutes)
+    target_index = next(i for i, trace in enumerate(reference_traces) if trace.staged_candidate is not None)
+    target_trace = reference_traces[target_index]
+    captured = {
+        trace.evaluation_id: "no_action"
+        for index, trace in enumerate(reference_traces)
+        if index != target_index
+    }
+
+    replay_bars = _minute_bars_for_closes(symbol, resolution_minutes, _RANDOM_WALK_CLOSES)
+    runtime, context, _executor = _fresh_runtime_and_executor(key, symbol)
+    binding = _binding(strategy_key=key, symbol=symbol)
+    recovered = await replay_warmup_bars(
+        runtime,
+        context,
+        _StaticWarmupFeed(replay_bars),
+        binding,
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=target_trace.bar_close_ms
+        ),
+    )
+
+    assert recovered is not None, (
+        f"'{key}' exempted a bucket that closed exactly at the rotation boundary"
+    )
+    assert recovered[1].trace.evaluation_id == target_trace.evaluation_id

@@ -5,6 +5,10 @@ import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ProviderBoundsService, TradingCalendarService, heldBounds, type TradingSessions } from "../../shared/date-picker";
+import { providerBounds } from "../../shared/date-picker/provider-bounds.service";
+import { STANDARD_DATE_WORLD, provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { fakeTickerCatalog, provideFakeTickerCatalog } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
@@ -75,6 +79,8 @@ describe("StrategyLab configuration and runner", () => {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
+        provideFakeTickerCatalog(fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", firstHeld: "2024-01-02", lastHeld: "2026-09-18" }])),
+        ...provideFakeDateWorld(),
         StrategyLabConfigStore,
         StrategyLabRunner,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
@@ -126,6 +132,8 @@ describe("StrategyLab configuration and runner", () => {
     }));
     configureLab();
     config = TestBed.inject(StrategyLabConfigStore);
+    // The rail's date picker starts the window; a store on its own has none.
+    config.range.update((range) => ({ ...range, from: "2026-01-05", to: "2026-01-30" }));
     runner = TestBed.inject(StrategyLabRunner);
     config.strategies.set([STRATEGY]);
     config.selectStrategy(STRATEGY.name);
@@ -348,6 +356,91 @@ describe("StrategyLab configuration and runner", () => {
     expect(request).not.toHaveProperty("strategy_parameters");
   });
 
+  it("refuses to run while a date field holds no usable date, and says so", async () => {
+    config.range.update((range) => ({ ...range, to: "" }));
+
+    await runner.run();
+
+    expect(runner.runError()).toBe("A date field in the time window holds no usable date.");
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it("bounds the dates by what the run reads: the provider with auto-fetch, the tree's held days without", () => {
+    expect(config.dateBounds().minReason).toBe(`The provider serves bars from ${STANDARD_DATE_WORLD.providerFloor}.`);
+
+    config.range.update((range) => ({ ...range, autoFetch: false }));
+
+    expect(config.dateBounds()).toEqual(heldBounds("SPY", "2024-01-02", "2026-09-18"));
+  });
+
+  it("keeps a launch warning when the picker refuses a date, and clears it when the operator changes the range", () => {
+    config.configurationWarning.set("This strategy does not support daily data.");
+
+    config.changeRange({ ...config.range(), from: "" });
+    expect(config.configurationWarning()).toBe("This strategy does not support daily data.");
+    expect(config.range().from).toBe("");
+
+    config.changeRange({ ...config.range(), from: "2026-01-06" });
+    expect(config.configurationWarning()).toBeNull();
+  });
+
+  describe("the window a new lab starts on", () => {
+    const sessions = signal<TradingSessions | null>(null);
+    const lastCompleted = signal<string | null>(null);
+
+    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. */
+    function labBeforeTheCalendar(): StrategyLabConfigStore {
+      sessions.set(null);
+      lastCompleted.set(null);
+      TestBed.resetTestingModule();
+      configureLab();
+      TestBed.overrideProvider(TradingCalendarService, { useValue: { sessions, lastCompleted, problem: signal(null), retry: () => undefined } });
+      TestBed.overrideProvider(ProviderBoundsService, {
+        useValue: { bounds: computed(() => providerBounds(STANDARD_DATE_WORLD.providerFloor, lastCompleted())) },
+      });
+      return TestBed.inject(StrategyLabConfigStore);
+    }
+
+    function calendarArrives(): void {
+      sessions.set(STANDARD_DATE_WORLD.sessions);
+      lastCompleted.set("2026-09-18");
+      TestBed.tick();
+    }
+
+    it.each([
+      // A launch link naming only the start keeps it and ends on the last readable day.
+      { given: { from: "2026-07-01" }, expected: { from: "2026-07-01", to: "2026-09-18" } },
+      // One naming only the end keeps it and starts a month before: 2026-05-30 is a Saturday, so Monday.
+      { given: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
+    ])("keeps the one date a launch link names and fills the other: $given", ({ given, expected }) => {
+      const store = labBeforeTheCalendar();
+      store.range.update((range) => ({ ...range, ...given }));
+      TestBed.tick();
+
+      calendarArrives();
+
+      expect(store.range()).toMatchObject(expected);
+    });
+
+    it("is the last month of what the run can read, set once the calendar has been read and never again", () => {
+      const store = labBeforeTheCalendar();
+      store.configurationWarning.set("This strategy does not support daily data.");
+      TestBed.tick();
+      expect(store.range()).toMatchObject({ from: "", to: "" });
+
+      calendarArrives();
+
+      expect(store.range()).toMatchObject({ from: "2026-08-18", to: "2026-09-18" });
+      // Nobody chose these dates, so the warning stands.
+      expect(store.configurationWarning()).toBe("This strategy does not support daily data.");
+
+      store.changeRange({ ...store.range(), from: "", to: "" });
+      TestBed.tick();
+
+      expect(store.range()).toMatchObject({ from: "", to: "" });
+    });
+  });
+
   it("rejects an empty custom source before probing the launcher", async () => {
     config.engine.set("lean");
     config.customLeanSource.set("  \n");
@@ -368,6 +461,7 @@ describe("StrategyLab configuration and runner", () => {
       vi.useFakeTimers();
       TestBed.resetTestingModule();
       configureLab();
+      TestBed.inject(StrategyLabConfigStore).range.update((range) => ({ ...range, from: "2026-01-05", to: "2026-01-30" }));
       visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
       refreshActive.mockClear();
       lab = TestBed.inject(StrategyLabRunner);
