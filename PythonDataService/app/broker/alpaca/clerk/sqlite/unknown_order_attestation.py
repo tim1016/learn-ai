@@ -659,10 +659,19 @@ def _broker_unreadable(error: BrokerError) -> UnknownOrderSettlementRefused:
 
 
 def _order_is_at_alpaca(order: BrokerOrder) -> UnknownOrderSettlementRefused:
+    shown = (
+        f"Alpaca shows this order: Alpaca order id {order.order_id!r}, {order.status or 'no status'}. "
+        "It is not absent. "
+    )
+    if (order.status or "").lower() == "replaced":
+        return UnknownOrderSettlementRefused(
+            "ORDER_EXISTS_AT_BROKER",
+            shown + "Alpaca replaced it with another order, which the Clerk does not follow, so "
+            "this action cannot settle it. Nothing was changed.",
+        )
     return UnknownOrderSettlementRefused(
         "ORDER_EXISTS_AT_BROKER",
-        f"Alpaca shows this order: Alpaca order id {order.order_id!r}, {order.status or 'no status'}. "
-        "It is not absent. Choose \"Alpaca shows it\" and give that order id. Nothing was changed.",
+        shown + "Choose \"Alpaca shows it\" and give that order id. Nothing was changed.",
     )
 
 
