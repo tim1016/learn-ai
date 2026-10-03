@@ -2158,22 +2158,47 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
 
 
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
-    # The greatest recorded uncertainty is the anchor when there is one — the
-    # maximum, not the last by sequence: ``recorded_at_ms`` is wall time, so a
-    # host clock that steps backwards and rebounds can leave the newest row
-    # holding an older timestamp, and a grace window must not shorten because
-    # of that. SQLite computes it over the index; the former ``max()`` did it
-    # after reading the order's whole history in Python (#1942).
-    anchor_ms = repo.max_order_transition_recorded_at_ms(
-        order_ref=order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN"
+    """Whether the submit-absence wait since this reducing order's latest send has passed (#2845).
+
+    An order whose submit answer was lost may have reached the broker and not
+    yet show in an exact lookup; sent again inside that window, it could sell
+    twice. So the wait runs from the latest send: from its
+    ``ORDER_SUBMIT_REQUESTED``, recorded before every send, or from the first
+    ``ORDER_SUBMIT_UNCERTAIN`` after it -- that send's lost answer, or the
+    first pass to find the order absent when the Clerk stopped before it
+    recorded one -- whichever was recorded with the later time.
+    ``recorded_at_ms`` is wall time, so the later of the two is not always
+    the later by sequence: a host clock that steps backwards between them
+    must not shorten the wait. An order never sent waits from its creation.
+
+    No later ``ORDER_SUBMIT_UNCERTAIN`` moves the wait. Those are this
+    machine's own records that the order is still absent: each pass writes
+    one, and the passes come more often than the wait is long, so a wait
+    measured from the newest never ended and the order was never sent again
+    while the passes kept running. Each read is one row off the order's
+    index (#1942).
+    """
+    requested = repo.last_order_transition(
+        order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
     )
-    if anchor_ms is None:
+    if requested is None:
         created = repo.first_order_transition(
             order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
         )
         if created is None:
             raise AssertionError(f"no reducing-order creation transition for {order_ref!r}")
         anchor_ms = created["recorded_at_ms"]
+    else:
+        answer_lost = repo.first_order_transition(
+            order_ref=order_ref,
+            transition_kind="ORDER_SUBMIT_UNCERTAIN",
+            after_sequence=requested["sequence"],
+        )
+        anchor_ms = (
+            requested["recorded_at_ms"]
+            if answer_lost is None
+            else max(requested["recorded_at_ms"], answer_lost["recorded_at_ms"])
+        )
     return repo.clock() - anchor_ms >= submit_absence_grace_ms()
 
 
