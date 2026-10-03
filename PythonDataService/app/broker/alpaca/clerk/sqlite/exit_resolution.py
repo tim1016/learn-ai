@@ -78,7 +78,7 @@ import base64
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import ClassVar, Literal, NamedTuple
+from typing import Any, ClassVar, Literal, NamedTuple, TypedDict
 
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
@@ -108,6 +108,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderCancelRequestedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
+    UncertaintyRaisedFacts,
     UnknownOutcomeNotice,
 )
 from app.broker.alpaca.clerk.sqlite.flatten_cover import (
@@ -159,6 +160,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_uncertainty,
     require_capability,
     resolve_exit_not_flat_uncertainty,
+    uncertainty_envelope,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
@@ -692,6 +694,24 @@ def _fold_exit_not_flat(
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     held = f"attributed_qty={attributed_qty} remains for {symbol!r}."
+    # The notice is written before the failure (#2854). Each is its own
+    # write, and a process that stops between them must not leave an EXIT
+    # that failed and released its entry with nothing telling the operator
+    # or the watchdog: no pass visits a failed EXIT again. Stopped after the
+    # notice alone, the EXIT is still unfinished, so the next pass drives it
+    # here again; the notice it then raises is the one already open.
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=effect.strategy_instance_id,
+        **_exit_not_flat_notice(
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=attributed_qty,
+            headline=headline,
+            explanation=explanation,
+            next_step=next_step,
+        ),
+    )
     fold_failed(
         repo,
         effect_operation_id=effect_operation_id,
@@ -702,27 +722,53 @@ def _fold_exit_not_flat(
         transition_kind="EXIT_NOT_FLAT",
         refusal=refusal,
     )
-    raise_uncertainty(
-        repo,
-        strategy_instance_id=effect.strategy_instance_id,
-        reason_code=EXIT_NOT_FLAT_REASON_CODE,
-        headline=headline,
-        explanation=explanation,
-        operator_impact=_EXIT_NOT_FLAT_OPERATOR_IMPACT,
-        next_step=next_step,
-        evidence_refs=(order_ref,),
-        cause_facts=ExitNotFlatCause(
-            symbol=symbol.upper(),
-            attributed_qty=attributed_qty,
-        ).to_mapping(),
-        severity="error",
-    )
 
 
 _EXIT_NOT_FLAT_OPERATOR_IMPACT = (
     "New exposure is on hold for this strategy; exact risk reduction and "
     "reconciliation remain available."
 )
+
+
+class _ExitNotFlatNotice(TypedDict):
+    """What every ``EXIT_NOT_FLAT`` episode an EXIT ends under is raised with."""
+
+    reason_code: str
+    headline: str
+    explanation: str
+    operator_impact: str
+    next_step: str
+    evidence_refs: tuple[str, ...]
+    cause_facts: dict[str, Any]
+    severity: str
+
+
+def _exit_not_flat_notice(
+    *,
+    order_ref: str,
+    symbol: str,
+    attributed_qty: float,
+    headline: str,
+    explanation: str,
+    next_step: str,
+) -> _ExitNotFlatNotice:
+    """The ``EXIT_NOT_FLAT`` notice of an EXIT that ended with ``attributed_qty`` of ``symbol`` still held.
+
+    One shape for the episode raised as its own transition
+    (:func:`_fold_exit_not_flat`) and the one an operator's attestation
+    opens in the write that ends the EXIT
+    (:func:`attested_absent_exit_notice`): the watchdog reads both the same.
+    """
+    return {
+        "reason_code": EXIT_NOT_FLAT_REASON_CODE,
+        "headline": headline,
+        "explanation": explanation,
+        "operator_impact": _EXIT_NOT_FLAT_OPERATOR_IMPACT,
+        "next_step": next_step,
+        "evidence_refs": (order_ref,),
+        "cause_facts": ExitNotFlatCause(symbol=symbol.upper(), attributed_qty=attributed_qty).to_mapping(),
+        "severity": "error",
+    }
 
 
 def _fold_observed_reducing_order(
@@ -2372,40 +2418,38 @@ ORDER_ATTESTED_ABSENT = "ORDER_ATTESTED_ABSENT"
 """How an EXIT ended whose closing order an operator attested Alpaca does not have (#2854)."""
 
 
-def fold_exit_attested_absent(
+def attested_absent_exit_notice(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
     order_ref: str,
     broker_qty: float,
     account_attributed_qty: float,
-) -> None:
-    """End an EXIT whose closing order an operator attested Alpaca does not have (#2854).
+) -> UncertaintyRaisedFacts | None:
+    """The ``EXIT_NOT_FLAT`` notice an EXIT ends under when an operator attested Alpaca does not have its closing order (#2854).
 
     The caller has read the broker itself and found no such order
-    (``unknown_order_attestation``). The order is ended as not sent and the
-    EXIT fails releasably through ``EXIT_NOT_FLAT`` (owner decision on
-    #2854): its entry is freed, and the Clerk may sell again by itself after
-    its own check of the account, as after any failed exit. The fold cites
-    the reducing order, so the unknown-outcome episode's identity for it
-    closes with the EXIT.
+    (``unknown_order_attestation``), and records this notice on the one
+    transition that ends the EXIT: the order is ended as not sent and the
+    EXIT fails releasably (owner decision on #2854), so its entry is freed
+    and the Clerk may sell again by itself after its own check of the
+    account, as after any failed exit. Nothing is written here.
 
-    The attributed quantity is never changed here. When the broker's position
-    in the symbol (``broker_qty``) does not equal the account-wide
+    The attributed quantity is never changed by this. When the broker's
+    position in the symbol (``broker_qty``) does not equal the account-wide
     attribution, the notice says both, and what to do about shares Alpaca
     does not hold.
 
-    An EXIT whose position is already flat has nothing left to exit: it
-    proves attributed-flat instead, citing the same order, as a resubmission
-    does (:func:`_created_leg_may_be_sent`).
+    ``None`` for an EXIT whose bot holds nothing in the symbol: it has
+    nothing left to exit and ends attributed-flat instead, citing the same
+    order, as a resubmission does (:func:`_created_leg_may_be_sent`).
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     created = _reducing_order_facts(repo, order_ref)
     held = repo.position(effect.strategy_instance_id, created.symbol)
     if not position_quantity_is_nonzero(held):
-        _fold_attributed_flat(repo, effect_operation_id, order_ref)
-        return
+        return None
     settled = (
         f"The Clerk could not confirm the order to {_the_reduction(created)}. An operator said "
         "Alpaca has no such order, the Clerk's own reads of Alpaca found none, and the exit was "
@@ -2422,18 +2466,15 @@ def fold_exit_attested_absent(
         )
     else:
         explanation, next_step = settled, _REDRIVE_NEXT_STEP
-    _fold_exit_not_flat(
-        repo,
-        effect_operation_id=effect_operation_id,
-        order_ref=order_ref,
-        symbol=created.symbol,
-        attributed_qty=held,
-        summary_code=ORDER_ATTESTED_ABSENT,
-        reason="An operator attested Alpaca has no such order, and the Clerk's own reads found none.",
-        why="The closing order was ended as not sent; nothing was sent to end it.",
-        headline="A closing order was settled as not sent; the position is still open",
-        explanation=explanation,
-        next_step=next_step,
+    return uncertainty_envelope(
+        **_exit_not_flat_notice(
+            order_ref=order_ref,
+            symbol=created.symbol,
+            attributed_qty=held,
+            headline="A closing order was settled as not sent; the position is still open",
+            explanation=explanation,
+            next_step=next_step,
+        )
     )
 
 
@@ -2452,9 +2493,12 @@ def fold_exit_attested_order(
     never twice. An order that ended unfilled fails the EXIT through
     ``EXIT_NOT_FLAT``.
 
-    The acknowledgement records the order's broker order id, which later
-    passes read it by while its client-id lookup still reads absent
-    (:func:`_observe_by_broker_order_id`).
+    The attestation's own transition already recorded the order's broker
+    order id on the order, before any of this is written. So should the
+    process stop between the writes made here, each of which commits alone,
+    the next pass reads the order by that id while its client-id lookup still
+    reads absent (:func:`_observe_by_broker_order_id`) and folds what is
+    left; nothing here is lost with it.
     """
     reducing = _read_exit_claim_state(repo, effect_operation_id).reducing
     if reducing is None or observed.client_order_id != reducing.client_order_id:
@@ -2729,9 +2773,9 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
 
 
 __all__ = [
+    "attested_absent_exit_notice",
     "cancel_and_prove_owned_entry",
     "flatten_send_refusal",
-    "fold_exit_attested_absent",
     "fold_exit_attested_order",
     "priced_reduction_reference_price",
     "resolve_exit",

@@ -560,6 +560,35 @@ def fold_uncertainty_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]
     )
 
 
+def open_or_refresh_episode(
+    conn: sqlite3.Connection, payload: dict[str, Any], facts: UncertaintyRaisedFacts
+) -> None:
+    """Open the episode ``facts`` describes inside another transition's own fold, or refresh the open one (#2854).
+
+    For a transition that ends an operation and must tell the operator so in
+    the same write: the notice cannot then be missing from a ledger that
+    holds the ending. The episode is opened and refreshed exactly as
+    ``UNCERTAINTY_RAISED`` and ``UNCERTAINTY_REFRESHED`` do it, with ``facts``
+    as its envelope; one opened here takes its id from the transition being
+    folded, as every episode does.
+    """
+    envelope = {
+        **payload,
+        "facts_schema_version": FACTS_SCHEMA_VERSION,
+        "facts_json": facts.to_facts_json(),
+    }
+    scope, subject_id, _strategy_instance_id = _uncertainty_custody(conn, envelope)
+    active = conn.execute(
+        "SELECT 1 FROM uncertainties WHERE scope = ? AND reason_code = ? AND subject_id IS ? "
+        "AND resolved_at_ms IS NULL",
+        (scope, facts.reason_code, subject_id),
+    ).fetchone()
+    if active is None:
+        fold_uncertainty_raised(conn, envelope)
+    else:
+        fold_uncertainty_refreshed(conn, envelope)
+
+
 def fold_uncertainty_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Close one active episode; an already-resolved row is a no-op."""
     facts = UncertaintyResolvedFacts.from_facts_json(payload["facts_json"])
@@ -573,6 +602,7 @@ __all__ = [
     "fold_uncertainty_raised",
     "fold_uncertainty_refreshed",
     "fold_uncertainty_resolved",
+    "open_or_refresh_episode",
     "open_or_refresh_unknown_outcome",
     "resolve_unknown_outcome_if_proven",
 ]

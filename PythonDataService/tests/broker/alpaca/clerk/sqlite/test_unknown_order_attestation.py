@@ -26,8 +26,13 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.account_open_work import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
-from app.broker.alpaca.clerk.sqlite.facts import OrderOutcomeAttestedFacts, OrderSubmitFailedFacts
+from app.broker.alpaca.clerk.sqlite.facts import (
+    AttributedResidueDischargedFacts,
+    OrderOutcomeAttestedFacts,
+    UncertaintyRaisedFacts,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
@@ -42,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.residue_discharge import ATTRIBUTED_RESIDUE_DISCHARGED
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
@@ -72,6 +78,7 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
     _closing_order,
     _exit_state,
     _passes,
+    _Refused,
     _SubmitFate,
     _the_runner_sends_the_exit,
     _the_stream_reports,
@@ -80,6 +87,7 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
     _context_of,
     _ExactLookup,
+    _flatten,
     _NoSubmitTrade,
 )
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
@@ -264,6 +272,9 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
     position is still open, the entry is free to be exited again, and the
     bot still holds its 10 SPY. Who settled it, and what the Clerk read, is
     on the record. No order left the Clerk.
+
+    All of that is one write to the ledger: the attestation's own row ends
+    the EXIT and opens its notice, so there is no part of it to be missing.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
@@ -271,6 +282,7 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
     closing = _closing_order(repo)
     (entry,) = repo.entry_orders_for_strategy(SID)
     facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    ledger = repo.custody_transitions()
 
     result = await _settle(
         facade, current_context, ABSENT, reason="Checked Alpaca's order list: no sell of SPY today."
@@ -282,8 +294,8 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
     assert alpaca.asked_since_ms == [closing.updated_at_ms - ORDERS_SINCE_MARGIN_MS] * 2
 
     assert _exit_state(repo, exit_id) == "failed"
-    ended = repo.first_effect_transition(effect_operation_id=exit_id, transition_kind="EXIT_NOT_FLAT")
-    assert ended is not None and ended["summary_code"] == "ORDER_ATTESTED_ABSENT"
+    (ended,) = repo.custody_transitions()[len(ledger):]
+    assert (ended["transition_kind"], ended["summary_code"]) == (ORDER_OUTCOME_ATTESTED, "ORDER_ATTESTED_ABSENT")
     assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
     notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
     assert notice is not None
@@ -1026,33 +1038,128 @@ async def test_a_settlement_names_its_operator_and_the_dispatcher_refuses_one_th
     assert alpaca.reads == []
 
 
-async def test_an_attestation_records_only_what_its_own_reads_found_and_changes_no_other_fact(
+async def test_an_attestation_records_only_what_its_own_reads_found(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
-    """The store is hash-chained: a fact gains no key it does not use, and no existing fact gains one.
+    """The store is hash-chained: a fact gains no key it does not use.
 
     The attestation's own row leaves out everything the other attestation
-    records, and the reason when none was given. The EXIT's failure is the
-    same two-key fact every failed order has written.
+    records, and the reason when none was given. The notice its EXIT ended
+    under is recorded whole, as the envelope every raised notice records.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+
+    await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
+
+    recorded = json.loads(_attestation_row(repo)["facts_json"])
+    assert set(recorded) == {
+        "attestation", "operator", "client_order_id", "symbol", "side", "quantity",
+        "latest_send_sequence", "uncertainty_id", "broker_observed_at_ms",
+        "open_orders_read", "orders_since_read", "orders_read_since_ms",
+        "broker_qty", "account_attributed_qty", "exit_not_flat",
+    }
+    notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
+    assert notice is not None
+    assert json.loads(notice["facts_json"]) == recorded["exit_not_flat"]
+    assert UncertaintyRaisedFacts.from_facts_json(notice["facts_json"]).evidence_refs == [
+        _closing_order(repo).order_ref
+    ]
+
+
+def _the_ledger_records_the_bots_shares_written_off(repo: ClerkSqliteRepository) -> None:
+    """A write-off of the bot's 10 SPY, put on the ledger as its own transition.
+
+    The Clerk's discharge refuses while an EXIT of the symbol is unfinished,
+    so no action of its own leaves a bot holding nothing under an unknown
+    EXIT; the row is written here to stand for any way the ledger came to say
+    so.
+    """
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=SID,
+            transition_kind=ATTRIBUTED_RESIDUE_DISCHARGED,
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code=ATTRIBUTED_RESIDUE_DISCHARGED,
+            facts_json=AttributedResidueDischargedFacts(
+                symbol="SPY", discharged_qty=10.0, broker_qty=0.0, account_attributed_qty=10.0,
+                broker_observed_at_ms=repo.clock(), uncertainty_ids=[], operator_reason=None,
+            ).to_facts_json(),
+        )
+    )
+
+
+async def test_an_absent_order_of_a_bot_that_holds_nothing_ends_its_exit_flat(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The bot holds nothing, and its closing order's outcome is still unknown.
+
+    It has nothing left to exit, so "no such order" ends the EXIT as flat and
+    raises no notice that a position is still open.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    alpaca.holds = 0.0
+    _the_ledger_records_the_bots_shares_written_off(repo)
+    assert repo.position(SID, "SPY") == 0.0 and _exit_state(repo, exit_id) == "unknown"
 
-    await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
+    result = await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
 
-    assert set(json.loads(_attestation_row(repo)["facts_json"])) == {
-        "attestation", "operator", "client_order_id", "symbol", "side", "quantity",
-        "latest_send_sequence", "uncertainty_id", "broker_observed_at_ms",
-        "open_orders_read", "orders_since_read", "orders_read_since_ms",
-        "broker_qty", "account_attributed_qty",
-    }
-    ended = repo.first_effect_transition(effect_operation_id=exit_id, transition_kind="EXIT_NOT_FLAT")
-    assert ended is not None
-    assert set(json.loads(ended["facts_json"])) == {"reason", "why"}
-    assert OrderSubmitFailedFacts.from_facts_json(ended["facts_json"]).reason.startswith(
-        "An operator attested Alpaca has no such order"
+    assert result.applied is True
+    assert _exit_state(repo, exit_id) == "succeeded"
+    assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
+    assert _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE) is None
+    (recorded,) = _attested(repo)
+    assert recorded.exit_not_flat is None
+    assert len(alpaca.sent) == 1
+
+
+async def test_an_absent_order_ends_its_exit_under_the_notice_its_bot_already_carries(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The bot's own exit was refused and left its notice; the operator's Flatten for the same shares was then lost.
+
+    Settling the Flatten's order as absent ends that EXIT under the notice
+    the bot already carries -- the same notice, now about this order -- in
+    the same one write.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(
+        repo, clock, submits=(_Refused(422, "extended hours order must be DAY limit orders"), "never_arrives")
     )
+    refused_exit = await _the_runner_sends_the_exit(repo, alpaca)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="operator_stop",
+    )
+    carried = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
+    assert _exit_state(repo, refused_exit) == "failed" and carried is not None
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+    await _flatten(facade, current_context)
+    (flatten_order,) = repo.unknown_exit_orders(SID)
+    assert len(alpaca.sent) == 2
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    ledger = repo.custody_transitions()
+
+    await _settle(facade, current_context, ABSENT)
+
+    assert _exit_state(repo, flatten_order.effect_operation_id) == "failed"
+    (ended,) = repo.custody_transitions()[len(ledger):]
+    assert ended["proof_reference"] == carried["uncertainty_id"], "the refresh is on the notice's own timeline"
+    notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
+    assert notice is not None and notice["uncertainty_id"] == carried["uncertainty_id"]
+    assert notice["headline"] == "A closing order was settled as not sent; the position is still open"
+    assert UncertaintyRaisedFacts.from_facts_json(notice["facts_json"]).evidence_refs == [
+        flatten_order.order_ref
+    ]
+    assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
+    assert len(alpaca.sent) == 2
 
 
 async def test_a_mirror_rebuild_replays_a_settled_order(tmp_path: Path) -> None:

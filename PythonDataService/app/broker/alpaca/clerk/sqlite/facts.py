@@ -801,7 +801,14 @@ class OrderOutcomeAttestedFacts:
     - ``exists``: the broker order id that was read, its state and its
       cumulative filled quantity as read.
 
-    The row is an audit record: the folds that follow it settle the order.
+    The row is the settlement, not a note beside it: its own fold settles
+    the order (``folds._fold_order_outcome_attested``), so no ledger holds an
+    attestation that did not take effect. An ``absent`` row ends the order's
+    EXIT. ``exit_not_flat`` is the ``EXIT_NOT_FLAT`` notice it ends under --
+    the whole envelope, opened by the same fold -- recorded when the bot
+    still holds the position; without one the bot held nothing and the EXIT
+    ended attributed-flat. An ``exists`` row records the order's broker order
+    id on the order, which the Clerk reads it by from then on.
     """
 
     attestation: str
@@ -819,6 +826,7 @@ class OrderOutcomeAttestedFacts:
     orders_read_since_ms: int | None = None
     broker_qty: float | None = None
     account_attributed_qty: float | None = None
+    exit_not_flat: dict[str, Any] | None = None
     broker_order_id: str | None = None
     broker_state: str | None = None
     broker_filled_quantity: float | None = None
@@ -831,7 +839,7 @@ class OrderOutcomeAttestedFacts:
         recorded, left_out = (
             (_ABSENT_ATTESTATION_FIELDS, _EXISTS_ATTESTATION_FIELDS)
             if self.attestation == "absent"
-            else (_EXISTS_ATTESTATION_FIELDS, _ABSENT_ATTESTATION_FIELDS)
+            else (_EXISTS_ATTESTATION_FIELDS, (*_ABSENT_ATTESTATION_FIELDS, "exit_not_flat"))
         )
         if any(getattr(self, name) is None for name in recorded) or any(
             getattr(self, name) is not None for name in left_out

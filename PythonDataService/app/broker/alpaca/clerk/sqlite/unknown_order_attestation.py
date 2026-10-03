@@ -23,8 +23,8 @@ on its side of its symbol since it was created: such an order may be this
 one under another identity. The broker's position must equal the
 account-wide attribution, unless an open ``POSITION_DRIFT`` already names
 the symbol; that episode is what then keeps the Clerk from selling shares
-Alpaca does not hold. The EXIT fails releasably through ``EXIT_NOT_FLAT``
-and the attributed quantity is never changed.
+Alpaca does not hold. The EXIT fails releasably, under an ``EXIT_NOT_FLAT``
+notice, and the attributed quantity is never changed.
 
 Attestation ``exists`` -- "Alpaca shows it, under this Alpaca order id". The
 Clerk reads that order by its broker id and takes it up only when it is this
@@ -43,12 +43,20 @@ check and every write happen in one fenced run, which reads the order again
 as the catalog presented it: an order sent again, acknowledged or filled
 since refuses, and nothing is written.
 
-One ``ORDER_OUTCOME_ATTESTED`` transition records who attested what, and
-what the Clerk read.
+One ``ORDER_OUTCOME_ATTESTED`` transition records who attested what and
+what the Clerk read, and its own fold settles the order: an ``absent`` one
+ends the EXIT and opens the notice it ends under, an ``exists`` one records
+the order's Alpaca order id on the order. So the ledger never holds an
+attestation that did not take effect, or an effect with no attestation,
+wherever the process stops. What an order taken up by its id then did -- a
+fill, its ending -- is folded in writes of their own, as any answer about
+the Clerk's own order is; a process that stops between those leaves an order
+the Clerk's next pass reads by that id and finishes.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -59,7 +67,8 @@ from app.broker.alpaca.clerk.sqlite.account_open_work import (
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
-    fold_exit_attested_absent,
+    ORDER_ATTESTED_ABSENT,
+    attested_absent_exit_notice,
     fold_exit_attested_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -78,6 +87,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 from app.broker.alpaca.clerk.sqlite.reconcile import broker_symbol_reader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import unknown_order_lookup_settles_at_ms
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    resolve_exit_not_flat_uncertainty,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     POSITION_DRIFT_REASON_CODE,
     PositionDriftCause,
@@ -568,6 +581,22 @@ def _settle_absent(
             lines=_absence_lines(presented, proof),
             observed_at_ms=observed_at_ms,
         )
+    effect = repo.effect_operation(presented.effect_operation_id)
+    assert effect is not None
+    notice = attested_absent_exit_notice(
+        repo,
+        effect_operation_id=presented.effect_operation_id,
+        order_ref=presented.order_ref,
+        broker_qty=proof.broker_qty,
+        account_attributed_qty=proof.account_attributed_qty,
+    )
+    open_notice = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=effect.strategy_instance_id,
+    )
+    # The one write of this settlement: its own fold ends the EXIT and opens
+    # the notice it ends under, so no ledger holds a part of it.
     committed = _append_attestation(
         repo,
         presented=presented,
@@ -587,16 +616,26 @@ def _settle_absent(
             orders_read_since_ms=since_ms,
             broker_qty=proof.broker_qty,
             account_attributed_qty=proof.account_attributed_qty,
+            exit_not_flat=None if notice is None else json.loads(notice.to_facts_json()),
         ),
         observed_at_ms=observed_at_ms,
+        operation_state="succeeded" if notice is None else "failed",
+        summary_code=ORDER_ATTESTED_ABSENT,
+        # A notice already open is refreshed, and joined to its own timeline
+        # by this reference, as every refresh is.
+        proof_reference=(
+            None if notice is None or open_notice is None else open_notice["uncertainty_id"]
+        ),
     )
-    fold_exit_attested_absent(
-        repo,
-        effect_operation_id=presented.effect_operation_id,
-        order_ref=presented.order_ref,
-        broker_qty=proof.broker_qty,
-        account_attributed_qty=proof.account_attributed_qty,
-    )
+    if notice is None:
+        # The bot holds nothing: the EXIT ended attributed-flat, and a notice
+        # of an earlier exit that left the position open no longer stands. A
+        # pass of the Clerk resolves it too, should this write be lost.
+        resolve_exit_not_flat_uncertainty(
+            repo,
+            strategy_instance_id=effect.strategy_instance_id,
+            evidence_refs=(presented.order_ref,),
+        )
     return _settled(repo, committed, presented, commit, attestation="absent")
 
 
@@ -626,8 +665,15 @@ def _append_attestation(
     presented: ProjectedUnknownExitOrder,
     facts: OrderOutcomeAttestedFacts,
     observed_at_ms: int,
+    operation_state: str,
+    summary_code: str,
+    proof_reference: str | None = None,
 ) -> CommittedTransition:
-    """Record who attested what, and what the Clerk read, on the EXIT's own timeline."""
+    """Record who attested what, and what the Clerk read, on the EXIT's own timeline.
+
+    The row's own fold settles the order (``folds._fold_order_outcome_attested``).
+    ``operation_state`` is the state that fold leaves the EXIT in.
+    """
     effect = repo.effect_operation(presented.effect_operation_id)
     assert effect is not None
     return repo.append_transition(
@@ -640,9 +686,10 @@ def _append_attestation(
             transition_kind=ORDER_OUTCOME_ATTESTED,
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
-            operation_state=effect.state,
+            operation_state=operation_state,
             clerk_observed_at_ms=observed_at_ms,
-            summary_code=ORDER_OUTCOME_ATTESTED,
+            summary_code=summary_code,
+            proof_reference=proof_reference,
             facts_json=facts.to_facts_json(),
         )
     )
@@ -795,7 +842,14 @@ def _settle_exists(
             broker_filled_quantity=observed.filled_quantity,
         ),
         observed_at_ms=observed_at_ms,
+        operation_state="unknown",
+        summary_code=ORDER_OUTCOME_ATTESTED,
     )
+    # The write above took the order up: it carries its broker order id now.
+    # What that order did is folded as the Clerk folds any answer about its
+    # own order, in writes that each commit alone. Should the process stop
+    # between them, the Clerk's next pass reads the order by that id and
+    # folds what is left (``exit_resolution._observe_by_broker_order_id``).
     fold_exit_attested_order(
         repo, effect_operation_id=presented.effect_operation_id, observed=observed
     )
@@ -812,19 +866,17 @@ def recorded_settlement(
     """The receipt of this same settlement, when it was already made: a replay does nothing twice.
 
     ``None`` unless this bot's order carries a recorded attestation of the
-    same kind -- and, for an order taken up by its Alpaca order id, the same
-    id -- and its EXIT is no longer ``unknown``: an attestation whose
-    settlement did not complete is not a receipt, and the order is settled
-    again as presented.
+    same kind and, for an order taken up by its Alpaca order id, the same id.
+    That row is the settlement itself -- its own fold ended the EXIT, or
+    recorded the order's broker order id -- so it is on the ledger only when
+    this attestation took effect. An order that left ``unknown`` any other
+    way carries no such row, and is never answered with a receipt.
     """
     row = repo.last_order_transition(order_ref=order_ref, transition_kind=ORDER_OUTCOME_ATTESTED)
     if row is None or row["strategy_instance_id"] != strategy_instance_id:
         return None
     facts = OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
     if facts.attestation != attestation.kind or facts.broker_order_id != attestation.broker_order_id:
-        return None
-    effect = repo.effect_operation(row["effect_operation_id"])
-    if effect is None or effect.state == "unknown":
         return None
     return UnknownOrderSettlementReceipt(
         sequence=row["sequence"],

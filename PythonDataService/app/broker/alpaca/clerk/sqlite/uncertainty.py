@@ -112,6 +112,37 @@ def _effective_identity(
     return policy, "ACCOUNT_CLERK", None
 
 
+def uncertainty_envelope(
+    *,
+    reason_code: str,
+    headline: str,
+    explanation: str,
+    operator_impact: str,
+    next_step: str,
+    evidence_refs: tuple[str, ...] = (),
+    cause_facts: dict[str, Any] | None = None,
+    severity: str = "warning",
+) -> UncertaintyRaisedFacts:
+    """The envelope one typed episode is raised or refreshed with.
+
+    What the episode permits is read from its registered policy; an
+    unregistered cause blocks new exposure and allows no reduction.
+    """
+    policy = reason_policy(reason_code)
+    return UncertaintyRaisedFacts(
+        severity=severity,
+        blocks_new_exposure=True if policy is None else policy.blocks_new_exposure,
+        allows_reduction=False if policy is None else policy.allows_reduction,
+        reason_code=reason_code,
+        headline=headline,
+        explanation=explanation,
+        operator_impact=operator_impact,
+        next_step=next_step,
+        evidence_refs=list(evidence_refs),
+        cause_facts=cause_facts or {},
+    )
+
+
 def raise_uncertainty(
     repo: ClerkSqliteRepository,
     *,
@@ -135,24 +166,19 @@ def raise_uncertainty(
     operator's only signal for whether an outage is new or ongoing. Callers
     that only care whether anything was recorded compare to ``"unchanged"``.
     """
-    policy, scope, effective_strategy_instance_id = _effective_identity(
+    _policy, scope, effective_strategy_instance_id = _effective_identity(
         reason_code=reason_code, strategy_instance_id=strategy_instance_id
     )
-    blocks_new_exposure = True if policy is None else policy.blocks_new_exposure
-    allows_reduction = False if policy is None else policy.allows_reduction
-    facts = UncertaintyRaisedFacts(
-        severity=severity,
-        blocks_new_exposure=blocks_new_exposure,
-        allows_reduction=allows_reduction,
+    facts_json = uncertainty_envelope(
         reason_code=reason_code,
         headline=headline,
         explanation=explanation,
         operator_impact=operator_impact,
         next_step=next_step,
-        evidence_refs=list(evidence_refs),
-        cause_facts=cause_facts or {},
-    )
-    facts_json = facts.to_facts_json()
+        evidence_refs=evidence_refs,
+        cause_facts=cause_facts,
+        severity=severity,
+    ).to_facts_json()
 
     def build_transition(transition_kind: str) -> TransitionInput:
         return TransitionInput(
