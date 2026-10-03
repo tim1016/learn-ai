@@ -78,6 +78,18 @@ series, moving every period that is a parameter: what a non-default deploy
 runs, and so what its seal and its view must name (#2796). No two periods of
 a program share a value, so a series wired to the wrong one cannot pass."""
 
+LONG_PERIODS: dict[str, dict[str, int]] = {
+    "ema_crossover_signal": {"fast_period": 30, "slow_period": 40},
+    "sma_crossover": {"short_window": 50, "long_window": 200},
+    "rsi_mean_reversion": {"window": 100},
+    "spy_strategy_a": {"ema_fast_period": 50, "ema_slow_period": 200},
+    "spy_strategy_b": {"macd_slow": 100, "macd_signal": 30},
+    "spy_strategy_c": {"adx_period": 60},
+}
+"""One long-period deploy per program that seals an indicator series: its
+longest series needs more history than the program's default warmup lookback
+holds, so its seal must name a longer one (#2841)."""
+
 
 def sealed_series_points() -> list[tuple[str, dict[str, int]]]:
     """Every sealed program at its validated settings, then each one that seals a series at its point off them.

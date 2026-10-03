@@ -393,6 +393,56 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
     assert _warmup_lookback_days_for(stale_binding) == 11
 
 
+@pytest.mark.asyncio
+async def test_a_sealed_long_period_deploy_warms_on_the_lookback_its_periods_need() -> None:
+    """SMA 50/200 needs 200 decision bars before it is ready; the program's
+    default seven days cannot hold them, so the bot started unready and waited
+    on live bars (#2841). Its seal now names the days those periods need, and
+    that is the window the feed is asked for.
+    """
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+    from app.schemas.run_admission import StrategyValidationAdmissionFact
+    from app.services.signal_program_admission import build_start_program_seal
+
+    periods = {"short_window": 50, "long_window": 200}
+    binding = _binding(strategy_key="sma_crossover").model_copy(
+        update={
+            "sealed_account_id": "sim:warmup-long-periods",
+            "strategy_params": periods,
+            "strategy_param_origins": dict.fromkeys(periods, "deploy_override"),
+        }
+    )
+    seal = build_start_program_seal(
+        binding,
+        StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key="sma_crossover",
+            evidence_status="accepted",
+            event_id="validation-warmup-2",
+            evidence_snapshot_sha256="e" * 64,
+            verified_at_ms=1_787_356_800_000,
+            explanation="The exact validation snapshot was re-hashed.",
+        ),
+        parameter_origins=binding.strategy_param_origins,
+    )
+    assert seal is not None
+    sealed_binding = binding.model_copy(update={"sealed_program": seal})
+    feed = _RecordingFeed()
+
+    await replay_warmup_bars(
+        _FakeRuntime(),  # type: ignore[arg-type]
+        _context(),
+        feed,  # type: ignore[arg-type]
+        sealed_binding,
+        captured_decisions=None,
+    )
+
+    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
+    assert contract is not None
+    assert _warmup_lookback_days_for(sealed_binding) == 18
+    assert feed.recorded_lookback_days == 18 > contract.warmup_lookback_days
+
+
 def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_cap(
     tmp_path: Path,
 ) -> None:

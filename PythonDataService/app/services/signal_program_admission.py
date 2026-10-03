@@ -231,7 +231,9 @@ def build_start_program_seal(
         ),
         clock=SignalClockContract(
             use_rth=binding.use_rth,
-            warmup_lookback_days=contract.warmup_lookback_days,
+            # Resolved for these parameters too: the history the longest
+            # series they build needs, never less than the default (#2841).
+            warmup_lookback_days=contract.resolved_warmup_lookback_days(validated),
         ),
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
@@ -704,8 +706,9 @@ def _seal_checks(
     seal without ever being gated.
     """
     configured = seal.configured_signal
-    # The series and exit rule a seal attests to depend on its own parameters
-    # (#2696), so they are compared against the contract resolved for them.
+    # The series, exit rule and warmup lookback a seal attests to depend on its
+    # own parameters (#2696, #2841), so they are compared against the contract
+    # resolved for them.
     sealed_params = _sealed_parameters(binding.strategy_key, configured)
     return (
         _SealCheck(
@@ -802,7 +805,8 @@ def _seal_checks(
         ),
         _SealCheck(
             "clock.warmup_lookback_days",
-            configured.clock.warmup_lookback_days == contract.warmup_lookback_days,
+            sealed_params is not None
+            and configured.clock.warmup_lookback_days == contract.resolved_warmup_lookback_days(sealed_params),
             "The sealed warmup requirement no longer matches the registered contract.",
         ),
         # `parameters_match_validated_settings` is deliberately not a row here.

@@ -39,7 +39,7 @@ from app.services.signal_program_admission import (
     record_imported_program_sources,
     running_wiring_digest,
 )
-from tests._helpers.signal_program import OFF_VALIDATED_PERIODS
+from tests._helpers.signal_program import LONG_PERIODS, OFF_VALIDATED_PERIODS
 
 _SID = "sealed-ema-1"
 _NOW = 1_787_356_800_000
@@ -737,6 +737,53 @@ def test_a_strategy_c_seal_off_its_default_periods_does_not_claim_them_in_its_fo
     formula = seal.configured_signal.numerical_provenance.formula
     assert "RSI(rsi_period)" in formula and "ADX(adx_period)" in formula
     assert "(14)" not in formula
+
+
+# --- #2841: the warmup lookback follows the deployed periods ------------------
+
+# The calendar days each program seals at its ``LONG_PERIODS`` point. Every one
+# is above the program's default, which cannot warm that deploy's longest series.
+_LOOKBACK_DAYS_AT_LONG_PERIODS: dict[str, int] = {
+    "ema_crossover_signal": 6,
+    "sma_crossover": 18,
+    "rsi_mean_reversion": 11,
+    "spy_strategy_a": 18,
+    "spy_strategy_b": 13,
+    "spy_strategy_c": 12,
+}
+
+
+@pytest.mark.parametrize("program_key", sorted(_LOOKBACK_DAYS_AT_LONG_PERIODS))
+def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: str) -> None:
+    """Every program sealed its default lookback whatever periods the deploy ran (#2841)."""
+    binding, seal = _off_validated_seal(program_key, LONG_PERIODS[program_key])
+    contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
+    assert contract is not None
+
+    sealed_days = seal.configured_signal.clock.warmup_lookback_days
+    assert sealed_days == _LOOKBACK_DAYS_AT_LONG_PERIODS[program_key]
+    assert sealed_days > contract.warmup_lookback_days
+    assert prove_running_program_build(binding, verified_at_ms=_NOW).state == "PROVEN"
+
+
+@pytest.mark.parametrize("program_key", sorted(_LOOKBACK_DAYS_AT_LONG_PERIODS))
+def test_a_seal_naming_the_default_lookback_for_a_long_period_deploy_fails_closed(program_key: str) -> None:
+    """A seal is checked against the lookback its *own* parameters resolve.
+
+    The seal these programs minted before #2841 names a warmup the bot cannot
+    fill at these periods.
+    """
+    binding, seal = _off_validated_seal(program_key, LONG_PERIODS[program_key])
+    contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
+    assert contract is not None
+    stale_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.warmup_lookback_days})
+    stale = seal.configured_signal.model_copy(update={"clock": stale_clock})
+    binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert "warmup requirement" in proof.explanation
 
 
 # --- Issue #1735: the wiring half of the build digest -------------------------
