@@ -20,13 +20,14 @@ interface AlignedLine {
   readonly falls: readonly (number | null)[];
 }
 
-/** The period an equity chart draws: its name and the note every hover ends with. */
+/** The period an equity chart draws: its name, whose fall the limit judges, and the note every hover ends with. */
 export interface EquityPeriod {
   readonly label: string;
+  readonly judged: string;
   readonly note: string;
 }
 
-export const DEVELOPMENT_EQUITY: EquityPeriod = { label: 'Development cumulative return and fall from peak', note: DEVELOPMENT_NOTE };
+export const DEVELOPMENT_EQUITY: EquityPeriod = { label: 'Development cumulative return and fall from peak', judged: 'The rules judge each run’s bar-by-bar fall', note: DEVELOPMENT_NOTE };
 
 /**
  * The equity chart (#2821): every run's cumulative return on top and its
@@ -141,7 +142,7 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
         values: recorded ? [signedPercentOrNotRecorded(returns[index]), signedPercentOrNotRecorded(falls[index])] : [NOT_RECORDED, NOT_RECORDED],
       })),
       notes: [
-        `Worst-fall limit ${percentText(ceiling)}. The rules judge each run's bar-by-bar fall, which can be deeper than this session-close line.`,
+        `Worst-fall limit ${percentText(ceiling)}. ${period.judged}, which can be deeper than this session-close line.`,
         period.note,
       ],
     },

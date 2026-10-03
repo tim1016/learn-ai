@@ -682,9 +682,10 @@ export function finalRun(key: CandidateKey): NonNullable<CandidateDetail['exam']
   return {
     window: { start_ms: FINAL_START_MS, end_ms: etMidnightMs('2026-04-01') },
     metrics: metrics({ total_return_pct: end, sharpe_ratio: key === 'incumbent' ? 0.54 : 0.91, total_trades: key === 'incumbent' ? 39 : 36 }),
-    cumulative_return: sessions.map((ms, i) => ({ ms, value: (end * (i + 1)) / sessions.length })),
+    // Up half the way, back to three tenths, then up to the end: the fall is the dip from the first peak.
+    cumulative_return: sessions.map((ms, i) => ({ ms, value: [end * 0.5, end * 0.3, end][i] })),
     daily_equity: [],
-    drawdown: sessions.map((ms, i) => ({ ms, drawdown: i === 1 ? -end / 3 : 0 })),
+    drawdown: sessions.map((ms, i) => ({ ms, drawdown: i === 1 ? (1 + end * 0.3) / (1 + end * 0.5) - 1 : 0 })),
     monthly: [
       { month_start_ms: etMidnightMs('2026-01-01'), year: 2026, month: 1, net_profit: end * 40_000, return_fraction: end * 0.4, trades: 12 },
       { month_start_ms: etMidnightMs('2026-02-01'), year: 2026, month: 2, net_profit: end * 60_000, return_fraction: end * 0.6, trades: 13 },

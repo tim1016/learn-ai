@@ -401,7 +401,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Read the labels at the right edge: where each run ended the final test.', target: { kind: 'point', group: 'equity', at: 'last' } },
       { text: 'Follow each line: a steady climb is more convincing than one jump.', target: { kind: 'series', group: 'equity' } },
       { text: 'Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.', target: { kind: 'point', group: 'fall', at: 'lowest' } },
-      { text: 'The dashed line is the worst-fall limit. The final test judges the candidate’s fall bar by bar, which can be deeper than this line.', target: null },
+      { text: 'The amber dashed line labelled “limit” is the worst-fall limit. The final test reads the candidate’s fall bar by bar, which can be deeper than its line here.', target: null },
     ],
   },
   'final-months': {

@@ -147,7 +147,7 @@ function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOp
 // ---------------------------------------------------------------- V34 final-year equity
 
 /** The final test on the shared equity chart: each run's return through it, and its fall from its own peak beneath. */
-export const FINAL_EQUITY: EquityPeriod = { label: 'Final-test cumulative return and fall from peak', note: FINAL };
+export const FINAL_EQUITY: EquityPeriod = { label: 'Final-test cumulative return and fall from peak', judged: 'The final test judges the candidate’s bar-by-bar fall', note: FINAL };
 
 /** Each run's cumulative return and fall from peak through the final test, against the worst-fall limit the final test is judged by. */
 export function finalEquitySpec(runs: readonly FinalRun[], ceiling: number): ChartSpec {

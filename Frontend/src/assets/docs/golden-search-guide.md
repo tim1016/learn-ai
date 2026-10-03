@@ -1127,7 +1127,7 @@ $$\text{fall from peak} = \frac{\text{equity today}}{\text{highest equity so far
 1. Read the labels at the right edge: where each run ended the final test.
 2. Follow each line: a steady climb is more convincing than one jump.
 3. Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.
-4. The dashed line is the worst-fall limit. The final test judges the candidate’s fall bar by bar, which can be deeper than this line.
+4. The amber dashed line labelled “limit” is the worst-fall limit. The final test reads the candidate’s fall bar by bar, which can be deeper than its line here.
 
 #### Good signs and warning signs
 
