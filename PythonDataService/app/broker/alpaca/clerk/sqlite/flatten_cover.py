@@ -110,14 +110,15 @@ def flatten_cover_refusal(
     their own orders) competes for nothing.
 
     Every quantity in the rule must be a finite number -- the position, each
-    competing order's quantity and filled quantity, and the reduction's own.
-    One that is not refuses as unproven: a ``NaN`` compares false both ways
-    and an infinite position would cover anything, so neither may read as
-    covered.
+    competing order's quantity and filled quantity, and the reduction's own,
+    which must also be above zero. One that is not refuses as unproven: a
+    ``NaN`` compares false both ways, an infinite position would cover
+    anything, and any account covers a reduction of nothing, so none may read
+    as covered.
     """
-    if not math.isfinite(quantity):
+    if not (math.isfinite(quantity) and quantity > 0):
         return _unproven(
-            f"This flatten's own {symbol} quantity ({quantity:g}) is not a finite number of shares; "
+            f"This flatten's own {symbol} quantity ({quantity:g}) is not a positive, finite number of shares; "
             "nothing was sent."
         )
     selling = side is OrderSide.SELL

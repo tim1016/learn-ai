@@ -935,8 +935,12 @@ def test_an_open_order_whose_quantity_is_not_a_finite_number_is_never_subtracted
     assert "states a quantity that is not a finite number" in refusal.explanation
 
 
-@pytest.mark.parametrize("own_quantity", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "minus-inf"])
-def test_a_flatten_whose_own_quantity_is_not_a_finite_number_is_never_covered(own_quantity: float) -> None:
+@pytest.mark.parametrize(
+    "own_quantity",
+    [math.nan, math.inf, -math.inf, 0.0, -10.0],
+    ids=["nan", "inf", "minus-inf", "zero", "negative"],
+)
+def test_a_flatten_whose_own_quantity_is_not_a_positive_finite_number_is_never_covered(own_quantity: float) -> None:
     refusal = flatten_cover_refusal(
         symbol="SPY", side=OrderSide.SELL, quantity=own_quantity,
         observed=([], [_position_reported_as(10.0)]),
