@@ -1279,7 +1279,8 @@ async def read_account_custody(
 
     Each uncleanly ended bot's cut is read beside the Clerk's latest published
     pass for it, read before the snapshot as the bot's own page reads it
-    (#2839): its notice then offers Flatten exactly when its page does.
+    (#2839): under that pass its notice offers Flatten exactly when its page
+    does.
     """
     ended, unreadable = await asyncio.to_thread(_uncleanly_ended, facade)
     passes = {bot.sid: await facade.published_pass(bot.sid) for bot in ended}

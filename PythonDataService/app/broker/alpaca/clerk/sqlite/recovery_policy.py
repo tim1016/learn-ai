@@ -105,9 +105,12 @@ class PublishedPass:
     and no order of the bot's is working or unresolved
     (``SqliteAlpacaClerkFacade.published_pass``).
 
-    ``observed_at_ms`` is the pass's own time: when its verdict was published
-    as the pass completed. It is never when this value, or a proof read from
-    the pass, was built -- a pass is read many times after it ran.
+    ``observed_at_ms`` is the pass's own time: when its verdict was reached
+    (``AccountReconciliationResult.verdict_at_ms``), read with
+    ``through_sequence`` under one intake hold. It is never when the pass was
+    published -- the Clerk can record more between the two, which the
+    comparison never saw -- and never when this value, or a proof read from
+    the pass, was built: a pass is read many times after it ran.
 
     ``through_sequence`` is the newest custody transition the pass's final
     broker comparison saw (``AccountReconciliationResult.through_sequence``).

@@ -571,7 +571,7 @@ async def test_the_clerks_own_pass_clears_the_unclean_exit_line_once_it_vouches_
         monkeypatch.setattr(facade, "_unresolved_order_refs", lambda sid: ("intent:enter:1",))
     newest = repo.last_custody_sequence("paper-0")
     facade.publish_sweep_reconciliation(AccountReconciliationResult(
-        verdict=verdict, through_sequence=newest - 1 if cut_before_bot else newest,
+        verdict=verdict, through_sequence=newest - 1 if cut_before_bot else newest, verdict_at_ms=repo.clock(),
     ))
     set_active_clerk_runtime(ActiveClerkRuntime(
         authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,
@@ -621,7 +621,7 @@ async def test_the_clerks_own_pass_vouches_on_the_desk_and_dates_the_sync_check(
     facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
     clock.now_ms = _T0 + 45_000
     facade.publish_sweep_reconciliation(AccountReconciliationResult(
-        verdict=verdict, through_sequence=repo.last_custody_sequence("paper-0"),
+        verdict=verdict, through_sequence=repo.last_custody_sequence("paper-0"), verdict_at_ms=clock.now_ms,
     ))
     clock.now_ms += read_after_ms
     set_active_clerk_runtime(ActiveClerkRuntime(
@@ -642,52 +642,57 @@ async def test_the_clerks_own_pass_vouches_on_the_desk_and_dates_the_sync_check(
 
 
 @pytest.mark.parametrize(
-    ("verdict", "position_changed_after_ms", "read_after_ms", "notice"),
+    ("verdict", "run_still_active", "read_after_ms", "notice"),
     [
         pytest.param(
-            "clean", None, 0,
+            "clean", False, 0,
             ("position_unmanaged", "Flatten", "Use Flatten to close this position."),
             id="the-pass-vouches-for-the-bot",
         ),
-        # The pass still says what the bot holds, but the bot's page would refuse its Flatten.
+        # The pass still says what the bot holds, but the bot's page would
+        # refuse its Flatten: the bot crashed after that pass, and its run
+        # stays ACTIVE with the Clerk until the next pass retires it (#2369).
         pytest.param(
-            "clean", 1_000, 0,
+            "clean", True, 0,
             ("position_unmanaged", "Open bot", "Reconcile now, then use Flatten to close this position."),
-            id="the-position-changed-after-the-pass",
+            id="the-crashed-bots-run-is-still-active",
         ),
         pytest.param(
-            "position_drift", None, 0, ("position_unverified", "Open bot", None), id="the-pass-cannot-vouch",
+            "position_drift", False, 0, ("position_unverified", "Open bot", None), id="the-pass-cannot-vouch",
         ),
-        pytest.param("clean", None, 60_001, ("position_unverified", "Open bot", None), id="the-pass-is-stale"),
+        pytest.param("clean", False, 60_001, ("position_unverified", "Open bot", None), id="the-pass-is-stale"),
     ],
 )
 async def test_the_desks_notice_of_an_ended_bot_offers_flatten_when_the_clerks_own_pass_vouches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    verdict: str, position_changed_after_ms: int | None, read_after_ms: int, notice: tuple[str, str, str | None],
+    verdict: str, run_still_active: bool, read_after_ms: int, notice: tuple[str, str, str | None],
 ) -> None:
     """#2839: the desk said "Reconcile now, then use Flatten" although the Clerk had just checked the account.
 
-    The notice offers Flatten exactly when the bot's own page does: on a
-    pass that vouches for the bot and that the page's gate accepts. A pass
-    the gate would refuse still sends the owner to Reconcile now first.
+    Under the Clerk's pass the notice offers Flatten exactly when the bot's
+    own page does: on a pass that vouches for the bot and that the page's
+    gate accepts. A pass the gate would refuse still sends the owner to
+    Reconcile now first.
     """
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
     from app.services.broker_v2_panel import sqlite_roster_status
 
     clock = _Clock()
-    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock))
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock)
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
     repo.register_strategy_instance(strategy_instance_id="paper-0", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
-    _end_uncleanly(tmp_path, "paper-0", at_ms=_T0)
+    if run_still_active:
+        submit_start_run(
+            repo, account_id=ACCOUNT, strategy_instance_id="paper-0", lifecycle_run_id="run-paper-0", clock=repo.clock
+        )
+    _end_uncleanly(tmp_path, "paper-0", at_ms=_T0, kind="CRASHED" if run_still_active else "EXITED_UNVERIFIED")
     _hold_position(repo, "paper-0", 3)
     facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
     clock.now_ms = _T0 + 45_000
     facade.publish_sweep_reconciliation(AccountReconciliationResult(
-        verdict=verdict, through_sequence=repo.last_custody_sequence("paper-0"),
+        verdict=verdict, through_sequence=repo.last_custody_sequence("paper-0"), verdict_at_ms=clock.now_ms,
     ))
-    if position_changed_after_ms is not None:
-        repo._conn.execute("UPDATE positions SET updated_at_ms = ?", (clock.now_ms + position_changed_after_ms,))
-        repo._conn.commit()
     clock.now_ms += max(read_after_ms, 2_000)
     set_active_clerk_runtime(ActiveClerkRuntime(
         authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,

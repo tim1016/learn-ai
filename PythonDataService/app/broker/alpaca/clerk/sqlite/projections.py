@@ -242,6 +242,30 @@ def _log_unreadable_once(row: Mapping[str, Any]) -> None:
     )
 
 
+async def read_pass_for_page(
+    facade: SqliteAlpacaClerkFacade, strategy_instance_id: str
+) -> PublishedPass | None:
+    """The Clerk's published pass for one bot's page, read before that page's snapshot (#2839).
+
+    ``None``, with nothing read under the intake lock, for a bot with an
+    ACTIVE run: the safe-flatten gate accepts a pass only for a stopped bot
+    (``recovery_policy._pass_evidence``). An open page is rebuilt every few
+    seconds, so a running bot's page never waits on a fold, and never fails
+    on a poisoned fence, for a pass it could not use. A page touches intake
+    only for a bot with no ACTIVE run (this read) and for one that ended
+    uncleanly (``published_custody``, #2826).
+
+    The run is a plain repository read made before the pass, and it only
+    decides whether to read one. The gate's own no-ACTIVE-run rule, judged on
+    the snapshot read afterwards, stays the authority, and a commit always
+    reads the pass (:func:`read_recovery_context`): a page that read none
+    presents exactly what that commit decides for a running bot.
+    """
+    if facade.repository.active_run(strategy_instance_id) is not None:
+        return None
+    return await facade.published_pass(strategy_instance_id)
+
+
 async def read_recovery_context(
     facade: SqliteAlpacaClerkFacade, *, strategy_instance_id: str | None
 ) -> RecoveryPolicyContext | None:

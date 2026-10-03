@@ -169,7 +169,9 @@ function verifiedPlan(check: SqliteRecoveryActionCheck, request: FlattenRequest)
  * prepare the plan and check it sells exactly what the owner confirmed, then
  * send it. Every step's refusal is the backend's own reason, and the sequence
  * stops at the first one. The Clerk's own periodic check also opens the Sell
- * button (#2839); the sale itself still rests on the reconciliation run here.
+ * button (#2839). A sale sent at once rests on the reconciliation run here;
+ * an extended-hours ticket left open past that receipt's 30 s is refreshed,
+ * and sent, on the Clerk's own check for as long as one stands for the bot.
  *
  * During regular hours the prepared sale is sent at market. Outside them the
  * sale needs a limit price, so the sequence stops at `needs_limit` and the

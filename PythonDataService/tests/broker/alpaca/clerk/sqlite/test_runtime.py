@@ -26,7 +26,11 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     record_unfoldable_broker_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
-from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, ReconciliationLockOrderError
+from app.broker.alpaca.clerk.sqlite.reconcile import (
+    AccountReconciliationResult,
+    ReconciliationLockOrderError,
+    reconcile_account,
+)
 from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS, PublishedPass
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
@@ -381,6 +385,46 @@ async def test_published_pass_is_dated_when_the_pass_ran_never_when_it_is_read(t
     repo.close()
 
 
+async def test_published_pass_is_dated_at_its_verdict_never_at_its_publish(tmp_path: Path) -> None:
+    """#2839: a pass is published after its verdict, and the Clerk can record more in between.
+
+    Dated at its publish, a pass reads whatever was recorded in that gap as
+    older than a broker comparison that never saw it. So the pass's time, the
+    sweep's liveness bound (#2826), the time the account was last found clean
+    and the custody projection's time all count from the verdict.
+    """
+    clock = _TestClock(_PASS_AT_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST", artifacts_root=tmp_path, clock=clock, lease_ttl_ms=600_000
+    )
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+
+    # As the sweep runs a pass: it reconciles, then hands the result to the facade.
+    result = await reconcile_account(
+        repo, read=broker, trade=broker, trigger="AUTOMATIC", intake=facade.intake, pricing=facade.recovery_pricing
+    )
+    clock.advance(4_000)
+    facade.publish_sweep_reconciliation(result)
+
+    published = await facade.published_pass("sid-1")
+    assert published is not None
+    assert (published.vouches, published.observed_at_ms) == (True, _PASS_AT_MS)
+    assert facade.last_clean_pass_at_ms() == _PASS_AT_MS
+    assert (await facade.custody_snapshot_projection("sid-1")).reconciled_at_ms == _PASS_AT_MS
+
+    # The pass stands for 60 s from its verdict. A millisecond later it vouches
+    # for nothing, though its publish is not yet 60 s old.
+    clock.value = _PASS_AT_MS + SWEEP_LIVENESS_BOUND_MS
+    assert await facade.published_custody("sid-1") is not None
+    clock.advance(1)
+    assert await facade.published_custody("sid-1") is None
+    stale = await facade.published_pass("sid-1")
+    assert stale is not None and not stale.vouches
+    repo.close()
+
+
 async def test_published_pass_stops_vouching_for_a_bot_that_moved_or_once_it_is_old(tmp_path: Path) -> None:
     """A pass vouches for a bot only while it is recent and saw the bot's every record (#2839)."""
     from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
@@ -431,7 +475,9 @@ async def test_published_pass_does_not_vouch_when_its_proof_cannot(
     if intent_unresolved:
         monkeypatch.setattr(facade, "_unresolved_order_refs", lambda sid: ("intent:enter:1",))
     facade.publish_sweep_reconciliation(
-        AccountReconciliationResult(verdict=verdict, through_sequence=repo.last_custody_sequence())
+        AccountReconciliationResult(
+            verdict=verdict, through_sequence=repo.last_custody_sequence(), verdict_at_ms=repo.clock()
+        )
     )
 
     published = await facade.published_pass("sid-1")

@@ -40,6 +40,9 @@ requires fresh broker truth.
 For `prepare_safe_flatten`, the plan version includes each position's attributed
 quantity and `updated_at_ms`, along with working-order, uncertainty, and
 reconciliation facts. Re-observing a position therefore invalidates the prior
-version even when its quantity is unchanged. The plan expires when the successful
-account-wide reconciliation leaves the freshness window. Operation-history
-pagination never limits the working-order or uncertainty evidence used by policy.
+version even when its quantity is unchanged. The plan rests on one check of the
+account against Alpaca, names which, and expires with it: a successful
+account-wide Reconcile now receipt, for 30 s, or (#2839) the Clerk's own latest
+pass, for one stopped bot only, for 60 s from that pass's verdict. A fresh receipt
+is used when both stand. Operation-history pagination never limits the
+working-order or uncertainty evidence used by policy.

@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunScope
+from app.broker.alpaca.clerk.sqlite.projections import read_pass_for_page
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     RepositoryPoisoned,
@@ -456,10 +457,12 @@ async def _get_panel_with_entries_from_authority(
         )
     authority_account_id = facade.account_id
     run = _latest_run(registry, broker, sid, binding=binding, facade=facade)
-    # Read before the custody snapshot, exactly as a commit reads it
+    # Read before the custody snapshot, as a commit reads it
     # (``read_recovery_context``): the Flatten this panel presents may rest on
-    # the Clerk's own pass (#2839).
-    published_pass = await facade.published_pass(sid)
+    # the Clerk's own pass (#2839). Only a bot with no ACTIVE run reads one,
+    # and that read takes the intake lock; a running bot's page takes it
+    # nowhere, so it has no fold to wait on (#2826).
+    published_pass = await read_pass_for_page(facade, sid)
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
@@ -563,7 +566,7 @@ async def _get_panel_with_entries_from_authority(
     )
     # An uncleanly ended bot's notices take the Clerk's own latest pass as a
     # check of what it holds (#2826). Only such a bot has notices to author,
-    # so only it asks for the proof.
+    # so only it asks for the proof: this read takes the intake lock too.
     outcome = panel.health.duty_outcome
     pass_proof = (
         await facade.published_custody(sid)

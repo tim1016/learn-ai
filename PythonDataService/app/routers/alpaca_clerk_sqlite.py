@@ -44,6 +44,7 @@ from app.broker.alpaca.clerk.sqlite.projections import (
     InvalidTimelineCursor,
     ProjectionReadError,
     SqliteClerkProjectionReader,
+    read_pass_for_page,
     read_recovery_context,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
@@ -366,8 +367,9 @@ async def get_bot_snapshot(
         return ClerkProjectionResponse.from_projection(failed)
     async with _bot_facade(account_id, strategy_instance_id) as facade:
         # Read before the snapshot, as every presentation and commit of this
-        # bot's recovery actions reads it (#2839).
-        published_pass = await facade.published_pass(strategy_instance_id)
+        # bot's recovery actions reads it (#2839). A bot with an ACTIVE run
+        # reads none, so its snapshot takes no intake lock (#2826).
+        published_pass = await read_pass_for_page(facade, strategy_instance_id)
         try:
             projection = await asyncio.to_thread(
                 _read_projection,

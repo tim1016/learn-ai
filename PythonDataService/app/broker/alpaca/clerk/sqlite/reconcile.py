@@ -836,6 +836,19 @@ class AccountReconciliationResult:
     # custody (``SqliteAlpacaClerkFacade.published_custody``, #2607).
     # In-process only, like ``stale_cause``.
     through_sequence: int | None = field(default=None, compare=False)
+    # When that verdict was reached: the Clerk's clock, read with
+    # ``through_sequence`` under the same intake hold (#2839). The pass is
+    # published later, with the intake lock released in between, so anything
+    # the Clerk records after this instant was not seen by the comparison.
+    # Set exactly when ``through_sequence`` is. In-process only.
+    verdict_at_ms: int | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        if (self.through_sequence is None) != (self.verdict_at_ms is None):
+            raise ValueError(
+                "a reconciliation verdict names the ledger point it saw through and "
+                "the instant it was reached together, or neither"
+            )
 
 
 @dataclass(frozen=True)
@@ -1354,6 +1367,7 @@ def _finalize_reconciliation_verdict(
         foreign_order_count=len(plan.foreign_orders),
         drifted_symbols=plan.drifted_symbols,
         indeterminate_symbols=plan.indeterminate_symbols,
+        verdict_at_ms=repo.clock(),
         through_sequence=repo.last_custody_sequence(),
     )
     if trigger != "OPERATOR_RECONCILE_NOW":

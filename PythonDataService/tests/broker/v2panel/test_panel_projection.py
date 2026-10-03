@@ -3038,7 +3038,7 @@ def test_the_clerks_own_pass_vouches_for_a_flat_bot_with_no_fresh_receipt() -> N
 
 def test_the_clerks_own_pass_names_what_the_ended_bot_holds_and_sends_the_owner_to_reconcile_first() -> None:
     """The pass says what the bot holds, but this cut's own gate offers no
-    Flatten: a notice never offers a Flatten the page would refuse."""
+    Flatten and no receipt is fresh: the notice offers none either."""
     outcome = adapt_sqlite_panel(
         _refused_panel("CRASHED"), _unreceipted_projection(), pass_proof=_pass_proof(exposure={"SPY": 3.0})
     ).health.duty_outcome

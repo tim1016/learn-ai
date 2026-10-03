@@ -829,8 +829,11 @@ def _flatten_ready(projection: ClerkProjection) -> bool:
 
     A fresh Reconcile now receipt, as before, or the plan the recovery policy
     prepared in this same cut: it also accepts the Clerk's own pass for a
-    stopped bot (#2839). Read from the cut's own catalog, so a notice offers
-    Flatten exactly when the page's button does.
+    stopped bot (#2839). The plan is the page's own Sell button, so under the
+    Clerk's pass a notice offers Flatten exactly when the button does. The
+    receipt is wider than the button: while one is fresh this is true even
+    when something else blocks the plan (a working order, a record newer than
+    the receipt), as it was before #2839.
     """
     return _has_fresh_account_receipt(projection) or any(
         action.action_id == "prepare_safe_flatten" and action.available
@@ -891,9 +894,8 @@ def terminal_exposure_notices(
         return []
     notices: list[ExposureNoticeView] = []
     held = _vouched_holdings(projection, sid, pass_proof)
-    # The notice never offers a Flatten the page would refuse: a pass that
-    # vouches for what the bot holds, but that the page's own gate did not
-    # accept in this cut, sends the owner to Reconcile now first.
+    # A pass that vouches for what the bot holds, but that the page's own
+    # gate did not accept in this cut, sends the owner to Reconcile now first.
     flatten_ready = _flatten_ready(projection)
     if held is None:
         notices.append(_POSITION_UNVERIFIED)

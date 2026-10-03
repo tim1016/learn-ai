@@ -744,7 +744,7 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     async def _account(*_args) -> str:
         return "account-1"
 
-    async def _no_published_pass(_sid: str) -> None:
+    async def _no_published_pass(_facade: object, _sid: str) -> None:
         """The stand-in authority has published no account pass (#2839)."""
         return None
 
@@ -789,8 +789,8 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "custody_facade", lambda _runtime: SimpleNamespace(
         account_id="account-1", account_mode="paper", repository=None,
         program_leg_policy=ProgramLegPolicy.regular_only(), flatten_send_verdict=lambda: None,
-        published_pass=_no_published_pass,
     ))
+    monkeypatch.setattr(panel_data_source, "read_pass_for_page", _no_published_pass)
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
     monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
     monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])

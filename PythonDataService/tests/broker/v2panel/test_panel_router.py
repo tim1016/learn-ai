@@ -1967,7 +1967,7 @@ async def test_a_crashed_bots_unverified_position_notice_clears_on_the_clerks_ow
     async with _client(app) as client:
         before = (await client.get(url)).json()["health"]["duty_outcome"]["exposure_notices"]
         facade.publish_sweep_reconciliation(AccountReconciliationResult(
-            verdict="clean", through_sequence=repo.last_custody_sequence(SID),
+            verdict="clean", through_sequence=repo.last_custody_sequence(SID), verdict_at_ms=repo.clock(),
         ))
         after = (await client.get(url)).json()["health"]["duty_outcome"]["exposure_notices"]
 
@@ -2142,12 +2142,14 @@ def _nothing_checked_the_account(world: _CrashedHolding) -> None:
 def _the_pass_found_the_account_out_of_step(world: _CrashedHolding) -> None:
     world.facade.publish_sweep_reconciliation(AccountReconciliationResult(
         verdict="position_drift", through_sequence=world.repo.last_custody_sequence(),
+        verdict_at_ms=world.clock.value,
     ))
 
 
 def _the_pass_ran_before_the_bots_newest_record(world: _CrashedHolding) -> None:
     world.facade.publish_sweep_reconciliation(AccountReconciliationResult(
         verdict="clean", through_sequence=world.repo.last_custody_sequence(SID) - 1,
+        verdict_at_ms=world.clock.value,
     ))
 
 
@@ -2335,6 +2337,54 @@ async def test_the_accounts_own_flatten_plan_still_waits_for_reconcile_now(
 
     assert prepare(bot.recovery_actions) == (True, None)
     assert prepare(account.recovery_actions) == (False, _NEEDS_A_CHECK)
+
+
+def _count_intake_use(facade: SqliteAlpacaClerkFacade, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Count each time the Clerk's intake lock is taken, and each read of its published pass."""
+    seen = {"intake_holds": 0, "pass_reads": 0}
+    fence = type(facade.intake)
+    enter, read_pass = fence.__aenter__, facade.published_pass
+
+    async def counted_enter(lock: object) -> object:
+        seen["intake_holds"] += lock is facade.intake
+        return await enter(lock)
+
+    async def counted_pass(sid: str) -> object:
+        seen["pass_reads"] += 1
+        return await read_pass(sid)
+
+    monkeypatch.setattr(fence, "__aenter__", counted_enter)
+    monkeypatch.setattr(facade, "published_pass", counted_pass)
+    return seen
+
+
+async def test_a_running_bots_page_reads_no_pass_and_never_takes_the_intake_lock(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running bot's Flatten never rests on the Clerk's pass, so its page reads none (#2839).
+
+    The read takes the intake lock, and an open page is rebuilt every 5 s: a
+    fold in progress would hold every running bot's page up, and a poisoned
+    fence would fail it. Once the bot has no ACTIVE run its page does read
+    the pass, as its Flatten may rest on it.
+    """
+    app, repo = api
+    seen = _count_intake_use(get_active_clerk_runtime().clerk, monkeypatch)
+
+    async with _client(app) as client:
+        running = await client.get(_PANEL)
+        snapshot = await alpaca_clerk_sqlite.get_bot_snapshot(ACCT, SID)
+        while_running = dict(seen)
+        submit_stop_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
+        get_bot_task_registry()._running = False  # type: ignore[union-attr]
+        stopped = await client.get(_PANEL)
+
+    assert running.status_code == 200, running.text
+    assert running.json()["bot_page"]["status"]["state"] == "running"
+    assert [run.state for run in snapshot.runs] == ["ACTIVE"]
+    assert while_running == {"intake_holds": 0, "pass_reads": 0}
+    assert stopped.status_code == 200, stopped.text
+    assert seen == {"intake_holds": 1, "pass_reads": 1}
 
 
 async def test_a_hold_on_the_bots_own_custody_needs_attention(api) -> None:
