@@ -20,7 +20,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 10px;
+    font-size: var(--fs-sm);
     font-weight: var(--fw-bold);
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -39,7 +39,7 @@
   }
 
   &__helper {
-    font-size: 10px;
+    font-size: var(--fs-sm);
     color: var(--text-muted);
   }
 }

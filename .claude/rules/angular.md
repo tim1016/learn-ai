@@ -68,6 +68,27 @@ Targets Angular 22.
   membership outright (the backfill panel; the Observatory's read-only coverage query)
   leaves the mode unset and the list closed.
 
+## Date picking (ADR 0075)
+
+- Every date is picked with `app-date-range-picker` (a range) or `app-date-field` (one
+  date), from `shared/date-picker`. Never write `<input type="date">`; a lint test fails
+  on one.
+- The pickers hand over `YYYY-MM-DD` calendar dates. Convert to `int64 ms UTC` at the
+  host's own HTTP call, with the anchor that endpoint takes.
+- The host states the bounds, because only it knows what its run reads: the provider's
+  bound (`ProviderBoundsService`) for a run that fetches its own bars, the held span
+  (`heldBoundsFor`) for a run that reads the lake as it stands. `app-ticker-range-picker`
+  takes `dateBounds` as a required input.
+- An empty date from a picker means its field holds no usable date. Disable the page's
+  run on it; never substitute a date.
+- Quick ranges come from the picker's list. A page may pass a shorter `ranges`; it never
+  adds labels or computes its own ranges in the browser. A page whose ranges are resolved
+  on the server passes them as `hostOffers`.
+- The trading calendar comes from `TradingCalendarService`. Never hardcode which days
+  trade, and never keep a second calendar in the browser.
+- A spec that renders a picker provides `fakePickerWorld()` or `provideFakeDateWorld()`,
+  so it reads no real calendar.
+
 ## Routing
 
 - Lazy-loaded routes via `loadComponent` / `loadChildren`.
