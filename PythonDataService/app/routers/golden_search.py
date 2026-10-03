@@ -40,6 +40,7 @@ from app.schemas.golden_search import (
     GoldenSearchProtocolRequest,
     GoldenSearchRefusalBody,
     GoldenSearchRefusalDetail,
+    GoldenSearchSearchCharts,
     GoldenSearchStudyDetail,
     GoldenSearchStudySummary,
     GoldenSearchTestOverTimeCharts,
@@ -197,6 +198,16 @@ async def list_evaluations(
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     return GoldenSearchEvaluationPage.model_validate(result)
+
+
+@router.get("/studies/{study_id}/charts/search", response_model=GoldenSearchSearchCharts, responses=_REFUSALS)
+async def get_search_charts(study_id: StudyId) -> GoldenSearchSearchCharts:
+    """The Search step's charts: each procedure's replayed path, knob moves and profiles, and every point it scored."""
+    try:
+        result = await service.search_step_charts(study_id)
+    except GoldenSearchRefusal as exc:
+        raise await _refused(exc) from exc
+    return GoldenSearchSearchCharts.model_validate(result)
 
 
 @router.get("/studies/{study_id}/charts/test-over-time", response_model=GoldenSearchTestOverTimeCharts, responses=_REFUSALS)

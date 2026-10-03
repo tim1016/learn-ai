@@ -103,6 +103,13 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert search["winner"]["gap"] == pytest.approx(0.3, abs=1e-12) and search["winner"]["hold_bars"] == 7
     assert search["counts"]["evaluated"] == search["evaluations"]
     assert search["pair_maps"][0]["x_knob"] == "hold_bars" and len(search["pair_maps"][0]["cells"]) == 25
+    # The Search charts replay the recorded path over the stored evaluations and end at the winner.
+    searched = (await service.search_step_charts(row.id))["procedures"][0]
+    tried = searched["convergence"]["tried"]
+    assert searched["key"] == "search" and searched["convergence"]["status"] == "measured" and tried[0]["knob"] is None
+    assert tried[-1]["best_so_far"] == pytest.approx(search["winner_metrics"]["sharpe_ratio"], abs=1e-9, rel=0)
+    assert [(move["name"], move["retained"]) for move in searched["moves"]] == [("gap", pytest.approx(0.3, abs=1e-12)), ("hold_bars", 7)]
+    assert sum(point["winner"] for point in searched["points"]) == 1 and len(searched["points"]) >= search["evaluations"]
     # Before testing over time runs, its charts show the receipt's planned folds and the search's winner.
     planned = await service.test_over_time_charts(row.id)
     assert planned["planned"] and [fold["status"] for fold in planned["folds"]] == ["planned", "planned"]

@@ -68,6 +68,7 @@ from app.research.golden_search.planning import (
     study_id_for,
 )
 from app.research.golden_search.protocol import DEFAULT_IMPORTANCE, IMPORTANCE_HIGH, IMPORTANCE_LOW, IncumbentRef
+from app.research.golden_search.search_charts import procedure_windows, search_charts
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
 from app.research.persistence import lifecycle
@@ -519,6 +520,15 @@ async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
         exam=exam_record,
         commission_per_order=protocol["execution"]["commission_per_order"],
     )
+
+
+async def search_step_charts(study_id: str) -> dict[str, Any]:
+    """The Search step's charts: each recorded procedure's path, knob moves and profiles, and every point it scored."""
+    row = await get_row(study_id)
+    evaluations = {}
+    for start, end in procedure_windows(row):
+        evaluations[(start, end)] = await with_connection(repo.window_evaluations, row.id, window_start_ms=start, window_end_ms=end)
+    return search_charts(row, evaluations)
 
 
 async def test_over_time_charts(study_id: str) -> dict[str, Any]:

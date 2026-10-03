@@ -5070,6 +5070,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/golden-search/studies/{study_id}/charts/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Search Charts
+         * @description The Search step's charts: each procedure's replayed path, knob moves and profiles, and every point it scored.
+         */
+        get: operations["get_search_charts_api_research_golden_search_studies__study_id__charts_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/golden-search/studies/{study_id}/charts/test-over-time": {
         parameters: {
             query?: never;
@@ -13425,6 +13445,23 @@ export interface components {
             /** Warmup Dependent */
             warmup_dependent: boolean;
         };
+        /** GoldenSearchChartPolicy */
+        GoldenSearchChartPolicy: {
+            /** Max Drawdown Ceiling */
+            max_drawdown_ceiling: number;
+            /**
+             * Min Trades
+             * @description This window's trade floor.
+             */
+            min_trades: number | null;
+            /**
+             * Objective
+             * @enum {string}
+             */
+            objective: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /** Require Positive Net */
+            require_positive_net: boolean;
+        };
         /** GoldenSearchCodeIdentity */
         GoldenSearchCodeIdentity: {
             /** Git Revision */
@@ -13538,6 +13575,26 @@ export interface components {
             op: "<";
             /** Right */
             right: string;
+        };
+        /** GoldenSearchConvergenceMeasured */
+        GoldenSearchConvergenceMeasured: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+            /** Tried */
+            tried: components["schemas"]["GoldenSearchTriedPoint"][];
+        };
+        /** GoldenSearchConvergenceMissing */
+        GoldenSearchConvergenceMissing: {
+            /** Reason */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "missing";
         };
         /** GoldenSearchCosts */
         GoldenSearchCosts: {
@@ -14142,6 +14199,15 @@ export interface components {
             /** Headline */
             headline: string;
         };
+        /** GoldenSearchHeldKnob */
+        GoldenSearchHeldKnob: {
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Value */
+            value: number;
+        };
         /** GoldenSearchHistogram */
         GoldenSearchHistogram: {
             /**
@@ -14274,6 +14340,43 @@ export interface components {
             /** Unit */
             unit: string;
         };
+        /** GoldenSearchKnobMove */
+        GoldenSearchKnobMove: {
+            /**
+             * Edge Hit
+             * @description The retained value is an end of the searched range.
+             */
+            edge_hit: boolean;
+            /** High */
+            high: number;
+            /** Label */
+            label: string;
+            /** Low */
+            low: number;
+            /** Moved */
+            moved: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Retained
+             * @description The winner's value.
+             */
+            retained: number;
+            /** Retained Position */
+            retained_position: number | null;
+            /**
+             * Start
+             * @description The seed's value.
+             */
+            start: number;
+            /**
+             * Start Position
+             * @description (start − low) / (high − low); null for a range of one value.
+             */
+            start_position: number | null;
+            /** Unit */
+            unit: string;
+        };
         /** GoldenSearchKnobPlan */
         GoldenSearchKnobPlan: {
             /** Fixed Value */
@@ -14319,6 +14422,34 @@ export interface components {
             name: string;
             /** Step */
             step?: number | null;
+        };
+        /** GoldenSearchKnobProfile */
+        GoldenSearchKnobProfile: {
+            /**
+             * Held
+             * @description Every other knob's value while this one varied.
+             */
+            held: components["schemas"]["GoldenSearchHeldKnob"][];
+            /** High */
+            high: number;
+            /** Label */
+            label: string;
+            /** Low */
+            low: number;
+            /** Name */
+            name: string;
+            /**
+             * Pass Index
+             * @description Zoom: the last pass that searched this knob; null for Grid, whose profile slices the scored points through the winner.
+             */
+            pass_index: number | null;
+            /**
+             * Points
+             * @description By value, ascending.
+             */
+            points: components["schemas"]["GoldenSearchProfilePoint"][];
+            /** Unit */
+            unit: string;
         };
         /** GoldenSearchKnobSummary */
         GoldenSearchKnobSummary: {
@@ -14498,6 +14629,40 @@ export interface components {
             refusals: components["schemas"]["GoldenSearchProtocolRefusal"][];
             run_up: components["schemas"]["GoldenSearchRunUp"] | null;
         };
+        /** GoldenSearchProcedureCharts */
+        GoldenSearchProcedureCharts: {
+            /** Convergence */
+            convergence: components["schemas"]["GoldenSearchConvergenceMeasured"] | components["schemas"]["GoldenSearchConvergenceMissing"];
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "search" | "recent";
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "zoom" | "grid";
+            /**
+             * Moves
+             * @description Each searched knob, in the plan's order.
+             */
+            moves: components["schemas"]["GoldenSearchKnobMove"][];
+            /**
+             * Points
+             * @description Every scored base-scenario point on the window, in the order first asked for.
+             */
+            points: components["schemas"]["GoldenSearchScoredPoint"][];
+            policy: components["schemas"]["GoldenSearchChartPolicy"];
+            /**
+             * Profiles
+             * @description Each searched knob, in the plan's order; empty when the Zoom path cannot be rebuilt.
+             */
+            profiles: components["schemas"]["GoldenSearchKnobProfile"][];
+            window: components["schemas"]["GoldenSearchWindow"];
+            /** Winner Hash */
+            winner_hash: string;
+        };
         /** GoldenSearchProcedureCounts */
         GoldenSearchProcedureCounts: {
             /** Cached */
@@ -14535,6 +14700,36 @@ export interface components {
             /** Winner Hash */
             winner_hash: string;
             winner_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+        };
+        /** GoldenSearchProfilePoint */
+        GoldenSearchProfilePoint: {
+            /**
+             * Ineligibility
+             * @description Why the rules reject the point; null when it is eligible.
+             */
+            ineligibility: string | null;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /** Net Profit */
+            net_profit: number | null;
+            /**
+             * Objective
+             * @description The policy's objective; null when undefined.
+             */
+            objective: number | null;
+            /**
+             * Retained
+             * @description The winner's value of this knob.
+             */
+            retained: boolean;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number | null;
+            /** Value */
+            value: number;
         };
         /** GoldenSearchProgress */
         GoldenSearchProgress: {
@@ -14837,6 +15032,43 @@ export interface components {
              * @enum {string}
              */
             final_state: "locked" | "opened_once";
+        };
+        /** GoldenSearchScoredPoint */
+        GoldenSearchScoredPoint: {
+            /**
+             * Ineligibility
+             * @description Why the rules reject the point; null when it is eligible.
+             */
+            ineligibility: string | null;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /** Net Profit */
+            net_profit: number | null;
+            /**
+             * Objective
+             * @description The policy's objective; null when undefined.
+             */
+            objective: number | null;
+            /** Point */
+            point: Record<string, never>;
+            /** Point Hash */
+            point_hash: string;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number | null;
+            /** Winner */
+            winner: boolean;
+        };
+        /** GoldenSearchSearchCharts */
+        GoldenSearchSearchCharts: {
+            /**
+             * Procedures
+             * @description The all-period search, then the recent fit, as far as the study has recorded them.
+             */
+            procedures: components["schemas"]["GoldenSearchProcedureCharts"][];
         };
         /**
          * GoldenSearchSearchView
@@ -15284,6 +15516,55 @@ export interface components {
              * @description Net profit of this trade and every trade that exited before it.
              */
             running_net_profit: number;
+        };
+        /** GoldenSearchTriedPoint */
+        GoldenSearchTriedPoint: {
+            /**
+             * Best So Far
+             * @description The highest objective among the eligible points tried so far; null before one is eligible.
+             */
+            best_so_far: number | null;
+            /**
+             * Ineligibility
+             * @description Why the rules reject the point; null when it is eligible.
+             */
+            ineligibility: string | null;
+            /** Knob */
+            knob: string | null;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /** Net Profit */
+            net_profit: number | null;
+            /**
+             * Objective
+             * @description The policy's objective; null when undefined.
+             */
+            objective: number | null;
+            /**
+             * Order
+             * @description 0 for the seed, then each evaluated value in the order the procedure tried it.
+             */
+            order: number;
+            /**
+             * Pass Index
+             * @description Null for the seed.
+             */
+            pass_index: number | null;
+            /** Point */
+            point: Record<string, never>;
+            /** Round Index */
+            round_index: number | null;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number | null;
+            /**
+             * Value
+             * @description The knob's value this point tried; null for the seed.
+             */
+            value: number | null;
         };
         /** GoldenSearchValidationFold */
         GoldenSearchValidationFold: {
@@ -33604,6 +33885,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenSearchCandidateDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_search_charts_api_research_golden_search_studies__study_id__charts_search_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchSearchCharts"];
                 };
             };
             /** @description Bad Request */
