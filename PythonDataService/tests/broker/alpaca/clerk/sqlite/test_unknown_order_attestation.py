@@ -775,6 +775,26 @@ async def test_a_pass_that_meets_a_settlement_in_progress_defers_the_exit_and_se
     assert len(alpaca.sent) == 1
 
 
+async def test_a_settlement_that_meets_a_pass_driving_the_exit_is_refused_before_it_reads_anything(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The other way round: a pass holds the EXIT's claim, and may be sending its order again right now."""
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    ledger = repo.custody_transitions()
+    held_by_a_pass = repo.claim_before_broker_contact(exit_id)
+
+    with pytest.raises(RecoveryExecutionError, match="working on this exit right now"):
+        await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
+
+    assert repo.custody_transitions() == ledger
+    assert alpaca.reads == []
+    assert repo.release_operation_claim(effect_operation_id=exit_id, token=held_by_a_pass.token), (
+        "the pass still holds its claim"
+    )
+
+
 async def test_an_order_the_clerk_sent_again_since_it_was_presented_is_not_settled(
     crashed_with_exposure,  # noqa: F811
 ) -> None:

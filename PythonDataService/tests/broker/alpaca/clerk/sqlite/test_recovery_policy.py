@@ -1359,6 +1359,8 @@ def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> 
     ("overrides", "reason_code", "needed"),
     [
         ({"unknown_exit_orders": ()}, "NO_UNKNOWN_EXIT_ORDER", False),
+        # Settled from the bot's own page, never the account's.
+        ({"strategy_instance_id": None}, "NO_UNKNOWN_EXIT_ORDER", False),
         # A Dry Run's and a Shadow's orders reach no broker an operator could look at.
         ({"account_id": "sim:spy-bot"}, "NO_UNKNOWN_EXIT_ORDER", False),
         ({"account_id": "shadow:PA-LIVE"}, "NO_UNKNOWN_EXIT_ORDER", False),

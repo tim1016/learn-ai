@@ -1161,15 +1161,24 @@ def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision
     about the order changed. A send made again changes the token.
     """
     simulated = is_synthetic_account_id(ctx.account_id) or is_shadow_account_id(ctx.account_id)
-    order = None if simulated or not ctx.unknown_exit_orders else ctx.unknown_exit_orders[0]
+    bot_scoped = ctx.strategy_instance_id is not None
+    order = (
+        ctx.unknown_exit_orders[0]
+        if bot_scoped and not simulated and ctx.unknown_exit_orders
+        else None
+    )
     active_runs = _relevant_runs(ctx)
     reason_code: str | None = None
     reason: str | None = None
     next_step = "Look at this account's orders at Alpaca, then say what it shows for this order."
     if order is None:
         reason_code = "NO_UNKNOWN_EXIT_ORDER"
-        reason = "No closing order of this bot has an outcome the Clerk could not confirm."
-        next_step = "Nothing to settle."
+        if bot_scoped:
+            reason = "No closing order of this bot has an outcome the Clerk could not confirm."
+            next_step = "Nothing to settle."
+        else:
+            reason = "An uncertain closing order is settled from its bot's page."
+            next_step = "Open the bot whose closing order the Clerk could not confirm."
     elif active_runs:
         reason_code = "RUN_STILL_ACTIVE"
         reason = "Stop the bot before settling its uncertain order."
