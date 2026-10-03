@@ -23,6 +23,7 @@ import {
   fakeCatalogBot,
   fakeChartFeed,
 } from '../../src/app/testing/bot-panel-fixtures';
+import { withoutShellPolls } from './support/shell-polls';
 
 /**
  * The account-first walk (ADR 0064, #2187; PRD #2560): one way into Alpaca,
@@ -386,11 +387,6 @@ async function installFleetBoundary(page: Page): Promise<string[]> {
   return requests;
 }
 
-/** The shell's per-lane trust-anchor poll fires on every route; it proves the
- * shell is alive, not that a surface reached into a lane. */
-const withoutVerdictPolls = (requests: string[]): string[] =>
-  requests.filter((entry) => !entry.includes('/live-verdict'));
-
 /** The top-bar account pills (PRD #2560 D4), each a link named by its
  * account and the server's verdict for it. */
 const accountPill = (page: Page, account: 'Paper' | 'Live') =>
@@ -475,7 +471,7 @@ test.describe('Account-first Alpaca navigation', () => {
 
     // Nothing the workspace did reached into the other account (FR-096).
     expect(
-      withoutVerdictPolls(requests.slice(sinceTheChoice)).filter((entry) =>
+      withoutShellPolls(requests.slice(sinceTheChoice)).filter((entry) =>
         entry.includes(`/clerks/${LIVE_CLERK}/`),
       ),
     ).toEqual([]);
