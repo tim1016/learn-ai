@@ -63,7 +63,13 @@ from app.broker.contract.models import (
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.broker_v2_panel.sqlite_panel_adapter import recent_fill_view
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
-from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _TestClock, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
+    _clock_at,
+    _covering_read,
+    _TestClock,
+    _walk_clock_to,
+)
 
 ACCOUNT_ID = "PA-FLATTEN"
 SID = "crashed-bot"
@@ -298,7 +304,7 @@ async def test_execute_safe_flatten_plan_reduces_attributed_exposure_exactly(
     trade = _FakeTrade()
 
     result = await execute_safe_flatten_plan(
-        repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
+        repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
     )
 
     assert len(result.orders) == 1
@@ -322,7 +328,7 @@ async def test_execute_safe_flatten_plan_refuses_expired_plans(
 
     with pytest.raises(SafeFlattenExecutionError, match="expired"):
         await execute_safe_flatten_plan(
-            repo, plan=plan, trade=_FakeTrade(), intake=ReentrantAsyncLock(),
+            repo, plan=plan, read=_covering_read(), trade=_FakeTrade(), intake=ReentrantAsyncLock(),
             account_id=ACCOUNT_ID,
             pricing=UNPRICEABLE_RECOVERY,
         )
@@ -350,7 +356,7 @@ async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_rech
 
     with pytest.raises(SafeFlattenExecutionError, match="re-activated"):
         await execute_safe_flatten_plan(
-            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(),
+            repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(),
             account_id=ACCOUNT_ID,
             pricing=UNPRICEABLE_RECOVERY,
         )
@@ -380,7 +386,7 @@ async def test_execute_safe_flatten_plan_refuses_a_symbol_an_exit_already_owns(
 
     with pytest.raises(SafeFlattenExecutionError, match="An exit is already reducing SPY"):
         await execute_safe_flatten_plan(
-            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(),
+            repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(),
             account_id=ACCOUNT_ID,
             pricing=UNPRICEABLE_RECOVERY,
         )
@@ -643,7 +649,7 @@ async def test_execute_safe_flatten_plan_raises_when_broker_rejects_reduction(
 
     with pytest.raises(SafeFlattenExecutionError, match="rejected"):
         await execute_safe_flatten_plan(
-            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
+            repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
         )
 
 
@@ -678,7 +684,7 @@ async def test_execute_safe_flatten_plan_defers_pending_on_transient_admission_r
     trade = _FakeTrade()
 
     result = await execute_safe_flatten_plan(
-        repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
+        repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
     )
 
     assert result.orders == ()  # nothing at the broker yet
@@ -717,7 +723,7 @@ async def test_execute_safe_flatten_plan_refuses_manual_custody_leg(
 
     with pytest.raises(SafeFlattenExecutionError, match="manual-custody"):
         await execute_safe_flatten_plan(
-            repo, plan=manual_plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
+            repo, plan=manual_plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY
         )
     assert trade.submit_calls == []
 
@@ -819,7 +825,7 @@ async def test_the_flatten_drives_its_exit_with_the_pricing_seam_it_is_handed(
     trade = _FakeTrade()
 
     result = await execute_safe_flatten_plan(
-        repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
+        repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
         pricing=RecoveryPricing(
             policy_for=lambda _sid: _XH_POLICY,
             quote_source=lambda _symbol, now_ms: _live_quote(now_ms),
@@ -848,7 +854,7 @@ async def test_execute_safe_flatten_plan_refuses_a_shape_priced_for_the_other_si
 
     with pytest.raises(SafeFlattenExecutionError, match="priced for"):
         await execute_safe_flatten_plan(
-            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
+            repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
             confirmed_shape=_confirmed_limit_shape(OrderSide.BUY),
             pricing=UNPRICEABLE_RECOVERY,
         )
@@ -1013,7 +1019,7 @@ async def test_a_confirmed_limit_never_goes_out_after_its_session_ends(
 
     _walk_clock_to(repo, _JUST_AFTER_POST_CLOSE_MS)
     trade.lookups_fail = False
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert trade.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)
@@ -1058,7 +1064,7 @@ async def test_a_confirmed_price_never_reduces_a_quantity_the_operator_never_saw
     # reduction is fifteen where ten was confirmed.
     await _late_entry_slice(repo, entry.order_ref, quantity=5)
     trade.lookups_fail = False
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert trade.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)
@@ -1094,7 +1100,7 @@ async def test_a_plan_leg_the_price_was_not_confirmed_for_is_refused(
 
     with pytest.raises(SafeFlattenExecutionError, match="priced for"):
         await execute_safe_flatten_plan(
-            repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
+            repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
             confirmed_shape=_confirmed_limit_shape(quantity=8.0),
             pricing=UNPRICEABLE_RECOVERY,
         )
@@ -1299,7 +1305,7 @@ async def test_a_clerk_priced_quantity_change_folds_without_asking_the_operator(
     # reduction is fifteen where the Clerk priced ten.
     await _late_entry_slice(repo, entry.order_ref, quantity=5)
     trade.lookups_fail = False
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert trade.submit_calls == []
     effect = repo.effect_operation(accepted.effect_operation_id)

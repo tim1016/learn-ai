@@ -47,7 +47,7 @@ async def read_account_open_work(
 ) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
     """The account's open orders and positions, as the broker reports them.
 
-    The one read of whole-account broker truth: reconciliation folds it into
+    Whole-account broker truth, read together: reconciliation folds it into
     custody and the lane-quiet observation (#2154) asks only whether it is
     empty. A ``BrokerError`` propagates, because what an unreadable broker
     means is the caller's to decide. The two lists are gathered concurrently
@@ -61,10 +61,28 @@ async def read_account_open_work(
     return broker_orders, broker_positions
 
 
+async def read_open_orders_then_positions(
+    read: BrokerReadPort,
+) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
+    """The account's open orders, then its positions: one read after the other (#2839).
+
+    For a caller that sets a position against what the open orders may still
+    take from it. Read in this sequence, an order that fills between the two
+    reads is counted twice -- as the open order it was, and in the position it
+    already changed -- and never missed; read the other way round, or
+    together as :func:`read_account_open_work` reads them, it can show in
+    neither. A ``BrokerError`` propagates.
+    """
+    broker_orders = await read.list_orders(status="open", limit=MAX_OPEN_ORDER_SNAPSHOT)
+    broker_positions = await read.list_positions()
+    return broker_orders, broker_positions
+
+
 __all__ = [
     "MAX_OPEN_ORDER_SNAPSHOT",
     "broker_order_in_flight",
     "broker_quantity_by_symbol",
     "open_order_snapshot_is_full",
     "read_account_open_work",
+    "read_open_orders_then_positions",
 ]

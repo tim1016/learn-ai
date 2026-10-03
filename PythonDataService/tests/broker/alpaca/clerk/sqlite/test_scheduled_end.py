@@ -336,7 +336,7 @@ async def test_the_bots_own_working_exit_is_left_to_finish(
     assert accepted.effect_operation_id is not None
     market = _Market()
     _walk_clock_to(repo, _at(_WEDNESDAY, 15, 58, 30))
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=market, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=market, pricing=UNPRICEABLE_RECOVERY, read=None)
     assert len(market.submitted_legs) == 1  # the bot's own sale, still working
     schedule.ends[SID] = _end("SELL")
     _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))

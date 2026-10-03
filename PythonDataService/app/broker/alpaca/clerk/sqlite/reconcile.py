@@ -389,6 +389,9 @@ async def _reconcile_effect(
             effect_operation_id=effect.effect_operation_id,
             trade=trade,
             pricing=pricing,
+            # A Flatten that deferred is sent from here, so it is checked
+            # against the account from here too (#2839).
+            read=read,
             off_loop=to_thread,
         )
     elif effect.kind == "CANCEL":

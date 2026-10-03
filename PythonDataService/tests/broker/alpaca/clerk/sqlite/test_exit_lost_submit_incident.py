@@ -143,7 +143,7 @@ async def test_one_reconciliation_pass_resolves_an_exit_whose_entry_never_reache
     )
     entry_ref, exit_effect_id = await _replay_incident(repo, trade)
 
-    await resolve_exit(repo, effect_operation_id=exit_effect_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=exit_effect_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     effect = repo.effect_operation(exit_effect_id)
     assert effect is not None and effect.state == "succeeded"
@@ -391,7 +391,7 @@ async def test_a_durable_fill_outweighs_an_absent_lookup(
     assert accepted.effect_operation_id is not None
     repo.clock.advance(submit_absence_grace_ms() + 1)  # type: ignore[attr-defined]
 
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     transitions = repo.transitions_for_order(submission.order_ref)
     assert not any(t["transition_kind"] == "ENTRY_NEVER_ACCEPTED" for t in transitions)
@@ -434,7 +434,7 @@ async def test_live_absence_also_voids_the_entry_s_own_enter(
     assert accepted.effect_operation_id is not None
     repo.clock.advance(submit_absence_grace_ms() + 1)  # type: ignore[attr-defined]
 
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     enter_effect = repo.effect_operation(submission.effect_operation_id)
     assert enter_effect is not None and enter_effect.state == "failed"

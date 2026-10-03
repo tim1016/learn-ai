@@ -297,6 +297,16 @@ class _FakeReadPort:
         return self._positions
 
 
+def _covering_read(symbol: str = "SPY", *, quantity: float = 10.0) -> _FakeReadPort:
+    """The broker's account holding what the Clerk attributes, with nothing open.
+
+    What an operator's Flatten is checked against as it is sent (#2839): a
+    test that drives one through a trade double that is not a simulation
+    hands it this, or the send is refused.
+    """
+    return _FakeReadPort(positions=[_broker_position_fixture(symbol, quantity=quantity)])
+
+
 class _AssertingNoReconciler:
     async def reconcile_account(self, *, trigger: str) -> Any:
         raise AssertionError(f"unexpected reconciliation trigger: {trigger}")

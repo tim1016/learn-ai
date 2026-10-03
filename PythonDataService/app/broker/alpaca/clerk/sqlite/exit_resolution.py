@@ -41,6 +41,14 @@ every watchdog re-drive of it. It goes out only as a market order inside the
 regular session; outside it, it holds -- never re-priced as an
 extended-hours limit -- and sells at the next open (owner default, grill
 2026-09-29: "never after hours").
+
+One kind of EXIT passes a second check as it is sent (#2839): an operator's
+Flatten (``RECOVERY_FLATTEN_DECISION_PREFIX``) going to a real broker. Its
+order is sized from the Clerk's own record, so just before it is submitted --
+first or resumed, by the Flatten itself or by the sweep that carries on a
+deferred one -- the Clerk reads the account's open orders, then its
+positions, and sends only a sale the account covers (``flatten_cover``).
+Otherwise nothing is sent and the EXIT folds as a broker's refusal does.
 """
 
 from __future__ import annotations
@@ -77,6 +85,11 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
     OrderCancelRequestedFacts,
+    OrderSubmitFailedFacts,
+)
+from app.broker.alpaca.clerk.sqlite.flatten_cover import (
+    FLATTEN_COVER_NEXT_STEPS,
+    flatten_cover_refusal,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -125,7 +138,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 from app.schemas.market_liveness import MarketLivenessFact
 
@@ -229,6 +242,7 @@ async def resolve_exit(
     effect_operation_id: str,
     trade: BrokerTradePort,
     pricing: RecoveryPricing,
+    read: BrokerReadPort | None,
     off_loop: OffLoop | None = None,
 ) -> ExitSubmission:
     """Advance one EXIT under one exclusive, attempt-scoped broker claim.
@@ -247,6 +261,14 @@ async def resolve_exit(
     EXIT never decides whether it is re-priced or folded. A caller that can
     price nothing passes :data:`~recovery_reduction.UNPRICEABLE_RECOVERY`, and
     such an EXIT folds for the operator instead.
+
+    ``read`` is the port an operator's Flatten is checked against the account
+    with as it is sent (#2839, module docstring). It has no default either:
+    the Flatten and the reconciliation sweep, which carries on a Flatten that
+    deferred, pass the authority's read port; every caller that drives only
+    its own kind of EXIT -- a deciding program's, the watchdog's re-drive, an
+    ended run's close -- says ``None``. A Flatten going to a real broker with
+    no read port is refused, never sent unchecked.
 
     ``off_loop`` moves each synchronous repository run of the machine onto a
     worker thread (#1993); the default keeps the pre-#1993 inline behavior
@@ -273,6 +295,7 @@ async def resolve_exit(
             effect_operation_id=effect_operation_id,
             broker=broker,
             pricing=pricing,
+            read=read,
             run=claim_scoped(run),
         )
     finally:
@@ -514,6 +537,7 @@ async def _resolve_claimed(
     effect_operation_id: str,
     broker: ClaimedBrokerIO,
     pricing: RecoveryPricing,
+    read: BrokerReadPort | None,
     run: OffLoop,
 ) -> ExitSubmission:
     """The claimed EXIT machine: read state, prove terminal, reduce, finalize.
@@ -582,6 +606,7 @@ async def _resolve_claimed(
             reducing=reducing,
             broker=broker,
             pricing=pricing,
+            read=read,
             run=run,
         )
     elif not _is_terminal(reducing.broker_state) or state.reducing_fills_short:
@@ -594,6 +619,7 @@ async def _resolve_claimed(
             reducing=reducing,
             broker=broker,
             pricing=pricing,
+            read=read,
             run=run,
         )
     refreshed, accepted, created = await run(lambda: (
@@ -943,6 +969,7 @@ def _created_leg_may_be_sent(
     created: ExitReducingOrderCreatedFacts,
     order_ref: str,
     liveness: MarketLivenessFact | None,
+    uncovered: LegRefusal | None,
 ) -> bool:
     """The send-time rule at (re)submission: ``True`` only to send the created order now.
 
@@ -955,6 +982,12 @@ def _created_leg_may_be_sent(
     its client identity, so its leg is never re-priced here: it is replayed
     exactly or not at all. No longer sendable, it is not sent — the EXIT
     folds releasably for the operator.
+
+    ``uncovered`` is the refusal of an operator's Flatten the broker's account
+    does not cover (#2839), read for this send; ``None`` for a covered one and
+    for every send outside that check. It refuses only an order this rule
+    would otherwise send, so a flat position or an ended session is still
+    told as itself.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -972,7 +1005,17 @@ def _created_leg_may_be_sent(
         _fold_market_hold(repo, effect_operation_id, order_ref, created.symbol, verdict)
         return False
     if verdict == "send":
-        return True
+        if uncovered is None:
+            return True
+        _fold_flatten_uncovered(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            symbol=created.symbol,
+            remaining_qty=remaining_qty,
+            refusal=uncovered,
+        )
+        return False
     _fold_unsendable_leg(
         repo,
         effect_operation_id=effect_operation_id,
@@ -1590,6 +1633,7 @@ async def _refresh_or_resume_reducing_order(
     reducing: OrderResource,
     broker: ClaimedBrokerIO,
     pricing: RecoveryPricing,
+    read: BrokerReadPort | None,
     run: OffLoop,
 ) -> None:
     observed = await broker.observe_exact(reducing.client_order_id)
@@ -1661,6 +1705,7 @@ async def _refresh_or_resume_reducing_order(
         reducing=reducing,
         broker=broker,
         pricing=pricing,
+        read=read,
         run=run,
     )
 
@@ -1672,9 +1717,21 @@ async def _submit_reducing_order(
     reducing: OrderResource,
     broker: ClaimedBrokerIO,
     pricing: RecoveryPricing,
+    read: BrokerReadPort | None,
     run: OffLoop,
 ) -> None:
-    created = await run(lambda: _reducing_order_facts(repo, reducing.order_ref))
+    created, checked = await run(lambda: (
+        _reducing_order_facts(repo, reducing.order_ref),
+        _send_is_checked_against_the_account(
+            _accepted_facts(repo, effect_operation_id), broker.trade
+        ),
+    ))
+    # Read here, on the event loop and outside intake, where the submit below
+    # also runs: the guarded read port refuses contact under the fence. The
+    # verdict is applied inside the one run that records the send (#2839).
+    uncovered = (
+        await _account_cover_refusal(created, broker=broker, read=read) if checked else None
+    )
     now_ms = repo.clock()
     liveness = pricing.read_liveness(created.symbol, now_ms)
 
@@ -1697,6 +1754,7 @@ async def _submit_reducing_order(
             created=facts,
             order_ref=reducing.order_ref,
              liveness=liveness,
+            uncovered=uncovered,
         ):
             return None
         # An EXIT with no decision bar is priced by the port before it is sent:
@@ -1766,6 +1824,108 @@ async def _submit_reducing_order(
             order=observed,
             trade=broker.trade,
         )
+    )
+
+
+def _send_is_checked_against_the_account(facts: ExitAcceptedFacts, trade: BrokerTradePort) -> bool:
+    """Whether this EXIT's reducing order is set against the broker's account before it is sent (#2839).
+
+    Only an operator's Flatten -- the safe flatten, its confirmed limit and
+    each leg of a cohort Flatten, all decided under
+    ``RECOVERY_FLATTEN_DECISION_PREFIX`` -- going to a real broker. A Dry
+    Run's or a Shadow's port fills inside ``submit`` and reaches no account,
+    so it sends as before with no account read. Every other EXIT is outside
+    the check: a deciding program's, a bot's scheduled end, a Dry Run's close,
+    and the watchdog's re-drive, which is admitted by its own check of the
+    same account (``exit_watchdog``).
+    """
+    return facts.decision_id.startswith(
+        RECOVERY_FLATTEN_DECISION_PREFIX
+    ) and not trade_port_folds_simulated_evidence(trade)
+
+
+async def _account_cover_refusal(
+    created: ExitReducingOrderCreatedFacts,
+    *,
+    broker: ClaimedBrokerIO,
+    read: BrokerReadPort | None,
+) -> LegRefusal | None:
+    """Read the account for an operator's Flatten about to be sent: its refusal, or ``None`` when covered.
+
+    The order's own created quantity is what must be covered. With no read
+    port nothing is read and the send is refused: a Flatten never goes to a
+    real broker unchecked.
+    """
+    return flatten_cover_refusal(
+        symbol=created.symbol,
+        side=OrderSide(created.side.lower()),
+        quantity=created.quantity,
+        observed=None if read is None else await broker.observe_open_orders_then_positions(read),
+    )
+
+
+def _fold_flatten_uncovered(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    symbol: str,
+    remaining_qty: float,
+    refusal: LegRefusal,
+) -> None:
+    """The Clerk would not send an operator's Flatten the broker's account does not cover (#2839).
+
+    Folded as a broker's own refusal is (:func:`_fold_submit_refused`; owner
+    decision #2839): nothing reached the book, so the EXIT fails releasably
+    through ``EXIT_NOT_FLAT`` -- the notice, the bell, and the episode the
+    watchdog re-drives under its own check of the account. The fold records
+    the refusal's own code and words, never a broker's: the broker was not
+    asked. :func:`flatten_send_refusal` reads them back for the operator.
+    """
+    logger.warning(
+        "an operator's flatten was not sent: the account check before the send refused it",
+        extra={
+            "action": "flatten_send_refused_by_account_check",
+            "account_id": repo.account_id,
+            "effect_operation_id": effect_operation_id,
+            "order_ref": order_ref,
+            "symbol": symbol,
+            "reason_code": refusal.reason_code,
+            "explanation": refusal.explanation,
+            "attributed_qty": remaining_qty,
+        },
+    )
+    _fold_exit_not_flat(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        symbol=symbol,
+        attributed_qty=remaining_qty,
+        summary_code=refusal.reason_code,
+        reason=refusal.explanation,
+        headline="A flatten was not sent after the Clerk checked the Alpaca account; the position is still open",
+        explanation=(
+            f"{refusal.explanation} The Clerk still attributes {remaining_qty:g} {symbol} to this bot."
+        ),
+        next_step=refusal.next_step,
+    )
+
+
+def flatten_send_refusal(repo: ClerkSqliteRepository, effect_operation_id: str) -> LegRefusal | None:
+    """The account check's refusal a failed Flatten recorded, or ``None`` for an EXIT that ended any other way (#2839).
+
+    Read from the EXIT's own fold (:func:`_fold_flatten_uncovered`), so the
+    Flatten that was refused and a retry of it are told the same thing.
+    """
+    row = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_NOT_FLAT"
+    )
+    if row is None or row["summary_code"] not in FLATTEN_COVER_NEXT_STEPS:
+        return None
+    return LegRefusal(
+        reason_code=row["summary_code"],
+        explanation=OrderSubmitFailedFacts.from_facts_json(row["facts_json"]).reason,
+        next_step=FLATTEN_COVER_NEXT_STEPS[row["summary_code"]],
     )
 
 
@@ -2020,4 +2180,9 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
     )
 
 
-__all__ = ["cancel_and_prove_owned_entry", "priced_reduction_reference_price", "resolve_exit"]
+__all__ = [
+    "cancel_and_prove_owned_entry",
+    "flatten_send_refusal",
+    "priced_reduction_reference_price",
+    "resolve_exit",
+]

@@ -397,6 +397,7 @@ async def test_reconcile_reports_the_fence_and_the_safe_flatten_clears_it(
     flatten = await execute_safe_flatten_plan(
         repo,
         plan=execute.reduction_plan,
+        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
         trade=trade,
         intake=ReentrantAsyncLock(),
         account_id=ACCOUNT_ID,

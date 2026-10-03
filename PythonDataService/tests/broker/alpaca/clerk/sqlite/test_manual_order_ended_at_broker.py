@@ -414,7 +414,7 @@ async def test_an_ending_that_lands_while_a_bot_exit_is_being_sent_ends_only_the
     port = _ExitPortThatSeesTheManualCancel(
         repo=repo, manual_cancel=_ended_at_alpaca(repo, website, order_ref, "canceled"))
 
-    await resolve_exit(repo, effect_operation_id=exit_a.effect_operation_id, trade=port, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=exit_a.effect_operation_id, trade=port, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert [(leg.side, leg.quantity) for leg in port.submitted_legs] == [(OrderSide.SELL, 10)]
     manual_effect = repo.effect_operation(effect_id)

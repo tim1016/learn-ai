@@ -916,6 +916,7 @@ class SqliteAlpacaClerkFacade:
         result = await execute_safe_flatten_plan(
             self._repo,
             plan=plan,
+            read=self._read,
             trade=self._trade,
             intake=self._intake,
             account_id=self.account_id,
@@ -1455,6 +1456,8 @@ class SqliteAlpacaClerkFacade:
             accepted=accepted_exit,
             trade=trade,
             pricing=self.recovery_pricing,
+            # A deciding program's EXIT is sent with no account check (#2839).
+            read=None,
         )
         order_refs = tuple(
             ref

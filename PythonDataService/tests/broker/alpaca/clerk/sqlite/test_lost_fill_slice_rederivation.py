@@ -553,7 +553,7 @@ async def _exit_with_open_reducing(
     trade.broker_state[entry_ref] = _broker_order(
         entry_ref, status="filled", quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0
     )
-    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
     red = resolved.reducing_order_ref
     assert red is not None
     red_order = repo.order(red)
@@ -680,7 +680,7 @@ async def test_unknown_exit_after_a_filled_submit_response_refreshes_with_bounde
     trade.broker_state[entry_ref] = _broker_order(
         entry_ref, status="filled", quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0
     )
-    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    resolved = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
     red = resolved.reducing_order_ref
     assert red is not None
     effect = repo.effect_operation(accepted.effect_operation_id)

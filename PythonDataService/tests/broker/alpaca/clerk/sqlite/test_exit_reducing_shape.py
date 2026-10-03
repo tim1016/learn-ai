@@ -31,7 +31,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import TopOfBookQuote
-from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _covering_read, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
     AFTER_HOURS_MS,
@@ -239,6 +239,7 @@ async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitt
         effect_operation_id=accepted.effect_operation_id,
         trade=first_trade,
         pricing=UNPRICEABLE_RECOVERY,
+        read=None,
     )
     assert first.reducing_order_ref is not None
     ((leg, _client_order_id),) = first_trade.submit_calls
@@ -252,7 +253,7 @@ async def test_reducing_order_is_submitted_with_the_decision_shape_and_resubmitt
 
     repo._clock.advance(31_000)  # type: ignore[attr-defined]
     second_trade = _FakeTrade(lookup_results=[None])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=second_trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=second_trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert second_trade.submit_calls[0][0] == leg
 
@@ -287,6 +288,7 @@ async def test_a_shape_for_the_other_side_falls_back_to_market(
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
             pricing=UNPRICEABLE_RECOVERY,
+            read=None,
         )
 
     ((leg, _),) = trade.submit_calls
@@ -333,7 +335,8 @@ async def test_a_replaced_leg_reports_no_slippage_against_the_price_it_never_use
     trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted"))
 
     resolved = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY,
+        read=_covering_read(),
     )
 
     ((leg, _),) = trade.submit_calls
@@ -374,7 +377,7 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
         lookup_results=[_broker_order(entry_ref, status="accepted", filled_quantity=0.0)]
     )
     deferred = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=deferring, pricing=UNPRICEABLE_RECOVERY
+        repo, effect_operation_id=accepted.effect_operation_id, trade=deferring, pricing=UNPRICEABLE_RECOVERY, read=None
     )
     assert deferring.submit_calls == [], "the entry is still working; nothing to reduce yet"
     assert deferred.reducing_order_ref is None
@@ -390,7 +393,7 @@ async def test_a_deferred_cancel_still_reduces_with_the_decisions_shape(
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
     swept = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=sweeping, pricing=UNPRICEABLE_RECOVERY
+        repo, effect_operation_id=accepted.effect_operation_id, trade=sweeping, pricing=UNPRICEABLE_RECOVERY, read=None
     )
 
     assert swept.reducing_order_ref is not None
@@ -423,7 +426,7 @@ async def test_an_exit_accepted_without_a_decision_still_reduces_market_day(
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
 
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     ((leg, _client_order_id),) = trade.submit_calls
     assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours) == (
