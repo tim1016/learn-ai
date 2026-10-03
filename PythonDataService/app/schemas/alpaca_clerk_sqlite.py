@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     quote_spread_bps,
 )
 from app.broker.alpaca.clerk.sqlite.models import CommandResource
+from app.broker.alpaca.clerk.sqlite.projection_models import SettlementAttestation
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -304,6 +305,35 @@ class SafeFlattenPlanResponse(BaseModel):
     legs: tuple[SafeFlattenPlanLegResponse, ...]
 
 
+class SettlementChoiceResponse(BaseModel):
+    """One thing the operator can say Alpaca shows for an uncertain order (#2854)."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    attestation: SettlementAttestation
+    label: str
+    explanation: str
+    asks_broker_order_id: bool
+
+
+class UnknownOrderSettlementResponse(BaseModel):
+    """The closing order an available ``settle_unknown_exit_order`` asks about (#2854).
+
+    ``ticket`` is the Clerk's own sentence about the order; the page shows it
+    as written and offers ``choices`` beneath it.
+    """
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    order_ref: str
+    symbol: str
+    side: Literal["buy", "sell"]
+    quantity: float
+    first_sent_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    ticket: str
+    choices: tuple[SettlementChoiceResponse, ...]
+
+
 class RecoveryCapabilityResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
@@ -323,6 +353,9 @@ class RecoveryCapabilityResponse(BaseModel):
     execution_ref: str | None
     mutation: bool
     primary: bool
+    # The order an available ``settle_unknown_exit_order`` asks about (#2854);
+    # ``None`` for every other capability.
+    settlement: UnknownOrderSettlementResponse | None = None
 
 
 class ProjectionGuidanceResponse(BaseModel):

@@ -77,6 +77,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
+from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import read_unknown_exit_orders
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
@@ -582,6 +583,12 @@ class SqliteClerkProjectionReader:
             ),
             published_pass=None if strategy_instance_id is None else published_pass,
             subject_custody_sequence=subject_custody_sequence,
+            # Settled for one bot from that bot's page only (#2854).
+            unknown_exit_orders=(
+                ()
+                if strategy_instance_id is None
+                else read_unknown_exit_orders(self._conn, strategy_instance_id)
+            ),
         )
 
     def timeline_page(

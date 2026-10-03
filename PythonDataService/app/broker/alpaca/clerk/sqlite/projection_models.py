@@ -16,6 +16,9 @@ EvidenceFreshness = Literal["fresh", "stale", "not_required", "unavailable"]
 # The check of the account against Alpaca a safe-flatten plan rests on: an
 # operator's Reconcile now receipt, or the Clerk's own published pass (#2839).
 AccountCheckKind = Literal["reconcile_now", "clerk_pass"]
+# What an operator attests Alpaca shows for a closing order whose outcome is
+# unknown (#2854): no such order, or the order under a broker order id.
+SettlementAttestation = Literal["absent", "exists"]
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,33 @@ class ProjectedExecutionCoverageConflict:
 
 
 @dataclass(frozen=True)
+class ProjectedUnknownExitOrder:
+    """An EXIT's closing order whose outcome is unknown and that an operator may settle (#2854).
+
+    The order was sent at least once, carries no broker order id, no
+    acknowledgement and no fill, and is an identity of the bot's open
+    ``ORDER_OUTCOME_UNKNOWN`` episode. ``side`` is as its creation recorded
+    it (``SELL`` or ``BUY``). ``latest_send_sequence`` is its latest
+    ``ORDER_SUBMIT_REQUESTED``; ``lookup_wait_from_ms`` is where the wait
+    after that send is counted from: the send, or the first record of its
+    answer when that was written later. ``answered_as_client_order_id`` is
+    the other client order id that send was answered under, when it was.
+    """
+
+    effect_operation_id: str
+    order_ref: str
+    symbol: str
+    side: str
+    quantity: float
+    created_at_ms: int
+    first_sent_at_ms: int
+    latest_send_sequence: int
+    lookup_wait_from_ms: int
+    answered_as_client_order_id: str | None
+    uncertainty_id: str
+
+
+@dataclass(frozen=True)
 class ProjectedReconciliation:
     reconciliation_id: str
     effect_operation_id: str | None
@@ -225,6 +255,33 @@ class SafeFlattenPlan:
 
 
 @dataclass(frozen=True)
+class SettlementChoice:
+    """One thing the operator can say Alpaca shows for an uncertain order (#2854)."""
+
+    attestation: SettlementAttestation
+    label: str
+    explanation: str
+    # Whether the operator must give the order's Alpaca order id with it.
+    asks_broker_order_id: bool
+
+
+@dataclass(frozen=True)
+class UnknownOrderSettlement:
+    """What the operator is asked about one closing order whose outcome is unknown (#2854).
+
+    ``ticket`` is the Clerk's own sentence about the order, its time in ET.
+    """
+
+    order_ref: str
+    symbol: str
+    side: Literal["buy", "sell"]
+    quantity: float
+    first_sent_at_ms: int
+    ticket: str
+    choices: tuple[SettlementChoice, ...]
+
+
+@dataclass(frozen=True)
 class RecoveryCapability:
     action_id: str
     label: str
@@ -247,6 +304,8 @@ class RecoveryCapability:
     # settle -- rather than being needed and gated. Decided where the policy
     # writes the reason (#2794).
     needed: bool = True
+    # The order an available ``settle_unknown_exit_order`` asks about (#2854).
+    settlement: UnknownOrderSettlement | None = None
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
+    ProjectedUnknownExitOrder,
     RecoveryCapability,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
@@ -26,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
     recheck_recovery_action,
+    unknown_order_lookup_settles_at_ms,
 )
 from app.schemas.alpaca_clerk_sqlite import RecoveryCapabilityResponse
 
@@ -87,6 +89,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
         "prepare_safe_flatten",
         "execute_safe_flatten",
         "discharge_attributed_residue",
+        "settle_unknown_exit_order",
         "stop_bot_decisions",
         "open_custody_timeline",
     }
@@ -1273,3 +1276,164 @@ def test_a_plan_presented_under_a_pass_is_never_committed_as_a_receipts_plan() -
             reconciled, action_id="execute_safe_flatten", concurrency_token=plan.concurrency_token
         )
 
+
+
+# ── Settling a closing order whose outcome is unknown (#2854) ────────────────
+
+_UNKNOWN_ORDER_SENT_AT_MS = 1_700_000_000_000
+
+
+def _unknown_exit_order(**changes: object) -> ProjectedUnknownExitOrder:
+    """A closing order to sell 10 SPY, sent once, whose answer was lost."""
+    return replace(
+        ProjectedUnknownExitOrder(
+            effect_operation_id="exit-1",
+            order_ref="bot:spy-bot:close-1",
+            symbol="SPY",
+            side="SELL",
+            quantity=10.0,
+            created_at_ms=_UNKNOWN_ORDER_SENT_AT_MS - 5,
+            first_sent_at_ms=_UNKNOWN_ORDER_SENT_AT_MS,
+            latest_send_sequence=41,
+            lookup_wait_from_ms=_UNKNOWN_ORDER_SENT_AT_MS,
+            answered_as_client_order_id=None,
+            uncertainty_id="uncertainty:40",
+        ),
+        **changes,
+    )
+
+
+def _stopped_with_an_unknown_exit(**overrides: object) -> RecoveryPolicyContext:
+    """A stopped bot whose closing order's wait has passed."""
+    order = _unknown_exit_order()
+    values: dict[str, object] = {
+        "runs": (),
+        "unknown_exit_orders": (order,),
+        "now_ms": unknown_order_lookup_settles_at_ms(order),
+    }
+    values.update(overrides)
+    return _context(**values)
+
+
+def _settle(context: RecoveryPolicyContext) -> RecoveryCapability:
+    return next(
+        action
+        for action in build_recovery_catalog(context)
+        if action.action_id == "settle_unknown_exit_order"
+    )
+
+
+def test_settling_is_offered_for_a_stopped_bots_unknown_closing_order() -> None:
+    action = _settle(_stopped_with_an_unknown_exit())
+
+    assert action.available is True
+    assert action.needed is True
+    assert action.mutation is True
+    assert action.confirmation is not None
+    assert action.execution_ref == "bot:spy-bot:close-1"
+    assert [item.reference for item in action.evidence] == ["order:bot:spy-bot:close-1"]
+    # Reconcile now cannot settle an order no read shows, so this is the bot's cure.
+    assert action.primary is True
+
+
+def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> None:
+    settlement = _settle(_stopped_with_an_unknown_exit()).settlement
+
+    assert settlement is not None
+    assert (settlement.symbol, settlement.side, settlement.quantity) == ("SPY", "sell", 10.0)
+    assert settlement.ticket == (
+        "The Clerk sent an order to sell 10 SPY on Tue Nov 14, 17:13 ET and could not confirm it. "
+        "It holds the position and sells nothing more for this bot until this is settled."
+    )
+    assert [(choice.attestation, choice.asks_broker_order_id) for choice in settlement.choices] == [
+        ("absent", False),
+        ("exists", True),
+    ]
+    # The wire carries it to the page that asks the operator.
+    assert RecoveryCapabilityResponse.model_validate(
+        _settle(_stopped_with_an_unknown_exit())
+    ).settlement is not None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_code", "needed"),
+    [
+        ({"unknown_exit_orders": ()}, "NO_UNKNOWN_EXIT_ORDER", False),
+        # A Dry Run's and a Shadow's orders reach no broker an operator could look at.
+        ({"account_id": "sim:spy-bot"}, "NO_UNKNOWN_EXIT_ORDER", False),
+        ({"account_id": "shadow:PA-LIVE"}, "NO_UNKNOWN_EXIT_ORDER", False),
+        (
+            {
+                "runs": (
+                    ProjectedRun(
+                        run_id="run-1",
+                        strategy_instance_id="spy-bot",
+                        lifecycle_run_id="lifecycle-1",
+                        state="ACTIVE",
+                        started_at_ms=1_700_000_000_000,
+                        stopped_at_ms=None,
+                    ),
+                )
+            },
+            "RUN_STILL_ACTIVE",
+            True,
+        ),
+        (
+            {"now_ms": unknown_order_lookup_settles_at_ms(_unknown_exit_order()) - 1},
+            "ORDER_LOOKUP_STILL_SETTLING",
+            True,
+        ),
+    ],
+)
+def test_settling_is_refused_outside_its_state(
+    overrides: dict[str, object], reason_code: str, needed: bool
+) -> None:
+    action = _settle(_stopped_with_an_unknown_exit(**overrides))
+
+    assert action.available is False
+    assert action.unavailable_reason_code == reason_code
+    assert action.needed is needed
+    assert action.execution_ref is None
+    assert action.settlement is None
+
+
+def test_an_order_answered_under_another_client_order_id_is_offered_without_the_wait() -> None:
+    """The Clerk never sends it again or finds it by itself, so there is nothing to wait for."""
+    answered = _unknown_exit_order(answered_as_client_order_id="another-id")
+
+    action = _settle(
+        _stopped_with_an_unknown_exit(
+            unknown_exit_orders=(answered,), now_ms=answered.lookup_wait_from_ms
+        )
+    )
+
+    assert action.available is True
+
+
+def test_the_settle_token_outlives_a_pass_and_not_a_send_made_again() -> None:
+    """A pass changes the clock and the episode's time, never the order's latest send."""
+    presented = _stopped_with_an_unknown_exit()
+    token = _settle(presented).concurrency_token
+    a_pass_later = replace(
+        presented,
+        now_ms=presented.now_ms + 15_000,
+        control_revision=presented.control_revision + 1,
+        uncertainties=(replace(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"), observed_at_ms=presented.now_ms + 15_000),),
+    )
+
+    assert recheck_recovery_action(
+        a_pass_later, action_id="settle_unknown_exit_order", concurrency_token=token
+    ).available
+
+    for changed in (
+        _unknown_exit_order(latest_send_sequence=57),
+        _unknown_exit_order(answered_as_client_order_id="another-id"),
+        _unknown_exit_order(uncertainty_id="uncertainty:99"),
+        _unknown_exit_order(order_ref="bot:spy-bot:close-2"),
+    ):
+        with pytest.raises(StaleRecoveryTokenError):
+            recheck_recovery_action(
+                replace(a_pass_later, unknown_exit_orders=(changed,)),
+                action_id="settle_unknown_exit_order",
+                concurrency_token=token,
+            )

@@ -15,7 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard
 
-from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.account_authority import (
+    is_shadow_account_id,
+    is_synthetic_account_id,
+)
 from app.broker.alpaca.clerk.sqlite.execution_coverage_policy import (
     ExecutionCoverageRecoveryDecision,
     coverage_resolution_decision,
@@ -32,18 +35,25 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
+    ProjectedUnknownExitOrder,
     ProjectionGuidance,
     RecoveryCapability,
     RecoveryConfirmation,
     RecoveryEvidence,
     SafeFlattenPlan,
     SafeFlattenPlanLeg,
+    SettlementChoice,
+    UnknownOrderSettlement,
 )
 from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
+    VoidAfter,
+    reason_age_policy,
     reason_policy,
     residue_discharge_role,
 )
+from app.utils.et_words import et_when_words
 
 RecoveryActionId = Literal[
     "reconcile_now",
@@ -53,6 +63,7 @@ RecoveryActionId = Literal[
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
 ]
@@ -144,6 +155,9 @@ class RecoveryPolicyContext:
     # read: the safe-flatten gate then accepts a Reconcile now receipt only.
     published_pass: PublishedPass | None = None
     subject_custody_sequence: int | None = None
+    # This bot's closing orders whose outcome is unknown and that an operator
+    # may settle (#2854); empty for an account-scoped context.
+    unknown_exit_orders: tuple[ProjectedUnknownExitOrder, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -184,6 +198,8 @@ class _Decision:
     needed: bool = True
     # The account check an available safe flatten rests on; its plan is built from it.
     account_check: AccountCheckEvidence | None = None
+    # The order an available settle action asks the operator about (#2854).
+    settlement: UnknownOrderSettlement | None = None
 
 
 @dataclass(frozen=True)
@@ -309,6 +325,21 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
             "account, writes the attributed quantity to zero under your reason, and "
             "submits no order.",
             "Discharge residue",
+        ),
+    ),
+    _Descriptor(
+        action_id="settle_unknown_exit_order",
+        label="Settle the uncertain order",
+        explanation=(
+            "Say what Alpaca shows for a closing order the Clerk could not confirm. "
+            "The Clerk reads Alpaca itself first and sends no order."
+        ),
+        mutation=True,
+        confirmation=_confirmation(
+            "Settle the uncertain order?",
+            "The Clerk reads Alpaca again and settles the order only if what it reads "
+            "agrees with what you said. It sends no order. This cannot be undone.",
+            "Settle the order",
         ),
     ),
     _Descriptor(
@@ -663,6 +694,8 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
         return _execute_safe_flatten_decision(ctx)
     if action_id == "discharge_attributed_residue":
         return _residue_discharge_decision(ctx)
+    if action_id == "settle_unknown_exit_order":
+        return _settle_unknown_exit_order_decision(ctx)
     raise AssertionError(f"healthy catalog cannot evaluate {action_id!r}")
 
 
@@ -1052,6 +1085,142 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     )
 
 
+def unknown_order_lookup_settles_at_ms(order: ProjectedUnknownExitOrder) -> int:
+    """When Alpaca's reads can be trusted to show an order sent at ``order``'s latest send (#2854).
+
+    The submit-absence wait after that send: an order whose answer was lost
+    may be at Alpaca and not yet show in a read, so nothing read inside the
+    wait is proof it is absent. The one declared wait
+    (``uncertainty_policies``, ADR 0048 Decision 1), counted from where the
+    Clerk's own re-send counts it. Not the longer waits between the Clerk's
+    own re-sends: those space out sends, and say nothing about what a read
+    shows.
+    """
+    grace_ms = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
+    return order.lookup_wait_from_ms + grace_ms
+
+
+_SETTLEMENT_CHOICES: tuple[SettlementChoice, ...] = (
+    SettlementChoice(
+        attestation="absent",
+        label="Alpaca has no such order",
+        explanation=(
+            "The Clerk checks once more. If it finds nothing, it ends this exit as not sent. "
+            "The shares stay with the bot; the Clerk may sell again after checking the account. "
+            "This cannot be undone."
+        ),
+        asks_broker_order_id=False,
+    ),
+    SettlementChoice(
+        attestation="exists",
+        label="Alpaca shows it",
+        explanation=(
+            "The Clerk reads that order and takes it only if it is the same order. Nothing is sent."
+        ),
+        asks_broker_order_id=True,
+    ),
+)
+
+
+def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) -> UnknownOrderSettlement:
+    """What the operator is asked about ``order``, in the Clerk's own words (#2854)."""
+    side = "sell" if order.side.upper() == "SELL" else "buy"
+    return UnknownOrderSettlement(
+        order_ref=order.order_ref,
+        symbol=order.symbol,
+        side=side,
+        quantity=order.quantity,
+        first_sent_at_ms=order.first_sent_at_ms,
+        ticket=(
+            f"The Clerk sent an order to {side} {order.quantity:g} {order.symbol} on "
+            f"{et_when_words(order.first_sent_at_ms, now_ms=ctx.now_ms)} and could not confirm it. "
+            f"It holds the position and {side}s nothing more for this bot until this is settled."
+        ),
+        choices=_SETTLEMENT_CHOICES,
+    )
+
+
+def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision:
+    """Offer the settling of one bot's closing order whose outcome is unknown (#2854).
+
+    For an EXIT only, and only while the bot has no ACTIVE run: a running
+    bot's own EXIT is sent with no check of the account, and would sell again
+    the moment an attestation freed its position. Not in a simulation, whose
+    orders fill inside the send and reach no broker an operator could look
+    at. Presentation reads only durable custody; the proof is the executor's
+    own fresh reads of the broker (``unknown_order_attestation``).
+
+    Until the wait after the order's latest send has passed, the Clerk's own
+    exact lookup may still find it, and no read is yet proof it is absent. An
+    order whose send the broker answered under another client order id is
+    offered at once: the Clerk will never send it again or find it by itself.
+
+    The token names the order and its latest send, never a pass's own record
+    that the order is still absent: every pass writes one, and a token naming
+    them would go stale under the operator's hands every 15 s with nothing
+    about the order changed. A send made again changes the token.
+    """
+    simulated = is_synthetic_account_id(ctx.account_id) or is_shadow_account_id(ctx.account_id)
+    order = None if simulated or not ctx.unknown_exit_orders else ctx.unknown_exit_orders[0]
+    active_runs = _relevant_runs(ctx)
+    reason_code: str | None = None
+    reason: str | None = None
+    next_step = "Look at this account's orders at Alpaca, then say what it shows for this order."
+    if order is None:
+        reason_code = "NO_UNKNOWN_EXIT_ORDER"
+        reason = "No closing order of this bot has an outcome the Clerk could not confirm."
+        next_step = "Nothing to settle."
+    elif active_runs:
+        reason_code = "RUN_STILL_ACTIVE"
+        reason = "Stop the bot before settling its uncertain order."
+        next_step = "Stop bot decisions first."
+    elif (
+        order.answered_as_client_order_id is None
+        and ctx.now_ms < unknown_order_lookup_settles_at_ms(order)
+    ):
+        reason_code = "ORDER_LOOKUP_STILL_SETTLING"
+        reason = "The Clerk sent this order moments ago and may still find it at Alpaca by itself."
+        next_step = "Wait for the Clerk's next check of the account."
+    available = reason_code is None
+    return _Decision(
+        available=available,
+        reason_code=reason_code,
+        reason=reason,
+        needed=order is not None,
+        freshness="not_required",
+        evidence=(
+            ()
+            if order is None
+            else (
+                _evidence(
+                    ctx,
+                    reference=f"order:{order.order_ref}",
+                    label="Closing order with an unknown outcome",
+                    observed_at_ms=order.lookup_wait_from_ms,
+                    required_fresh=False,
+                ),
+            )
+        ),
+        next_step=next_step,
+        token_facts={
+            "order": (
+                None
+                if order is None
+                else (
+                    order.effect_operation_id,
+                    order.order_ref,
+                    order.latest_send_sequence,
+                    order.answered_as_client_order_id,
+                    order.uncertainty_id,
+                )
+            ),
+            "active_runs": [run.run_id for run in active_runs],
+        },
+        execution_ref=order.order_ref if available and order is not None else None,
+        settlement=_settlement(ctx, order) if available and order is not None else None,
+    )
+
+
 def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Decision:
     return _coverage_decision(
         coverage_resolution_decision(
@@ -1181,6 +1350,7 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
                 mutation=descriptor.mutation,
                 primary=False,
                 needed=decision.needed,
+                settlement=decision.settlement,
             )
         )
     primary_id = _primary_action_id(capabilities)
@@ -1212,6 +1382,8 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
         "recover_exact_execution_evidence",
         "resolve_execution_coverage",
         "cancel_verified_working_orders",
+        # Above Reconcile now, which cannot settle an order no read shows (#2854).
+        "settle_unknown_exit_order",
         "reconcile_now",
         "stop_bot_decisions",
         "execute_safe_flatten",

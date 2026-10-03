@@ -30,7 +30,8 @@ from app.broker.alpaca.clerk.sqlite.models import (
     RunResource,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import read_open_opposite_side_orders
-from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
+from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder, ProjectedUnknownExitOrder
+from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import read_unknown_exit_orders
 from app.broker.contract.models import OrderSide
 
 if TYPE_CHECKING:
@@ -651,6 +652,13 @@ class ClerkSqliteRepositoryReadApi:
     def uncertain_orders(self: ClerkSqliteRepository) -> list[OrderResource]:
         with self._write_lock:
             return reads.uncertain_orders(self._conn)
+
+    def unknown_exit_orders(
+        self: ClerkSqliteRepository, strategy_instance_id: str
+    ) -> tuple[ProjectedUnknownExitOrder, ...]:
+        """One bot's closing orders an operator may settle, as its page was offered them (#2854)."""
+        with self._write_lock:
+            return read_unknown_exit_orders(self._conn, strategy_instance_id)
 
     def attributed_positions_by_symbol(self: ClerkSqliteRepository) -> dict[str, float]:
         with self._write_lock:
