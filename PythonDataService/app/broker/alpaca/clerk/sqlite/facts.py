@@ -766,6 +766,15 @@ class AttributedResidueDischargedFacts:
         return cls(**json.loads(facts_json))
 
 
+@dataclass(frozen=True)
+class EndedForeignOrder:
+    """An order the Clerk did not place, on the attested order's symbol and side, that had ended when it was read (#2854)."""
+
+    broker_order_id: str
+    broker_state: str
+    filled_quantity: float
+
+
 _ORDER_OUTCOME_ATTESTATIONS = ("absent", "exists")
 # What only one of the two attestations records. Omitted when absent, so a
 # row carries exactly what its own attestation read.
@@ -794,10 +803,14 @@ class OrderOutcomeAttestedFacts:
     ``"exists"`` -- it is the order under ``broker_order_id``. Each records
     what the Clerk itself read for it, and nothing of the other:
 
-    - ``absent``: how many open orders and how many orders of any state since
-      ``orders_read_since_ms`` it read, none of them this order, with the
-      broker's position in the symbol and the account-wide attribution it
-      was set against.
+    - ``absent``: how many open orders, and how many orders of any state in
+      the order's symbol since ``orders_read_since_ms``, it read, none of
+      them this order, with the broker's position in the symbol and the
+      account-wide attribution it was set against. ``ended_foreign_orders``
+      are the orders among them, on this order's side, that the Clerk did
+      not place and that had ended: what the operator and the Clerk were
+      looking at when the order was ended as not sent. Recorded only when
+      there were any.
     - ``exists``: the broker order id that was read, its state and its
       cumulative filled quantity as read.
 
@@ -826,6 +839,7 @@ class OrderOutcomeAttestedFacts:
     orders_read_since_ms: int | None = None
     broker_qty: float | None = None
     account_attributed_qty: float | None = None
+    ended_foreign_orders: tuple[EndedForeignOrder, ...] | None = None
     exit_not_flat: dict[str, Any] | None = None
     broker_order_id: str | None = None
     broker_state: str | None = None
@@ -839,7 +853,10 @@ class OrderOutcomeAttestedFacts:
         recorded, left_out = (
             (_ABSENT_ATTESTATION_FIELDS, _EXISTS_ATTESTATION_FIELDS)
             if self.attestation == "absent"
-            else (_EXISTS_ATTESTATION_FIELDS, (*_ABSENT_ATTESTATION_FIELDS, "exit_not_flat"))
+            else (
+                _EXISTS_ATTESTATION_FIELDS,
+                (*_ABSENT_ATTESTATION_FIELDS, "ended_foreign_orders", "exit_not_flat"),
+            )
         )
         if any(getattr(self, name) is None for name in recorded) or any(
             getattr(self, name) is not None for name in left_out
@@ -854,7 +871,12 @@ class OrderOutcomeAttestedFacts:
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderOutcomeAttestedFacts:
-        return cls(**json.loads(facts_json))
+        facts = json.loads(facts_json)
+        if facts.get("ended_foreign_orders") is not None:
+            facts["ended_foreign_orders"] = tuple(
+                EndedForeignOrder(**order) for order in facts["ended_foreign_orders"]
+            )
+        return cls(**facts)
 
 
 @dataclass(frozen=True)

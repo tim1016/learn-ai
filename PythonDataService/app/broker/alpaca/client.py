@@ -317,6 +317,8 @@ class AlpacaTradingClient:
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {}
         if status is not None:
@@ -325,6 +327,10 @@ class AlpacaTradingClient:
             kwargs["limit"] = limit
         if after_ms is not None:
             kwargs["after"] = _ms_to_utc(after_ms)
+        if symbols is not None:
+            kwargs["symbols"] = list(symbols)
+        if until_ms is not None:
+            kwargs["until"] = _ms_to_utc(until_ms)
         request = GetOrdersRequest(direction=Sort.DESC, **kwargs)
         return await self._call(lambda c: c.get_orders(filter=request), describe="orders")
 
