@@ -38,7 +38,7 @@
     <app-golden-search-grid>
       <app-golden-search-panel chart="fold-timeline" data-span="12">
         <app-golden-search-chart [spec]="spec" [height]="timelineHeight()" />
-        <p caption class="caption">{{ charts.planned ? 'The folds the plan froze at lock; testing over time runs them after the search.' : charts.in_progress ? 'Testing over time is under way: each fold fills in as it finishes.' : 'Each fold trained on its window, then tested its winner on the next.' }}</p>
+        <p caption class="caption">{{ charts.planned ? 'The folds the plan froze at lock; testing over time runs them after the search.' : charts.in_progress ? (running() ? 'Testing over time is under way: each fold fills in as it finishes.' : 'Testing over time stopped before its verdict: these are the folds it finished.') : 'Each fold trained on its window, then tested its winner on the next.' }}</p>
       </app-golden-search-panel>
       @if (!charts.planned) {
         <app-golden-search-panel chart="linked-return" data-span="8">

@@ -70,10 +70,15 @@ export class GoldenSearchTestStepComponent {
     let seen: string | null = null;
     effect(() => {
       const progress = this.progress();
+      // A reload asked for while one is in flight is dropped: wait for it to settle, then catch up.
+      if (this.charts.isLoading()) return;
       if (seen !== null && progress !== seen) untracked(() => this.charts.reload());
       seen = progress;
     });
   }
+
+  /** Running, or stopped before its verdict. */
+  protected readonly running = computed(() => this.study().state === 'validation_running');
 
   protected readonly pending = computed(() =>
     this.study().state === 'validation_running'

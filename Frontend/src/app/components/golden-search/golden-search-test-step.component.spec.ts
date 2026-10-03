@@ -60,7 +60,7 @@ describe('GoldenSearchTestStepComponent', () => {
     await renderStep(studyDetail('awaiting_candidate'), running);
 
     const activity = (await screen.findByRole('region', { name: 'Test activity per fold' })).querySelector('[role=img]')?.getAttribute('aria-label') ?? '';
-    expect(activity).toContain('so far 12, testing still under way');
+    expect(activity).toContain('so far 12, before the verdict');
     expect(activity).not.toContain('minimum');
     expect(region('Linked test return').textContent).toContain('drawn when testing over time finishes');
   });
