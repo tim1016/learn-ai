@@ -2,9 +2,11 @@
 
 A closing order whose submit answer was lost, whose re-send keeps being
 refused, or which the broker answered under another client order id leaves
-its EXIT ``unknown``: the Clerk keeps custody of the position and sells
-nothing more for the bot. It cannot settle such an order by itself, because
-no read of its own shows what became of it.
+its EXIT ``unknown``: the Clerk keeps custody of the position and starts no
+other closing order for the bot. While the order's session is open it sends
+that same order again by itself, unless the broker answered under another
+client order id. It cannot settle such an order by itself, because no read
+of its own shows what became of it.
 
 The operator can look at the account at Alpaca. This module takes what they
 saw as an *attestation*, and does not take their word for it: the Clerk

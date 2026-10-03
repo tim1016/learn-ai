@@ -307,8 +307,16 @@ run. Guarded Flatten, reducing order recovery and existing exit seals survive.
 When the Clerk cannot settle an EXIT's closing order whose outcome is unknown,
 a stopped bot's operator may: they look at the account at Alpaca and say that
 it has no such order, or which Alpaca order it is. The Clerk reads Alpaca
-itself and acts only when its own reads agree; it sends no order and never
-changes the attributed quantity. One `ORDER_OUTCOME_ATTESTED` transition
-records what was attested, who attested it and when. For this one state the
+itself and acts only when its own reads agree, and it sends no order. "No
+such order" ends the EXIT as not sent and never changes the attributed
+quantity. "It is this Alpaca order" takes that order up as the EXIT's own, so
+a fill Alpaca reports for it is credited, once, as any fill of the Clerk's
+own order is. One `ORDER_OUTCOME_ATTESTED` transition records what was
+attested, who attested it and when, and its own fold settles the order, so no
+ledger holds an attestation that did not take effect. For this one state the
 "never out-of-band" consequence above is narrowed: the operator first looks
 at Alpaca, then acts through the Clerk.
+
+Known gap: an order Alpaca answered under another client order id cannot be
+taken up yet. While that order is working neither attestation settles the
+EXIT; once it has ended, "no such order" does.

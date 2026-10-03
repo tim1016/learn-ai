@@ -1123,19 +1123,40 @@ _SETTLEMENT_CHOICES: tuple[SettlementChoice, ...] = (
 
 
 def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) -> UnknownOrderSettlement:
-    """What the operator is asked about ``order``, in the Clerk's own words (#2854)."""
+    """What the operator is asked about ``order``, in the Clerk's own words (#2854).
+
+    The ticket says what the Clerk does meanwhile, which is not nothing. It
+    starts no other closing order for the bot, but while the order's session
+    is open it sends this same order again by itself, after longer and longer
+    waits (``exit_resolution.resend_wait_ms``), and each send makes what the
+    operator saw at Alpaca, and the action they were presented, out of date.
+    An order Alpaca answered under another client order id is never sent
+    again.
+    """
     side = "sell" if order.side.upper() == "SELL" else "buy"
+    sent = (
+        f"The Clerk sent an order to {side} {order.quantity:g} {order.symbol} on "
+        f"{et_when_words(order.first_sent_at_ms, now_ms=ctx.now_ms)}"
+    )
+    holds = "holds the position and starts no other closing order for this bot"
+    if order.answered_as_client_order_id is None:
+        ticket = (
+            f"{sent} and could not confirm it. It {holds}. While the order's session is open, "
+            "the Clerk sends this same order again by itself, waiting longer each time. If it "
+            "does, look at Alpaca again and open this action again."
+        )
+    else:
+        ticket = (
+            f"{sent}, and Alpaca answered under another order id. The Clerk {holds}, and does "
+            "not send this order again."
+        )
     return UnknownOrderSettlement(
         order_ref=order.order_ref,
         symbol=order.symbol,
         side=side,
         quantity=order.quantity,
         first_sent_at_ms=order.first_sent_at_ms,
-        ticket=(
-            f"The Clerk sent an order to {side} {order.quantity:g} {order.symbol} on "
-            f"{et_when_words(order.first_sent_at_ms, now_ms=ctx.now_ms)} and could not confirm it. "
-            f"It holds the position and {side}s nothing more for this bot until this is settled."
-        ),
+        ticket=ticket,
         choices=_SETTLEMENT_CHOICES,
     )
 
