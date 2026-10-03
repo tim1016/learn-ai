@@ -2336,6 +2336,75 @@ def _fold_submit_refused(
     )
 
 
+ORDER_ATTESTED_ABSENT = "ORDER_ATTESTED_ABSENT"
+"""How an EXIT ended whose closing order an operator attested Alpaca does not have (#2854)."""
+
+
+def fold_exit_attested_absent(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    broker_qty: float,
+    account_attributed_qty: float,
+) -> None:
+    """End an EXIT whose closing order an operator attested Alpaca does not have (#2854).
+
+    The caller has read the broker itself and found no such order
+    (``unknown_order_attestation``). The order is ended as not sent and the
+    EXIT fails releasably through ``EXIT_NOT_FLAT`` (owner decision on
+    #2854): its entry is freed, and the Clerk may sell again by itself after
+    its own check of the account, as after any failed exit. The fold cites
+    the reducing order, so the unknown-outcome episode's identity for it
+    closes with the EXIT.
+
+    The attributed quantity is never changed here. When the broker's position
+    in the symbol (``broker_qty``) does not equal the account-wide
+    attribution, the notice says both, and what to do about shares Alpaca
+    does not hold.
+
+    An EXIT whose position is already flat has nothing left to exit: it
+    proves attributed-flat instead, citing the same order, as a resubmission
+    does (:func:`_created_leg_may_be_sent`).
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    created = _reducing_order_facts(repo, order_ref)
+    held = repo.position(effect.strategy_instance_id, created.symbol)
+    if not position_quantity_is_nonzero(held):
+        _fold_attributed_flat(repo, effect_operation_id, order_ref)
+        return
+    settled = (
+        f"The Clerk could not confirm the order to {_the_reduction(created)}. An operator said "
+        "Alpaca has no such order, the Clerk's own reads of Alpaca found none, and the exit was "
+        f"ended as not sent; {held:g} {created.symbol} is still held."
+    )
+    if position_quantity_is_nonzero(broker_qty - account_attributed_qty):
+        explanation = (
+            f"{settled} Alpaca holds {broker_qty:g} {created.symbol}; the Clerk's records say "
+            f"{account_attributed_qty:g}."
+        )
+        next_step = (
+            "Look at this account's position at Alpaca. If Alpaca does not hold these shares, "
+            "write off the missing shares; otherwise sell what is held."
+        )
+    else:
+        explanation, next_step = settled, _REDRIVE_NEXT_STEP
+    _fold_exit_not_flat(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        symbol=created.symbol,
+        attributed_qty=held,
+        summary_code=ORDER_ATTESTED_ABSENT,
+        reason="An operator attested Alpaca has no such order, and the Clerk's own reads found none.",
+        why="The closing order was ended as not sent; nothing was sent to end it.",
+        headline="A closing order was settled as not sent; the position is still open",
+        explanation=explanation,
+        next_step=next_step,
+    )
+
+
 def priced_reduction_reference_price(repo: ClerkSqliteRepository, order_ref: str) -> float | None:
     """The bid (sell) or ask (cover) a priced reducing leg's fills are measured from.
 
@@ -2591,6 +2660,7 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
 __all__ = [
     "cancel_and_prove_owned_entry",
     "flatten_send_refusal",
+    "fold_exit_attested_absent",
     "priced_reduction_reference_price",
     "resolve_exit",
 ]

@@ -136,6 +136,11 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "The operator wrote off an attributed position the broker did not hold, "
         "after a fresh broker read proved the account flat for it. No order was sent.",
     ),
+    "ORDER_OUTCOME_ATTESTED": (
+        "Uncertain order settled by an operator",
+        "An operator said what Alpaca shows for an order the Clerk could not confirm, "
+        "and the Clerk's own reads of Alpaca agreed. No order was sent.",
+    ),
     "EXTERNAL_ORDER_OBSERVED": (
         "External order observed",
         "The Account Clerk recorded an order outside the configured bot namespaces.",

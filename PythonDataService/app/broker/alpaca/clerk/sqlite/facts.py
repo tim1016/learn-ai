@@ -775,6 +775,89 @@ class AttributedResidueDischargedFacts:
         return cls(**json.loads(facts_json))
 
 
+_ORDER_OUTCOME_ATTESTATIONS = ("absent", "exists")
+# What only one of the two attestations records. Omitted when absent, so a
+# row carries exactly what its own attestation read.
+_ABSENT_ATTESTATION_FIELDS = (
+    "open_orders_read",
+    "orders_since_read",
+    "orders_read_since_ms",
+    "broker_qty",
+    "account_attributed_qty",
+)
+_EXISTS_ATTESTATION_FIELDS = ("broker_order_id", "broker_state", "broker_filled_quantity")
+
+
+@dataclass(frozen=True)
+class OrderOutcomeAttestedFacts:
+    """``ORDER_OUTCOME_ATTESTED`` (#2854): an operator said what Alpaca shows for an
+    order whose outcome was unknown, and the Clerk's own reads agreed.
+
+    Who said it (``operator``, the installation's configured operator
+    identity) and their reason when given; the order it was said of, by the
+    client order id that was sent, with its symbol, side and quantity and
+    its latest send (``latest_send_sequence``); the open unknown-outcome
+    episode it settles; and when the Clerk read the broker.
+
+    ``attestation`` is ``"absent"`` -- Alpaca has no such order -- or
+    ``"exists"`` -- it is the order under ``broker_order_id``. Each records
+    what the Clerk itself read for it, and nothing of the other:
+
+    - ``absent``: how many open orders and how many orders of any state since
+      ``orders_read_since_ms`` it read, none of them this order, with the
+      broker's position in the symbol and the account-wide attribution it
+      was set against.
+    - ``exists``: the broker order id that was read, its state and its
+      cumulative filled quantity as read.
+
+    The row is an audit record: the folds that follow it settle the order.
+    """
+
+    attestation: str
+    operator: str
+    client_order_id: str
+    symbol: str
+    side: str
+    quantity: float
+    latest_send_sequence: int
+    uncertainty_id: str
+    broker_observed_at_ms: int
+    operator_reason: str | None = None
+    open_orders_read: int | None = None
+    orders_since_read: int | None = None
+    orders_read_since_ms: int | None = None
+    broker_qty: float | None = None
+    account_attributed_qty: float | None = None
+    broker_order_id: str | None = None
+    broker_state: str | None = None
+    broker_filled_quantity: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.attestation not in _ORDER_OUTCOME_ATTESTATIONS:
+            raise ValueError(f"Unknown order-outcome attestation {self.attestation!r}")
+        if not self.operator or len(self.operator) > 64:
+            raise ValueError("An attestation records who made it, in 1 to 64 characters")
+        recorded, left_out = (
+            (_ABSENT_ATTESTATION_FIELDS, _EXISTS_ATTESTATION_FIELDS)
+            if self.attestation == "absent"
+            else (_EXISTS_ATTESTATION_FIELDS, _ABSENT_ATTESTATION_FIELDS)
+        )
+        if any(getattr(self, name) is None for name in recorded) or any(
+            getattr(self, name) is not None for name in left_out
+        ):
+            raise ValueError(
+                f"An {self.attestation!r} attestation records {', '.join(recorded)} and none of "
+                f"{', '.join(left_out)}"
+            )
+
+    def to_facts_json(self) -> str:
+        return canonicalize({name: value for name, value in asdict(self).items() if value is not None})
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderOutcomeAttestedFacts:
+        return cls(**json.loads(facts_json))
+
+
 @dataclass(frozen=True)
 class OrderFillObservedFacts:
     """The evidence ``_fold_order_fill_observed`` needs beyond the outer

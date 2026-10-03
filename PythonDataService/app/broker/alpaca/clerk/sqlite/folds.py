@@ -54,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ManualOrderReplacedFacts,
     OrderCancelRequestedFacts,
     OrderFillObservedFacts,
+    OrderOutcomeAttestedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
@@ -1541,6 +1542,19 @@ def _fold_order_cancel_requested(_conn: sqlite3.Connection, payload: dict[str, A
 
 
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", _fold_order_cancel_requested)
+
+
+def _fold_order_outcome_attested(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """An operator's attestation of an unknown order outcome (#2854): an audit record.
+
+    It changes no projection. The order is settled by the folds that follow
+    it -- the exit's own failure, or the broker's order evidence -- so a
+    replay settles it exactly as the live run did.
+    """
+    OrderOutcomeAttestedFacts.from_facts_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("ORDER_OUTCOME_ATTESTED", _fold_order_outcome_attested)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
 
