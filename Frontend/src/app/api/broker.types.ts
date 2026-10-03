@@ -3732,6 +3732,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/calendar/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sessions
+         * @description Every scheduled NYSE session between two instants, with the holidays between them.
+         *
+         *     The window is the ET calendar dates containing ``start_ms`` and
+         *     ``end_ms``, both included. The shared date picker reads it once so its
+         *     quick ranges land on real sessions and its calendar greys out the days
+         *     the exchange is closed, without a second calendar in the browser.
+         */
+        get: operations["get_sessions_api_calendar_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/data": {
         parameters: {
             query?: never;
@@ -8736,6 +8761,16 @@ export interface components {
              * @default false
              */
             total?: boolean;
+        };
+        /**
+         * CalendarHoliday
+         * @description A weekday the exchange is closed, anchored at 09:30 ET on that date.
+         */
+        CalendarHoliday: {
+            /** Date Ms */
+            date_ms: number;
+            /** Name */
+            name: string;
         };
         /**
          * CanaryActivationConfirmation
@@ -23796,6 +23831,22 @@ export interface components {
             symbol: string;
         };
         /**
+         * TradingCalendarWindow
+         * @description The scheduled NYSE sessions in a window, oldest first.
+         *
+         *     Parallel arrays: session ``i`` opens at ``session_open_ms[i]`` and closes
+         *     at ``session_close_ms[i]``. The close is the scheduled one, so a half-day
+         *     carries its early close.
+         */
+        TradingCalendarWindow: {
+            /** Holidays */
+            holidays: components["schemas"]["CalendarHoliday"][];
+            /** Session Close Ms */
+            session_close_ms: number[];
+            /** Session Open Ms */
+            session_open_ms: number[];
+        };
+        /**
          * TrainingCandidateResult
          * @description Auditable train-window outcome for one parameter candidate.
          */
@@ -32057,6 +32108,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TodayStatement"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sessions_api_calendar_sessions_get: {
+        parameters: {
+            query: {
+                start_ms: number;
+                end_ms: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingCalendarWindow"];
                 };
             };
             /** @description Validation Error */
