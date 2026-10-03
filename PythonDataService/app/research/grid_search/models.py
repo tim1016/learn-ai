@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from app.engine.data.availability import Resolution
+from app.engine.execution.fill_mode_names import RESEARCH_DEFAULT_FILL_MODE, UNRECORDED_FILL_MODE
 from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
 from app.research.sweep.ranking import RankingMeasure
 
@@ -119,7 +120,7 @@ class GridSearchSpec:
     start_ms: int
     end_ms: int
     resolution: Resolution = "minute"
-    fill_mode: str = "signal_bar_close"
+    fill_mode: str = RESEARCH_DEFAULT_FILL_MODE
     commission_per_order: float = 0.0
     slippage_per_share: float = 0.0
     initial_cash: float = 100_000.0
@@ -151,7 +152,9 @@ class GridSearchSpec:
             start_ms=int(payload["start_ms"]),
             end_ms=int(payload["end_ms"]),
             resolution=payload.get("resolution", "minute"),
-            fill_mode=payload.get("fill_mode", "signal_bar_close"),
+            # Not the default above: a sweep saved before the field existed
+            # keeps the rule it ran under (#2599).
+            fill_mode=payload.get("fill_mode", UNRECORDED_FILL_MODE),
             # A stored request always names its commission; a row from before it
             # did was run at the $1 default of the time.
             commission_per_order=float(payload.get("commission_per_order", 1.0)),

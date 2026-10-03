@@ -8,6 +8,12 @@ import type { components } from "../api/broker.types";
  */
 export type FillModeName = NonNullable<components["schemas"]["GridSearchSpecRequest"]["fillMode"]>;
 
+/**
+ * What a research form starts on: the fill the evidence grade and the
+ * Walk-Forward Study use to ask "will this survive live?" (#2599).
+ */
+export const RESEARCH_DEFAULT_FILL_MODE: FillModeName = "decision_minute_open";
+
 /** Keyed by the contract's vocabulary, so a mode the backend adds cannot go unlabelled. */
 const FILL_MODE_LABELS: Record<FillModeName, string> = {
   signal_bar_close: "Signal bar close",

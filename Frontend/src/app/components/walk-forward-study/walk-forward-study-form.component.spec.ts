@@ -114,11 +114,19 @@ describe('WalkForwardStudyFormComponent', () => {
     expect(launch.mock.lastCall?.[0]).toEqual(spec);
   });
 
-  it('seeds and shows a stored decision-minute-open study (#2599)', async () => {
+  it('starts a new study at the decision minute open (#2599)', async () => {
     const preflight = vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN);
-    await renderForm({ preflight }, { prefill: { ...PREFILL, fill_mode: 'decision_minute_open' } });
+    await renderForm({ preflight });
 
     await waitFor(() => expect(preflight.mock.lastCall?.[0].fill_mode).toBe('decision_minute_open'));
     expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('decision_minute_open');
+  });
+
+  it('seeds and shows the fill mode a stored search ran under, not the default (#2599)', async () => {
+    const preflight = vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN);
+    await renderForm({ preflight }, { prefill: PREFILL });
+
+    await waitFor(() => expect(preflight.mock.lastCall?.[0].fill_mode).toBe('signal_bar_close'));
+    expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('signal_bar_close');
   });
 });

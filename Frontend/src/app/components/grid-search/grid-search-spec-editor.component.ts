@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
-import { FILL_MODE_OPTIONS, isFillModeName, type FillModeName } from '../../models/fill-mode';
+import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, type FillModeName } from '../../models/fill-mode';
 import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
 import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange, rangeProblem } from '../../shared/param-range/param-range';
@@ -71,7 +71,7 @@ export class GridSearchSpecEditorComponent {
   readonly strategyKey = signal<string | null>(null);
   readonly fromDate = signal(defaultWindow(Date.now()).from);
   readonly toDate = signal(defaultWindow(Date.now()).to);
-  readonly fillMode = signal<FillModeName>('signal_bar_close');
+  readonly fillMode = signal<FillModeName>(RESEARCH_DEFAULT_FILL_MODE);
   readonly resolution = signal<'minute' | 'daily'>('minute');
   readonly commissionPerOrder = signal(0);
   readonly slippagePerShare = signal(0);

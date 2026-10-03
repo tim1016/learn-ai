@@ -16215,7 +16215,7 @@ export interface components {
             endMs: number;
             /**
              * Fillmode
-             * @default signal_bar_close
+             * @default decision_minute_open
              * @enum {string}
              */
             fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
@@ -16300,7 +16300,7 @@ export interface components {
             endMs: number;
             /**
              * Fillmode
-             * @default signal_bar_close
+             * @default decision_minute_open
              * @enum {string}
              */
             fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
@@ -24314,7 +24314,7 @@ export interface components {
             endMs: number;
             /**
              * Fillmode
-             * @default signal_bar_close
+             * @default decision_minute_open
              * @enum {string}
              */
             fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
@@ -24405,7 +24405,7 @@ export interface components {
             endMs: number;
             /**
              * Fillmode
-             * @default signal_bar_close
+             * @default decision_minute_open
              * @enum {string}
              */
             fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";

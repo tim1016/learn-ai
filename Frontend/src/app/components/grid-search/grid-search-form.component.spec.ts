@@ -124,7 +124,7 @@ describe('GridSearchFormComponent', () => {
     await renderForm([strategy()], { launch });
 
     expect(screen.getByText('Fees not charged')).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Fill mode'), { target: { value: 'decision_minute_open' } });
+    expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('decision_minute_open');
     await waitFor(() => expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: /launch search/i }));
     await waitFor(() => expect(launch).toHaveBeenCalled());
@@ -132,5 +132,17 @@ describe('GridSearchFormComponent', () => {
     const spec = launch.mock.lastCall?.[0];
     expect(spec?.fill_mode).toBe('decision_minute_open');
     expect(spec?.commission_per_order).toBe(0);
+  });
+
+  it('launches under another fill mode when the researcher picks one', async () => {
+    const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-8');
+    await renderForm([strategy()], { launch });
+
+    fireEvent.change(screen.getByLabelText('Fill mode'), { target: { value: 'signal_bar_close' } });
+    await waitFor(() => expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: /launch search/i }));
+    await waitFor(() => expect(launch).toHaveBeenCalled());
+
+    expect(launch.mock.lastCall?.[0].fill_mode).toBe('signal_bar_close');
   });
 });

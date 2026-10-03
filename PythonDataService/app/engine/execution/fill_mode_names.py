@@ -5,13 +5,24 @@ runs, the legacy walk-forward route and spec strategies -- parses it here, so
 one spelling means one mode everywhere and an unknown one is refused with the
 modes that surface really runs. A surface passes the modes it offers as
 ``allowed``; the canonical name of a parsed mode is its ``FillMode.value``.
+
+It also names two rules that must stay apart: the one research defaults to,
+and the one a record saved before it named a fill mode ran under. A fallback
+for such a record never follows the default.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
 
 from app.engine.execution.order import FillMode
+
+# What the evidence grade and the walk-forward study fill at when the question
+# is "will this survive live?": the earliest price a live order could get.
+RESEARCH_DEFAULT_FILL_MODE: Literal["decision_minute_open"] = "decision_minute_open"
+# What a run or sweep saved before it recorded its fill mode ran under.
+UNRECORDED_FILL_MODE: Literal["signal_bar_close"] = "signal_bar_close"
 
 # What a research request may ask for. ``NEXT_SESSION_OPEN`` is the
 # daily-prediction parity path: only the research-run runner offers it.

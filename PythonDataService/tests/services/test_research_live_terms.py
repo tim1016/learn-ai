@@ -4,7 +4,9 @@ Both request surfaces a researcher grades with -- Strategy Lab's engine run
 and Grid Search (which Walk-Forward sweeps through) -- accept the
 ``decision_minute_open`` fill mode and record it in their receipts, and both
 default the flat fee to $0: Alpaca charges no commission, and its regulatory
-fees are not modelled. The engine-level fill rule itself is pinned in
+fees are not modelled. Grid Search defaults to that fill mode too; the engine
+request's own default stays the signal bar's close, which a LEAN-paired run
+relies on. The engine-level fill rule itself is pinned in
 ``tests/engine/test_engine_fill_modes.py``.
 """
 
@@ -126,27 +128,63 @@ def test_an_unknown_fill_mode_names_every_mode_an_engine_run_accepts(lake: Path,
     assert "signal_bar_close, next_bar_open or decision_minute_open" in refused.value.detail
 
 
-def test_a_grid_search_carries_the_decision_minute_open_into_its_receipt_and_cells(lake: Path) -> None:
-    body = GridSearchSpecRequest(
+def _grid_body(**overrides: Any) -> GridSearchSpecRequest:
+    return GridSearchSpecRequest(
         strategy_key="sma_crossover",
         symbol="SPY",
         param_ranges={name: {"type": "value_list", "values": [float(value)]} for name, value in SMA_PARAMS.items()},
         start_ms=service.et_midnight_ms(START),
         end_ms=service.et_midnight_ms(END) + DAY_MS,
-        fill_mode="decision_minute_open",
         min_trades=1,
+        **overrides,
     )
+
+
+CANDIDATE = RunSpec(symbol="SPY", strategy_key="sma_crossover", params=dict(SMA_PARAMS), params_hash="x")
+
+
+@pytest.mark.parametrize("named", [{"fill_mode": "decision_minute_open"}, {}], ids=["named", "by default"])
+def test_a_grid_search_carries_the_decision_minute_open_into_its_receipt_and_cells(lake: Path, named: dict[str, str]) -> None:
+    """Named or not: the sweep answers "will this survive live?", so the mode is also its default."""
+    body = _grid_body(**named)
 
     record = service.prepare_launch(to_grid_spec(body), job_id=None, roots=[lake])
     stored = service.GridSearchSpec.from_request_dict(record.request)
-    candidate = RunSpec(symbol="SPY", strategy_key="sma_crossover", params=dict(SMA_PARAMS), params_hash="x")
-    cell_request = engine_adapter.engine_request(record, stored, candidate)
+    cell_request = engine_adapter.engine_request(record, stored, CANDIDATE)
 
     assert record.receipt["execution_contract"]["fill_mode"] == "decision_minute_open"
     assert cell_request.fill_mode == "decision_minute_open"
     # Nobody asked for a fee, so none is charged.
     assert record.receipt["execution_contract"]["commission_per_order"] == 0.0
     assert cell_request.commission_per_order == 0.0
+
+
+def test_a_sweep_saved_before_it_recorded_a_fill_mode_still_runs_at_the_signal_bar_close(lake: Path) -> None:
+    """Finish reads the stored request; a keyless one must not pick up today's default."""
+    record = service.prepare_launch(to_grid_spec(_grid_body()), job_id=None, roots=[lake])
+    saved = {key: value for key, value in record.request.items() if key != "fill_mode"}
+
+    stored = service.GridSearchSpec.from_request_dict(saved)
+
+    assert stored.fill_mode == "signal_bar_close"
+    assert engine_adapter.engine_request(record, stored, CANDIDATE).fill_mode == "signal_bar_close"
+
+
+def test_grid_search_defaults_to_the_decision_minute_open_and_the_engine_request_does_not() -> None:
+    engine = EngineBacktestRequest(strategy_name="sma_crossover")
+    grid = GridSearchSpecRequest(strategy_key="sma_crossover", symbol="SPY", start_ms=0, end_ms=DAY_MS)
+    spec = service.GridSearchSpec(
+        strategy_key="sma_crossover",
+        symbol="SPY",
+        param_ranges={"short_window": ValueListRange((2.0,))},
+        start_ms=0,
+        end_ms=DAY_MS,
+    )
+
+    assert grid.fill_mode == "decision_minute_open"
+    assert spec.fill_mode == "decision_minute_open"
+    # A LEAN-paired run sends no fill mode and its profile refuses any other.
+    assert engine.fill_mode == "signal_bar_close"
 
 
 def test_the_research_request_surfaces_default_to_no_fee() -> None:

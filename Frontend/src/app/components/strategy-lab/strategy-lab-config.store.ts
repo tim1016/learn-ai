@@ -6,7 +6,7 @@ import { firstValueFrom, map } from "rxjs";
 
 import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
-import type { FillModeName } from "../../models/fill-mode";
+import { RESEARCH_DEFAULT_FILL_MODE, type FillModeName } from "../../models/fill-mode";
 import type { PriceAdjustmentMode } from "../../shared/data-lake";
 import { TickerCatalogService } from "../../shared/ticker-catalog";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
@@ -81,9 +81,9 @@ export class StrategyLabConfigStore {
     resolution: "minute",
     autoFetch: true,
   });
-  readonly fillMode = signal<FillModeName>("signal_bar_close");
-  /** The fill a run on the selected engine uses: a paired run is pinned to the signal bar's close. */
-  readonly runFillMode = computed<FillModeName>(() => (this.engine() === "both" ? "signal_bar_close" : this.fillMode()));
+  readonly fillMode = signal<FillModeName>(RESEARCH_DEFAULT_FILL_MODE);
+  /** The fill a run on the selected engine uses: only a Python run takes the rail's; LEAN, alone or paired, fills at the signal bar's close. */
+  readonly runFillMode = computed<FillModeName>(() => (this.engine() === "python" ? this.fillMode() : "signal_bar_close"));
   readonly initialCash = signal(100000);
   readonly commissionPerOrder = signal(0);
   readonly customLeanSource = signal<string | null>(null);

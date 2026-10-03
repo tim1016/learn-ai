@@ -575,7 +575,7 @@ describe("Strategy Lab Workbench", () => {
     // written over the defaults the operator is now looking at.
     expect(lab.report.displayRun()).toBeNull();
     expect(lab.config.initialCash()).toBe(100_000);
-    expect(lab.config.fillMode()).toBe("signal_bar_close");
+    expect(lab.config.fillMode()).toBe("decision_minute_open");
     http.verify();
   });
 
