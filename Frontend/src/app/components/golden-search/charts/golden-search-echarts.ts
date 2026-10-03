@@ -3,6 +3,7 @@ import type { BarSeriesOption, CustomSeriesOption, HeatmapSeriesOption, LineSeri
 import type {
   AxisPointerComponentOption,
   GridComponentOption,
+  MarkAreaComponentOption,
   MarkLineComponentOption,
   TooltipComponentOption,
   VisualMapComponentOption,
@@ -19,6 +20,7 @@ export type ChartOption = ComposeOption<
   | GridComponentOption
   | TooltipComponentOption
   | AxisPointerComponentOption
+  | MarkAreaComponentOption
   | MarkLineComponentOption
   | VisualMapComponentOption
 >;

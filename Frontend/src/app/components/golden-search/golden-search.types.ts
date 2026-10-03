@@ -280,8 +280,8 @@ export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
 /** `GET /studies/{id}/charts/test-over-time`: every fold, from the receipt's plan before testing over time ran. */
-export type TestOverTimeCharts = Schemas['GoldenSearchTestOverTimeCharts'];
-export type FoldChart = Schemas['GoldenSearchFoldChart'];
+export type FoldChart = Omit<Schemas['GoldenSearchFoldChart'], 'winner'> & { winner: Point | null };
+export type TestOverTimeCharts = Omit<Schemas['GoldenSearchTestOverTimeCharts'], 'folds'> & { folds: FoldChart[] };
 export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
 
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */

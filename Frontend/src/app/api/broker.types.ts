@@ -14134,6 +14134,11 @@ export interface components {
             train_sharpe: number | null;
             /** Train Start Ms */
             train_start_ms: number;
+            /**
+             * Winner
+             * @description The settings the fold's training chose; null without a winner.
+             */
+            winner: Record<string, never> | null;
         };
         /** GoldenSearchGuidance */
         GoldenSearchGuidance: {
@@ -15149,8 +15154,11 @@ export interface components {
             judged: string;
             /** Median Retention */
             median_retention: number | null;
-            /** Test Trades */
-            test_trades: number;
+            /**
+             * Test Trades
+             * @description The verdict's test trades; null before it is computed.
+             */
+            test_trades: number | null;
         };
         /**
          * GoldenSearchSummaryRow
@@ -15184,6 +15192,11 @@ export interface components {
              * @description The trades all forward tests together must reach, as the verdict judged them.
              */
             forward_minimum: number | null;
+            /**
+             * In Progress
+             * @description Testing over time is running or stopped short of its verdict: totals count only the folds completed so far.
+             */
+            in_progress: boolean;
             /** Incumbent Linked */
             incumbent_linked: components["schemas"]["GoldenSearchLinkedReturn"][];
             /** Linked */
@@ -15199,7 +15212,7 @@ export interface components {
             retention_threshold: number;
             /**
              * Test Trades Total
-             * @description Test trades over completed folds; null before testing over time ran.
+             * @description The verdict's test trades; while in progress, the completed folds' so far; null before testing over time ran.
              */
             test_trades_total: number | null;
         };

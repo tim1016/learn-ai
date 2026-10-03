@@ -278,9 +278,11 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
   const [first, second] = preflight().folds;
   return {
     planned: false,
+    in_progress: false,
     folds: [
       {
         ...first,
+        winner: { ...INCUMBENT_PARAMS, fast_period: 8 },
         status: 'completed',
         failure_reason: null,
         train_sharpe: 1.4,
@@ -294,6 +296,7 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
       },
       {
         ...second,
+        winner: null,
         status: 'failed',
         failure_reason: "No setting met your rules in this fold's training window.",
         train_sharpe: null,
@@ -319,7 +322,7 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
 
 /** The same read before testing over time ran: the receipt's planned folds, nothing measured. */
 export function plannedTestOverTimeCharts(): TestOverTimeCharts {
-  const blank = { status: 'planned' as const, failure_reason: null, train_sharpe: null, test_sharpe: null, retention: null, test_return: null, incumbent_return: null, return_difference: null, test_trades: null, incumbent_trades: null };
+  const blank = { winner: null, status: 'planned' as const, failure_reason: null, train_sharpe: null, test_sharpe: null, retention: null, test_return: null, incumbent_return: null, return_difference: null, test_trades: null, incumbent_trades: null };
   return testOverTimeCharts({
     planned: true,
     folds: preflight().folds.map((fold) => ({ ...fold, ...blank })),

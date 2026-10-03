@@ -28,21 +28,22 @@ Which months did each fold train on and test on, and how did each fold end?
 
 #### What you're looking at
 
-A row for each fold. The grey bar is the fold's training window; the coloured bar right after it is its test window, in Eastern dates. A blue test bar is a fold that completed, red one that failed, and grey one that has not run yet. Before testing over time runs, the chart shows the folds the plan froze when the study was locked.
+A row for each fold. The grey bar is the fold's training window; the coloured bar right after it is its test window, in Eastern dates. A completed fold's test bar is green when its winner made money on the test window and red when it lost; a failed fold's bar is outlined in red; a grey one has not run yet. Before testing over time runs, the chart shows the folds the plan froze when the study was locked, and while it runs each fold fills in as it finishes.
 
-Hover a fold to see its windows, the winner's training and test Sharpe, its retention, its test return and its test trades, or the reason it failed.
+Hover a fold to see its windows, the settings its training chose, the winner's training and test Sharpe, its retention, its test return and its test trades, or the reason it failed.
 
 #### How to read it
 
 1. Read each row as one fold: the grey bar is its training window, the coloured bar the test window right after it.
 2. The test windows follow one another in time, so together they cover a stretch the procedure never trained on before choosing.
-3. A red test bar is a fold that failed; hover it for the reason. A grey one has not run yet.
+3. A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet.
 4. Hover a fold for its windows, both Sharpes, its retention, test return and trades.
 
 #### Good signs and warning signs
 
 - Good: every fold completed.
 - Warning: failed folds. The verdict cannot judge a procedure with a failed fold, and the linked return breaks at it.
+- Warning: mostly red test bars. The winners chosen on training lost money on the months that followed.
 - Warning: very short test windows. A few weeks of testing says little.
 
 #### An everyday comparison
@@ -121,7 +122,7 @@ Did the search choose similar settings in every fold?
 
 #### What you're looking at
 
-A row for each searched knob, each on its own searched range. The dots are the value each fold's training chose; a fold without a winner has no dot. The dashed line is the all-period winner, the value the search chose on the whole development period; the dotted line is the current settings.
+A row for each searched knob, on its own scale. The shaded band is the knob's searched range. The dots are the value each fold's training chose; a fold without a winner has no dot. A dot outside the band is a starting value the search kept because nothing it tried in the range did better. The dashed line is the all-period winner, the value the search chose on the whole development period; the dotted line is the current settings.
 
 Hover a dot for the fold's value beside both reference values and the searched range.
 
@@ -185,7 +186,7 @@ On the left, each fold's test trades: the trades its winner made on its test win
 
 $$\text{test trades} = \sum_{\text{completed folds}} \text{trades on the fold's test window}$$
 
-The forward minimum is the number of trades all forward tests must reach together; for a plan with an expected trade frequency, it is that frequency over the forward tests' trading years, frozen when the study was locked. It applies to the total only: no fold has a minimum of its own. A total below it turns red.
+The forward minimum is the number of trades all forward tests must reach together; for a plan with an expected trade frequency, it is that frequency over the forward tests' trading years, frozen when the study was locked. It applies to the total only: no fold has a minimum of its own. A total below it turns red. While testing over time is still running, the total counts the folds finished so far and is not judged against the minimum.
 
 Hover a fold for its test trades and the current settings' trades on the same window.
 

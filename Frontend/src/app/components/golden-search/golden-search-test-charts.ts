@@ -4,8 +4,8 @@ import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, seriesIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { percentText, ratioText, signedPercentText } from './golden-search-display';
-import type { FoldChart, KnobDrift, LinkedFoldReturn, TestOverTimeCharts } from './golden-search.types';
+import { entryText, pointEntries, ratioText, signedPercentText } from './golden-search-display';
+import type { FoldChart, KnobDrift, LinkedFoldReturn, StrategyCapability, TestOverTimeCharts } from './golden-search.types';
 
 /**
  * The Test over time charts (#2821): each fold's training and test windows
@@ -20,6 +20,8 @@ import type { FoldChart, KnobDrift, LinkedFoldReturn, TestOverTimeCharts } from 
  */
 
 const OUT_OF_SAMPLE = 'Each fold’s test window is out-of-sample for the winner chosen on its training window.';
+const IN_PROGRESS = 'Testing over time has not finished: this counts only the folds completed so far.';
+const WHOLE_PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 0 });
 const PROCEDURE = 'Search procedure';
 const INCUMBENT = 'Current settings';
 const STATUS_TEXT: Readonly<Record<FoldChart['status'], string>> = {
@@ -42,12 +44,17 @@ function windowText(startMs: number, endMs: number): string {
   return `${dateEt(startMs)} to ${dateEt(endMs - 1)}`;
 }
 
-function orNotRecorded(text: string): string {
-  return text === '—' ? NOT_RECORDED : text;
+function ratioOrMissing(value: number | null): string {
+  return value === null ? NOT_RECORDED : ratioText(value);
 }
 
+function returnOrMissing(value: number | null): string {
+  return value === null ? NOT_RECORDED : signedPercentText(value);
+}
+
+/** Retention in whole percent, as the verdict panel shows it; a completed fold without one says why. */
 function retentionText(fold: FoldChart): string {
-  return fold.retention === null ? (fold.status === 'completed' ? 'not defined' : NOT_RECORDED) : percentText(fold.retention);
+  return fold.retention === null ? (fold.status === 'completed' ? 'not defined' : NOT_RECORDED) : WHOLE_PERCENT.format(fold.retention);
 }
 
 const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11 });
@@ -55,7 +62,7 @@ const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize:
 // ---------------------------------------------------------------- V12 fold timeline
 
 /** Each fold as a row: its training window, then its test window coloured by how the fold ended. */
-export function foldTimelineSpec(charts: TestOverTimeCharts): ChartSpec {
+export function foldTimelineSpec(charts: TestOverTimeCharts, capability: StrategyCapability | null): ChartSpec {
   const folds = charts.folds;
   const ran = folds.filter((fold) => fold.status === 'completed').length;
   const summary = charts.planned
@@ -65,7 +72,7 @@ export function foldTimelineSpec(charts: TestOverTimeCharts): ChartSpec {
     label: 'Fold timeline',
     summary,
     featured: null,
-    option: (theme) => timelineOption(folds, theme),
+    option: (theme) => timelineOption(folds, capability, theme),
     table: {
       caption: 'Every fold’s windows (ET) and results; — marks a value not recorded',
       columns: ['Fold', 'Training', 'Test', 'Status', 'Training Sharpe', 'Test Sharpe', 'Retention', 'Test return', 'Test trades'],
@@ -78,7 +85,7 @@ export function foldTimelineSpec(charts: TestOverTimeCharts): ChartSpec {
           fold.failure_reason === null ? STATUS_TEXT[fold.status] : `${STATUS_TEXT[fold.status]}: ${fold.failure_reason}`,
           ratioText(fold.train_sharpe),
           ratioText(fold.test_sharpe),
-          fold.retention === null ? '—' : percentText(fold.retention),
+          retentionText(fold),
           signedPercentText(fold.test_return),
           fold.test_trades === null ? '—' : String(fold.test_trades),
         ],
@@ -87,10 +94,11 @@ export function foldTimelineSpec(charts: TestOverTimeCharts): ChartSpec {
   };
 }
 
-function testColor(fold: FoldChart, theme: ChartTheme): string {
-  if (fold.status === 'failed') return theme.loss;
-  if (fold.status !== 'completed') return theme.tooFew;
-  return theme.candidates.all_period;
+/** A completed fold's test bar takes its return's colour; a failed one is outlined in the loss colour; one not run is grey. */
+function testStyle(fold: FoldChart, theme: ChartTheme): { color: string; borderColor?: string; borderWidth?: number } {
+  if (fold.status === 'failed') return { color: 'transparent', borderColor: theme.loss, borderWidth: 2 };
+  if (fold.status !== 'completed' || fold.test_return === null) return { color: theme.tooFew };
+  return { color: fold.test_return < 0 ? theme.loss : theme.gain };
 }
 
 /** A window as a bar from its start to its end on the fold's row, outlined when a walkthrough or hover lights it up. */
@@ -109,10 +117,10 @@ function windowBar(outline: string): NonNullable<CustomSeriesOption['renderItem'
   };
 }
 
-function timelineOption(folds: readonly FoldChart[], theme: ChartTheme): ChartOption {
+function timelineOption(folds: readonly FoldChart[], capability: StrategyCapability | null, theme: ChartTheme): ChartOption {
   const windows = [
     { group: 'training', name: 'Training window', bars: folds.map((fold) => ({ value: [fold.train_start_ms, fold.train_end_ms, fold.fold_index], itemStyle: { color: theme.textSecondary, opacity: 0.45 } })) },
-    { group: 'test', name: 'Test window', bars: folds.map((fold) => ({ value: [fold.test_start_ms, fold.test_end_ms, fold.fold_index], itemStyle: { color: testColor(fold, theme) } })) },
+    { group: 'test', name: 'Test window', bars: folds.map((fold) => ({ value: [fold.test_start_ms, fold.test_end_ms, fold.fold_index], itemStyle: testStyle(fold, theme) })) },
   ];
   return {
     grid: { left: 56, right: 16, top: 8, bottom: 28 },
@@ -121,7 +129,7 @@ function timelineOption(folds: readonly FoldChart[], theme: ChartTheme): ChartOp
       trigger: 'item',
       formatter: (params: unknown) => {
         const fold = folds[dataIndexOf(params) ?? -1];
-        return fold === undefined ? '' : foldTooltip(fold, theme);
+        return fold === undefined ? '' : foldTooltip(fold, capability, theme);
       },
     },
     xAxis: { type: 'time', axisLine: { lineStyle: { color: theme.axis } }, axisLabel: { ...axisText(theme), hideOverlap: true, formatter: (value: number) => dateEt(value) }, splitLine: { lineStyle: { color: theme.gridLine } } },
@@ -137,18 +145,19 @@ function timelineOption(folds: readonly FoldChart[], theme: ChartTheme): ChartOp
   };
 }
 
-function foldTooltip(fold: FoldChart, theme: ChartTheme): string {
+function foldTooltip(fold: FoldChart, capability: StrategyCapability | null, theme: ChartTheme): string {
   const rows: TooltipRow[] = [
     { label: 'Training', values: [windowText(fold.train_start_ms, fold.train_end_ms)] },
     { label: 'Test', values: [windowText(fold.test_start_ms, fold.test_end_ms)] },
-    { label: 'Training Sharpe', values: [orNotRecorded(ratioText(fold.train_sharpe))] },
-    { label: 'Test Sharpe', values: [orNotRecorded(ratioText(fold.test_sharpe))] },
+    { label: 'Training Sharpe', values: [ratioOrMissing(fold.train_sharpe)] },
+    { label: 'Test Sharpe', values: [ratioOrMissing(fold.test_sharpe)] },
     { label: 'Retention', values: [retentionText(fold)] },
-    { label: 'Test return', values: [orNotRecorded(signedPercentText(fold.test_return))] },
+    { label: 'Test return', values: [returnOrMissing(fold.test_return)] },
     { label: 'Test trades', values: [fold.test_trades === null ? NOT_RECORDED : String(fold.test_trades)] },
   ];
   const reason = fold.failure_reason === null ? [] : [fold.failure_reason];
-  return tooltipHtml({ title: `${foldName(fold)} · ${STATUS_TEXT[fold.status]}`, columns: ['Value'], rows, notes: [...reason, 'Dates are Eastern; each window’s last day is shown.', OUT_OF_SAMPLE] }, theme);
+  const winner = fold.winner === null ? [] : [`Winner: ${pointEntries(fold.winner, capability).map(entryText).join(' · ')}.`];
+  return tooltipHtml({ title: `${foldName(fold)} · ${STATUS_TEXT[fold.status]}`, columns: ['Value'], rows, notes: [...reason, ...winner, 'Dates are Eastern; each window’s last day is shown.', OUT_OF_SAMPLE] }, theme);
 }
 
 // ---------------------------------------------------------------- V13 linked test return
@@ -221,10 +230,10 @@ function linkedOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOptio
 
 /** Each fold's training and test Sharpe side by side, labelled with the retention the verdict reads. */
 export function sharpeRetentionSpec(charts: TestOverTimeCharts): ChartSpec {
-  const median = charts.median_retention === null ? 'no median retention' : `a median retention of ${percentText(charts.median_retention)}`;
+  const median = charts.median_retention === null ? 'no median retention' : `a median retention of ${WHOLE_PERCENT.format(charts.median_retention)}`;
   return {
     label: 'Training against test Sharpe',
-    summary: `Each fold's training and test Sharpe, with ${median}; the verdict asks for ${percentText(charts.retention_threshold)} or more.`,
+    summary: `Each fold's training and test Sharpe, with ${median}; the verdict asks for ${WHOLE_PERCENT.format(charts.retention_threshold)} or more.`,
     featured: null,
     option: (theme) => sharpeOption(charts, theme),
     table: {
@@ -251,11 +260,11 @@ function sharpeOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOptio
         const fold = folds[dataIndexOf(params) ?? -1];
         if (fold === undefined) return '';
         const rows: TooltipRow[] = [
-          { label: 'Training Sharpe', values: [orNotRecorded(ratioText(fold.train_sharpe))] },
-          { label: 'Test Sharpe', values: [orNotRecorded(ratioText(fold.test_sharpe))] },
+          { label: 'Training Sharpe', values: [ratioOrMissing(fold.train_sharpe)] },
+          { label: 'Test Sharpe', values: [ratioOrMissing(fold.test_sharpe)] },
           { label: 'Retention', values: [retentionText(fold)] },
         ];
-        const rule = `Retention is the test Sharpe over the training Sharpe, defined only when the training Sharpe is above 0. The verdict reads the median over folds against ${percentText(charts.retention_threshold)}.`;
+        const rule = `Retention is the test Sharpe over the training Sharpe, defined only when the training Sharpe is above 0. The verdict reads the median over folds against ${WHOLE_PERCENT.format(charts.retention_threshold)}.`;
         return tooltipHtml({ title: `${foldName(fold)} · ${STATUS_TEXT[fold.status]}`, columns: ['Value'], rows, notes: [rule, OUT_OF_SAMPLE] }, theme);
       },
     },
@@ -277,7 +286,7 @@ function sharpeOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOptio
 }
 
 function keepsText(fold: FoldChart | undefined): string {
-  return fold?.retention === null || fold?.retention === undefined ? '' : `keeps ${percentText(fold.retention)}`;
+  return fold?.retention === null || fold?.retention === undefined ? '' : `keeps ${WHOLE_PERCENT.format(fold.retention)}`;
 }
 
 // ---------------------------------------------------------------- V15 parameter drift
@@ -301,6 +310,11 @@ export function parameterDriftSpec(charts: TestOverTimeCharts): ChartSpec {
       })),
     },
   };
+}
+
+/** Every value a knob's row draws: the fold winners and the all-period winner. */
+function present(knob: KnobDrift): number[] {
+  return [...knob.folds, knob.all_period].filter((value): value is number => value !== null);
 }
 
 /** The chart's height for `count` knobs: a row each. */
@@ -347,8 +361,9 @@ function driftOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOption
     yAxis: knobs.map((knob, i) => ({
       type: 'value' as const,
       gridIndex: i,
-      min: knob.low,
-      max: knob.high,
+      // Every value drawn stays on the axis, even one outside the searched range (a kept starting value, say).
+      min: Math.min(knob.low, knob.current, ...present(knob)),
+      max: Math.max(knob.high, knob.current, ...present(knob)),
       splitNumber: 2,
       name: knob.label,
       nameLocation: 'end' as const,
@@ -374,6 +389,8 @@ function driftOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOption
         label: { color: theme.textSecondary, fontSize: 10, formatter: (params: { name?: string }) => params.name ?? '' },
         data: reference(knob),
       },
+      // The searched range as a band.
+      markArea: { silent: true, itemStyle: { color: theme.gridLine, opacity: 0.5 }, data: [[{ yAxis: knob.low }, { yAxis: knob.high }]] },
     })),
   };
 }
@@ -414,9 +431,9 @@ function returnsOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpti
         const fold = folds[dataIndexOf(params) ?? -1];
         if (fold === undefined) return '';
         const rows: TooltipRow[] = [
-          { label: PROCEDURE, values: [orNotRecorded(signedPercentText(fold.test_return))], swatch: { color: theme.candidates.all_period, dashed: false } },
-          { label: INCUMBENT, values: [orNotRecorded(signedPercentText(fold.incumbent_return))], swatch: { color: theme.candidates.incumbent, dashed: false } },
-          { label: 'Difference', values: [orNotRecorded(signedPercentText(fold.return_difference))] },
+          { label: PROCEDURE, values: [returnOrMissing(fold.test_return)], swatch: { color: theme.candidates.all_period, dashed: false } },
+          { label: INCUMBENT, values: [returnOrMissing(fold.incumbent_return)], swatch: { color: theme.candidates.incumbent, dashed: false } },
+          { label: 'Difference', values: [returnOrMissing(fold.return_difference)] },
         ];
         return tooltipHtml({ title: `${foldName(fold)} · test ${windowText(fold.test_start_ms, fold.test_end_ms)} (ET)`, columns: ['Test return'], rows, notes: ['Each return is on the fold’s fresh starting capital.', OUT_OF_SAMPLE] }, theme);
       },
@@ -444,9 +461,10 @@ export function foldActivitySpec(charts: TestOverTimeCharts): ChartSpec {
   const total = charts.test_trades_total;
   const minimum = charts.forward_minimum;
   const against = minimum === null ? '' : ` against a minimum of ${minimum}`;
+  const together = charts.in_progress ? `so far ${total ?? NOT_RECORDED}, testing still under way` : `together ${total ?? NOT_RECORDED}${against}`;
   return {
     label: 'Test activity per fold',
-    summary: `Each fold's test trades; together ${total === null ? NOT_RECORDED : total}${against}.`,
+    summary: `Each fold's test trades; ${together}.`,
     featured: null,
     option: (theme) => activityOption(charts, theme),
     table: {
@@ -464,7 +482,8 @@ function activityOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpt
   const folds = charts.folds;
   const total = charts.test_trades_total;
   const minimum = charts.forward_minimum;
-  const short = total !== null && minimum !== null && total < minimum;
+  // Only a finished verdict's total is judged against the minimum.
+  const short = !charts.in_progress && total !== null && minimum !== null && total < minimum;
   return {
     grid: [
       { left: 40, right: '34%', top: 20, bottom: 28 },
@@ -480,7 +499,7 @@ function activityOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpt
             { label: 'Forward minimum', values: [minimum === null ? NOT_RECORDED : String(minimum)] },
           ];
           const note = 'The verdict counts the winners’ test trades over completed folds and needs at least the minimum across all forward tests; no fold has a minimum of its own.';
-          return tooltipHtml({ title: ALL_FOLDS, columns: ['Count'], rows, notes: [note, OUT_OF_SAMPLE] }, theme);
+          return tooltipHtml({ title: charts.in_progress ? `${ALL_FOLDS} so far` : ALL_FOLDS, columns: ['Count'], rows, notes: [...(charts.in_progress ? [IN_PROGRESS] : []), note, OUT_OF_SAMPLE] }, theme);
         }
         const fold = folds[dataIndexOf(params) ?? -1];
         if (fold === undefined) return '';
@@ -520,7 +539,7 @@ function activityOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpt
         data: [total ?? '-'],
         barMaxWidth: 28,
         itemStyle: { color: short ? theme.loss : theme.candidates.all_period },
-        label: { show: total !== null, position: 'top', color: theme.text, fontSize: 11, formatter: () => (short ? `${total} · below the minimum` : String(total)) },
+        label: { show: total !== null, position: 'top', color: theme.text, fontSize: 11, formatter: () => (short ? `${total} · below the minimum` : charts.in_progress ? `${total} so far` : String(total)) },
         emphasis: { focus: 'series', blurScope: 'global' },
         ...(minimum === null
           ? {}

@@ -78,6 +78,8 @@ async def test_configured_frequency_survives_lock_selection_views_and_final_test
     assert windows["development"]["minimum_trades"] == 24
     assert windows["final"]["minimum_trades"] == 9
     assert all(fold["status"] == "completed" for fold in detail["results"]["validation"]["folds"])
+    # A frequency plan's forward minimum is the one the receipt froze for all forward tests.
+    assert (await service.test_over_time_charts(row.id))["forward_minimum"] == windows["forward"]["minimum_trades"]
     row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
     check = next(item for item in row.results["exam"]["checks"] if item["code"] == "SAMPLE_FLOOR")

@@ -195,7 +195,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Read each row as one fold: the grey bar is its training window, the coloured bar the test window right after it.', target: { kind: 'series', group: 'training' } },
       { text: 'The test windows follow one another in time, so together they cover a stretch the procedure never trained on before choosing.', target: { kind: 'series', group: 'test' } },
-      { text: 'A red test bar is a fold that failed; hover it for the reason. A grey one has not run yet.', target: null },
+      { text: 'A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet.', target: null },
       { text: 'Hover a fold for its windows, both Sharpes, its retention, test return and trades.', target: null },
     ],
   },
