@@ -1720,6 +1720,8 @@ async def _submit_reducing_order(
         # fence. With no read port nothing is read, and the rule refuses: a
         # Flatten never goes to a real broker unchecked (#2839).
         account = None if read is None else await broker.observe_open_orders_then_positions(read)
+        # Its own order is looked for among the open orders first, whatever
+        # the positions read after them answered (#2839).
         if account_lists_order(account, client_order_id=reducing.client_order_id):
             await run(
                 lambda: _retain_flatten_already_at_broker(
