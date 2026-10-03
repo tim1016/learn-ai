@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -928,6 +929,19 @@ async def read_sqlite_catalog_from_facade(
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
+def _attestation_digest(request: PanelActionRequest) -> str | None:
+    """What a replay of ``request`` under its idempotency key must say again (#2854).
+
+    The operator's attestation decides what a settlement does, so the key is
+    bound to it: the same key with another attestation is another request,
+    refused as a conflict, never answered with the first one's receipt.
+    ``None`` for every request that carries none.
+    """
+    if request.attestation is None:
+        return None
+    return hashlib.sha256(request.attestation.model_dump_json().encode("utf-8")).hexdigest()
+
+
 async def execute_sqlite_panel_action(
     broker: str,
     account_id: str,
@@ -965,7 +979,10 @@ async def execute_sqlite_panel_action(
     # revision fence accidentally doubled as its double-execution guard.
     ledger = store if store is not None else get_idempotency_store()
     record = await ledger.reserve_or_get(
-        strategy_instance_id, request.action_id, request.idempotency_key
+        strategy_instance_id,
+        request.action_id,
+        request.idempotency_key,
+        request_digest=_attestation_digest(request),
     )
     if record is not None:
         if record.state == "succeeded" and record.result is not None:

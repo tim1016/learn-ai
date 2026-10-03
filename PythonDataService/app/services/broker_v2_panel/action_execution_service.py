@@ -72,6 +72,12 @@ class ActionNotAvailableError(ActionExecutionError):
     http_status = 409
 
 
+class IdempotencyKeyConflictError(ActionExecutionError):
+    """The idempotency key was first used for a request that said something else (409)."""
+
+    http_status = 409
+
+
 class UnknownActionError(ActionExecutionError):
     """The action id is outside the closed set (422). Should not occur post-validation."""
 
@@ -384,6 +390,9 @@ class IdempotencyRecord:
     state: Literal["in_flight", "succeeded", "failed"]
     result: PanelActionReceipt | None = None
     error_detail: str | None = None
+    # A digest of what the request said beyond its action, for a request
+    # whose content decides what it does (#2854). ``None`` for every other.
+    request_digest: str | None = None
     _event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -405,21 +414,37 @@ class IdempotencyStore:
         self._records: dict[tuple[str, str, str], IdempotencyRecord] = {}
         self._wait_timeout_s = wait_timeout_s
 
-    async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
+    async def reserve_or_get(
+        self, sid: str, action_id: str, key: str, *, request_digest: str | None = None
+    ) -> IdempotencyRecord | None:
         """Reserve key for new execution, returning None; or return existing record.
 
         If None: key is new, caller should execute and then call complete() or fail().
         If record with state in_flight: waits (up to 5 s) for the first
             execution to finish, then returns the resolved record.
         If record with state succeeded/failed: returns immediately.
+
+        ``request_digest`` binds the key to what the request said (#2854). A
+        key is a replay only of the request it was first sent with: the same
+        key carrying another digest raises
+        :class:`IdempotencyKeyConflictError`, having reserved and changed
+        nothing, instead of answering with the first request's receipt.
         """
         compound = (sid, action_id, key)
         async with self._lock:
             existing = self._records.get(compound)
             if existing is None:
-                record = IdempotencyRecord(state="in_flight")
+                record = IdempotencyRecord(state="in_flight", request_digest=request_digest)
                 self._records[compound] = record
                 return None
+            if existing.request_digest != request_digest:
+                raise IdempotencyKeyConflictError(
+                    "This idempotency key was already used for a different request.",
+                    detail=(
+                        "The request first sent under this key said something else. Nothing "
+                        "was changed. Send this request under a new key."
+                    ),
+                )
             if existing.state != "in_flight":
                 return existing
             # in_flight — capture the event to wait on outside the lock
@@ -513,7 +538,9 @@ class DurableIdempotencyStore(IdempotencyStore):
                 # A retired action's receipt decodes as history; a request can
                 # never name that action again, so it is never dispatched.
                 result = PanelActionReceipt.model_validate(result_payload)
-                records[(sid, action_id, key)] = IdempotencyRecord(state="succeeded", result=result)
+                records[(sid, action_id, key)] = IdempotencyRecord(
+                    state="succeeded", result=result, request_digest=payload.get("request_digest")
+                )
             else:
                 records[(sid, action_id, key)] = IdempotencyRecord(
                     state="failed",
@@ -522,6 +549,7 @@ class DurableIdempotencyStore(IdempotencyStore):
                         or "The prior command did not finish with a durable receipt. "
                         "Inspect Clerk evidence before issuing a new command."
                     ),
+                    request_digest=payload.get("request_digest"),
                 )
         self._records.update(records)
         self._loaded = True
@@ -535,6 +563,9 @@ class DurableIdempotencyStore(IdempotencyStore):
                 "state": record.state,
                 "result": record.result.model_dump() if record.result is not None else None,
                 "error_detail": record.error_detail,
+                # Written only for a request that has one, so every other
+                # record is stored exactly as before.
+                **({} if record.request_digest is None else {"request_digest": record.request_digest}),
             }
         descriptor, temporary = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent, text=True)
         try:
@@ -547,9 +578,11 @@ class DurableIdempotencyStore(IdempotencyStore):
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
+    async def reserve_or_get(
+        self, sid: str, action_id: str, key: str, *, request_digest: str | None = None
+    ) -> IdempotencyRecord | None:
         self._load()
-        record = await super().reserve_or_get(sid, action_id, key)
+        record = await super().reserve_or_get(sid, action_id, key, request_digest=request_digest)
         if record is None:
             self._persist()
         return record

@@ -27,6 +27,8 @@ from app.schemas.alpaca_clerk_sqlite import UnknownOrderAttestationRequest
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult, PanelQuiesceActionRequest
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
+    DurableIdempotencyStore,
+    IdempotencyKeyConflictError,
     IdempotencyStore,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import _catalog_row_action, _recovery_cure
@@ -126,6 +128,41 @@ async def test_the_panel_settles_the_order_as_its_operator_and_a_repost_does_not
     assert len(alpaca.sent) == 1, "settling sends nothing"
 
 
+async def test_a_key_sent_again_with_another_attestation_is_a_conflict_not_the_first_receipt(
+    lost_closing_order, tmp_path: Path
+) -> None:
+    """The key that settled "no such order" is posted again saying "it is this Alpaca order".
+
+    That is not a replay of the first request. It is refused as a conflict:
+    the first receipt is not handed back for something the operator did not
+    say, Alpaca is not read and nothing is written. The same attestation
+    under the same key still replays -- from the ledger file too, as after a
+    restart.
+    """
+    repo, alpaca, facade = lost_closing_order
+    receipts = tmp_path / "panel_action_receipts.json"
+    store = DurableIdempotencyStore(receipts, wait_timeout_s=0)
+    absent = UnknownOrderAttestationRequest(kind="absent")
+    exists = UnknownOrderAttestationRequest(kind="exists", broker_order_id=settling.NO_SUCH_ORDER_ID)
+    first = await _run_from_the_panel(repo, facade, store, attestation=absent, idempotency_key="settle-1")
+    ledger = repo.custody_transitions()
+    alpaca.reads.clear()
+
+    for ledger_as_read in (store, DurableIdempotencyStore(receipts, wait_timeout_s=0)):
+        with pytest.raises(IdempotencyKeyConflictError, match="already used for a different request"):
+            await _run_from_the_panel(
+                repo, facade, ledger_as_read, attestation=exists, idempotency_key="settle-1"
+            )
+        again = await _run_from_the_panel(
+            repo, facade, ledger_as_read, attestation=absent, idempotency_key="settle-1"
+        )
+        assert first is not None and again is not None
+        assert (again.applied, again.receipt_id) == (False, first.receipt_id)
+
+    assert repo.custody_transitions() == ledger and alpaca.reads == []
+    assert len(alpaca.sent) == 1
+
+
 async def test_a_settle_posted_without_saying_what_alpaca_shows_is_refused_and_writes_nothing(
     lost_closing_order,
 ) -> None:
@@ -203,8 +240,17 @@ async def test_the_quiesce_route_carries_the_attestation_and_acts_as_the_configu
         )
         named = await client.post(route, json={**body, "attestation": exists, "operator_identity": "x"})
 
+        async def the_key_was_used_for_another_request(*_args: object, **_kwargs: object) -> PanelActionResult:
+            raise IdempotencyKeyConflictError("This idempotency key was already used for a different request.")
+
+        monkeypatch.setattr(broker_v2_panel.ds, "run_action", the_key_was_used_for_another_request)
+        conflicting = await client.post(route, json={**body, "attestation": {"kind": "absent"}})
+
     assert settled.status_code == 200, settled.text
     assert (on_another_action.status_code, named.status_code) == (422, 422)
+    assert conflicting.status_code == 409, conflicting.text
+    assert conflicting.json()["detail"]["outcome"] == "conflict"
+    assert "already used for a different request" in conflicting.json()["detail"]["message"]
     ((request, operator),) = seen
     assert isinstance(request, PanelQuiesceActionRequest)
     assert request.attestation == UnknownOrderAttestationRequest(**exists)
