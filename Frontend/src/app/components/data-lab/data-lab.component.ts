@@ -289,9 +289,14 @@ export class DataLabComponent {
   readonly pickerAdjustmentMode = computed<PriceAdjustmentMode>(() =>
     this.store.draft().adjusted ? DEFAULT_ADJUSTMENT_MODE : 'raw',
   );
-  /** The draft window's dates; empty while the draft has no window, which is ms 0, not 1970. */
-  readonly draftFromIso = computed(() => isoOrEmpty(this.store.draft().window.startMsUtc));
-  readonly draftToIso = computed(() => isoOrEmpty(this.store.draft().window.endMsUtc));
+  /**
+   * The dates the picker holds for the draft window; empty while the draft
+   * has no window, which is ms 0, not 1970. The picker empties a date it
+   * cannot use, and a replaced window (a saved setup, a preset) puts both
+   * dates back in the fields, even one that is the same day as before.
+   */
+  readonly draftFromIso = linkedSignal({ source: () => this.store.draft().window, computation: (held) => isoOrEmpty(held.startMsUtc) });
+  readonly draftToIso = linkedSignal({ source: () => this.store.draft().window, computation: (held) => isoOrEmpty(held.endMsUtc) });
   /**
    * Data Lab charts the session still forming and takes any calendar day, so
    * its dates run from the provider's oldest day with no last day, and need
@@ -331,7 +336,8 @@ export class DataLabComponent {
   /** The picker's dates into the draft window: string dates become int64 ms here and nowhere else. */
   onDatesChanged(dates: { readonly from: string; readonly to: string }): void {
     this.datesUnusable.set(dates.from === '' || dates.to === '');
-    if (dates.from === this.draftFromIso() && dates.to === this.draftToIso()) return;
+    const held = this.store.draft().window;
+    if (dates.from === isoOrEmpty(held.startMsUtc) && dates.to === isoOrEmpty(held.endMsUtc)) return;
     const start = parseYmdMsUtc(dates.from);
     const end = parseYmdMsUtc(dates.to);
     if (start === null || end === null) return;

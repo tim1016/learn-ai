@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, input, model, output, signal, untracked, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, input, linkedSignal, model, output, untracked, viewChild } from '@angular/core';
 import type { FormValueControl } from '@angular/forms/signals';
 import { Popover } from 'primeng/popover';
 
@@ -59,11 +59,12 @@ export class DateFieldComponent implements FormValueControl<string> {
   protected readonly noteId = `date-field-note-${nextNoteId++}`;
   private emitted: string | null = null;
   private readonly field = viewChild.required<ElementRef<HTMLInputElement>>('field');
+  private readonly opener = viewChild.required<ElementRef<HTMLButtonElement>>('opener');
   private readonly popover = viewChild(Popover);
 
   protected readonly text = fieldText(this.value, () => this.emitted);
-  /** Whether the in-place calendar is open. */
-  protected readonly open = signal(false);
+  /** Whether the in-place calendar is open. A field that is disabled, or enabled again, starts with it closed. */
+  protected readonly open = linkedSignal({ source: this.disabled, computation: () => false });
   protected readonly entry = computed(() => checkDate(this.text(), { bounds: UNBOUNDED, sessions: null }));
   protected readonly calendarBounds = computed<DateBounds>(() => ({ ...UNBOUNDED, min: this.pickFrom() }));
   protected readonly problem = computed(() => (this.disabled() ? null : (this.entry().problem ?? this.hostProblem())));
@@ -94,10 +95,22 @@ export class DateFieldComponent implements FormValueControl<string> {
     else this.popover()?.toggle(event, anchor);
   }
 
-  protected pick(date: IsoDate): void {
-    this.apply(date);
+  /** Puts the calendar away, e.g. when the host that shows this field closes. */
+  closeCalendar(): void {
     this.open.set(false);
     this.popover()?.hide();
+  }
+
+  protected pick(date: IsoDate): void {
+    if (this.disabled()) return;
+    this.apply(date);
+    this.dismissCalendar();
+  }
+
+  /** Puts the calendar away and hands the keyboard back to the button that opened it. */
+  protected dismissCalendar(): void {
+    this.closeCalendar();
+    this.opener().nativeElement.focus();
   }
 
   private handOver(): void {

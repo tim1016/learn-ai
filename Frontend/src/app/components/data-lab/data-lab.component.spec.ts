@@ -282,19 +282,38 @@ describe('DataLabComponent (shell)', () => {
     expect([store.draft().timespan, store.draft().multiplier]).toEqual(['minute', 30]);
   });
 
-  it('lets Apply scope through again when a saved window replaces dates the field had refused (#2858)', async () => {
+  it('shows a saved window over dates the field had refused, and lets Apply scope through again (#2858)', async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
     fixture.detectChanges();
     const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
-    fireEvent.change(screen.getByRole('textbox', { name: 'End date' }), { target: { value: '2026-05' } });
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    fireEvent.change(end, { target: { value: '2026-05' } });
     await fixture.whenStable();
     expect(apply.disabled).toBe(true);
 
+    // The saved window ends on the day the draft already ended on.
     store.patchDraft({ window: { startMsUtc: preset1D.start_ms_utc, endMsUtc: preset1D.end_ms_utc } });
     await fixture.whenStable();
 
     expect(apply.disabled).toBe(false);
+    expect([end.value, end.getAttribute('aria-invalid')]).toEqual(['2026-09-11', 'false']);
+  });
+
+  it('shows a clicked quick range over an end date the field had refused (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset1D.start_ms_utc, endMsUtc: preset1D.end_ms_utc } });
+    fixture.detectChanges();
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    fireEvent.change(end, { target: { value: 'junk' } });
+    await fixture.whenStable();
+
+    // Every preset ends on the same day, so the end date itself does not change.
+    await userEvent.click(screen.getByRole('button', { name: '6M' }));
+    await fixture.whenStable();
+
+    expect([end.value, end.getAttribute('aria-invalid')]).toEqual(['2026-09-11', 'false']);
+    expect(store.committedWindow()).toEqual({ startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc });
   });
 
   it('applies a preset verbatim: server window committed, chart refresh requested', async () => {

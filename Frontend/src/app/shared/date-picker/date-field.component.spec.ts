@@ -1,4 +1,5 @@
 import { Component, signal } from '@angular/core';
+import { By } from '@angular/platform-browser';
 import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
@@ -140,6 +141,41 @@ describe('DateFieldComponent', () => {
 
     expect(host.value()).toBe('2022-11-15');
     expect(screen.queryByRole('group', { name: 'Calendar' })).toBeNull();
+    // The keyboard goes back to the button that opened it, not to the page.
+    expect(document.activeElement).toBe(open);
+  });
+
+  it('puts its in-place calendar away on Escape, when it is disabled, and when its host says so', async () => {
+    const { view, host, day } = await renderField();
+    host.calendar.set('inline');
+    await view.fixture.whenStable();
+    const open = screen.getByRole('button', { name: 'Open the calendar' });
+    const calendar = (): HTMLElement | null => screen.queryByRole('group', { name: 'Calendar' });
+    const reopen = async (): Promise<HTMLElement> => {
+      await userEvent.click(open);
+      await view.fixture.whenStable();
+      return screen.getByRole('group', { name: 'Calendar' });
+    };
+
+    day(await reopen(), '2022-11-15').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await view.fixture.whenStable();
+    expect(calendar()).toBeNull();
+    expect(document.activeElement).toBe(open);
+
+    await reopen();
+    host.disabled.set(true);
+    await view.fixture.whenStable();
+    expect(calendar()).toBeNull();
+    // Enabled again, it stays closed: nothing could have closed it while its button was disabled.
+    host.disabled.set(false);
+    await view.fixture.whenStable();
+    expect(calendar()).toBeNull();
+
+    await reopen();
+    view.fixture.debugElement.query(By.directive(DateFieldComponent)).componentInstance.closeCalendar();
+    await view.fixture.whenStable();
+    expect(calendar()).toBeNull();
+    expect(host.value()).toBe('2022-11-01');
   });
 
   it('checks nothing and hands nothing back while disabled, and says when it has been left', async () => {
