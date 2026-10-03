@@ -11,6 +11,13 @@ import { TradingSessions, type TradingCalendarWindow } from './trading-sessions'
 /** The first day the calendar is read for: older than any bar the provider serves. */
 const CALENDAR_FROM: IsoDate = '2000-01-01';
 
+/**
+ * The longest the clock goes unread while a close is awaited. A browser timer
+ * does not count the time a machine sleeps, so one timer set for the close
+ * itself would fire hours late on a laptop that slept overnight.
+ */
+const CLOSE_WATCH_MS = 60_000;
+
 type CalendarRead = { readonly kind: 'ok'; readonly sessions: TradingSessions } | { readonly kind: 'failed'; readonly message: string };
 
 /**
@@ -26,7 +33,7 @@ export class TradingCalendarService {
   private opened: ResourceRef<CalendarRead | undefined> | null = null;
   /** Bumped each time a session closes, so what depends on the clock is worked out again. */
   private readonly closes = signal(0);
-  private nextClose: ReturnType<typeof setTimeout> | null = null;
+  private closeWatch: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * The one read, started by the first picker that asks. A date field that
@@ -77,21 +84,27 @@ export class TradingCalendarService {
         }),
       );
       const sessions = new TradingSessions(window, CALENDAR_FROM, through);
-      this.wakeAtNextClose(sessions);
+      this.watchForClose(sessions);
       return { kind: 'ok', sessions };
     } catch (error) {
       return { kind: 'failed', message: classifyDataLakeError(error).message };
     }
   }
 
-  /** Arms one timer for the next scheduled close; when it fires, the close is counted and the next one armed. */
-  private wakeAtNextClose(sessions: TradingSessions): void {
-    if (this.nextClose !== null) clearTimeout(this.nextClose);
-    const close = sessions.nextCloseAfter(this.nowMs());
+  /** Counts each scheduled close as the clock passes it, reading the clock at most ``CLOSE_WATCH_MS`` apart. */
+  private watchForClose(sessions: TradingSessions, close: number | null = sessions.nextCloseAfter(this.nowMs())): void {
+    if (this.closeWatch !== null) clearTimeout(this.closeWatch);
     if (close === null) return;
-    this.nextClose = setTimeout(() => {
-      this.closes.update((count) => count + 1);
-      this.wakeAtNextClose(sessions);
-    }, close - this.nowMs());
+    this.closeWatch = setTimeout(
+      () => {
+        if (this.nowMs() < close) {
+          this.watchForClose(sessions, close);
+          return;
+        }
+        this.closes.update((count) => count + 1);
+        this.watchForClose(sessions);
+      },
+      Math.min(close - this.nowMs(), CLOSE_WATCH_MS),
+    );
   }
 }
