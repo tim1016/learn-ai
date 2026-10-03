@@ -2,7 +2,9 @@ import { TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { DataLakeService } from '../data-lake';
-import type { DataLakeRead, PriceAdjustmentMode, StorageSummaryResponse } from '../data-lake';
+import type { CoverageResponse, CoverageStatus, DataLakeRead, PriceAdjustmentMode, StorageSummaryResponse } from '../data-lake';
+import { heldBounds } from '../date-picker';
+import { HeldGapsService } from './held-gaps.service';
 import { TickerCatalogService } from './ticker-catalog.service';
 
 /** 2024-08-06 and 2026-09-04, both 09:30 ET — the anchor a trading date carries. */
@@ -143,6 +145,41 @@ describe('TickerCatalogService', () => {
   // Strategy Lab sends `adjusted: false` when the engine is `both`, which
   // resolves the raw tree. Pinning the pool to the split-adjusted default
   // would offer a symbol that run then refuses for missing sessions.
+  it("reads a held span's gaps again when the tree's holdings are read again, so a backfilled gap goes (#2858)", async () => {
+    let status: CoverageStatus = 'missing';
+    const coverage = async (): Promise<DataLakeRead<CoverageResponse>> => ({
+      kind: 'ok',
+      value: {
+        market: 'usa',
+        symbol: 'SPY',
+        data_type: 'trade',
+        resolution: 'minute',
+        provider: 'polygon',
+        price_adjustment_mode: 'raw',
+        days: [{ trading_date_ms: AUG_2024, status, artifact_id: null }],
+      },
+    });
+    TestBed.configureTestingModule({
+      providers: [{ provide: DataLakeService, useValue: { storageSummary: async () => summary([]), coverage } }],
+    });
+    const gaps = TestBed.inject(HeldGapsService);
+    const span = heldBounds('SPY', '2024-08-06', '2024-08-06');
+    const unheld = async (): Promise<number | undefined> => {
+      TestBed.tick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      TestBed.tick();
+      return gaps.gapsFor('raw', 'SPY', span, 'minute')?.unheld.size;
+    };
+    gaps.gapsFor('raw', 'SPY', span, 'minute');
+    expect(await unheld()).toBe(1);
+
+    // The backfill leaves the span's first and last day where they were.
+    status = 'complete';
+    TestBed.inject(TickerCatalogService).viewFor('raw').reload();
+
+    expect(await unheld()).toBe(0);
+  });
+
   it('reads each tree separately and caches per mode', async () => {
     TestBed.resetTestingModule();
     asked.length = 0;

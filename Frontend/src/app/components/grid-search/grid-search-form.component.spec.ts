@@ -134,7 +134,7 @@ describe('GridSearchFormComponent', () => {
     });
 
     await waitFor(() => expect(screen.getByText(/sessions, 2 not held/)).not.toBeNull());
-    expect(gapsFor).toHaveBeenCalledWith('polygon_split_adjusted', 'SPY', expect.objectContaining({ min: '2024-01-02', max: '2026-09-18' }));
+    expect(gapsFor).toHaveBeenCalledWith('polygon_split_adjusted', 'SPY', expect.objectContaining({ min: '2024-01-02', max: '2026-09-18' }), 'minute');
   });
 
   it('opens on as many whole months as a short history holds, and does not reopen a window the operator emptied (#2858)', async () => {

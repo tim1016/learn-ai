@@ -381,7 +381,8 @@ describe("StrategyLab configuration and runner", () => {
 
     expect(config.dateBounds()).toEqual(heldBounds("SPY", "2024-01-02", "2026-09-18"));
     expect(config.dateGaps()).toEqual(GAPS);
-    expect(gapsFor).toHaveBeenCalledWith("polygon_split_adjusted", "SPY", heldBounds("SPY", "2024-01-02", "2026-09-18"));
+    // The run's resolution goes with the ask: the gaps are those of the minute bars.
+    expect(gapsFor).toHaveBeenCalledWith("polygon_split_adjusted", "SPY", heldBounds("SPY", "2024-01-02", "2026-09-18"), "minute");
   });
 
   it("keeps a launch warning when the picker refuses a date, and clears it when the operator changes the range", () => {

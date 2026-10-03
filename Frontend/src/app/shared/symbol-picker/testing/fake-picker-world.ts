@@ -70,7 +70,7 @@ export function fakePickerWorld(
       provideFakeEnsureCoverage(coverage),
       ...provideFakeDateWorld(),
       // No gaps are known unless a spec provides its own: the real service reads the coverage endpoint.
-      { provide: HeldGapsService, useValue: { gapsFor: () => null } },
+      { provide: HeldGapsService, useValue: { gapsFor: () => null, reload: () => undefined } },
     ],
   };
 }

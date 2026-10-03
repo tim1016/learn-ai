@@ -225,7 +225,7 @@ export class StrategyLabConfigStore {
    */
   readonly dateGaps = computed<DataGaps | null>(() => {
     if (!this.readsLake() || this.autoFetch()) return null;
-    return this.heldGaps.gapsFor(this.adjustmentMode(), this.effectiveSymbol(), this.dateBounds());
+    return this.heldGaps.gapsFor(this.adjustmentMode(), this.effectiveSymbol(), this.dateBounds(), this.resolution());
   });
 
   /** A date field holds no usable date: the picker hands over an empty one until it does. */

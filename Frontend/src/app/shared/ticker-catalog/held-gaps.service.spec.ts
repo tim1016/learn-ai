@@ -32,11 +32,14 @@ async function gapsFor(answer: (query: CoverageQuery) => DataLakeRead<CoverageRe
   TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
   const service = TestBed.inject(HeldGapsService);
   const bounds = heldBounds('QQQ', first, last);
-  const before = service.gapsFor('polygon_split_adjusted', 'QQQ', bounds);
-  TestBed.tick();
-  await TestBed.inject(ApplicationRef).whenStable();
-  const after: DataGaps | null = service.gapsFor('polygon_split_adjusted', 'QQQ', bounds);
-  return { before, after, asked };
+  const settled = async (): Promise<DataGaps | null> => {
+    TestBed.tick();
+    await TestBed.inject(ApplicationRef).whenStable();
+    return service.gapsFor('polygon_split_adjusted', 'QQQ', bounds, 'minute');
+  };
+  const before = service.gapsFor('polygon_split_adjusted', 'QQQ', bounds, 'minute');
+  const after = await settled();
+  return { before, after, asked, service, settled };
 }
 
 describe('HeldGapsService', () => {
@@ -72,7 +75,33 @@ describe('HeldGapsService', () => {
     const read = vi.fn();
     TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
 
-    expect(TestBed.inject(HeldGapsService).gapsFor('raw', 'QQQ', heldBounds('QQQ', null, null))).toBeNull();
+    expect(TestBed.inject(HeldGapsService).gapsFor('raw', 'QQQ', heldBounds('QQQ', null, null), 'minute')).toBeNull();
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it('tells a daily run nothing: the endpoint reports minute bars, and a daily run reads the daily history', () => {
+    const read = vi.fn();
+    TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
+
+    expect(TestBed.inject(HeldGapsService).gapsFor('raw', 'QQQ', heldBounds('QQQ', '2026-09-14', '2026-09-18'), 'daily')).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("reads a tree's gaps again when its holdings were read again: a filled gap goes, and a failed read is retried", async () => {
+    let answer: DataLakeRead<CoverageResponse> = { kind: 'unavailable', message: 'The data plane did not respond.' };
+    const { after, asked, service, settled } = await gapsFor(() => answer, '2026-09-14', '2026-09-18');
+    expect(after?.problem).toBe('The data plane did not respond.');
+
+    answer = coverage({ '2026-09-15': 'missing' });
+    service.reload('polygon_split_adjusted');
+    expect(await settled()).toEqual({ unheld: new Set(['2026-09-15']), problem: null });
+
+    // A backfill fills the gap; the span's first and last day are the same as before.
+    answer = coverage({ '2026-09-15': 'complete' });
+    service.reload('raw');
+    expect((await settled())?.unheld.size).toBe(1);
+    service.reload('polygon_split_adjusted');
+    expect(await settled()).toEqual({ unheld: new Set(), problem: null });
+    expect(asked).toHaveLength(3);
   });
 });

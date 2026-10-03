@@ -113,7 +113,7 @@ export class GridSearchSpecEditorComponent {
 
   /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
   protected readonly gaps = computed<DataGaps | null>(() =>
-    this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.symbol().trim().toUpperCase(), this.bounds()),
+    this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.symbol().trim().toUpperCase(), this.bounds(), this.resolution()),
   );
 
   private debounce: ReturnType<typeof setTimeout> | null = null;
