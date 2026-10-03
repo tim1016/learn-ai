@@ -1107,6 +1107,7 @@ def fold_uncertain(
     order_ref: str,
     why: str,
     transition_kind: str = "ORDER_SUBMIT_UNCERTAIN",
+    answered_as_client_order_id: str | None = None,
 ) -> None:
     """A lost/timed-out broker response — never a terminal outcome (R4).
 
@@ -1115,10 +1116,16 @@ def fold_uncertain(
     same fold semantics (effect/command move to ``unknown``, no receipt),
     a distinct name for audit-trail honesty about which broker call was
     actually attempted.
+
+    ``answered_as_client_order_id`` is the other client order id a submit was
+    answered under, when it was (#2845); recorded on the facts, it keeps the
+    order from ever being sent again on the Clerk's own initiative.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
-    facts = OrderSubmitUncertainFacts(why=why)
+    facts = OrderSubmitUncertainFacts(
+        why=why, answered_as_client_order_id=answered_as_client_order_id
+    )
     repo.append_transition(
         TransitionInput(
             strategy_instance_id=effect.strategy_instance_id,

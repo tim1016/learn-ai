@@ -15,9 +15,14 @@ Alpaca and not yet show, and sending it again inside the wait risks a second
 sale.
 
 An order sent again may also have been at Alpaca all along, shown by no read.
-Alpaca then answers the second send as it answers any client order id it
-already has. That answer keeps custody; it never fails the EXIT, which would
-release the position to be sold again under a new id.
+Alpaca then refuses the second send: as it answers any client order id it
+already has, or because the first order holds the shares. No refusal of a
+send made again fails the EXIT, which would release the position to be sold
+again under a new id; custody is kept and the same id goes out again.
+
+A send Alpaca answers with an order under another client order id is never
+sent again: the order may be at Alpaca under that other identity, and the
+same id cannot guard a second send against it.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.exit_resolution import flatten_send_refusal
+from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts, OrderSubmitUncertainFacts
 from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_BROKER
 from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
@@ -47,6 +53,8 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, BrokerPosition
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.utils.session_anchors import et_date_at_ms
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
@@ -71,6 +79,8 @@ WAIT_MS = submit_absence_grace_ms()
 RESEND_AFTER_MS = -(-WAIT_MS // SWEEP_INTERVAL_MS) * SWEEP_INTERVAL_MS
 # Five minutes of passes: what the reviewer who found #2845 drove, with the EXIT ``unknown`` throughout.
 FIVE_MINUTES_OF_PASSES = 300_000 // SWEEP_INTERVAL_MS
+# The broker order id of an order Alpaca answers a send with that is not under the client order id sent.
+ANOTHER_BROKER_ORDER_ID = "alpaca-another-order"
 
 
 @dataclass(frozen=True)
@@ -96,7 +106,14 @@ class _Refused:
 # ``tests/broker/alpaca/test_client.py`` pins the client against.
 ALPACA_HAS_THIS_CLIENT_ORDER_ID = _Refused(422, "client_order_id must be unique", code=40010001)
 
-type _SubmitFate = Literal["never_arrives", "arrives_unanswered"] | _Refused
+@dataclass(frozen=True)
+class _AnsweredAs:
+    """A submit Alpaca answers with an order that is not under the client order id sent: under another, or under none."""
+
+    client_order_id: str | None
+
+
+type _SubmitFate = Literal["never_arrives", "arrives_unanswered"] | _Refused | _AnsweredAs
 
 
 @dataclass(frozen=True)
@@ -118,6 +135,8 @@ class _Alpaca(_Account):
     - ``"arrives_unanswered"``: the request times out and Alpaca has the order,
       though nothing shows it until the test says so.
     - a :class:`_Refused`: Alpaca answers the request with that error and has no order.
+    - an :class:`_AnsweredAs`: Alpaca answers the request with an order under
+      that client order id, and no read shows an order under either id.
 
     The exact lookup answers a closing order only once Alpaca has it and shows
     it. Any entry it is asked about filled before its EXIT was decided, as
@@ -162,6 +181,10 @@ class _Alpaca(_Account):
         fate = self._fates.pop(0)
         if isinstance(fate, _Refused):
             raise fate.as_the_clerk_receives_it()
+        if isinstance(fate, _AnsweredAs):
+            return order.model_copy(
+                update={"client_order_id": fate.client_order_id, "order_id": ANOTHER_BROKER_ORDER_ID}
+            )
         if fate == "arrives_unanswered":
             self._has[client_order_id] = order
             self._unanswered.add(client_order_id)
@@ -192,6 +215,13 @@ class _Alpaca(_Account):
     def lists_among_its_open_orders(self, client_order_id: str) -> None:
         """The account's open orders now list the order; its exact lookup still answers absent."""
         self.open_orders.append(self._has[client_order_id])
+
+    def now_has(self, client_order_id: str) -> None:
+        """Alpaca has a working order under this id after all, and every read shows it."""
+        self._has[client_order_id] = safe_flatten._broker_order(
+            client_order_id, order_id=f"alpaca-{client_order_id}", status="new", side="sell", quantity=10.0,
+        )
+        self.shows(client_order_id)
 
     def shows(self, client_order_id: str) -> None:
         """Every read now shows the order Alpaca had all along."""
@@ -240,6 +270,23 @@ def _refused_by_the_broker(repo: ClerkSqliteRepository, effect_operation_id: str
         effect_operation_id=effect_operation_id, transition_kind="EXIT_NOT_FLAT"
     )
     return failed is not None and failed["summary_code"] == "ORDER_SUBMIT_FAILED"
+
+
+def _latest_unknown(repo: ClerkSqliteRepository, closing: OrderResource) -> OrderSubmitUncertainFacts:
+    """What the Clerk last recorded of why the closing order's outcome is unknown."""
+    row = repo.last_order_transition(order_ref=closing.order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN")
+    assert row is not None
+    return OrderSubmitUncertainFacts.from_facts_json(row["facts_json"])
+
+
+def _a_second_exit_is_refused(repo: ClerkSqliteRepository) -> None:
+    """The bot decides to exit again: the EXIT that holds custody of its entry is the only one there is."""
+    (entry,) = repo.entry_orders_for_strategy(SID)
+    with pytest.raises(UnknownEntryOrderError):
+        accept_exit(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-2",
+            lifecycle_run_id=RUN_ID, entry_order_ref=entry.order_ref,
+        )
 
 
 async def _the_stream_reports(repo: ClerkSqliteRepository, order: BrokerOrder, event: BrokerOrderEvent) -> None:
@@ -459,7 +506,6 @@ async def test_a_send_made_again_that_alpaca_answers_as_a_duplicate_keeps_custod
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
     exit_id = await _the_runner_sends_the_exit(repo, alpaca)
     closing = _closing_order(repo)
-    (entry,) = repo.entry_orders_for_strategy(SID)
     passes_until_sent_again = RESEND_AFTER_MS // SWEEP_INTERVAL_MS
 
     await _passes(repo, _the_sweep(repo, alpaca), passes_until_sent_again)
@@ -468,13 +514,8 @@ async def test_a_send_made_again_that_alpaca_answers_as_a_duplicate_keeps_custod
     assert _exit_state(repo, exit_id) == "unknown"
     assert repo.active_exit_for_strategy(SID) is not None
     assert _exit_not_flat(repo) is None
-    kept = repo.last_order_transition(order_ref=closing.order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN")
-    assert kept is not None and ALPACA_HAS_THIS_CLIENT_ORDER_ID.message in kept["facts_json"]
-    with pytest.raises(UnknownEntryOrderError):
-        accept_exit(
-            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-2",
-            lifecycle_run_id=RUN_ID, entry_order_ref=entry.order_ref,
-        )
+    assert ALPACA_HAS_THIS_CLIENT_ORDER_ID.message in _latest_unknown(repo, closing).why
+    _a_second_exit_is_refused(repo)
 
     # Long past the age at which the watchdog re-drives an EXIT that failed with the position open.
     await _passes(repo, _the_sweep(repo, alpaca), FIVE_MINUTES_OF_PASSES)
@@ -502,22 +543,6 @@ async def test_a_send_made_again_that_alpaca_answers_as_a_duplicate_keeps_custod
     assert {sent.client_order_id for sent in alpaca.sent} == {closing.client_order_id}
 
 
-async def test_a_send_made_again_that_alpaca_refuses_as_a_conflict_keeps_custody(
-    crashed_with_exposure,  # noqa: F811
-) -> None:
-    """A 409 on an order request is the Alpaca client's order conflict, a client order id in use among them."""
-    repo, clock = crashed_with_exposure
-    alpaca = _Alpaca(repo, clock, submits=("never_arrives", _Refused(409, "order conflict")))
-    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
-
-    await _passes(repo, _the_sweep(repo, alpaca), RESEND_AFTER_MS // SWEEP_INTERVAL_MS)
-
-    assert len(alpaca.sent) == 2
-    assert _exit_state(repo, exit_id) == "unknown"
-    assert repo.active_exit_for_strategy(SID) is not None
-    assert _exit_not_flat(repo) is None
-
-
 @pytest.mark.parametrize(
     "refused",
     [
@@ -527,40 +552,88 @@ async def test_a_send_made_again_that_alpaca_refuses_as_a_conflict_keeps_custody
         ),
         pytest.param(_Refused(401, "request is not authorized"), id="401-credentials"),
         pytest.param(_Refused(429, "rate limit exceeded"), id="429-throttled"),
+        pytest.param(_Refused(409, "order conflict"), id="409-conflict"),
     ],
 )
-async def test_a_send_made_again_that_alpaca_refuses_for_another_reason_fails_the_exit_as_before(
+async def test_a_send_made_again_that_alpaca_refuses_keeps_custody_whatever_the_refusal(
     crashed_with_exposure,  # noqa: F811
     refused: _Refused,
 ) -> None:
-    """A refusal of another kind is still folded as a refusal of the sale, as for a first send.
+    """No refusal of a send made again proves the lost send never arrived (#2845 review).
 
-    Alpaca will not place the order for this account, rejects the
-    credentials, or throttles the request: none is how it answers a client
-    order id it already has. The EXIT fails and releases the position, the
-    operator is told, and the watchdog re-drives it.
+    The first order may be working at Alpaca and shown by no read: Alpaca
+    refuses the second for shares the first one holds (403) as readily as for
+    its client order id. Folded as a refusal of the sale, the EXIT failed and
+    released the position, and the watchdog's re-drive or the bot's next exit
+    decision could sell it again under a new id. Whatever Alpaca answers, the
+    EXIT stays ``unknown`` with custody, the operator is not told the
+    position is free, no second exit is accepted, and only the one id is ever
+    sent: again a whole wait after each refusal, for as long as Alpaca
+    refuses, and accepted on the first send after it stops.
     """
     repo, clock = crashed_with_exposure
-    alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused))
+    refused_for_five_minutes = 1 + FIVE_MINUTES_OF_PASSES * SWEEP_INTERVAL_MS // RESEND_AFTER_MS
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", *[refused] * refused_for_five_minutes))
     exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+    closing = _closing_order(repo)
+    passes_until_sent_again = RESEND_AFTER_MS // SWEEP_INTERVAL_MS
 
-    await _passes(repo, _the_sweep(repo, alpaca), RESEND_AFTER_MS // SWEEP_INTERVAL_MS)
+    await _passes(repo, _the_sweep(repo, alpaca), passes_until_sent_again)
 
-    assert len(alpaca.sent) == 2
-    assert _exit_state(repo, exit_id) == "failed"
-    assert _refused_by_the_broker(repo, exit_id)
-    assert repo.active_exit_for_strategy(SID) is None
-    assert _exit_not_flat(repo) is not None
+    assert _sent_after_the_first_ms(alpaca) == [0, RESEND_AFTER_MS]
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None
+    assert _exit_not_flat(repo) is None
+    assert refused.message in _latest_unknown(repo, closing).why
+    _a_second_exit_is_refused(repo)
+
+    # Long past the age at which the watchdog re-drives an EXIT that failed with the position open.
+    await _passes(repo, _the_sweep(repo, alpaca), FIVE_MINUTES_OF_PASSES)
+
+    assert {sent.client_order_id for sent in alpaca.sent} == {closing.client_order_id}
+    last_pass_ms = (passes_until_sent_again + FIVE_MINUTES_OF_PASSES) * SWEEP_INTERVAL_MS
+    assert _sent_after_the_first_ms(alpaca) == list(range(0, last_pass_ms + 1, RESEND_AFTER_MS))
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None
+    assert _exit_not_flat(repo) is None
+
+    # Alpaca stops refusing: the same order goes out on the first send after, one wait on.
+    await _passes(repo, _the_sweep(repo, alpaca), passes_until_sent_again)
+
+    assert _sent_after_the_first_ms(alpaca)[-1] == last_pass_ms + RESEND_AFTER_MS
+    assert _exit_state(repo, exit_id) == "in_progress"
+
+    alpaca.fills(closing.client_order_id)
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+
+    assert _exit_state(repo, exit_id) == "succeeded"
+    assert repo.position(SID, "SPY") == 0
+    assert {sent.client_order_id for sent in alpaca.sent} == {closing.client_order_id}
 
 
-async def test_a_first_send_alpaca_answers_422_fails_the_exit_as_before(
+@pytest.mark.parametrize(
+    ("refused", "looked_for_an_opposite_order"),
+    [
+        pytest.param(_Refused(422, "extended hours order must be DAY limit orders"), False, id="422-invalid"),
+        pytest.param(
+            _Refused(403, "insufficient qty available for order (requested: 10, available: 0)"), True,
+            id="403-the-order-is-not-permitted",
+        ),
+    ],
+)
+async def test_a_first_send_alpaca_refuses_fails_the_exit_as_before(
     crashed_with_exposure,  # noqa: F811
+    refused: _Refused,
+    looked_for_an_opposite_order: bool,
 ) -> None:
-    """Nothing was sent before, so a 422 to the first send cannot be about an earlier one."""
+    """Nothing was sent before, so a refusal of the first send cannot be about an earlier one.
+
+    The EXIT fails and releases the position, the operator is told, and a
+    403's fold still records what the Clerk found open on the other side of
+    the symbol -- nothing, here -- which the watchdog's re-drive reads (#2622).
+    """
     repo, clock = crashed_with_exposure
-    alpaca = _Alpaca(
-        repo, clock, submits=(_Refused(422, "extended hours order must be DAY limit orders"),)
-    )
+    alpaca = _Alpaca(repo, clock, submits=(refused,))
 
     exit_id = await _the_runner_sends_the_exit(repo, alpaca)
 
@@ -568,6 +641,99 @@ async def test_a_first_send_alpaca_answers_422_fails_the_exit_as_before(
     assert _refused_by_the_broker(repo, exit_id)
     assert repo.active_exit_for_strategy(SID) is None
     assert _exit_not_flat(repo) is not None
+    failed = repo.first_effect_transition(effect_operation_id=exit_id, transition_kind="EXIT_NOT_FLAT")
+    assert failed is not None
+    opposite = OrderSubmitFailedFacts.from_facts_json(failed["facts_json"]).opposite_open_order_refs
+    assert opposite == ([] if looked_for_an_opposite_order else None)
+
+
+@pytest.mark.parametrize(
+    ("submits", "recorded_as", "named_as"),
+    [
+        pytest.param(
+            (_AnsweredAs("an-id-the-clerk-never-sent"),),
+            "an-id-the-clerk-never-sent", "'an-id-the-clerk-never-sent'", id="the-first-send",
+        ),
+        pytest.param(
+            ("never_arrives", _AnsweredAs("an-id-the-clerk-never-sent")),
+            "an-id-the-clerk-never-sent", "'an-id-the-clerk-never-sent'", id="the-send-made-again",
+        ),
+        pytest.param((_AnsweredAs(None),), "", "no client order id", id="an-answer-that-names-no-id"),
+    ],
+)
+async def test_a_send_alpaca_answers_under_another_client_order_id_is_never_sent_again(
+    crashed_with_exposure,  # noqa: F811
+    submits: tuple[_SubmitFate, ...],
+    recorded_as: str,
+    named_as: str,
+) -> None:
+    """Alpaca answers a send with an order that is not under the client order id the Clerk sent (#2845 review).
+
+    An order may be at Alpaca under another identity. The id the Clerk sent
+    reads absent, which for a lost answer is leave to send it again once the
+    wait has passed -- but the same id guards a second send only against
+    itself, and the two could both execute. So nothing is sent again, however
+    long the passes run: the EXIT stays ``unknown`` with custody, no second
+    exit is accepted, and the answer's broker order id is not taken as this
+    order's. The answer is recorded once on the order; every later pass says
+    which two ids it is about.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=submits)
+    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+    closing = _closing_order(repo)
+
+    await _passes(repo, _the_sweep(repo, alpaca), FIVE_MINUTES_OF_PASSES)
+
+    assert len(alpaca.sent) == len(submits)
+    assert {sent.client_order_id for sent in alpaca.sent} == {closing.client_order_id}
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None
+    assert _exit_not_flat(repo) is None
+    kept = repo.order(closing.order_ref)
+    assert kept is not None and kept.broker_order_id is None
+    told = _latest_unknown(repo, closing).why
+    assert repr(closing.client_order_id) in told and named_as in told
+    answers = [
+        OrderSubmitUncertainFacts.from_facts_json(row["facts_json"])
+        for row in repo.transitions_for_order(closing.order_ref)
+        if row["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+    ]
+    (answer,) = [facts for facts in answers if facts.answered_as_client_order_id is not None]
+    assert answer.answered_as_client_order_id == recorded_as
+    assert repr(ANOTHER_BROKER_ORDER_ID) in answer.why
+    _a_second_exit_is_refused(repo)
+
+    # The one way out there is: Alpaca shows an order under the id the Clerk sent, and it is folded as any other.
+    alpaca.now_has(closing.client_order_id)
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+
+    found = repo.order(closing.order_ref)
+    assert found is not None
+    assert (found.broker_order_id, found.broker_state) == (f"alpaca-{closing.client_order_id}", "new")
+    assert _exit_state(repo, exit_id) == "in_progress"
+    assert len(alpaca.sent) == len(submits)
+
+
+def test_an_unknown_outcomes_facts_omit_the_other_identity_so_every_ordinary_row_hashes_the_same() -> None:
+    """``answered_as_client_order_id`` joins the hash-chained facts only on an answer under another identity.
+
+    Every ``ORDER_SUBMIT_UNCERTAIN`` written before #2845's review -- and
+    every ordinary one after it -- re-serializes byte-identically, so no
+    sealed receipt moves; the marked answer reads back as it was written.
+    """
+    plain = OrderSubmitUncertainFacts(why="the submit timed out")
+    earlier_row = '{"why":"the submit timed out"}'
+    marked = OrderSubmitUncertainFacts(why="the submit timed out", answered_as_client_order_id="another-id")
+    names_none = OrderSubmitUncertainFacts(why="the submit timed out", answered_as_client_order_id="")
+
+    assert plain.to_facts_json() == earlier_row
+    assert OrderSubmitUncertainFacts.from_facts_json(earlier_row) == plain
+    assert marked.to_facts_json() == '{"answered_as_client_order_id":"another-id","why":"the submit timed out"}'
+    assert OrderSubmitUncertainFacts.from_facts_json(marked.to_facts_json()) == marked
+    # An answer that named no client order id is recorded as the empty string, and is still recorded.
+    assert names_none.to_facts_json() == '{"answered_as_client_order_id":"","why":"the submit timed out"}'
+    assert OrderSubmitUncertainFacts.from_facts_json(names_none.to_facts_json()) == names_none
 
 
 async def test_a_clock_stepped_back_while_a_send_was_awaited_does_not_shorten_the_wait(
@@ -807,3 +973,57 @@ async def test_a_flatten_whose_order_the_stream_reports_while_the_account_is_rea
     found = repo.order(closing.order_ref)
     assert found is not None and found.broker_order_id == at_alpaca.order_id
     assert repo.position(SID, "SPY") == left_in_the_account
+
+
+async def test_a_flatten_whose_order_the_stream_acknowledges_as_it_would_be_sent_again_after_the_close_keeps_custody(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Whether the order reached Alpaca is read again before the session rule, not after it.
+
+    An operator's Flatten is lost a minute before the regular close, and the
+    Clerk next drives it a minute after. The exact lookup reads the order
+    absent, and the stream acknowledges it while the account is read for the
+    send. A market order can no longer go out at that hour -- but this one is
+    not going out: it is at Alpaca. Judged by the session rule first, the
+    EXIT would fail as one whose order missed its session and release a
+    position its own order is selling. It keeps custody and reads in
+    progress instead.
+    """
+    repo, clock = crashed_with_exposure
+    close_ms = session_close_ms_utc(et_date_at_ms(clock()))
+    _walk_clock_to(repo, close_ms - 60_000)
+    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    await _flatten(facade, current_context)
+    exit_id = _flatten_exit(repo)
+    closing = _closing_order(repo)
+    assert _exit_state(repo, exit_id) == "unknown"
+    at_alpaca = safe_flatten._broker_order(
+        closing.client_order_id, order_id=f"alpaca-{closing.client_order_id}", status="new",
+        side="sell", quantity=10.0,
+    )
+
+    async def the_stream_acknowledges_the_order() -> None:
+        await _the_stream_reports(
+            repo, at_alpaca,
+            BrokerOrderEvent(event_type="new", occurred_at_ms=clock(), price=None, quantity=None),
+        )
+
+    alpaca.while_positions_are_read = the_stream_acknowledges_the_order
+    _walk_clock_to(repo, close_ms + 60_000)
+
+    # Driven as the sweep drives it, without the sweep's own account read
+    # first: the only account read is the one made for the send.
+    await resolve_exit(
+        repo, effect_operation_id=exit_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY, read=alpaca
+    )
+
+    assert alpaca.while_positions_are_read is None, "the account was never read for a send"
+    assert len(alpaca.sent) == 1
+    found = repo.order(closing.order_ref)
+    assert found is not None
+    assert (found.broker_order_id, found.broker_state) == (at_alpaca.order_id, "new")
+    assert _exit_state(repo, exit_id) == "in_progress"
+    assert repo.active_exit_for_strategy(SID) is not None
+    assert _exit_not_flat(repo) is None
+    assert repo.first_effect_transition(effect_operation_id=exit_id, transition_kind="EXIT_NOT_FLAT") is None
