@@ -24,7 +24,12 @@ from typing import Any
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
-from app.research.golden_search.concentration import concentration_curve
+from app.research.golden_search.concentration import (
+    NOT_MEASURED,
+    concentration_curve,
+    missing_curve,
+    stored_concentration,
+)
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
@@ -351,8 +356,7 @@ def evidence_view(
                 "stress": [stress_view(result, item["development_metrics"]) for result in item["stress"]],
                 "trades_per_year": trades_per_year(item["development_metrics"], years),
                 "stress_tally": stress_tally(item["stress"]),
-                # Absent from evidence recorded before the evidence stage measured it.
-                "concentration": item.get("concentration"),
+                "concentration": stored_concentration(item),
                 "edge_hits": list(item["edge_hits"]),
                 "guidance": candidate_guidance(
                     key=item["key"],
@@ -436,50 +440,42 @@ def qualification_view(row: StudyRow) -> dict[str, Any] | None:
 # ── Candidate detail ─────────────────────────────────────────────────────
 
 
-def run_detail(record: EvaluationRecord, *, commission_per_order: float | None = None) -> dict[str, Any]:
-    """One detail run's metrics and its daily series, with its concentration curve when ``commission_per_order`` is given."""
+def run_detail(record: EvaluationRecord) -> dict[str, Any]:
+    """One detail run's metrics and its daily series."""
     window = {"start_ms": record.window_start_ms, "end_ms": record.window_end_ms}
     detail = record.detail_json
-    metrics = metrics_of(record)
-    curve = None if commission_per_order is None else concentration_curve(metrics, detail, commission_per_order=commission_per_order)
     if detail is None:
-        return {
-            "window": window,
-            "metrics": metrics.as_dict(),
-            "cumulative_return": [],
-            "daily_equity": [],
-            "drawdown": [],
-            "monthly": [],
-            "trades": [],
-            "concentration_curve": curve,
-        }
+        return {"window": window, "metrics": metrics_of(record).as_dict(), "cumulative_return": [], "daily_equity": [], "drawdown": [], "monthly": [], "trades": []}
     capital = float(detail["initial_cash"])
     daily = [(int(ms), float(equity)) for ms, equity in detail["daily_equity"]]
     trades = list(detail["trades"])
     return {
         "window": window,
-        "metrics": metrics.as_dict(),
+        "metrics": metrics_of(record).as_dict(),
         "cumulative_return": [{"ms": ms, "value": equity / capital - 1.0} for ms, equity in daily],
         "daily_equity": [{"ms": ms, "equity": equity} for ms, equity in daily],
         "drawdown": [{"ms": ms, "drawdown": value} for ms, value in drawdown_series(daily)],
         "monthly": [month.as_dict() for month in monthly_results(daily, capital, [int(trade["exit_ms"]) for trade in trades])],
         "trades": trades,
-        "concentration_curve": curve,
     }
 
 
 def candidate_detail(
-    key: str,
-    point: Mapping[str, Any],
-    *,
-    development: EvaluationRecord | None,
-    exam: EvaluationRecord | None,
-    commission_per_order: float,
+    stored: Mapping[str, Any], *, development: EvaluationRecord | None, exam: EvaluationRecord | None, commission_per_order: float
 ) -> dict[str, Any]:
-    """The candidate's development run, with its concentration curve, and its final-test run."""
+    """The stored candidate's development run, with its concentration curve, and its final-test run."""
+    run = None
+    if development is not None:
+        # Held back with the stored measure for evidence recorded before the evidence stage measured it.
+        curve = (
+            concentration_curve(metrics_of(development), development.detail_json, commission_per_order=commission_per_order)
+            if "concentration" in stored
+            else missing_curve(NOT_MEASURED)
+        )
+        run = {**run_detail(development), "concentration_curve": curve}
     return {
-        "candidate_key": key,
-        "point": dict(point),
-        "development": None if development is None else run_detail(development, commission_per_order=commission_per_order),
-        "exam": None if exam is None else run_detail(exam),
+        "candidate_key": stored["key"],
+        "point": dict(stored["point"]),
+        "development": run,
+        "exam": None if exam is None else {**run_detail(exam), "concentration_curve": None},
     }

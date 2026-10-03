@@ -1,9 +1,9 @@
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { NOT_RECORDED, dataIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
+import { dataIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { percentText, signedUsdText } from './golden-search-display';
-import type { Concentration, ConcentrationCurve, EvidenceCandidate } from './golden-search.types';
+import { percentText, signedCentsText, signedUsdText } from './golden-search-display';
+import type { ConcentrationCurve, EvidenceCandidate, MeasuredConcentration } from './golden-search.types';
 
 /**
  * The Compare evidence's concentration charts (#2821, #2815): the running
@@ -32,10 +32,11 @@ function tradesText(count: number): string {
 export function concentrationCurveSpec(candidate: EvidenceCandidate, curve: ConcentrationCurve): ChartSpec {
   const points = curve.points;
   const total = points.at(-1)?.trades ?? 0;
-  const best = points[curve.best_count];
+  const count = curve.best_count ?? 0;
+  const best = points[count];
   return {
     label: `${candidate.label} profit concentration`,
-    summary: `The best ${tradesText(curve.best_count)} of ${total} make ${percentText(best?.share_of_profit)} of its development net profit.`,
+    summary: `The best ${tradesText(count)} of ${total} make ${percentText(best?.share_of_profit)} of its development net profit.`,
     featured: candidate.key,
     option: (theme) => curveOption(candidate, curve, theme),
     table: {
@@ -58,7 +59,8 @@ function curveIndexOf(params: unknown): number | null {
 function curveOption(candidate: EvidenceCandidate, curve: ConcentrationCurve, theme: ChartTheme): ChartOption {
   const points = curve.points;
   const total = points.at(-1)?.trades ?? 0;
-  const best = points[curve.best_count];
+  const count = curve.best_count ?? 0;
+  const best = points[count];
   const color = theme.candidates[candidate.key];
   const axisLabel = { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => WHOLE_PERCENT.format(value) };
   return {
@@ -74,7 +76,7 @@ function curveOption(candidate: EvidenceCandidate, curve: ConcentrationCurve, th
           { label: 'Running net profit', values: [signedUsdText(point.net_profit)] },
           { label: 'Share of net profit', values: [percentText(point.share_of_profit)] },
         ];
-        const marked = point.trades === curve.best_count ? ['The best 5% of trades, rounded up.'] : [];
+        const marked = point.trades === count ? ['The best 5% of trades, rounded up.'] : [];
         const title = point.trades === 0 ? 'Before any trade' : `The best ${tradesText(point.trades)} of ${total}`;
         return tooltipHtml({ title, columns: ['Value'], rows, notes: [...marked, NET_OF_COMMISSION, DEVELOPMENT] }, theme);
       },
@@ -124,7 +126,7 @@ function curveOption(candidate: EvidenceCandidate, curve: ConcentrationCurve, th
           position: 'right',
           color: theme.text,
           fontSize: 11,
-          formatter: () => `best ${tradesText(curve.best_count)}: ${percentText(best?.share_of_profit)}`,
+          formatter: () => `best ${tradesText(count)}: ${percentText(best?.share_of_profit)}`,
         },
         emphasis: { focus: 'series', blurScope: 'global' },
       },
@@ -137,34 +139,35 @@ function curveOption(candidate: EvidenceCandidate, curve: ConcentrationCurve, th
 interface Bar {
   readonly key: 'all' | 'month' | 'trades';
   readonly label: string;
-  readonly value: number | null;
+  readonly value: number;
 }
 
-/** A measured result (`measure.status` is meets or concern) with and without its best month and best trades. */
-export function withoutBestSpec(candidate: EvidenceCandidate, measure: Concentration): ChartSpec {
+/**
+ * A measured result with and without its best month and best trades. Its
+ * dollars are to the cent: the rule is judged at $0, and a whole-dollar
+ * "$0" would hide which side of it a result falls.
+ */
+export function withoutBestSpec(candidate: EvidenceCandidate, measure: MeasuredConcentration): ChartSpec {
   const bars = barsOf(measure);
-  const monthFrom = measure.best_month === null ? null : formatTimestampDisplay(measure.best_month.month_start_ms, { mode: 'date-et' });
+  const monthFrom = formatTimestampDisplay(measure.best_month.month_start_ms, { mode: 'date-et' });
   return {
     label: `${candidate.label} without its best`,
-    summary: `${candidate.label}: ${bars.map((bar) => `${bar.label} ${signedUsdText(bar.value)}`).join('; ')}.`,
+    summary: `${candidate.label}: ${bars.map((bar) => `${bar.label} ${signedCentsText(bar.value)}`).join('; ')}.`,
     featured: null,
     option: (theme) => withoutBestOption(candidate, measure, bars, theme),
     table: {
       caption: `${candidate.label}'s development net profit with and without its best; — marks a value not recorded`,
       columns: ['Result', 'Net profit', 'Taken out'],
       rows: [
-        { key: 'all', cells: ['All trades', signedUsdText(measure.net_profit), '—'] },
-        {
-          key: 'month',
-          cells: [monthFrom === null ? bars[1].label : `${bars[1].label} (month from ${monthFrom}, ET)`, signedUsdText(measure.without_best_month), signedUsdText(measure.best_month?.net_profit)],
-        },
-        { key: 'trades', cells: [bars[2].label, signedUsdText(measure.without_best_trades), signedUsdText(measure.best_trades_net_profit)] },
+        { key: 'all', cells: ['All trades', signedCentsText(measure.net_profit), '—'] },
+        { key: 'month', cells: [`${bars[1].label} (month from ${monthFrom}, ET)`, signedCentsText(measure.without_best_month), signedCentsText(measure.best_month.net_profit)] },
+        { key: 'trades', cells: [bars[2].label, signedCentsText(measure.without_best_trades), signedCentsText(measure.best_trades_net_profit)] },
       ],
     },
   };
 }
 
-function barsOf(measure: Concentration): Bar[] {
+function barsOf(measure: MeasuredConcentration): Bar[] {
   return [
     { key: 'all', label: 'All trades', value: measure.net_profit },
     { key: 'month', label: 'Without its best month', value: measure.without_best_month },
@@ -173,22 +176,22 @@ function barsOf(measure: Concentration): Bar[] {
 }
 
 function profitable(bar: Bar): boolean {
-  return bar.value === null || bar.value > 0;
+  return bar.value > 0;
 }
 
-function withoutBestOption(candidate: EvidenceCandidate, measure: Concentration, bars: readonly Bar[], theme: ChartTheme): ChartOption {
+function withoutBestOption(candidate: EvidenceCandidate, measure: MeasuredConcentration, bars: readonly Bar[], theme: ChartTheme): ChartOption {
   const colorOf = (bar: Bar) => (!profitable(bar) ? theme.loss : bar.key === 'all' ? theme.candidates[candidate.key] : theme.withoutBest);
   // Each bar is its own series, so a walkthrough step can light up one of them; they share one row each.
   const series = bars.map((bar) => ({
     id: `${bar.key}:result`,
     name: bar.label,
     type: 'bar' as const,
-    data: bars.map((other) => (other.key !== bar.key || other.value === null ? '-' : other.value)),
+    data: bars.map((other) => (other.key === bar.key ? other.value : '-')),
     barMaxWidth: 22,
     barGap: '-100%',
     itemStyle: { color: colorOf(bar) },
     // Right of the bar's end, which for a loss is $0, so the value never runs into the row's name.
-    label: { show: true, position: 'right' as const, color: theme.text, fontSize: 11, formatter: () => signedUsdText(bar.value) },
+    label: { show: true, position: 'right' as const, color: theme.text, fontSize: 11, formatter: () => signedCentsText(bar.value) },
     emphasis: { focus: 'series' as const, blurScope: 'global' as const },
   }));
   return {
@@ -228,23 +231,23 @@ function withoutBestOption(candidate: EvidenceCandidate, measure: Concentration,
   };
 }
 
-function withoutBestTooltip(bar: Bar, measure: Concentration, theme: ChartTheme): string {
-  const net = { label: 'Net profit', values: [bar.value === null ? NOT_RECORDED : signedUsdText(bar.value)] };
+function withoutBestTooltip(bar: Bar, measure: MeasuredConcentration, theme: ChartTheme): string {
+  const net = { label: 'Net profit', values: [signedCentsText(bar.value)] };
   if (bar.key === 'all') {
     const rows: TooltipRow[] = [net, { label: 'Trades', values: [String(measure.trades)] }];
     return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: ['The development run’s net profit, every trade included.', DEVELOPMENT] }, theme);
   }
   if (bar.key === 'month') {
     const month = measure.best_month;
-    const rows: TooltipRow[] = [net, { label: 'The best month made', values: [signedUsdText(month?.net_profit)] }];
-    const which = month === null ? [] : [`The best month is the one from ${formatTimestampDisplay(month.month_start_ms, { mode: 'date-et' })} (ET).`];
-    return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [...which, RULE, DEVELOPMENT] }, theme);
+    const rows: TooltipRow[] = [net, { label: 'The best month made', values: [signedCentsText(month.net_profit)] }];
+    const which = `The best month is the one from ${formatTimestampDisplay(month.month_start_ms, { mode: 'date-et' })} (ET).`;
+    return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [which, RULE, DEVELOPMENT] }, theme);
   }
   const removed = measure.best_trades;
   const rows: TooltipRow[] = [
     net,
-    { label: 'Those trades made', values: [signedUsdText(measure.best_trades_net_profit)] },
-    ...removed.slice(0, LISTED_TRADES).map((trade) => ({ label: `Entered ${formatTimestampDisplay(trade.entry_ms, { mode: 'local' })}`, values: [signedUsdText(trade.net_profit)] })),
+    { label: 'Those trades made', values: [signedCentsText(measure.best_trades_net_profit)] },
+    ...removed.slice(0, LISTED_TRADES).map((trade) => ({ label: `Entered ${formatTimestampDisplay(trade.entry_ms, { mode: 'local' })}`, values: [signedCentsText(trade.net_profit)] })),
   ];
   const more = removed.length > LISTED_TRADES ? [`${removed.length - LISTED_TRADES} more of the best trades are not listed.`] : [];
   const which = `The best 5% of its ${measure.trades} trades, rounded up, each net of its entry and exit commission.`;

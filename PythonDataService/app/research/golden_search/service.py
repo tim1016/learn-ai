@@ -511,9 +511,7 @@ async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
             window_start_ms=protocol["final_start_ms"],
             window_end_ms=protocol["final_end_ms"],
         )
-    return candidate_detail(
-        candidate_key, stored["point"], development=development, exam=exam_record, commission_per_order=protocol["execution"]["commission_per_order"]
-    )
+    return candidate_detail(stored, development=development, exam=exam_record, commission_per_order=protocol["execution"]["commission_per_order"])
 
 
 async def evaluations(study_id: str, *, stage: str | None = None, fold_index: int | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:

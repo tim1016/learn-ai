@@ -17,7 +17,8 @@ from typing import Any, Literal
 
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.compare_measures import completed_net
-from app.research.golden_search.trade_net import usd
+from app.research.golden_search.concentration import stored_concentration
+from app.research.golden_search.guidance import usd
 
 Status = Literal["meets", "concern", "missing"]
 Window = tuple[int, int]
@@ -145,9 +146,7 @@ def _stress(item: Mapping[str, Any]) -> dict[str, Any]:
 
 def _concentration(item: Mapping[str, Any]) -> dict[str, Any]:
     label, link = "Concentration", ("chart", "without-best")
-    measure = item.get("concentration")
-    if measure is None:
-        return _row("concentration", label, "missing", "Not measured for this study: its evidence was recorded before concentration was measured.", link)
+    measure = stored_concentration(item)
     if measure["status"] == "missing":
         return _row("concentration", label, "missing", str(measure["reason"]), link)
     count = len(measure["best_trades"])

@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.research.golden_search.concentration import NO_PROFIT_TO_SHARE, NOT_EVALUATED, best_count, concentration, concentration_curve
+from app.research.golden_search.concentration import (
+    NO_PROFIT_TO_SHARE,
+    NOT_EVALUATED,
+    best_count,
+    concentration,
+    concentration_curve,
+)
 from app.research.golden_search.selection import Metrics
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import metrics
@@ -41,7 +48,7 @@ def test_the_best_five_percent_is_one_in_twenty_rounded_up(trades: int, best: in
 
 def test_a_spread_out_result_meets_the_rule() -> None:
     measure = _measure((2_000.0, 1_500.0, 500.0, -300.0, -200.0), 3_500.0)
-    assert (measure["status"], measure["reason"], measure["trades"]) == ("meets", None, 5)
+    assert (measure["status"], measure["trades"]) == ("meets", 5)
     assert measure["best_month"] == {"month_start_ms": et_midnight_ms(date(2024, 2, 1)), "net_profit": pytest.approx(3_000.0, abs=1e-9, rel=0)}
     # Without February: 3,500 - 3,000. Without the one best trade (5% of 5, rounded up): 3,500 - 2,000.
     assert measure["without_best_month"] == pytest.approx(500.0, abs=1e-9, rel=0)
@@ -98,7 +105,8 @@ def test_ties_take_the_earliest_month_and_the_earlier_trade() -> None:
 )
 def test_a_run_with_nothing_to_measure_is_missing_never_a_pass(run: Metrics | None, detail: dict[str, Any] | None, reason: str) -> None:
     measure = concentration(run, detail, commission_per_order=COMMISSION)
-    assert (measure["status"], measure["reason"], measure["without_best_month"], measure["without_best_trades"]) == ("missing", reason, None, None)
+    # Nothing but the reason: no zero trades and no $0 results.
+    assert measure == {"status": "missing", "reason": reason}
 
 
 def test_trades_that_do_not_add_up_to_the_run_leave_it_unmeasured() -> None:
@@ -123,4 +131,18 @@ def test_the_curve_climbs_through_the_winners_and_ends_at_the_whole_result() -> 
 
 def test_no_curve_is_drawn_for_a_result_that_did_not_make_money() -> None:
     curve = concentration_curve(metrics(1.0, net=-1_500.0), _detail(_trades(-700.0, -800.0)), commission_per_order=COMMISSION)
-    assert curve == {"points": [], "best_count": 1, "reason": NO_PROFIT_TO_SHARE}
+    assert curve == {"points": [], "best_count": None, "reason": NO_PROFIT_TO_SHARE}
+
+
+def test_a_result_that_is_exactly_zero_without_its_best_is_a_concern_whatever_the_float_noise() -> None:
+    # One trade of 199 shares from $101.01 to $102.35 at $1 commission is its own best 5%. The engine's net
+    # profit (exact Decimal equity) and the trade's net (float price change times quantity) differ by about
+    # 6e-12, so without the trade the result is "$0" only once it is rounded to the cent.
+    entry, exit_ = Decimal("101.01"), Decimal("102.35")
+    net = float(Decimal(100_000) + (exit_ - entry) * 199 - 2) - 100_000.0
+    trade = {"entry_ms": _trades(0.0)[0]["entry_ms"], "exit_ms": _trades(0.0)[0]["exit_ms"], "pnl": (float(exit_) - float(entry)) * 199}
+    assert net - (trade["pnl"] - 2 * COMMISSION) != 0.0
+    months = ((date(2024, 1, 31), 100_100.0), (date(2024, 2, 29), 100_000.0 + net))
+    measure = concentration(metrics(1.0, net=net, trades=1), _detail([trade], months), commission_per_order=COMMISSION)
+    assert (measure["status"], measure["without_best_trades"]) == ("concern", 0.0)
+    assert measure["without_best_month"] == pytest.approx(100.0, abs=1e-9, rel=0)

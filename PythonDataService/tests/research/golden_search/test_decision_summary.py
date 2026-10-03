@@ -138,18 +138,16 @@ def test_stress_calls_a_zero_result_break_even_not_a_loss() -> None:
     assert (flat["status"], flat["text"]) == ("concern", "It only breaks even before any cost stress.")
 
 
-def _measure(status: str, *, month: float = 500.0, trades: float = 1_500.0, best: int = 1, reason: str | None = None) -> dict[str, Any]:
-    measured = status != "missing"
+def _measure(status: str, *, month: float = 500.0, trades: float = 1_500.0, best: int = 1) -> dict[str, Any]:
     return {
         "status": status,
-        "reason": reason,
-        "net_profit": 3_500.0 if measured else None,
-        "trades": 20 if measured else 0,
-        "best_month": {"month_start_ms": 0, "net_profit": 3_500.0 - month} if measured else None,
-        "without_best_month": month if measured else None,
-        "best_trades": [{"entry_ms": 0, "exit_ms": 1, "net_profit": 100.0}] * best if measured else [],
-        "best_trades_net_profit": 3_500.0 - trades if measured else None,
-        "without_best_trades": trades if measured else None,
+        "net_profit": 3_500.0,
+        "trades": 20,
+        "best_month": {"month_start_ms": 0, "net_profit": 3_500.0 - month},
+        "without_best_month": month,
+        "best_trades": [{"entry_ms": 0, "exit_ms": 1, "net_profit": 100.0}] * best,
+        "best_trades_net_profit": 3_500.0 - trades,
+        "without_best_trades": trades,
     }
 
 
@@ -163,7 +161,7 @@ def test_concentration_reads_the_stored_measure_and_names_what_fails() -> None:
 
 
 def test_concentration_is_missing_with_its_reason_or_for_evidence_recorded_before_it() -> None:
-    unmeasured = _rows(_results(_candidate(concentration=_measure("missing", reason="The development run made no trades."))))["concentration"]
+    unmeasured = _rows(_results(_candidate(concentration={"status": "missing", "reason": "The development run made no trades."})))["concentration"]
     assert (unmeasured["status"], unmeasured["text"]) == ("missing", "The development run made no trades.")
     legacy = _rows(_results(_candidate()))["concentration"]
     assert legacy["status"] == "missing" and legacy["text"].startswith("Not measured for this study")

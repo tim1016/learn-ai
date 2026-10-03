@@ -7,6 +7,9 @@ Formula: with N the run's net profit, profit_m each ET month's net profit
   * without the best month = N − max_m profit_m (ties: the earliest month);
   * without the best trades = N − Σ of the first k ranked t_i, where
     k = ⌈n / 20⌉ is 5% of the n trades rounded up, so at least one;
+  * both are rounded to the cent before the rule reads them: N and t_i take
+    different float paths, so a result that is truly $0 can come out a few
+    trillionths either side, and that noise must not decide a stored status;
   * status — concern when either "without" value is ≤ $0, else meets; missing
     when the run was not evaluated, failed, made no trades, or its trades do
     not add up to N within a cent;
@@ -27,21 +30,26 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import accumulate
-from typing import Any, Literal
+from typing import Any
 
 from app.research.golden_search.evidence import monthly_results
+from app.research.golden_search.guidance import usd
 from app.research.golden_search.selection import Metrics
-from app.research.golden_search.trade_net import trade_nets, unreconciled
-
-Status = Literal["meets", "concern", "missing"]
+from app.research.golden_search.trade_net import reconciles, trade_nets
 
 NOT_EVALUATED = "Not evaluated: the study's budget ran out before this candidate's development run."
+NOT_MEASURED = "Not measured for this study: its evidence was recorded before concentration was measured."
 NO_PROFIT_TO_SHARE = "It did not make money over the development period, so there is no profit to take a share of."
 
 
 def best_count(trades: int) -> int:
     """How many trades make the best 5% of ``trades``: one in twenty, rounded up."""
     return -(-trades // 20)
+
+
+def _cents(value: float) -> float:
+    # Adding 0.0 turns a rounded -0.0 into 0.0, which reads "$0.00".
+    return round(value, 2) + 0.0
 
 
 @dataclass(frozen=True)
@@ -67,9 +75,11 @@ def _run(metrics: Metrics | None, detail: Mapping[str, Any] | None, commission_p
     if not trades:
         return "The development run made no trades."
     nets = trade_nets(trades, commission_per_order)
-    reason = unreconciled(nets, metrics.net_profit)
-    if reason is not None:
-        return reason
+    if not reconciles(nets, metrics.net_profit):
+        return (
+            f"Its trades add up to {usd(math.fsum(nets))} after commission, but the run's net profit is "
+            f"{usd(metrics.net_profit)}, so the trades do not account for the whole result."
+        )
     order = sorted(range(len(trades)), key=lambda i: (-nets[i], int(trades[i]["entry_ms"]), int(trades[i]["exit_ms"])))
     return _Run(
         net_profit=metrics.net_profit,
@@ -80,17 +90,7 @@ def _run(metrics: Metrics | None, detail: Mapping[str, Any] | None, commission_p
 
 
 def _missing(reason: str) -> dict[str, Any]:
-    return {
-        "status": "missing",
-        "reason": reason,
-        "net_profit": None,
-        "trades": 0,
-        "best_month": None,
-        "without_best_month": None,
-        "best_trades": [],
-        "best_trades_net_profit": None,
-        "without_best_trades": None,
-    }
+    return {"status": "missing", "reason": reason}
 
 
 def concentration(metrics: Metrics | None, detail: Mapping[str, Any] | None, *, commission_per_order: float) -> dict[str, Any]:
@@ -103,29 +103,39 @@ def concentration(metrics: Metrics | None, detail: Mapping[str, Any] | None, *, 
         return _missing("The development run recorded no daily equity.")
     best_month = max(months, key=lambda month: month.net_profit)  # the earliest of equal months
     removed = run.ranked[: best_count(len(run.ranked))]
-    without_month = run.net_profit - best_month.net_profit
     removed_net = math.fsum(net for net, _ in removed)
+    without_month = _cents(run.net_profit - best_month.net_profit)
+    without_trades = _cents(run.net_profit - removed_net)
     return {
-        "status": "concern" if without_month <= 0 or run.net_profit - removed_net <= 0 else "meets",
-        "reason": None,
+        "status": "concern" if without_month <= 0 or without_trades <= 0 else "meets",
         "net_profit": run.net_profit,
         "trades": len(run.ranked),
         "best_month": {"month_start_ms": best_month.month_start_ms, "net_profit": best_month.net_profit},
         "without_best_month": without_month,
         "best_trades": [{"entry_ms": int(trade["entry_ms"]), "exit_ms": int(trade["exit_ms"]), "net_profit": net} for net, trade in removed],
         "best_trades_net_profit": removed_net,
-        "without_best_trades": run.net_profit - removed_net,
+        "without_best_trades": without_trades,
     }
+
+
+def stored_concentration(item: Mapping[str, Any]) -> dict[str, Any]:
+    """The measure stored with a candidate's evidence; evidence recorded before the stage measured it reads as not measured."""
+    stored = item.get("concentration")
+    return dict(stored) if stored is not None else _missing(NOT_MEASURED)
+
+
+def missing_curve(reason: str) -> dict[str, Any]:
+    return {"points": [], "best_count": None, "reason": reason}
 
 
 def concentration_curve(metrics: Metrics | None, detail: Mapping[str, Any] | None, *, commission_per_order: float) -> dict[str, Any]:
     """The running share of net profit with the trades best first, or why none is drawn."""
     run = _run(metrics, detail, commission_per_order)
     if isinstance(run, str):
-        return {"points": [], "best_count": 0, "reason": run}
-    count = len(run.ranked)
+        return missing_curve(run)
     if run.net_profit <= 0:
-        return {"points": [], "best_count": best_count(count), "reason": NO_PROFIT_TO_SHARE}
+        return missing_curve(NO_PROFIT_TO_SHARE)
+    count = len(run.ranked)
     running = [0.0, *accumulate(net for net, _ in run.ranked)]
     points = [
         {"trades": i, "share_of_trades": i / count, "share_of_profit": total / run.net_profit, "net_profit": total}

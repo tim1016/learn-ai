@@ -2,7 +2,6 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
   CandidateDetail,
   CandidateKey,
-  Concentration,
   DecisionSummary,
   EvidenceCandidate,
   EvidenceView,
@@ -13,6 +12,7 @@ import type {
   Finding,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
+  MeasuredConcentration,
   Metrics,
   PairMap,
   PairMapCell,
@@ -415,7 +415,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       trades_per_year: 79,
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
       // Evidence recorded before the evidence stage measured concentration.
-      concentration: null,
+      concentration: { status: 'missing', reason: 'Not measured for this study: its evidence was recorded before concentration was measured.' },
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
@@ -428,11 +428,10 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
 }
 
 /** A measured result (#2815): 8,700 net over 146 development trades unless overridden; its best month is November 2025. */
-export function concentration(overrides: Partial<Concentration> = {}): Concentration {
+export function concentration(overrides: Partial<MeasuredConcentration> = {}): MeasuredConcentration {
   const trades = overrides.trades ?? 146;
   return {
     status: 'meets',
-    reason: null,
     net_profit: 8700,
     trades,
     best_month: { month_start_ms: etMidnightMs('2025-11-01'), net_profit: 1900 },

@@ -296,12 +296,12 @@ describe('GoldenSearchCompareStepComponent', () => {
 
     const without = region('Without its best');
     expect(within(without).getByRole('img').getAttribute('aria-label')).toBe(
-      'All-period fit without its best. All-period fit: All trades +$8,700; Without its best month +$6,800; Without its best 8 trades +$5,400.',
+      'All-period fit without its best. All-period fit: All trades +$8,700.00; Without its best month +$6,800.00; Without its best 8 trades +$5,400.00.',
     );
     fireEvent.click(within(without).getByRole('button', { name: 'Show as table' }));
     const results = within(without).getAllByRole('row').slice(1).map((row) => row.textContent ?? '');
-    expect(results[1]).toMatch(/Without its best month \(month from 2025-11-01, ET\)\s*\+\$6,800\s*\+\$1,900/);
-    expect(results[2]).toMatch(/Without its best 8 trades\s*\+\$5,400\s*\+\$3,300/);
+    expect(results[1]).toMatch(/Without its best month \(month from 2025-11-01, ET\)\s*\+\$6,800\.00\s*\+\$1,900\.00/);
+    expect(results[2]).toMatch(/Without its best 8 trades\s*\+\$5,400\.00\s*\+\$3,300\.00/);
 
     // Evidence recorded before concentration was measured says so; it never draws an empty or zero chart.
     fireEvent.click(screen.getByRole('button', { name: /current settings frozen incumbent/i }));

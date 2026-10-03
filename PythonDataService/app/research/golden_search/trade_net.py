@@ -30,14 +30,6 @@ def trade_nets(trades: Sequence[Mapping[str, Any]], commission_per_order: float)
     return [float(trade["pnl"]) - 2.0 * commission_per_order for trade in trades]
 
 
-def usd(value: float) -> str:
-    """Dollars and cents with the sign before the dollar sign (``-$12.50``), for a server-written sentence."""
-    return f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}"
-
-
-def unreconciled(nets: Sequence[float], net_profit: float) -> str | None:
-    """Why the trades cannot stand for their run, or ``None`` when they add up to its net profit within a cent."""
-    total = math.fsum(nets)
-    if abs(total - net_profit) <= RECONCILE_ATOL + _FLOAT_SLACK:
-        return None
-    return f"Its trades add up to {usd(total)} after commission, but the run's net profit is {usd(net_profit)}, so the trades do not account for the whole result."
+def reconciles(nets: Sequence[float], net_profit: float) -> bool:
+    """Whether the trades add up to their run's net profit within a cent."""
+    return abs(math.fsum(nets) - net_profit) <= RECONCILE_ATOL + _FLOAT_SLACK

@@ -255,13 +255,13 @@ Three horizontal bars start at $0:
 - **Without its best month** takes out the month with the highest net profit.
 - **Without its best trades** takes out the best 5% of trades, rounded up, so at least one. Each trade counts its net profit after its entry and exit commission.
 
-Each bar's value is printed at its end. A bar at $0 or less turns red, reaches left of $0, and is marked "not profitable".
+Each bar's value is printed to the cent beside it. A bar at $0 or less turns red and is marked "not profitable"; a loss reaches left of $0.
 
 $$\text{without the best month} = \text{net profit} - \text{the best month's net profit}$$
 
 $$\text{without the best trades} = \text{net profit} - \text{net profit of the best } \lceil n / 20 \rceil \text{ of the } n \text{ trades}$$
 
-The rule reads **concern** when either result is $0 or less, and **meets** otherwise. It reads **missing** when the run failed or made no trades, or when its trades do not add up to the run's net profit within a cent, for example because a position was still open when the period ended. Nothing is rescaled to make them fit. The measure informs your choice; it gates nothing. A study whose evidence was recorded before concentration was measured says "Not measured for this study".
+The rule reads **concern** when either result is $0 or less, to the cent, and **meets** otherwise. It reads **missing** when the run was not evaluated because the study's budget ran out, when it failed or made no trades, or when its trades do not add up to the run's net profit within a cent, for example because a position was still open when the period ended. Nothing is rescaled to make them fit. The measure informs your choice; it gates nothing. A study whose evidence was recorded before concentration was measured says "Not measured for this study".
 
 Hover a bar to see what it takes out: the month and what it made, or the trades and what they made together.
 
