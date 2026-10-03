@@ -430,9 +430,7 @@ export class StrategyLabConfigStore {
     const previous = this.range();
     // The picker hands over an empty date for a field it cannot use. That is
     // not a new configuration: it keeps the warning and the restored selection.
-    // The date was somebody's, so the starting window is not put over it.
     if (onlyRefusesDates(previous, range)) {
-      this.windowStarted = true;
       this.range.set(range);
       return;
     }
