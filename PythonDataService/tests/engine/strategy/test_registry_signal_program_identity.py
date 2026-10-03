@@ -28,11 +28,20 @@ carrying a factory/contract pairing that has drifted apart.
 
 from __future__ import annotations
 
+import pytest
+
+from app.engine.indicators.base import BarIndicator, Indicator
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.programs.ema_crossover_signal import EmaCrossoverSignalParams
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import SignalSession
+from tests._helpers.signal_program import (
+    bind_strategy_context,
+    indexed_bucket,
+    sealed_series_points,
+    series_point_id,
+)
 
 
 def test_each_sealed_signal_program_identity_is_unique_to_its_registry_key() -> None:
@@ -198,13 +207,59 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
     assert warmup_by_name["rsi"] == rsi.period + 1
 
 
-def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> None:
-    """A contract's static ``signals``/``exit_eligibility`` are its default point.
+_DECISION_BAR_MS = 15 * 60_000
 
-    A program whose lengths or hold are parameters resolves them per seal
-    (#2696); its static values must still be what the default parameters
-    resolve to, so a seal at the default point is byte-identical to one made
-    before the parameters existed.
+
+def _bars_until_ready(indicator: Indicator | BarIndicator) -> int:
+    """How many decision bars a freshly built indicator takes to turn ready."""
+    for count in range(1, 2_000):
+        bar = indexed_bucket("SPY", count, _DECISION_BAR_MS, str(100 + count % 7))
+        if isinstance(indicator, BarIndicator):
+            indicator.update(bar)
+        else:
+            indicator.update(bar.end_ms, bar.close)
+        if indicator.is_ready:
+            return count
+    raise AssertionError(f"{indicator.name} never became ready")
+
+
+# ema_crossover_signal keeps its indicators under their reference-length names
+# (``_ema5``); test_ema_crossover_signal_lengths.py holds it to the same rule.
+_SERIES_POINTS = [point for point in sealed_series_points() if point[0] != "ema_crossover_signal"]
+
+
+@pytest.mark.parametrize(("program_key", "overrides"), _SERIES_POINTS, ids=series_point_id)
+def test_resolved_series_are_exactly_the_indicators_these_parameters_build(
+    program_key: str, overrides: dict[str, int]
+) -> None:
+    """A seal names what runs (#2796): each series its parameters resolve is
+    one indicator the program built from them constructs -- the same period,
+    ready on the same bar -- and the program constructs no other. Each series
+    is held as ``_<name>`` on its strategy.
+    """
+    registration = _STRATEGY_REGISTRY[program_key]
+    contract = registration.signal_program_contract
+    assert contract is not None and registration.signal_program_factory is not None
+    params = registration.param_schema(**{**contract.validated_settings, **overrides})
+    strategy = registration.signal_program_factory(params).strategy
+    bind_strategy_context(strategy)
+    built = {name: value for name, value in vars(strategy).items() if isinstance(value, Indicator | BarIndicator)}
+
+    series = {f"_{entry.name}": entry for entry in contract.resolved_signals(params)}
+
+    assert set(series) == set(built)
+    for name, indicator in built.items():
+        assert series[name].period == indicator.period, name
+        assert series[name].warmup_bars == _bars_until_ready(indicator), name
+
+
+def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> None:
+    """A contract's static ``signals``/``exit_eligibility``/``numerical_provenance`` are its default point.
+
+    A program whose periods or hold are parameters resolves them per seal
+    (#2696, #2796); its static values must still be what the default
+    parameters resolve to, so a seal at the default point is byte-identical
+    to one made before they were resolved.
     """
     for key, registration in _STRATEGY_REGISTRY.items():
         contract = registration.signal_program_contract
@@ -214,6 +269,7 @@ def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> 
 
         assert contract.resolved_signals(defaults) == contract.signals, key
         assert contract.resolved_exit_eligibility(defaults) == contract.exit_eligibility, key
+        assert contract.resolved_numerical_provenance(defaults) == contract.numerical_provenance, key
 
 
 def test_validated_settings_a_dump_omits_are_their_schema_defaults() -> None:

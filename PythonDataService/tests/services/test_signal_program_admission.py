@@ -39,6 +39,7 @@ from app.services.signal_program_admission import (
     record_imported_program_sources,
     running_wiring_digest,
 )
+from tests._helpers.signal_program import OFF_VALIDATED_PERIODS
 
 _SID = "sealed-ema-1"
 _NOW = 1_787_356_800_000
@@ -664,6 +665,69 @@ def test_seal_whose_parameters_no_longer_validate_fails_closed() -> None:
 
     assert proof.state == "UNPROVEN"
     assert "no longer validate" in proof.explanation
+
+
+# --- #2796: every program seals the indicator periods it runs -----------------
+
+# Each program's sealed series, name -> (period, warmup_bars), at its
+# ``OFF_VALIDATED_PERIODS`` point.
+_SERIES_OFF_VALIDATED: dict[str, dict[str, tuple[int, int]]] = {
+    "sma_crossover": {"sma_short": (7, 7), "sma_long": (21, 21)},
+    "rsi_mean_reversion": {"rsi": (21, 22)},
+    "spy_strategy_a": {"ema_fast": (8, 8), "ema_slow": (21, 21), "macd": (16, 16), "rsi": (21, 22), "adx": (10, 20)},
+    "spy_strategy_b": {"rsi": (21, 22), "adx": (10, 20), "supertrend": (7, 7), "macd": (16, 16)},
+    "spy_strategy_c": {"rsi": (21, 22), "adx": (10, 20)},
+}
+
+
+def _off_validated_seal(program_key: str) -> tuple[BrokerBotBinding, SealedBotProgram]:
+    periods = OFF_VALIDATED_PERIODS[program_key]
+    binding = _binding(
+        strategy_instance_id=f"sealed-{program_key}",
+        strategy_key=program_key,
+        strategy_params=dict(periods),
+        strategy_param_origins={name: "deploy_override" for name in periods},
+        sealed_account_id=f"sim:sealed-{program_key}",
+    )
+    validation = _validation().model_copy(update={"strategy_key": program_key})
+    seal = build_start_program_seal(binding, validation, parameter_origins=binding.strategy_param_origins)
+    assert seal is not None
+    return binding.model_copy(update={"sealed_program": seal}), seal
+
+
+@pytest.mark.parametrize("program_key", sorted(_SERIES_OFF_VALIDATED))
+def test_a_deploy_off_the_default_periods_seals_the_periods_it_runs(program_key: str) -> None:
+    """These five sealed their default periods whatever the deploy ran (#2796)."""
+    _bound, seal = _off_validated_seal(program_key)
+    configured = seal.configured_signal
+
+    sealed = {series.name: (series.period, series.warmup_bars) for series in configured.signals}
+    assert sealed == _SERIES_OFF_VALIDATED[program_key]
+    assert configured.parameters_match_validated_settings is False
+
+
+@pytest.mark.parametrize("program_key", sorted(_SERIES_OFF_VALIDATED))
+def test_a_seal_naming_the_default_periods_for_another_deploy_fails_closed(program_key: str) -> None:
+    """The seal these five minted before #2796 attests to series the bot does not run."""
+    binding, seal = _off_validated_seal(program_key)
+    contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
+    assert contract is not None
+    stale = seal.configured_signal.model_copy(update={"signals": contract.signals})
+    binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+    assert "signal semantics" in proof.explanation
+
+
+def test_a_strategy_c_seal_off_its_default_periods_does_not_claim_them_in_its_formula() -> None:
+    """Strategy C's formula names RSI(14) and ADX(14) outright; that holds only at 14/14."""
+    _bound, seal = _off_validated_seal("spy_strategy_c")
+
+    formula = seal.configured_signal.numerical_provenance.formula
+    assert "RSI(rsi_period)" in formula and "ADX(adx_period)" in formula
+    assert "(14)" not in formula
 
 
 # --- Issue #1735: the wiring half of the build digest -------------------------
