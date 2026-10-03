@@ -27,7 +27,8 @@ export interface FinalRun {
 
 const FINAL = 'The final test: one look at data no step chose on.';
 const ONE_DECIMAL = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const ROW = 64;
+/** One measure's block: its two bars, its value axis beneath, and room above for the next block's name. */
+const ROW = 88;
 
 
 function measureText(measure: FinalMeasure, value: number | null): string {
@@ -79,7 +80,7 @@ export function finalComparisonSpec(runs: readonly FinalRun[]): ChartSpec {
 
 /** The comparison's height: a row per measure. */
 export function comparisonHeight(count: number): number {
-  return 24 + ROW * Math.max(1, count);
+  return 32 + ROW * Math.max(1, count);
 }
 
 function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOption {
@@ -89,7 +90,7 @@ function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOp
     { key: 'final', name: 'Final test', color: theme.candidates.all_period },
   ] as const;
   return {
-    grid: measures.map((_, i) => ({ left: 130, right: 64, top: 16 + i * ROW, height: ROW - 28 })),
+    grid: measures.map((_, i) => ({ left: 130, right: 64, top: 24 + i * ROW, height: ROW - 48 })),
     tooltip: {
       ...tooltipFrame(theme),
       trigger: 'item',
