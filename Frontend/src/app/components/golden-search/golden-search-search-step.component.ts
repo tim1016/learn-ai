@@ -6,7 +6,7 @@ import { pairAudit } from './golden-search-compare';
 import { GoldenSearchProcedureChartsComponent } from './golden-search-procedure-charts.component';
 import { GoldenSearchProcedureComponent } from './golden-search-procedure.component';
 import { GoldenSearchService } from './golden-search.service';
-import type { SearchCharts, StrategyCapability, StudyDetail } from './golden-search.types';
+import { isLive, type SearchCharts, type StrategyCapability, type StudyDetail } from './golden-search.types';
 
 /**
  * The Search step (#2696): the all-period procedure fitted on the whole
@@ -49,7 +49,11 @@ export class GoldenSearchSearchStepComponent {
   protected readonly pending = computed(() => {
     const study = this.study();
     if (study.state === 'locked') return 'The search has not started. Start it once the frozen plan is what you want to test.';
-    if (study.state === 'search_running') return 'The search is running; its path appears here when it finishes.';
+    if (study.state === 'search_running') {
+      return isLive(study.presented_status)
+        ? 'The search is running; its path appears here when it finishes.'
+        : 'The search stopped before it finished; its path appears here once it does.';
+    }
     return 'No search result is recorded for this study.';
   });
   protected readonly recentDescription = computed(
