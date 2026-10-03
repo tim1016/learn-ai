@@ -508,7 +508,7 @@ function activityOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpt
             { label: 'Test trades', values: [total === null ? NOT_RECORDED : String(total)] },
             { label: 'Forward minimum', values: [minimum === null ? NOT_RECORDED : String(minimum)] },
           ];
-          const note = 'The verdict counts the winners’ test trades over completed folds and needs at least the minimum across all forward tests; no fold has a minimum of its own.';
+          const note = 'The verdict counts the winners’ test trades over completed folds and needs at least the minimum across all forward tests; no fold’s test window has a minimum of its own.';
           return tooltipHtml({ title: charts.in_progress ? `${ALL_FOLDS} so far` : ALL_FOLDS, columns: ['Count'], rows, notes: [...(charts.in_progress ? [IN_PROGRESS] : []), note, OUT_OF_SAMPLE] }, theme);
         }
         const fold = folds[dataIndexOf(params) ?? -1];

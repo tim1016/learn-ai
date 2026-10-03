@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
@@ -8,6 +8,8 @@ import { ConfirmDeleteComponent } from '../../shared/research-record/confirm-del
 import { RecordPoller } from '../../shared/research-record/record-poller';
 import { extractServerMessage } from '../broker/operation-error';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
+import { GoldenSearchReviewTour, reviewStepText, reviewStops, type ReviewStop } from './charts/golden-search-review-tour';
+import { GoldenSearchWalkthroughComponent } from './charts/golden-search-walkthrough.component';
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import { GoldenSearchPlanSummaryComponent } from './golden-search-plan-summary.component';
@@ -37,7 +39,9 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
  * server's guidance for the current state with the one next action, the
  * scope line above every step, the
  * record controls (Cancel, Finish, Hide), and a footer naming the data and
- * where the final test and the current default stand. Every stage change is a command
+ * where the final test and the current default stand. Review this study
+ * walks the key charts across the steps in research order, one question at
+ * each (#2821). Every stage change is a command
  * carrying the study's revision and an idempotency key; a command that
  * authorizes a stage starts its job through the jobs boundary. Polls while a
  * stage runs; a failed poll keeps the study shown and tries again, and an
@@ -57,15 +61,19 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
     GoldenSearchSearchStepComponent,
     GoldenSearchStudyStripComponent,
     GoldenSearchTestStepComponent,
+    GoldenSearchWalkthroughComponent,
     ReceiptLabelPipe,
     RouterLink,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-study.component.html',
   styleUrl: './golden-search-study.component.scss',
+  providers: [GoldenSearchReviewTour],
 })
 export class GoldenSearchStudyComponent {
   private readonly service = inject(GoldenSearchService);
+  private readonly review = inject(GoldenSearchReviewTour);
+  private readonly reviewButton = viewChild<ElementRef<HTMLButtonElement>>('reviewButton');
   private readonly destroyRef = inject(DestroyRef);
 
   readonly studyId = input.required<string>();
@@ -86,6 +94,9 @@ export class GoldenSearchStudyComponent {
   readonly announcement = signal('');
 
   protected readonly progressText = PROGRESS_TEXT;
+  /** The study review's stops, fixed when it opens; null when it is closed. */
+  protected readonly reviewing = signal<readonly ReviewStop[] | null>(null);
+  protected readonly reviewSteps = computed(() => (this.reviewing() ?? []).map((stop) => ({ text: reviewStepText(stop) })));
   protected readonly capability = computed(() => {
     const key = this.detail()?.strategy_key;
     return this.capabilities().find((c) => c.strategy_key === key) ?? null;
@@ -167,6 +178,9 @@ export class GoldenSearchStudyComponent {
         this.announcement.set('');
         this.stateStep = null;
         this.awaitingClaimPolls = 0;
+        // A review belongs to the study it started on; another study starts without one.
+        this.reviewing.set(null);
+        this.review.stop.set(null);
         void this.reload(id);
       });
     });
@@ -194,6 +208,26 @@ export class GoldenSearchStudyComponent {
 
   selectStep(step: StudyStep): void {
     this.selectedStep.set(step);
+  }
+
+  protected toggleReview(): void {
+    const study = this.detail();
+    if (this.reviewing() !== null) this.endReview();
+    else if (study !== null) this.reviewing.set(reviewStops(study));
+  }
+
+  /** Opens the step that holds the stop's chart; its panel comes into view when it shows. */
+  protected visitStop(index: number): void {
+    const stop = this.reviewing()?.[index];
+    if (stop === undefined) return;
+    this.selectStep(stop.step);
+    this.review.stop.set(stop);
+  }
+
+  protected endReview(): void {
+    this.reviewing.set(null);
+    this.review.stop.set(null);
+    this.reviewButton()?.nativeElement.focus();
   }
 
   async runPrimary(action: PrimaryAction): Promise<void> {

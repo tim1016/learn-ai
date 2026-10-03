@@ -1,4 +1,5 @@
-:host { display: grid; gap: var(--space-3); align-content: start; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); }
+// Scrolled into view (the study review), the panel stops clear of the app bar.
+:host { display: grid; gap: var(--space-3); align-content: start; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); scroll-margin-top: 72px; }
 p, h3 { margin: 0; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; }
 .titles { display: grid; gap: var(--space-1); min-width: 0; }
@@ -8,6 +9,7 @@ h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .help { display: flex; gap: var(--space-4); flex-wrap: wrap; }
 .link { all: unset; display: inline-flex; align-items: center; gap: var(--space-1); color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
 .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:host([data-review='current']) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
 @media (max-width: 680px) {
   :host { padding: var(--space-3); }

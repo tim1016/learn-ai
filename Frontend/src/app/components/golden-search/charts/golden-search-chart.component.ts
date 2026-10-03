@@ -112,6 +112,7 @@ export class GoldenSearchChartComponent {
   }
 }
 
-function reducedMotion(): boolean {
+/** The viewer asked for less motion. */
+export function reducedMotion(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }

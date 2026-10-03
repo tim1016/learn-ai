@@ -30,7 +30,7 @@
             } @else {
               <p class="muted">No month closed inside this run.</p>
             }
-            <p caption class="caption">{{ row.candidate.label }} · development months, by their Eastern dates. A trade counts in the month it exits.</p>
+            <p caption class="caption">{{ row.candidate.label }} · development months, by their Eastern dates. A position open at a month end splits its profit between the two months.</p>
           </app-golden-search-panel>
           <app-golden-search-panel chart="monthly-net" data-span="6">
             @if (monthlyNet(); as spec) {

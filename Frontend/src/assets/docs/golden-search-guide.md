@@ -7,7 +7,9 @@ This guide explains the charts on the Golden Search pages. For each chart it cov
 Every chart panel has two buttons:
 
 - **About this chart** opens this guide at that chart's section, in a drawer beside the live chart, so you can read and look at the same time.
-- **Walk me through it** steps through the chart's "How to read it" list on the chart itself. Each step lights up the part of the chart it talks about. Use Back and Next, or the arrow keys; Esc leaves the walkthrough.
+- **Walk me through it** steps through the chart's "How to read it" list on the chart itself. Where a step names a mark on the chart, that mark lights up. Use Back and Next, or the arrow keys; Esc leaves the walkthrough.
+
+**Review this study**, beside the step tabs, walks the reading path below on your own study: it opens each step in turn, brings the chart into view and asks the chart's question. It skips what the study has not reached yet: a step still ahead, the search path of a Grid search, and the final test before it has a result.
 
 A few rules hold for every chart:
 
@@ -15,6 +17,58 @@ A few rules hold for every chart:
 - **Missing is never zero.** A value the study did not record reads "not recorded". It is never drawn as zero, and it never counts as a pass.
 - **Every number comes from the study.** The charts draw values the research recorded; the page computes none of its own.
 - **Show as table.** Every chart can show its values as a table, for reading without a mouse or with a screen reader.
+
+## A reading path {#reading-path}
+
+To review a study end to end, read these charts in this order, one question at each. They follow the research: what was locked, how the search chose, whether the choice held over time, how the candidates compare, and what the one final look found.
+
+1. [Window map](#window-map), on Plan: Which months does each part of the study use?
+2. [Data coverage](#data-coverage), on Plan: Does the lake hold the minute bars the study’s data span needs?
+3. [Search path](#search-path), on Search: How did the search reach its winner, point by point?
+4. [One-knob profiles](#knob-profiles), on Search: How did the result change as each knob moved on its own?
+5. [Eligibility map](#eligibility-map), on Search: Which of the points scored meet the rules, and what stops the rest?
+6. [Fold timeline](#fold-timeline), on Test over time: Which months did each fold train on and test on, and how did each end?
+7. [Training against test Sharpe](#train-test-sharpe), on Test over time: How much of each fold’s training Sharpe survived on its test window?
+8. [Parameter drift](#parameter-drift), on Test over time: Did the search choose similar settings in every fold?
+9. [Test activity per fold](#fold-activity), on Test over time: Did the folds trade enough on their test windows to judge?
+10. [Equity and fall from peak](#equity-and-fall), on Compare: How did each candidate grow over the development period, and how deep were its falls?
+11. [Neighbor tornado](#neighbor-tornado), on Compare: Does the result hold when one setting moves one step?
+12. [Cost stress ladder](#cost-stress), on Compare: Does the result survive harsher costs and fills?
+13. [Without its best](#without-best), on Compare: Does the result stay profitable without its best month or its best 5% of trades?
+14. [Final-test checks](#final-checks), on Final decision: Did the final test meet each rule, in words?
+15. [Development against final](#final-comparison), on Final decision: Which measures held up on the final test?
+
+## Glossary {#glossary}
+
+- **Candidate**: a set of settings Compare puts forward: the all-period fit, the recent fit, or the current settings.
+- **Concentration**: whether the result rests on its best month or its best 5% of trades. See [Without its best](#without-best).
+- **Current settings**: the strategy's settings as frozen at lock, also called the incumbent. Every result is set against them on the same window.
+- **Development period**: the dates Search, Test over time and Compare use. Everything measured on it helped choose the settings, so it flatters them.
+- **Eligible**, or **meets the rules**: a run that completed, made at least the window's trade minimum of trades, has an objective and a worst fall recorded, kept its worst fall within the limit and, when the plan requires one, made a profit. See [Eligibility map](#eligibility-map).
+- **Final test**: the window after the development period. It stays sealed until a candidate is locked, then runs once for that candidate and for the current settings. See [Final-test checks](#final-checks).
+- **Fold**: one training window followed by its test window, inside the development period. See [Fold timeline](#fold-timeline).
+- **Forward minimum**: the trade minimum for all the fold test windows together. No single fold's test window has a minimum of its own.
+- **Grid** and **Zoom**: the two search methods. Grid scores every combination of the searched values. Zoom starts from a starting point and searches one knob at a time, in passes, narrowing around the best value it finds.
+- **In-sample**: measured on the data that chose the settings.
+- **Knob**: one strategy setting, searched over a range or held at one value.
+- **Net profit** and **net return**: a run's result after the study's commission and slippage, in dollars and as a share of its starting capital.
+- **Objective**: the measure the search ranks eligible runs by: Sharpe, unless the plan names another.
+- **Retention**: a fold's test Sharpe divided by its training Sharpe. See [Training against test Sharpe](#train-test-sharpe).
+- **Recent fit**: the same search run on only the last few months of the development period, when the plan asks for it.
+- **Run-up**: the data loaded before the development period so the indicators start warmed up. Nothing is judged on it.
+- **Session**: one trading day on the exchange calendar. Half-days count; weekends and holidays do not.
+- **Sharpe**: the engine's ratio of the average daily return to its spread, scaled to a year of 252 sessions, with no risk-free rate. It is not defined for fewer than two daily returns or returns that never vary.
+
+$$\text{Sharpe} = \frac{\text{mean of the daily returns}}{\text{standard deviation of the daily returns}} \times \sqrt{252}$$
+
+$$\text{daily return} = \frac{\text{equity at the day's last bar}}{\text{equity at the previous day's last bar}} - 1$$
+
+The first day is measured against the starting capital, and the standard deviation is the sample one.
+
+- **Starting point**: where a Zoom search starts, the plan's seed: often the current settings. When nothing meets the rules, the search keeps it.
+- **Trade minimum**, also called the trade floor: the trades a window must reach for its result to count. See [Trade minimums](#trade-minimums).
+- **Trading years**: a window's length in years, counted on the calendar: for each year, the window's sessions in it divided by all that year's sessions, added up.
+- **Worst fall**: the deepest drop from a peak in equity, as the engine measures it bar by bar. The charts' session-close fall lines can be shallower.
 
 ## Plan
 
@@ -78,7 +132,7 @@ A school year planner: term dates, practice tests along the way, and the final e
 
 #### The question it answers
 
-How much of each knob's legal range does the search explore?
+How much of each knob’s legal range does the search explore?
 
 #### What you're looking at
 
@@ -162,7 +216,7 @@ A survey's minimum sample: a longer survey needs more answers before its result 
 
 #### The question it answers
 
-Does the lake hold the minute bars the study's data span needs?
+Does the lake hold the minute bars the study’s data span needs?
 
 #### What you're looking at
 
@@ -198,7 +252,7 @@ How did the search reach its winner, point by point?
 
 #### What you're looking at
 
-Zoom improves the settings one knob at a time. Each dot is a point it scored, left to right in the order it tried them; the first is the starting point. Up is the plan's objective (Sharpe, unless the plan chose another). Blue dots meet the rules; grey dots fail one and can never win.
+Zoom improves the settings one knob at a time. Each dot is a point it scored, left to right in the order it tried them; the first is the starting point. Up is the plan's objective (Sharpe, unless the plan chose another). Blue dots meet the rules; grey dots fail one. A grey dot wins only when nothing meets the rules: then the search keeps its starting point. A point with no objective recorded, such as a failed run, has no dot, and the current value is scored again in each round, so the same settings can appear more than once.
 
 The line is the best objective so far among the points that meet the rules:
 
@@ -211,7 +265,7 @@ Hover a dot for its step (pass, knob and round), the value tried, its full setti
 #### How to read it
 
 1. Each dot is a point the search scored, in the order it tried them; the first is the starting point.
-2. Grey dots fail a rule: too few trades, too deep a fall or no profit. They can never win.
+2. Grey dots fail a rule: too few trades, too deep a fall or no profit. One wins only when nothing meets the rules.
 3. The line is the best result so far that meets the rules. It only rises when a knob moves to a better value.
 4. A line that flattens early means later rounds found nothing better along the moves they tried — not that nothing better exists.
 
@@ -274,7 +328,7 @@ Hover a dot for its numbers and the values the other knobs were held at.
 
 1. Each small chart is one knob: its result at every value tried, every other knob held.
 2. The blue dot is the value kept. Hollow dots fail a rule.
-3. A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbours is not.
+3. A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbors is not.
 4. Hover a dot to see what the other knobs were held at: for Zoom, their values when this knob was searched, not the final winner.
 
 #### Good signs and warning signs
@@ -295,7 +349,7 @@ Which of the points scored meet the rules, and what stops the rest?
 
 #### What you're looking at
 
-Every point scored on the window, with its trades across and its net profit up. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey has no objective or worst fall recorded. A failed run has no numbers to place, so the caption counts failed runs and the table lists them. The outlined dot is the winner. The dashed lines are the window's trade floor and, when the plan requires a profit, $0.
+Every point scored on the window, with its trades across and its net profit up: the search's own, and the pair audit's and later checks' on the same data. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey has no objective or worst fall recorded. A failed run has no numbers to place, so the caption counts failed runs and the table lists them. The outlined dot is the winner. The dashed lines are the window's trade floor and, when the plan requires a profit, $0.
 
 The rules are the plan's frozen ones, with this window's trade floor. Hover a dot for its settings and numbers.
 
@@ -303,7 +357,7 @@ The rules are the plan's frozen ones, with this window's trade floor. Hover a do
 
 1. Each dot is a point scored on this window: across, its trades; up, its net profit.
 2. Blue dots meet the rules. The outlined one is the winner.
-3. The other colours name the rule a point fails: too few trades, too deep a fall, no profit, or a run that failed.
+3. The other colours name the rule a point fails: amber too few trades, red too deep a fall, light blue no profit, grey nothing recorded.
 4. The dashed lines are the trade floor and $0. Many points just past them mean the rules shaped the choice.
 
 #### Good signs and warning signs
@@ -320,19 +374,19 @@ Job applicants plotted by experience and test score, with the hiring bar drawn i
 
 #### The question it answers
 
-Does the result survive nearby settings of two knobs together?
+Does the result hold across two knobs’ searched ranges together?
 
 #### What you're looking at
 
-A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the candidate's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the candidate itself. Grey cells have no return: an invalid pair (—), a value outside the legal range (·), a pair never run (?), a run that failed (Failed), or one that recorded no return (no return). When the plan audited more than one pair, buttons above the chart switch between them.
+A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the all-period winner’s. Each axis takes up to five values across the knob's searched range, rounded to the knob's step (so a narrow range can have fewer) and with the winner's value among them. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the all-period winner itself. Grey cells have no return: an invalid pair (—), a value outside the legal range (·), a pair never run (?), a run that failed (Failed), or one that recorded no return (no return). When the plan audited more than one pair, buttons above the chart switch between them.
 
 The landscape is a two-knob slice: it says nothing about combinations of the other knobs.
 
 #### How to read it
 
-1. Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.
+1. Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the all-period winner’s.
 2. Green cells made money and red cells lost it; each cell prints its net return.
-3. The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.
+3. The outlined cell is the all-period winner itself. A plateau of similar cells around it is more robust than a lone peak.
 4. Grey cells have no return: an invalid pair (—), outside the legal range (·), never run (?), a failed run, or one that recorded none.
 
 #### Good signs and warning signs
@@ -353,11 +407,11 @@ Test over time checks the search procedure itself. It cuts the development perio
 
 #### The question it answers
 
-Which months did each fold train on and test on, and how did each fold end?
+Which months did each fold train on and test on, and how did each end?
 
 #### What you're looking at
 
-A row for each fold. The grey bar is the fold's training window; the coloured bar right after it is its test window, in Eastern dates. A completed fold's test bar is green when its winner made money on the test window and red when it lost; a failed fold's bar is outlined in red; a grey one has not run yet. Before testing over time runs, the chart shows the folds the plan froze when the study was locked, and while it runs each fold fills in as it finishes.
+A row for each fold. The grey bar is the fold's training window; the coloured bar right after it is its test window, in Eastern dates. A completed fold's test bar is green when its winner made money on the test window and red when it lost; a failed fold's bar is outlined in red; a grey one has not run yet or broke even (its row label shows the return). Before testing over time runs, the chart shows the folds the plan froze when the study was locked, and while it runs each fold fills in as it finishes.
 
 Hover a fold to see its windows, the settings its training chose, the winner's training and test Sharpe, its retention, its test return and its test trades, or the reason it failed.
 
@@ -365,7 +419,7 @@ Hover a fold to see its windows, the settings its training chose, the winner's t
 
 1. Read each row as one fold: the grey bar is its training window, the coloured bar the test window right after it.
 2. The test windows follow one another in time, so together they cover a stretch the procedure never trained on before choosing.
-3. A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet.
+3. A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet or broke even.
 4. Hover a fold for its windows, both Sharpes, its retention, test return and trades.
 
 #### Good signs and warning signs
@@ -383,7 +437,7 @@ A teacher who writes each week's quiz using only what was taught up to that week
 
 #### The question it answers
 
-If the procedure had chosen fresh settings before each test window, how would its test results have added up?
+If the search procedure had chosen fresh settings before each test window, how would its test results have added up?
 
 #### What you're looking at
 
@@ -416,7 +470,7 @@ A fund manager who rebalances every quarter using only past data, compared with 
 
 #### The question it answers
 
-How much of each fold's training Sharpe survived on its test window?
+How much of each fold’s training Sharpe survived on its test window?
 
 #### What you're looking at
 
@@ -424,7 +478,7 @@ Two bars per fold: the winner's Sharpe on its training window, in grey, and on i
 
 $$\text{retention} = \frac{\text{test Sharpe}}{\text{training Sharpe}}$$
 
-Retention is defined only for a completed fold whose training Sharpe is above 0. The verdict takes the median retention over the folds that have one and needs 50% or more to say the procedure still worked.
+Retention is defined only for a completed fold with a recorded test Sharpe and a training Sharpe above 0. The verdict takes the median retention over the folds that have one and needs 50% or more to say the procedure still worked, once every fold completed, the folds made enough trades and the median test Sharpe is above 0.
 
 #### How to read it
 
@@ -437,7 +491,7 @@ Retention is defined only for a completed fold whose training Sharpe is above 0.
 
 - Good: test bars a good fraction of the training bars, fold after fold.
 - Warning: tall training bars with short or negative test bars. The search fitted each training window's noise.
-- Warning: retention above 100% in one fold and far below in others. One lucky fold can hide the rest.
+- Warning: retention swinging far above and below 100% from fold to fold. The median can look fine while the folds disagree.
 
 #### An everyday comparison
 
@@ -476,7 +530,7 @@ Asking several tailors to measure you on different days. If they all write down 
 
 #### The question it answers
 
-Fold by fold, did the procedure's winner beat the current settings on the same test window?
+Fold by fold, did the procedure’s winner beat the current settings on the same test window?
 
 #### What you're looking at
 
@@ -484,14 +538,14 @@ Two bars per fold: the test return of the winner that fold's training chose, in 
 
 $$\text{difference} = \text{winner's test return} - \text{current settings' test return}$$
 
-A fold whose winner failed has only the grey bar.
+A fold that failed has only the grey bar, or no bar at all when the current settings' run failed too.
 
 #### How to read it
 
 1. Each fold has two bars: the return of the winner its training chose, and the current settings on the same test window.
 2. Compare them fold by fold. The grey bar is the benchmark.
 3. Count the folds where the procedure leads. Winning a few folds by a lot is weaker than winning most of them.
-4. A fold with only a grey bar is one whose winner failed; hover it for what the current settings did.
+4. A fold with only a grey bar is one that failed; hover it for what the current settings did.
 
 #### Good signs and warning signs
 
@@ -507,7 +561,7 @@ Two route planners driving the same trips. One plans fresh each time; the other 
 
 #### The question it answers
 
-Did the folds trade enough on their test windows to judge the procedure?
+Did the folds trade enough on their test windows to judge?
 
 #### What you're looking at
 
@@ -515,7 +569,7 @@ On the left, each fold's test trades: the trades its winner made on its test win
 
 $$\text{test trades} = \sum_{\text{completed folds}} \text{trades on the fold's test window}$$
 
-The forward minimum is the number of trades all forward tests must reach together; for a plan with an expected trade frequency, it is that frequency over the forward tests' trading years, frozen when the study was locked. It applies to the total only: no fold has a minimum of its own. A total below it turns red. While testing over time is still running, the total counts the folds finished so far and is not judged against the minimum.
+The forward minimum is the number of trades all forward tests must reach together; for a plan with an expected trade frequency, it is that frequency times the forward tests' trading years, rounded up, frozen when the study was locked; a fixed-floor plan uses its selection floor. It applies to the total only: no fold's test window has a minimum of its own. A total below it turns red. Until testing over time reaches its verdict (while it runs, or if it stopped early), the total counts the folds finished so far and is not judged against the minimum.
 
 Hover a fold for its test trades and the current settings' trades on the same window.
 
@@ -544,7 +598,7 @@ Compare lines up the candidates on the development data, the data used to choose
 
 #### The question it answers
 
-Which settings are you comparing, how did each do on the development data, and which one is selected?
+Which settings are you comparing, and how did each do on the development data?
 
 #### What you're looking at
 
@@ -552,7 +606,7 @@ One card per candidate. A **candidate** is a complete set of knob values: the st
 
 Each card shows:
 
-- Its name in its colour, where it came from (the all-period search, the most recent training window, or the frozen current settings), and a chip saying whether it passes the plan's rules: enough trades, a worst fall within the study's limit and a completed run.
+- Its name in its colour, where it came from (the all-period search, the most recent training window, or the frozen current settings), and a chip saying whether it passes the plan's rules: enough trades, a worst fall within the study's limit, a profit when the plan requires one, and a completed run.
 - Its settings line: the value of every knob.
 - Four numbers from the development data. **Net return** is the gain after trading costs, as a percent of the starting capital. **Sharpe** is return for each unit of day-to-day swing; higher means steadier. **Worst fall** is the deepest drop from a previous high on the engine's bar-by-bar equity. **Trades** is the count, beside the minimum the plan requires over the development period.
 - A small line of the running return, the same series as the equity chart.
@@ -581,7 +635,7 @@ Think of player cards at a tryout: key numbers plus a form line. A player who mi
 
 #### The question it answers
 
-How did each candidate's account grow over the development period, and how deep and how long were its falls along the way?
+How did each candidate grow over the development period, and how deep were its falls?
 
 #### What you're looking at
 
@@ -622,7 +676,7 @@ Picture a hike. The top part is your height above the trailhead; the lower part 
 
 #### The question it answers
 
-Which candidate leads on each measure, and does one lead on most of them?
+Which candidate leads on each measure?
 
 #### What you're looking at
 
@@ -660,11 +714,11 @@ It is like comparing phones on battery, camera, price and weight. Each spec has 
 
 #### The question it answers
 
-Does the selected candidate's result hold when one setting moves one step?
+Does the result hold when one setting moves one step?
 
 #### What you're looking at
 
-One row per searched knob. A **neighbor** is the candidate with one knob moved one search step down or up and every other knob unchanged.
+One row per searched knob. A **neighbor** is the candidate with one knob moved one neighbor step down or up and every other knob unchanged. The neighbor step is fixed for each knob by the strategy, such as 2 RSI points, not the plan's search step.
 
 The dashed line at 0 is the candidate's own net return, named with its value under the axis. Each row has two bars that start there: the lighter one for the neighbor one step below, the darker one for the neighbor one step above. A bar's length is how much that neighbor's net return differs from the candidate's: left of 0 it earns less, right of 0 it earns more. A neighbor that loses money is drawn in red, and its knob is marked "loses money".
 
@@ -682,7 +736,7 @@ A step can have no bar: it fell outside the knob's legal range, was not a valid 
 
 - Good: short bars on both sides of every knob, none of them red.
 - Warning: a red bar. The result may depend on hitting one exact value.
-- Warning: a missing step at the edge of a range. The best value sat at the end of what was searched, so a better or worse value may lie just past it.
+- Warning: a step marked "Outside the legal range". The candidate sits at the very end of what the knob allows, so only one side was checked.
 
 #### An everyday comparison
 
@@ -692,13 +746,13 @@ A good cake recipe still works with a little more or less sugar. If one extra sp
 
 #### The question it answers
 
-Does the selected candidate still make money when trading costs are higher and fills are worse than the study assumes?
+Does the result survive harsher costs and fills?
 
 #### What you're looking at
 
 Horizontal bars stacked like the rungs of a ladder, each the candidate's net return over the development period under one cost setting, with its value printed at its end.
 
-The top bar, in the candidate's colour, is the result at the study's own costs: its commission per order, its slippage per share and its fill rule. Each bar below reruns the same settings in the engine under one scenario the plan declared before the study started, such as doubled slippage or fills at the next bar's open. A stress that turns the result into a loss is drawn in red and marked "loses money" under its name; a run that failed has no bar.
+The top bar, in the candidate's colour, is the result at the study's own costs: its commission per order, its slippage per share and its fill rule. Each bar below reruns the same settings in the engine under one scenario the plan declared before the study started, such as an extra 1¢ a share of slippage or an extra $1 per order. Any bar that loses money, the top one included, is drawn in red and marked "loses money" under its name; a run that failed, or one the budget cut off, has no bar and reads "not recorded".
 
 Hover a bar to see its net return, its change from the top bar, its worst fall, trades and Sharpe.
 
@@ -712,7 +766,7 @@ Hover a bar to see its net return, its change from the top bar, its worst fall, 
 #### Good signs and warning signs
 
 - Good: every bar stays clearly right of 0%.
-- Warning: a large drop from one stress, such as delayed fills. Trades that rely on an exact price are fragile.
+- Warning: a large drop from one stress, such as the extra slippage. Trades that rely on an exact price are fragile.
 - Warning: a stressed bar close to 0%. Real costs vary, and there would be little room left.
 
 #### An everyday comparison
@@ -727,7 +781,7 @@ The **By month** tab of Compare's evidence shows the selected candidate's develo
 
 #### The question it answers
 
-Which months of the development period made money for the selected candidate, which lost it, and do the good and bad months fall in any pattern?
+Which months made money and which lost it, year by year?
 
 #### What you're looking at
 
@@ -737,7 +791,7 @@ A month's net profit is the change in the account over the month, from the last 
 
 $$\text{net profit}_m = \text{equity at the end of } m - \text{equity at the end of the month before}$$
 
-A trade counts in the month it exits. Hover a cell to see the month's net profit, its return on the equity it started with, and how many trades closed in it.
+A month's net profit includes the gain or loss on a position still open at its end, so a trade held across a month end splits its profit between the two months; it is counted among the trades closed in the month it exits. The first and last months may be partial. Hover a cell to see the month's net profit, its return on the equity it started with, and how many trades closed in it.
 
 #### How to read it
 
@@ -760,7 +814,7 @@ A shop's monthly takings on a wall calendar. A good year can come from steady mo
 
 #### The question it answers
 
-How did the selected candidate's development net profit move from one month to the next?
+How did the net profit move from month to month?
 
 #### What you're looking at
 
@@ -789,7 +843,9 @@ A runner's monthly mileage. Steady months build fitness; one huge month followed
 
 #### The question it answers
 
-How fast does the selected candidate's development net profit pile up when its trades are counted from best to worst? A steep start means the result rests on a few big winners.
+With the trades counted best first, how fast does the net profit pile up?
+
+A steep start means the result rests on a few big winners.
 
 #### What you're looking at
 
@@ -799,7 +855,7 @@ The horizontal axis is the share of trades counted so far, from 0% to 100%. The 
 
 $$\text{share of net profit after } i \text{ trades} = \frac{\text{net profit of the best } i \text{ trades}}{\text{net profit of all the trades}}$$
 
-The line climbs above 100% because the winners come first: the winners alone add up to more than the final result. Then the losers begin, smallest first, each pulling the total down. After the last and biggest loss, the line ends at 100%, because all the trades together make the final net profit.
+When some trades lost, the line climbs above 100%, because the winners come first: the winners alone add up to more than the final result. Then the losers begin, smallest first, each pulling the total down. After the last and biggest loss, the line ends at 100%, because all the trades together make the final net profit.
 
 The curve is drawn only when the trades, each net of its commission, add up to the run's net profit within a cent, and only when the run made money: a share of a loss means nothing. Otherwise the panel says why.
 
@@ -809,7 +865,7 @@ Hover the line to see how many trades are counted, their running net profit and 
 
 1. A steep climb at the left means the best few trades carry much of the profit.
 2. The marked dot shows the share of net profit the best 5% of trades make.
-3. The peak is where the winning trades end. Its height is all the winners added together.
+3. The peak is where the winning trades end. Its height is all the winners added together, as a share of the final net profit.
 4. The fall from the peak back to 100% is all the losing trades added together.
 
 #### Good signs and warning signs
@@ -827,7 +883,9 @@ Sort a basketball team's games from biggest win to biggest loss and keep a runni
 
 #### The question it answers
 
-Does the selected candidate stay profitable over the development period without its best month, or without its best 5% of trades? This is the concentration rule, and the decision summary's Concentration row reports it.
+Does the result stay profitable without its best month or its best 5% of trades?
+
+This is the concentration rule, and the decision summary's Concentration row reports it.
 
 #### What you're looking at
 
@@ -835,7 +893,7 @@ Three horizontal bars start at $0:
 
 - **All trades**, in the candidate's colour, is the whole development net profit.
 - **Without its best month** takes out the month with the highest net profit.
-- **Without its best trades** takes out the best 5% of trades, rounded up, so at least one. Each trade counts its net profit after its entry and exit commission.
+- **Without its best N trades** (the label gives the count) takes out the best 5% of trades, rounded up, so at least one. Each trade counts its net profit after its entry and exit commission.
 
 Each bar's value is printed to the cent beside it. A bar at $0 or less turns red and is marked "not profitable"; a loss reaches left of $0.
 
@@ -879,7 +937,7 @@ The charts are drawn only when the trades, each net of its commission, add up to
 
 #### The question it answers
 
-When did the selected candidate make its development profit, trade by trade?
+When was the profit made, trade by trade?
 
 #### What you're looking at
 
@@ -895,7 +953,7 @@ The trades are in exit order. Hover a trade to see its full record: when it ente
 2. Find where it rose most. Profit made in a few short stretches is less dependable than a steady climb.
 3. Find the line’s lowest point. Below $0 there means the trades had lost money overall by then.
 4. Read the bars beneath: each trade’s own net profit, at its exit.
-5. Hover a trade for its full record: times, prices, quantity, P&L before and after commission, bars held, RSI at entry and why it exited.
+5. Hover a trade for its full record: times, prices, quantity, P&L before fees and net profit, bars held, RSI at entry and why it exited.
 
 #### Good signs and warning signs
 
@@ -911,7 +969,7 @@ A savings account statement: each deposit or withdrawal, with the balance after 
 
 #### The question it answers
 
-What do the selected candidate's wins and losses look like: many small ones, or a few big ones?
+What do the wins and losses look like: many small ones, or a few big ones?
 
 #### What you're looking at
 
@@ -946,7 +1004,7 @@ A teacher's spread of test scores. The average can hide whether most students di
 
 #### The question it answers
 
-Does holding a trade for longer help or hurt the selected candidate's results?
+Does holding a trade longer help or hurt?
 
 #### What you're looking at
 
@@ -987,13 +1045,13 @@ Within the RSI gates the strategy enters between, do some RSI readings lead to b
 
 Each dot is a development trade: across is the RSI the strategy saw when it decided to enter, and up is the trade's net profit. The two dashed lines are this candidate's lower and upper RSI gates; every entry falls between them.
 
-The level lines are band averages. The space between the gates is cut every 5 RSI points, and each band's line is the average net profit of the trades that entered in it:
+The level lines are band averages. The space between the gates is cut at each multiple of 5 RSI points, so the bands touching a gate can be narrower, and each band's line is the average net profit of the trades that entered in it:
 
 $$\text{band average} = \frac{\text{net profit of the trades entered in the band}}{\text{number of those trades}}$$
 
-A band runs up to, but not including, its upper edge; the last band includes the upper gate. A band no trade entered in has no line. A trade with no RSI recorded is in no band, and the summary says how many.
+A band runs up to, but not including, its upper edge; the last band includes the upper gate. A band no trade entered in has no line. A trade with no RSI recorded has no dot and is in no band.
 
-Hover a dot for the trade, or a band's line for its trade count and average.
+Hover a dot for the trade, or the dark dot at the left end of a band's line for its trade count and average.
 
 #### How to read it
 
@@ -1016,7 +1074,7 @@ A fishing log by water temperature. If every catch came at one narrow temperatur
 
 #### The question it answers
 
-Do the selected candidate's trades do better or worse at some times of day or on some weekdays?
+Do trades entered at some times of day or on some weekdays do better?
 
 #### What you're looking at
 
@@ -1037,7 +1095,7 @@ Hover a cell for its trade count, average and total net profit.
 
 #### Good signs and warning signs
 
-- Good: no strong pattern, or one that holds across several neighbouring cells with plenty of trades.
+- Good: no strong pattern, or one that holds across several neighboring cells with plenty of trades.
 - Warning: most cells grey. The development period has too few trades to say anything about timing.
 - Warning: one bright cell among grey and pale ones. Treat it as luck until more data says otherwise.
 
