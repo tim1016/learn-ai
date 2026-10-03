@@ -20,7 +20,7 @@ async function renderStep(study: StudyDetail) {
   const steps: StudyStep[] = [];
   view.fixture.componentInstance.studyCommand.subscribe((command) => commands.push(command));
   view.fixture.componentInstance.goTo.subscribe((step) => steps.push(step));
-  return { view, commands, steps };
+  return { view, commands, steps, service };
 }
 
 function reviewWith(exam: Partial<ExamView>, overrides: Partial<StudyDetail> = {}): StudyDetail {
@@ -53,6 +53,17 @@ describe('GoldenSearchDecisionStepComponent — final-test charts', () => {
     const months = screen.getByRole('region', { name: 'Final-test months' });
     fireEvent.click(within(months).getByRole('button', { name: 'Show as table' }));
     expect(within(months).getAllByRole('row')[1].textContent).toMatch(/Jan 2026\s*\+0\.7%\s*\+0\.4%/);
+  });
+
+  it('reads the final-test runs once; a poll keeps them drawn', async () => {
+    const { view, service } = await renderStep(studyDetail('awaiting_review'));
+    await screen.findByRole('region', { name: 'Development against final' });
+
+    view.fixture.componentRef.setInput('study', studyDetail('awaiting_review', { revision: 4 }));
+    await view.fixture.whenStable();
+
+    expect(service.candidate).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('region', { name: 'Development against final' })).toBeTruthy();
   });
 });
 

@@ -62,6 +62,8 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
             <p caption class="caption">A final result spread across months is steadier than one carried by a single month.</p>
           </app-golden-search-panel>
         }
+      } @else if (finalRuns() !== null) {
+        <p class="muted" data-span="6">No final-test run is recorded for these settings.</p>
       } @else {
         <p class="muted" data-span="6">Loading the final-test runs…</p>
       }
@@ -90,20 +92,23 @@ export class GoldenSearchFinalChartsComponent {
   protected readonly words = CHECK_WORDS;
   protected readonly icons = CHECK_ICONS;
 
-  /** The final test's two runs: the candidate's, then the current settings' (one when they are the same). */
-  private readonly keys = computed<CandidateKey[]>(() => {
-    const candidate = this.exam().candidate_key;
-    return candidate === 'incumbent' ? ['incumbent'] : [candidate, 'incumbent'];
-  });
+  /** The final test's two runs: the candidate's, then the current settings' (one when they are the same). Its runs never change, so a poll never reads them again. */
+  private readonly request = computed(
+    () => {
+      const candidate = this.exam().candidate_key;
+      return { studyId: this.study().id, keys: candidate === 'incumbent' ? (['incumbent'] as CandidateKey[]) : [candidate, 'incumbent' as CandidateKey] };
+    },
+    { equal: (a, b) => a.studyId === b.studyId && a.keys.join() === b.keys.join() },
+  );
   protected readonly runs = resource({
-    params: () => ({ studyId: this.study().id, keys: this.keys() }),
+    params: () => this.request(),
     loader: async ({ params }) => Promise.all(params.keys.map(async (key) => ({ key, detail: await this.service.candidate(params.studyId, key) }))),
   });
   protected readonly error = computed(() => {
     const error = this.runs.error();
     return error === undefined ? null : extractServerMessage(error, 'The final-test runs could not be loaded.');
   });
-  private readonly finalRuns = computed<FinalRun[] | null>(() => {
+  protected readonly finalRuns = computed<FinalRun[] | null>(() => {
     if (!this.runs.hasValue()) return null;
     return this.runs.value().flatMap(({ key, detail }) =>
       detail.exam === null
