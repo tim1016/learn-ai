@@ -9,6 +9,7 @@ offered tuple deploys. The store-backed read is exercised in
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 import asyncpg
@@ -102,6 +103,39 @@ def test_a_default_that_is_not_ready_falls_back_to_the_registry_point(status: St
     assert preset.golden_qualification_id is None
     assert preset.parameters == {name: value for name, value in _point("SPY").items() if name != "symbol"}
     assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
+
+
+def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_and_says_why() -> None:
+    """#2841: a READY tuple whose periods need more history than a bot can load was still offered, then always refused."""
+    program = "sma_crossover"
+    registration = _STRATEGY_REGISTRY[program]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    symbol = contract.validated_symbols[0]
+    registry_point = registration.param_schema.model_validate({**contract.validated_settings, "symbol": symbol})
+    approved = registry_point.model_copy(update={"short_window": 50, "long_window": 500}).model_dump(mode="json")
+    default = JudgedQualification(
+        qualification=dataclasses.replace(
+            _judged(symbol).qualification,
+            program_key=program,
+            program_version=contract.program_version,
+            parameter_schema_version=contract.parameter_schema_version,
+            params=approved,
+            params_sha256=params_sha256(approved),
+        ),
+        events=(),
+        status="ready",
+        is_default=True,
+    )
+
+    preset = _qualified_configuration(program, symbol, {(program, symbol): default})
+
+    assert preset is not None
+    assert preset.golden_qualification_id is None
+    assert preset.parameters == registry_point.model_dump(mode="json", exclude={"symbol"})
+    assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
+    assert f"The Golden Search default for {symbol} is not offered" in preset.explanation
+    assert "39 days" in preset.explanation
 
 
 def test_another_stocks_default_leaves_this_stock_on_the_registry_point() -> None:
