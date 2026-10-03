@@ -556,6 +556,38 @@ async def test_a_position_alpaca_no_longer_holds_is_settled_only_under_a_recorde
     assert len(alpaca.sent) == 1
 
 
+async def test_an_order_settled_as_absent_that_had_filled_unseen_is_credited_once_alpaca_shows_it(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The lost order did fill, and no read showed it: Alpaca holds none of the bot's 10 SPY.
+
+    Settled as absent under the recorded drift, the EXIT ends with the 10 SPY
+    still attributed. The Clerk goes on looking the closing order of a failed
+    EXIT up while its symbol is drifted: when Alpaca shows it filled, the
+    fill is credited once and the bot holds nothing, as Alpaca says. Nothing
+    is sold twice.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca, wait_passed=False)
+    closing = _closing_order(repo)
+    alpaca.fills(closing.client_order_id)
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    assert _exit_state(repo, exit_id) == "unknown" and alpaca.holds == 0.0
+
+    await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
+    assert _exit_state(repo, exit_id) == "failed" and repo.position(SID, "SPY") == 10.0
+
+    alpaca.answers_its_lookup(closing.client_order_id)
+    await _passes(repo, _the_sweep(repo, alpaca), 3)
+
+    assert repo.position(SID, "SPY") == 0.0
+    assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == 10.0
+    assert _exit_state(repo, exit_id) == "failed"
+    assert len(alpaca.sent) == 1
+
+
 async def test_an_order_sent_moments_ago_is_not_ended_as_absent_until_alpaca_would_show_it(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
@@ -1519,6 +1551,41 @@ async def test_an_absent_order_ends_its_exit_under_the_notice_its_bot_already_ca
     ]
     assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
     assert len(alpaca.sent) == 2
+
+
+async def test_a_mirror_rebuild_replays_an_order_taken_up_by_its_alpaca_id(tmp_path: Path) -> None:
+    """The mirror alone rebuilds the order's Alpaca order id, its fill and the flat EXIT, row for row."""
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
+    )
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id, it_is_this_order = await _a_stopped_bot_whose_closing_order_alpaca_has_unseen(repo, alpaca)
+    closing = _closing_order(repo)
+    alpaca.fills(closing.client_order_id)
+    await _settle(_facade(repo, alpaca), _context_of(repo, SID), it_is_this_order)
+    transitions = repo.custody_transitions()
+    db_path = repo.db_path
+    repo.close()
+    db_path.rename(db_path.with_suffix(".db.corrupt"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
+    )
+    try:
+        assert rebuilt.custody_transitions() == transitions
+        assert _exit_state(rebuilt, exit_id) == "succeeded"
+        assert rebuilt.position(SID, "SPY") == 0.0
+        taken_up = rebuilt.order(closing.order_ref)
+        assert taken_up is not None
+        assert (taken_up.broker_order_id, taken_up.broker_state) == (it_is_this_order.broker_order_id, "filled")
+        assert _open_episode(rebuilt, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
+    finally:
+        rebuilt.close()
 
 
 async def test_a_mirror_rebuild_replays_a_settled_order(tmp_path: Path) -> None:
