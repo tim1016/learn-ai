@@ -2,7 +2,7 @@
   <div class="bot-end-editor__when">
     <div class="bot-end-editor__field">
       <label [for]="dateId">End date</label>
-      <app-date-field [inputId]="dateId" appearance="filled" [formField]="endForm.date" [pickFrom]="today" [hostProblem]="dateError()" />
+      <app-date-field [inputId]="dateId" appearance="filled" calendar="inline" [formField]="endForm.date" [pickFrom]="today" [hostProblem]="dateError()" />
     </div>
     <label>
       <span>End time <small>· your time</small></span>

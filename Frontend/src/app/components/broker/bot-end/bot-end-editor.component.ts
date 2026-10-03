@@ -40,7 +40,8 @@ export class BotEndEditorComponent {
   /**
    * The viewer's own today: the first day the calendar offers. An end that has
    * passed is still shown and can be typed, because the backend says why it
-   * refuses one, in its own words.
+   * refuses one, in its own words. The calendar opens in place: this editor
+   * lives in a native popover, and a floating calendar would open beneath it.
    */
   protected readonly today = localWallClock(Date.now()).date;
   protected readonly errorId = `bot-end-editor-${this.id}-error`;

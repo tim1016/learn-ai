@@ -41,9 +41,13 @@ function selectValue(event: Event): string | null {
 function defaultWindow(bounds: DateBounds): { from: string; to: string } | null {
   const to = bounds.max;
   if (to === null) return null;
+  const end = isoDateAfter(to);
   for (let months = DEFAULT_WINDOW_MONTHS; months >= 1; months--) {
-    const from = shiftIsoDateByMonths(isoDateAfter(to), -months);
-    if (bounds.min === null || from >= bounds.min) return { from, to };
+    const from = shiftIsoDateByMonths(end, -months);
+    // Whole months as the planner counts them: the start plus the months is the end again.
+    // A month end can break that (six months before October 31st is April 30th).
+    const whole = shiftIsoDateByMonths(from, months) === end;
+    if (whole && (bounds.min === null || from >= bounds.min)) return { from, to };
   }
   return null;
 }

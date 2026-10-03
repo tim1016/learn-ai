@@ -44,6 +44,8 @@ export class DateRangePickerComponent {
    * Quick ranges a host's server has already resolved, shown in place of the
    * picker's own. For a host whose ranges are worked out server-side (Data
    * Lab's end on the session still forming); the labels stay the shared ones.
+   * A click on one is the host's to apply: the picker reports it through
+   * ``picked`` and sets nothing itself, so the range has one writer.
    */
   readonly hostOffers = input<readonly QuickRangeOffer[] | null>(null);
   /** Whether both ends must be trading sessions. */
@@ -52,7 +54,7 @@ export class DateRangePickerComponent {
   readonly label = input('Date range');
   /** Both dates after any change, in one event, for a host that keeps them in one value. */
   readonly changed = output<{ readonly from: string; readonly to: string }>();
-  /** The quick range just clicked, for a host that does more on a click than take its dates. */
+  /** The host-resolved quick range just clicked. */
   readonly picked = output<QuickRangeKey>();
 
   protected readonly noteId = `date-range-note-${nextNoteId++}`;
@@ -131,8 +133,8 @@ export class DateRangePickerComponent {
 
   protected applyOffer(offer: QuickRangeOffer): void {
     if (offer.range === null) return;
-    this.setRange(offer.range);
-    this.picked.emit(offer.key);
+    if (this.hostOffers() !== null) this.picked.emit(offer.key);
+    else this.setRange(offer.range);
   }
 
   protected retryCalendar(): void {

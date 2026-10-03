@@ -140,7 +140,7 @@ describe('DateRangePickerComponent', () => {
     expect(within(row).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['1Y', '2Y', 'Max']);
   });
 
-  it("shows the ranges a host's server resolved in place of its own, and says which one was clicked", async () => {
+  it("shows the ranges a host's server resolved in place of its own, and leaves a click on one to the host", async () => {
     const { view, host } = await renderPicker();
     // The server ends its week on the session still forming, 2026-10-02, which the picker's own ranges never reach.
     host.hostOffers.set([{ key: '1W', range: { from: '2026-09-28', to: '2026-10-02' }, unavailable: null }]);
@@ -151,8 +151,9 @@ describe('DateRangePickerComponent', () => {
 
     await userEvent.click(within(row).getByText('1W'));
 
-    expect([host.from(), host.to()]).toEqual(['2026-09-28', '2026-10-02']);
+    // The host applies its own server's window; the picker sets nothing, so the range has one writer.
     expect(host.picked()).toBe('1W');
+    expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
   });
 
   it('says when the held data stops short of the market', async () => {

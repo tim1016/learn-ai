@@ -9,21 +9,36 @@
     maxlength="10"
     placeholder="YYYY-MM-DD"
     [attr.id]="inputId()"
-    [attr.aria-label]="label()"
     [value]="text()"
     [attr.aria-invalid]="problem() !== null"
     [attr.aria-describedby]="problem() === null ? null : noteId"
     [disabled]="disabled()"
-    (change)="text.set(field.value.trim())"
+    (change)="apply(field.value)"
     (blur)="touch.emit()"
   />
-  <button type="button" class="date-control__open" aria-label="Open the calendar" aria-haspopup="dialog" [disabled]="disabled()" (click)="popover.toggle($event, anchor)">
+  <button
+    type="button"
+    class="date-control__open"
+    aria-label="Open the calendar"
+    [attr.aria-haspopup]="calendar() === 'inline' ? null : 'dialog'"
+    [attr.aria-expanded]="calendar() === 'inline' ? open() : null"
+    [disabled]="disabled()"
+    (click)="toggleCalendar($event, anchor)"
+  >
     <i class="pi pi-calendar" aria-hidden="true"></i>
   </button>
 </span>
 @if (problem(); as message) {
   <p class="date-control__note date-control__note--problem" [id]="noteId" role="alert">{{ message }}</p>
 }
-<p-popover #popover ariaLabel="Calendar">
-  <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" [sessions]="sessions()" (picked)="text.set($event.from); popover.hide()" />
-</p-popover>
+@if (calendar() === 'inline') {
+  @if (open()) {
+    <div class="date-field__inline" role="group" aria-label="Calendar">
+      <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" (picked)="pick($event.from)" />
+    </div>
+  }
+} @else {
+  <p-popover ariaLabel="Calendar">
+    <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" (picked)="pick($event.from)" />
+  </p-popover>
+}

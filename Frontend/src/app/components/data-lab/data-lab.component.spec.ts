@@ -120,7 +120,9 @@ const preset6M: ChartRangePreset = {
   estimated_bars_per_timeframe: { '1m': 49_140, '5m': 9_828, '1D': 126 },
 };
 
-const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset6M];
+/** Five sessions ending on the 1D preset's day; shown under the shared label 1W. */
+const preset5D: ChartRangePreset = { ...preset1D, key: '5D', label: '5 days', start_ms_utc: preset1D.start_ms_utc - 6 * 86_400_000, session_count: 5 };
+const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset5D, preset6M];
 
 /** Render the shell through a real router outlet (tabs, routing, dock). */
 async function renderRoutedShell(runSession = idleRunSession()) {
@@ -266,6 +268,33 @@ describe('DataLabComponent (shell)', () => {
     const group = screen.getByRole('group', { name: 'Quick ranges' });
     expect(group.querySelector('button')?.textContent?.trim()).toBe('1D');
     expect(screen.getByRole('button', { name: '6M' })).toBeTruthy();
+  });
+
+  it("shows Python's five-session preset under the shared label 1W, with its intraday timeframe (#2858)", async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: '1W' }));
+    fixture.detectChanges();
+
+    expect(store.committedWindow()).toEqual({ startMsUtc: preset5D.start_ms_utc, endMsUtc: preset5D.end_ms_utc });
+    expect([store.draft().timespan, store.draft().multiplier]).toEqual(['minute', 30]);
+  });
+
+  it('lets Apply scope through again when a saved window replaces dates the field had refused (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'End date' }), { target: { value: '2026-05' } });
+    await fixture.whenStable();
+    expect(apply.disabled).toBe(true);
+
+    store.patchDraft({ window: { startMsUtc: preset1D.start_ms_utc, endMsUtc: preset1D.end_ms_utc } });
+    await fixture.whenStable();
+
+    expect(apply.disabled).toBe(false);
   });
 
   it('applies a preset verbatim: server window committed, chart refresh requested', async () => {

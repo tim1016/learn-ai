@@ -105,6 +105,73 @@ describe('BotEndCardComponent (#2607)', () => {
     expect(within(card).getByRole('button', { name: 'Change end' })).toBeTruthy();
   });
 
+  it('saves the date just typed, even when Save is clicked in the same task as leaving the field (#2858)', async () => {
+    const { save, fixture } = await renderCard(SCHEDULED);
+    const fields = await openEditor(fixture);
+    const date = within(fields).getByLabelText<HTMLInputElement>('End date');
+    const wall = localWallClock(END_AT);
+
+    // A touch tap: the field's change and the click arrive with no tick between them.
+    date.value = '2026-12-01';
+    date.dispatchEvent(new Event('change'));
+    fireEvent.click(within(fields).getByRole('button', { name: 'Save end' }));
+
+    const [hour, minute] = wall.clock.split(':').map(Number);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: new Date(2026, 11, 1, hour, minute).getTime(), end_action: 'SELL' }));
+  });
+
+  it('opens the end date’s calendar inside the fields, where the page’s top layer cannot cover it; it offers today onward and takes a picked day (#2858)', async () => {
+    // The viewer's today is 2026-09-28, two days before the bot's end.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 28, 12));
+    try {
+      const { fixture } = await renderCard(SCHEDULED);
+      const fields = await openEditor(fixture);
+      const date = within(fields).getByLabelText<HTMLInputElement>('End date');
+
+      fireEvent.click(within(fields).getByRole('button', { name: 'Open the calendar' }));
+      await fixture.whenStable();
+
+      // Inside the dialog, not floated to the page body.
+      const calendar = within(fields).getByRole('group', { name: 'Calendar' });
+      const day = (dayOfMonth: number): HTMLElement => {
+        // PrimeNG's months are zero-based: 2026-8 is September.
+        const cell = calendar.querySelector<HTMLElement>(`span[data-date="2026-8-${dayOfMonth}"]`);
+        if (cell === null) throw new Error(`September ${dayOfMonth} is not on the calendar`);
+        return cell;
+      };
+      expect([day(27), day(28)].map((cell) => cell.classList.contains('p-disabled'))).toEqual([true, false]);
+
+      fireEvent.click(day(29));
+      await fixture.whenStable();
+
+      expect(date.value).toBe('2026-09-29');
+      expect(within(fields).queryByRole('group', { name: 'Calendar' })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('brings the date back when "No end" is unticked, and saves it', async () => {
+    const { save, fixture } = await renderCard(SCHEDULED);
+    const fields = await openEditor(fixture);
+    const date = within(fields).getByLabelText<HTMLInputElement>('End date');
+    const noEnd = within(fields).getByRole('checkbox', { name: 'No end — run until I stop it' });
+    const wall = localWallClock(END_AT);
+
+    fireEvent.click(noEnd);
+    await fixture.whenStable();
+    expect(date.disabled).toBe(true);
+
+    fireEvent.click(noEnd);
+    await fixture.whenStable();
+    expect(date.disabled).toBe(false);
+    expect(date.value).toBe(wall.date);
+
+    fireEvent.click(within(fields).getByRole('button', { name: 'Save end' }));
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: END_AT, end_action: 'SELL' }));
+  });
+
   it('offers no change once the backend says the end is not editable, and suggests no sale', async () => {
     await renderCard(STOPPED);
 

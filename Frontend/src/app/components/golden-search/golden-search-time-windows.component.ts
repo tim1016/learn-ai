@@ -5,7 +5,7 @@ import { etIsoDate } from '../../shared/date/et-midnight';
 import { DateFieldComponent } from '../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
-import { numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
+import { dateProblemKey, numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
 import { dateInputId, numberInputId, type PlanProblem } from './golden-search-plan-problems';
 import type { GoldenSearchPreflight, ProtocolRequest } from './golden-search.types';
 
@@ -74,8 +74,14 @@ export class GoldenSearchTimeWindowsComponent {
     return this.problems().has(numberProblemKey(field));
   }
 
-  /** What the server refused about this date, in its own words; null when it refused nothing. */
-  protected refusalFor(field: ProtocolDateField): string | null {
+  /**
+   * What is wrong with this date that the field cannot see for itself: the
+   * plan cannot read it (a date left empty), or the server refused it, in its
+   * own words. Null when nothing is.
+   */
+  protected problemFor(field: ProtocolDateField): string | null {
+    const unreadable = this.problems().get(dateProblemKey(field));
+    if (unreadable !== undefined) return unreadable;
     const target = dateInputId(field);
     const texts = this.refusals().filter((refusal) => refusal.target === target).map((refusal) => refusal.text);
     return texts.length === 0 ? null : texts.join(' ');
