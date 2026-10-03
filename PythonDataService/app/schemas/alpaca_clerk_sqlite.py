@@ -294,7 +294,11 @@ class SafeFlattenPlanResponse(BaseModel):
     control_revision: int
     scope: CustodyScope
     strategy_instance_id: str | None
-    reconciliation_id: str
+    # The Reconcile now receipt the plan rests on; null when it rests on the
+    # Clerk's own account check, which writes no receipt (#2839).
+    reconciliation_id: str | None
+    account_check_kind: Literal["reconcile_now", "clerk_pass"]
+    account_check_observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     prepared_at_ms: int
     expires_at_ms: int
     legs: tuple[SafeFlattenPlanLegResponse, ...]

@@ -21709,6 +21709,13 @@ export interface components {
         };
         /** SafeFlattenPlanResponse */
         SafeFlattenPlanResponse: {
+            /**
+             * Account Check Kind
+             * @enum {string}
+             */
+            account_check_kind: "reconcile_now" | "clerk_pass";
+            /** Account Check Observed At Ms */
+            account_check_observed_at_ms: number;
             /** Account Id */
             account_id: string;
             /** Authority Generation */
@@ -21724,7 +21731,7 @@ export interface components {
             /** Prepared At Ms */
             prepared_at_ms: number;
             /** Reconciliation Id */
-            reconciliation_id: string;
+            reconciliation_id: string | null;
             /**
              * Scope
              * @enum {string}

@@ -13,6 +13,8 @@ const PLAN: SqliteSafeFlattenPlan = {
   scope: 'CUSTODY_SUBJECT',
   strategy_instance_id: 'spy-bot',
   reconciliation_id: 'reconciliation-17',
+  account_check_kind: 'reconcile_now',
+  account_check_observed_at_ms: 1_700_000_009_000,
   prepared_at_ms: 1_700_000_010_000,
   expires_at_ms: 1_700_000_039_000,
   legs: [{

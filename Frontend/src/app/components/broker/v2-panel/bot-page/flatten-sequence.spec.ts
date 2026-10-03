@@ -20,6 +20,7 @@ import {
 const PLAN: SqliteSafeFlattenPlan = {
   version_token: 'plan-token', account_id: 'PA9', authority_generation: 4, db_identity_token: 'db-4',
   control_revision: 17, scope: 'CUSTODY_SUBJECT', strategy_instance_id: 'spy-a', reconciliation_id: 'rec-17',
+  account_check_kind: 'reconcile_now', account_check_observed_at_ms: 1_753_799_999_500,
   prepared_at_ms: 1_753_800_000_000, expires_at_ms: 4_102_444_800_000,
   legs: [{ strategy_instance_id: 'spy-a', symbol: 'SPY', side: 'sell', quantity: 3, position_updated_at_ms: 1_753_799_999_000 }],
 };
