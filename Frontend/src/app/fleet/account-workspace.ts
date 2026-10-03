@@ -63,6 +63,10 @@ export const HOME_WALL_VIEW = 'wall';
  * consent. */
 export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
 
+/** Activity's query parameter for one recovery action: `activity?recover=<action_id>`
+ * opens the order records and recovery section at that action's button. */
+export const ACTIVITY_RECOVER_QUERY_PARAM = 'recover';
+
 /** Golden Search's handoff (#2696): `?golden_qualification=<id>` carries an
  * approved qualification from "Use in Deploy" through the account list to
  * the chosen account's Deploy, which applies its exact settings. */
@@ -225,13 +229,13 @@ export function accountWorkspaceBotRoute(
 }
 
 /** Where an attention line's fix lives (`LaneAttentionAction.destination`). */
-export type AccountWorkspaceFixDestination = 'bot' | 'activity' | 'settings';
+export type AccountWorkspaceFixDestination = 'bot' | 'activity' | 'reconcile' | 'settings';
 
 /**
  * The link to an attention line's fix: the line's own bot page, Activity's
- * order records and recovery, or Settings — lane-scoped wherever it is
- * opened from. `null` only for a bot fix naming no bot, which the backend
- * never sends.
+ * order records and recovery, that section's Reconcile now, or Settings —
+ * lane-scoped wherever it is opened from. `null` only for a bot fix naming
+ * no bot, which the backend never sends.
  */
 export function accountWorkspaceFixRoute(
   account: BoundAccountWorkspaceAddress,
@@ -243,6 +247,11 @@ export function accountWorkspaceFixRoute(
       return sid === null ? null : accountWorkspaceBotRoute(account, sid);
     case 'activity':
       return { commands: [...workspaceRoute(account), 'activity'], queryParams: {} };
+    case 'reconcile':
+      return {
+        commands: [...workspaceRoute(account), 'activity'],
+        queryParams: { [ACTIVITY_RECOVER_QUERY_PARAM]: 'reconcile_now' },
+      };
     case 'settings':
       return { commands: settingsRoute(account), queryParams: {} };
   }

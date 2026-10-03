@@ -16271,7 +16271,7 @@ export interface components {
              * Destination
              * @enum {string}
              */
-            destination: "bot" | "activity" | "settings";
+            destination: "bot" | "activity" | "reconcile" | "settings";
             /** Label */
             label: string;
         };

@@ -94,6 +94,8 @@ interface BellItem {
       background: var(--panel-bg, #10141c); color: var(--text-primary);
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
       font-weight: 400; text-align: left;
+      /* The top bar never wraps; the panel's sentences must. */
+      white-space: normal;
     }
     .panel__heading { font-size: var(--fs-xs); font-weight: 700; margin-bottom: 0.4rem; }
     .panel__list { display: flex; flex-direction: column; gap: 0.45rem; list-style: none; margin: 0; padding: 0; }

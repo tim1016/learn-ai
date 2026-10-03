@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.active_runtime import ClerkStartupFailure
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import next_redrive_at_ms
@@ -71,6 +72,7 @@ from app.schemas.broker_v2_panel import (
     LaneAttentionKind,
     LaneAttentionRead,
 )
+from app.services.bot_carryover import custody_unprovable
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
@@ -82,6 +84,7 @@ logger = logging.getLogger(__name__)
 
 _OPEN_BOT = LaneAttentionAction(label="Open bot", destination="bot")
 _ORDER_RECORDS = LaneAttentionAction(label="Open order records", destination="activity")
+_RECONCILE = LaneAttentionAction(label="Reconcile now", destination="reconcile")
 _SETTINGS = LaneAttentionAction(label="Open Settings", destination="settings")
 
 #: What each episode is about, and where its fix lives. A hold on losses is
@@ -118,11 +121,12 @@ _CHANNEL_NAMES = {"market_data": "IBKR market data", "execution": "Alpaca order 
 async def lane_attention_read() -> LaneAttentionRead:
     """Everything currently needing the owner on this lane (#2228, PRD #2560).
 
-    From the lane's own custody ledger, never the broker: its active episodes
-    (holds, channels, out-of-sync orders and positions, exits that have not
-    flattened), a bot whose lifecycle cannot be read, stopped bots still
-    holding money, bots that ended uncleanly since the account was last
-    checked against Alpaca, the account's own standing (an authority that is
+    From the lane's own custody ledger and the Clerk's latest published pass,
+    never the broker: its active episodes (holds, channels, out-of-sync
+    orders and positions, exits that have not flattened), a bot whose
+    lifecycle cannot be read, stopped bots still holding money, bots that
+    ended uncleanly and that no check against Alpaca has since vouched
+    for, the account's own standing (an authority that is
     not serving, or what the latest cached account observation says), a bot's
     end sale waiting for the next open, and an account that has not switched
     to budgets. A lane with no authority at all, or one awaiting the owner's
@@ -160,7 +164,11 @@ async def lane_attention_read() -> LaneAttentionRead:
     # One line per bot: a bot whose exit is already named above is not named
     # again as merely stopped.
     named = {item.strategy_instance_id for item in items if item.kind == "exit"}
-    items.extend(await asyncio.to_thread(_bot_items, repository, world=world, already_named=named))
+    bot_items, unchecked = await asyncio.to_thread(_bot_items, repository, world=world, already_named=named)
+    items.extend(bot_items)
+    unchecked = [sid for sid in unchecked if not await _latest_pass_vouches_flat(clerk, sid)]
+    if unchecked:
+        items.append(_positions_unchecked_item(len(unchecked)))
     if repository.budget_authority_version() < 2:
         items.append(LaneAttentionItem(
             condition_id="legacy-budget", reason_code=BUDGETS_NOT_SWITCHED_ON, kind="legacy_budget",
@@ -283,7 +291,7 @@ def _channel_headline(evidence_refs: tuple[str, ...]) -> str:
 
 def _bot_items(
     repository: ClerkSqliteRepository, *, world: AuthorityKind, already_named: set[str | None],
-) -> list[LaneAttentionItem]:
+) -> tuple[list[LaneAttentionItem], list[str]]:
     """The lines Home's bots need, placed by the catalog's own groups (PRD #2560 D7).
 
     - A stopped bot still holding money -- the catalog's ``holding`` group,
@@ -294,9 +302,9 @@ def _bot_items(
     - A bot whose lifecycle cannot be read is one line: where it sits, and
       what it holds, are unknown.
     - A flat bot with nothing claimed is never a line of its own (H13, H34).
-      When some ended without a clean exit after the account was last
-      checked against Alpaca, the Clerk cannot vouch that they left nothing
-      behind: that is ONE account line, cleared by reconciling the account.
+      Those that ended without a clean exit after the account's last
+      Reconcile now are returned apart: the caller drops each one the
+      Clerk's latest pass vouches for, and the rest are ONE account line.
     Blocking: runs off the event loop.
     """
     items: list[LaneAttentionItem] = []
@@ -322,17 +330,31 @@ def _bot_items(
             last_check_ms is None or bot.unclean_ended_at_ms > last_check_ms
         ):
             unchecked.append(sid)
-    if unchecked:
-        items.append(LaneAttentionItem(
-            condition_id="positions-unchecked", reason_code="POSITIONS_UNCHECKED_SINCE_UNCLEAN_EXIT",
-            kind="out_of_sync", severity="warning",
-            headline=(
-                f"{len(unchecked)} bot{'s' if len(unchecked) != 1 else ''} ended without a clean exit after "
-                "this account was last checked against Alpaca. Reconcile now to confirm nothing is still held."
-            ),
-            action=_ORDER_RECORDS,
-        ))
-    return items
+    return items, unchecked
+
+
+async def _latest_pass_vouches_flat(clerk: ActiveAlpacaClerk | None, sid: str) -> bool:
+    """Whether the Clerk's latest pass proves an uncleanly ended bot left nothing behind.
+
+    The Clerk compares the whole account with Alpaca every 15 s. Once a pass
+    saw the bot's every transition (``published_custody``, #2607) and finds
+    it flat with nothing working, that pass is the check the line asks for --
+    the proof a stop at the bot's end records as STOPPED_FLAT.
+    """
+    proof = None if clerk is None else await clerk.published_custody(sid)
+    return proof is not None and not custody_unprovable(proof) and not proof.exposure
+
+
+def _positions_unchecked_item(count: int) -> LaneAttentionItem:
+    return LaneAttentionItem(
+        condition_id="positions-unchecked", reason_code="POSITIONS_UNCHECKED_SINCE_UNCLEAN_EXIT",
+        kind="out_of_sync", severity="warning",
+        headline=(
+            f"{count} bot{'s' if count != 1 else ''} ended without a clean exit, and no check of this "
+            "account against Alpaca has yet confirmed that nothing is still held. Reconcile now to check it."
+        ),
+        action=_RECONCILE,
+    )
 
 
 def _stopped_holding_item(repository: ClerkSqliteRepository, sid: str) -> LaneAttentionItem:

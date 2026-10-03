@@ -154,7 +154,11 @@ function deferred<T>() {
 
 async function renderCustody(
   service: Partial<BrokersService>,
-  inputs: { readonly timelineQuery?: SqliteTimelineQuery | null; readonly fence?: LaneFence } = {},
+  inputs: {
+    readonly timelineQuery?: SqliteTimelineQuery | null;
+    readonly fence?: LaneFence;
+    readonly focusAction?: string | null;
+  } = {},
 ) {
   return render(AlpacaSqliteCustodyComponent, {
     inputs: { accountId: 'PA1', target: TARGET, fence: FENCE, ...inputs },
@@ -195,6 +199,23 @@ describe('AlpacaSqliteCustodyComponent', () => {
     });
     expect(await screen.findByText('Position could not be verified')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Open bot' })).toBeNull();
+  });
+
+  it('focuses the recovery action a link asked for once, and never again on a re-read', async () => {
+    const getSqliteClerkProjection = vi.fn().mockResolvedValue(projection([
+      action({ action_id: 'prepare_safe_flatten', label: 'Prepare safe flatten', primary: false }),
+      action(),
+    ]));
+    const view = await renderCustody({ getSqliteClerkProjection }, { focusAction: 'reconcile_now' });
+
+    const reconcile = await screen.findByRole('button', { name: 'Reconcile now' });
+    await waitFor(() => expect(document.activeElement).toBe(reconcile));
+
+    view.fixture.componentRef.setInput('projectionRefreshVersion', 1);
+    await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(2));
+    const reread = await screen.findByRole('button', { name: 'Reconcile now' });
+    await view.fixture.whenStable();
+    expect(document.activeElement).not.toBe(reread);
   });
 
   it('fails closed when the SQLite authority is unavailable', async () => {

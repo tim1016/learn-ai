@@ -1192,9 +1192,10 @@ LaneAttentionKind = Literal[
 ]
 """What one attention line is about (PRD #2560 "Home composition")."""
 
-LaneAttentionDestination = Literal["bot", "activity", "settings"]
+LaneAttentionDestination = Literal["bot", "activity", "reconcile", "settings"]
 """Where an attention line's fix lives, inside the account's workspace: the
-line's own bot page, Activity's order records and recovery, or Settings."""
+line's own bot page, Activity's order records and recovery, that section's
+Reconcile now, or Settings."""
 
 
 class LaneAttentionAction(BaseModel):

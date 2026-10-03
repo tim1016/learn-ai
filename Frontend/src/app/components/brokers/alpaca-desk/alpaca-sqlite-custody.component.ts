@@ -2,6 +2,8 @@ import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
+  afterRenderEffect,
   computed,
   effect,
   inject,
@@ -10,6 +12,7 @@ import {
   resource,
   signal,
   untracked,
+  viewChildren,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -112,6 +115,9 @@ export class AlpacaSqliteCustodyComponent {
   readonly fence = input.required<LaneFence>();
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
+  /** The recovery action a link asked for (`?recover=…`): its button is
+   * scrolled to and focused once, when it first renders. */
+  readonly focusAction = input<string | null>(null);
   readonly projectionInvalidated = output();
   private readonly brokers = inject(BrokersService);
 
@@ -150,11 +156,25 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly selectedTimelineEntry = signal<SqliteTimelineEntry | null>(null);
   protected readonly unfoldableReasonCode = UNFOLDABLE_BROKER_ORDER_REASON_CODE;
   protected readonly acknowledgingOrderId = signal<string | null>(null);
+  private readonly recoveryButtons = viewChildren<ElementRef<HTMLButtonElement>>('recoveryButton');
+  /** The `focusAction` already brought into view, so a re-read never moves focus again. */
+  private focusedAction: string | null = null;
 
   constructor() {
     effect(() => {
       const query = this.timelineQuery();
       if (query !== null) untracked(() => this.openTimeline(query));
+    });
+    afterRenderEffect(() => {
+      const wanted = this.focusAction();
+      if (wanted === null || wanted === this.focusedAction) return;
+      const button = this.recoveryButtons().find(
+        (ref) => ref.nativeElement.dataset['recoveryAction'] === wanted,
+      )?.nativeElement;
+      if (button === undefined) return;
+      this.focusedAction = wanted;
+      button.scrollIntoView({ block: 'center' });
+      button.focus();
     });
   }
 
