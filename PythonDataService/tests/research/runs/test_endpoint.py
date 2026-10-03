@@ -148,11 +148,26 @@ async def test_post_invalid_date_returns_400(client):
     assert "start_date" in response.json()["detail"]
 
 
-async def test_post_invalid_fill_mode_returns_400(client):
+@pytest.mark.parametrize("fill_mode", ["signal_bar_close", "next_bar_open", "decision_minute_open"])
+async def test_post_runs_under_every_fill_mode_a_research_request_may_name(client, fill_mode: str):
     body = _request_body()
-    body["fill_mode"] = "magic"
+    body["fill_mode"] = fill_mode
+    response = await client.post("/api/research/strategy-runs", json=body)
+
+    assert response.status_code == 200, response.text
+    ledger = response.json()["ledger"]
+    assert ledger["status"] == "completed"
+    assert ledger["fill_mode"] == fill_mode
+
+
+# ``next_session_open`` is a real mode the runner runs for parity callers; the route does not offer it.
+@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open"])
+async def test_post_invalid_fill_mode_returns_400(client, fill_mode: str):
+    body = _request_body()
+    body["fill_mode"] = fill_mode
     response = await client.post("/api/research/strategy-runs", json=body)
     assert response.status_code == 400
+    assert "signal_bar_close, next_bar_open or decision_minute_open" in response.json()["detail"]
 
 
 async def test_post_start_after_end_returns_400(client):

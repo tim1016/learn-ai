@@ -16,6 +16,7 @@ Coverage:
 
 from __future__ import annotations
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.strategy.spec.tests._parity_helpers import (
@@ -151,6 +152,49 @@ async def test_backtest_runs_sma_spec_on_synthetic_data() -> None:
     assert first["exit_time"] > first["entry_time"], (
         f"exit_time {first['exit_time']} should be after entry_time {first['entry_time']}"
     )
+
+
+async def _post_sma_backtest(fill_mode: str):
+    """POST the canonical SMA fixture on the synthetic stream under ``fill_mode``."""
+    app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
+    try:
+        async with await _client() as client:
+            spec_payload = (await client.get("/api/spec-strategy/fixtures/sma_crossover")).json()
+            spec_payload["symbols"] = [SYMBOL]
+            return await client.post(
+                "/api/spec-strategy/backtest",
+                json={
+                    "spec": spec_payload,
+                    "start_date": "2024-01-02",
+                    "end_date": "2024-12-31",
+                    "fill_mode": fill_mode,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_data_source_factory, None)
+
+
+async def test_backtest_runs_under_every_fill_mode_a_research_request_may_name() -> None:
+    """Each mode fills the same entries at its own price (#2599)."""
+    entries: dict[str, list[float]] = {}
+    for fill_mode in ("signal_bar_close", "next_bar_open", "decision_minute_open"):
+        resp = await _post_sma_backtest(fill_mode)
+        assert resp.status_code == 200, f"{fill_mode}: {resp.text}"
+        body = resp.json()
+        assert body["success"] is True, body
+        entries[fill_mode] = [trade["entry_price"] for trade in body["trades"]]
+
+    assert all(entries.values())
+    assert entries["decision_minute_open"] != entries["signal_bar_close"]
+    assert entries["decision_minute_open"] != entries["next_bar_open"]
+
+
+@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open"])
+async def test_backtest_rejects_an_unknown_fill_mode_naming_the_modes(fill_mode: str) -> None:
+    resp = await _post_sma_backtest(fill_mode)
+
+    assert resp.status_code == 400, resp.text
+    assert "signal_bar_close, next_bar_open or decision_minute_open" in resp.json()["detail"]
 
 
 async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:

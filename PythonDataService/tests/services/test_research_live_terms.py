@@ -83,6 +83,30 @@ def test_an_engine_run_fills_at_the_decision_minute_open_and_records_it(
     assert persisted["commission_per_order"] == 0.0
 
 
+@pytest.mark.parametrize(
+    ("spelling", "canonical"),
+    [("close", "signal_bar_close"), ("NextBarOpen", "next_bar_open"), ("Signal-Bar-Close", "signal_bar_close")],
+)
+def test_an_engine_run_still_parses_the_aliases(
+    lake: Path, monkeypatch: pytest.MonkeyPatch, spelling: str, canonical: str
+) -> None:
+    monkeypatch.setattr(engine_backtest_service, "_resolve_lean_data_roots", lambda **_: [lake])
+    request = EngineBacktestRequest(
+        strategy_name="sma_crossover",
+        params={"symbol": "SPY", **SMA_PARAMS},
+        from_date=START.isoformat(),
+        to_date=END.isoformat(),
+        fill_mode=spelling,
+        auto_fetch=False,
+        save_study=False,
+    )
+
+    response = engine_backtest_service.execute_engine_backtest(request=request, on_phase=_noop, on_log=_noop)
+
+    assert response.success, response.error
+    assert response.fill_mode == canonical
+
+
 def test_an_unknown_fill_mode_names_every_mode_an_engine_run_accepts(lake: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_backtest_service, "_resolve_lean_data_roots", lambda **_: [lake])
     request = EngineBacktestRequest(

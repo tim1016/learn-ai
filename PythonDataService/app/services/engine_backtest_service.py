@@ -36,6 +36,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.execution_config import ExecutionConfig
+from app.engine.execution.fill_mode_names import REQUEST_FILL_MODES, UnknownFillModeError, parse_fill_mode
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.execution.sizing import LeanSetHoldingsSizing
@@ -201,17 +202,13 @@ def _dispatch_requested_parity_companion(
 # Helpers
 # ---------------------------------------------------------------------------
 def _parse_fill_mode(raw: str) -> FillMode:
-    key = raw.strip().lower()
-    if key in ("signal_bar_close", "signalbarclose", "close"):
-        return FillMode.SIGNAL_BAR_CLOSE
-    if key in ("next_bar_open", "nextbaropen", "open"):
-        return FillMode.NEXT_BAR_OPEN
-    if key == FillMode.DECISION_MINUTE_OPEN.value:
-        return FillMode.DECISION_MINUTE_OPEN
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unknown fill_mode '{raw}'. Expected signal_bar_close, next_bar_open or decision_minute_open.",
-    )
+    try:
+        return parse_fill_mode(raw, allowed=REQUEST_FILL_MODES)
+    except UnknownFillModeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown fill_mode '{raw}'. Expected {exc.expected}.",
+        ) from exc
 
 
 def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:

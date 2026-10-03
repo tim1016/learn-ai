@@ -291,6 +291,26 @@ async def test_list_since_ms_admits_the_ceiling_and_refuses_past_it(client, path
     assert past_ceiling.status_code == 422, past_ceiling.text
 
 
+@pytest.mark.parametrize("fill_mode", ["signal_bar_close", "next_bar_open", "decision_minute_open"])
+async def test_post_runs_under_every_fill_mode_a_research_request_may_name(client, fill_mode: str):
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.6}, fill_mode=fill_mode)
+    response = await client.post(_WALK_FORWARD, json=body)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["result"]["status"] == "completed"
+    assert payload["config"]["fill_mode"] == fill_mode
+
+
+@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open"])
+async def test_post_unknown_fill_mode_returns_400_naming_the_modes(client, fill_mode: str):
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.6}, fill_mode=fill_mode)
+    response = await client.post(_WALK_FORWARD, json=body)
+
+    assert response.status_code == 400, response.text
+    assert "signal_bar_close, next_bar_open or decision_minute_open" in response.json()["detail"]
+
+
 async def test_post_unknown_split_kind_returns_400(client):
     body = _request_body(split_policy={"kind": "totally_made_up"})
     response = await client.post("/api/research/strategy-runs/walk-forward", json=body)

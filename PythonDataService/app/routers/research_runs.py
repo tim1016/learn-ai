@@ -48,6 +48,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.engine.execution.fill_mode_names import REQUEST_FILL_MODES, UnknownFillModeError, parse_fill_mode
 from app.engine.strategy.spec import StrategySpec
 from app.research.runs import (
     BacktestRunResult,
@@ -84,7 +85,7 @@ class StrategyRunRequest(BaseModel):
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
     initial_cash: float = Field(100_000.0, ge=0)
-    fill_mode: str = Field("signal_bar_close", description="signal_bar_close or next_bar_open")
+    fill_mode: str = Field("signal_bar_close", description="signal_bar_close, next_bar_open or decision_minute_open")
     commission_per_order: float = Field(0.0, ge=0)
     slippage_per_share: float = Field(
         0.0,
@@ -159,13 +160,12 @@ def _parse_date(s: str, field: str) -> Date:
         ) from exc
 
 
-def _validate_fill_mode(s: str) -> None:
-    norm = s.lower().replace("-", "_")
-    if norm not in {"signal_bar_close", "next_bar_open"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"unknown fill_mode {s!r} — expected signal_bar_close or next_bar_open",
-        )
+def validate_fill_mode(s: str) -> None:
+    """Refuse, with a 400 naming them, any mode a research request may not ask for."""
+    try:
+        parse_fill_mode(s, allowed=REQUEST_FILL_MODES)
+    except UnknownFillModeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ def create_run(
     """
     start_d = _parse_date(request.start_date, "start_date")
     end_d = _parse_date(request.end_date, "end_date")
-    _validate_fill_mode(request.fill_mode)
+    validate_fill_mode(request.fill_mode)
     if start_d >= end_d:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

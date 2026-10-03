@@ -27,7 +27,6 @@ from app.data_lake.path_policy import lake_subpath
 from app.data_lake.run_materialization import EngineRunMaterialization, LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError, check_availability
 from app.engine.engine import EquitySnapshot
-from app.engine.execution.order import FillMode
 from app.engine.strategy.spec import StrategySpec
 from app.engine.strategy.spec.tests._parity_helpers import (
     FakeDataReader,
@@ -38,7 +37,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
-from app.research.runs.runner import _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
+from app.research.runs.runner import _summarize_metrics
 from app.services.spec_run_data import materialize_spec_data_source
 from app.utils.timestamps import to_ms_utc
 from tests._helpers.lean_store import seed_store_day
@@ -451,15 +450,38 @@ def test_parent_run_id_round_trips(fake_data_factory):
 
 
 # ---------------------------------------------------------------------------
-# next_session_open fill mode.
+# The fill modes beyond the two the router first offered.
 # ---------------------------------------------------------------------------
-def test_normalize_fill_mode_handles_dash_and_case_variants_for_next_session_open() -> None:
-    # All three of these must produce the same canonical form so they
+def test_next_session_open_spellings_share_one_ledger_identity(fake_data_factory) -> None:
+    # Every spelling must produce the same canonical form so the runs
     # ledger-identify identically (R5 hash-identity invariant).
-    assert _normalize_fill_mode("NEXT-SESSION-OPEN") == "next_session_open"
-    assert _normalize_fill_mode("Next-Session-Open") == "next_session_open"
-    assert _normalize_fill_mode("next_session_open") == "next_session_open"
-    assert _parse_fill_mode("NEXT-SESSION-OPEN") is FillMode.NEXT_SESSION_OPEN
+    spec = _build_test_spec()
+    canonical, _ = _run(spec, fake_data_factory, fill_mode="next_session_open")
+    hyphen, _ = _run(spec, fake_data_factory, fill_mode="NEXT-SESSION-OPEN")
+
+    assert canonical.status == "completed"
+    assert canonical.fill_mode == hyphen.fill_mode == "next_session_open"
+    assert canonical.result_hash == hyphen.result_hash
+
+
+def test_decision_minute_open_fills_at_the_open_of_the_minute_the_bucket_is_emitted_on(fake_data_factory) -> None:
+    """The runner runs the mode and records it (#2599)."""
+    spec = _build_test_spec()
+    at_close, close_result = _run(spec, fake_data_factory, fill_mode="signal_bar_close")
+    ledger, result = _run(spec, fake_data_factory, fill_mode="Decision-Minute-Open")
+
+    assert ledger.status == "completed"
+    assert ledger.fill_mode == "decision_minute_open"
+    assert result.trades
+    opens = {bar.start_ms: float(bar.open) for bar in build_minute_bars(closes_for_spy_ema(2000))}
+    assert [trade.entry_price for trade in result.trades] == [opens[trade.entry_time_ms] for trade in result.trades]
+    assert ledger.result_hash != at_close.result_hash
+    assert [trade.entry_price for trade in result.trades] != [trade.entry_price for trade in close_result.trades]
+
+
+def test_an_unknown_fill_mode_is_refused_naming_every_mode_the_runner_runs(fake_data_factory) -> None:
+    with pytest.raises(ValueError, match="signal_bar_close, next_bar_open, next_session_open or decision_minute_open"):
+        _run(_build_test_spec(), fake_data_factory, fill_mode="magic")
 
 
 # ---------------------------------------------------------------------------
