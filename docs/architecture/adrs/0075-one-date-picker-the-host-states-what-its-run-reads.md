@@ -22,11 +22,13 @@ The browser also had no way to read trading sessions: the only calendar route an
 
 ### 2. The value is a calendar date; the host converts it
 
-The pickers hand hosts `YYYY-MM-DD` calendar dates, the form a person types and reads. Each host converts to `int64 ms UTC` at its own HTTP call.
+The pickers hand hosts `YYYY-MM-DD` calendar dates, the form a person types and reads. Each host builds what its endpoint takes at its own HTTP call.
 
-Why not ms in the picker: four anchors are on the wire (noon UTC for the Data Lake, ET midnight with a half-open end for Grid Search and Golden Search, the 09:30 session open for the LEAN sidecar, UTC midnight for Data Lab). One ms value cannot serve them. Unifying the endpoints is not decided here.
+Why not ms in the picker: four anchors are on the wire (noon UTC for the Data Lake, ET midnight with a half-open end for Grid Search and Golden Search, the 09:30 session open for the LEAN sidecar, UTC midnight for Data Lab). One ms value cannot serve them. Some older endpoints still take the date itself (Research Lab's `from_date` and `to_date`). Unifying the endpoints is not decided here.
 
 A single date is a plain calendar day whose zone is the host's to say: a trading date is an ET date, a bot's end date is the viewer's own.
+
+A date held as a string in a page's form state is a deviation from ADR 0022 (a), which has no date type beside `int64 ms UTC`. ADR 0022 (f) names it. It covers the form state only, not what any endpoint takes.
 
 ### 3. The host states the bounds
 
