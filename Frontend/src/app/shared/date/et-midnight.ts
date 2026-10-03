@@ -46,6 +46,8 @@ function etWallClockAsUtc(ms: number): number {
 export function etMidnightMs(isoDate: string): number {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
   if (match === null) throw new Error(`expected YYYY-MM-DD, got ${isoDate}`);
+  // Year 0 is 1 BC: the ET formatter reports it as year 1, so the instant would land a year off.
+  if (match[1] === '0000') throw new Error(`year 0000 is not a calendar year, got ${isoDate}`);
   const wanted = utcMs(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   // Guess the instant as if ET were UTC-5, then correct by however far the
   // ET wall clock at that guess sits from the midnight we want. One

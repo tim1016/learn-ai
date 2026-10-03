@@ -34,6 +34,10 @@ describe('etMidnightMs', () => {
     expect(() => etMidnightMs('2024/01/02')).toThrow(/YYYY-MM-DD/);
   });
 
+  it('rejects year 0000, which no calendar date has', () => {
+    expect(() => etMidnightMs('0000-11-01')).toThrow(/year 0000/);
+  });
+
   it('keeps a year below 100 as given instead of reading it as 19xx', () => {
     // Date.UTC(22, …) is 1922; a date field reports 0022 while 2022 is half typed.
     const ms = etMidnightMs('0022-11-01');
