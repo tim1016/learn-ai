@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, input, output, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Directive, ElementRef, computed, effect, inject, input, output, viewChild } from '@angular/core';
 import { FormControl, ReactiveFormsModule } from '@angular/forms';
 import { DatePicker } from 'primeng/datepicker';
 
@@ -8,6 +8,30 @@ import type { DateRange } from './quick-ranges';
 import type { TradingSessions } from './trading-sessions';
 
 const WEEKEND = [0, 6];
+
+let nextLegendId = 0;
+
+/**
+ * Ties a day PrimeNG draws to the text that describes it. PrimeNG labels the
+ * focusable day cell itself, and a label replaces the text inside the cell
+ * for a screen reader, so a mark is said as the cell's description.
+ */
+@Directive({ selector: '[appDayDescribedBy]' })
+export class DayDescribedByDirective {
+  /** The id of the describing text, or null for a day with nothing to add. */
+  readonly describedBy = input.required<string | null>({ alias: 'appDayDescribedBy' });
+
+  constructor() {
+    const content = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
+    effect(() => {
+      const id = this.describedBy();
+      const cell = content.parentElement;
+      if (cell === null) return;
+      if (id === null) cell.removeAttribute('aria-describedby');
+      else cell.setAttribute('aria-describedby', id);
+    });
+  }
+}
 
 /**
  * The month grid behind both date controls: PrimeNG's calendar, speaking
@@ -19,7 +43,7 @@ const WEEKEND = [0, 6];
  */
 @Component({
   selector: 'app-date-calendar',
-  imports: [DatePicker, ReactiveFormsModule],
+  imports: [DatePicker, ReactiveFormsModule, DayDescribedByDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <p-datepicker
@@ -35,11 +59,11 @@ const WEEKEND = [0, 6];
       (onSelect)="onSelect()"
     >
       <ng-template #date let-date>
-        <span [class.date-calendar__unheld]="isMarked(date)">{{ date.day }}@if (isMarked(date)) {<span class="date-calendar__hidden">, not held</span>}</span>
+        <span [class.date-calendar__unheld]="isMarked(date)" [appDayDescribedBy]="isMarked(date) ? legendId : null">{{ date.day }}</span>
       </ng-template>
     </p-datepicker>
     @if ((marked()?.size ?? 0) > 0) {
-      <p class="date-calendar__legend"><span class="date-calendar__unheld">12</span> A session the lake does not hold.</p>
+      <p class="date-calendar__legend"><span class="date-calendar__unheld" aria-hidden="true">12</span> <span [id]="legendId">A session the lake does not hold.</span></p>
     }
   `,
   styleUrl: './date-calendar.component.scss',
@@ -59,6 +83,8 @@ export class DateCalendarComponent {
   readonly picked = output<DateRange>();
 
   protected readonly weekend = WEEKEND;
+  /** The legend's sentence, which a marked day points at as its description. */
+  protected readonly legendId = `date-calendar-legend-${nextLegendId++}`;
   protected readonly control = new FormControl<Date | (Date | null)[] | null>(null);
 
   private readonly first = computed(() => this.bounds().min ?? this.sessions()?.from ?? null);

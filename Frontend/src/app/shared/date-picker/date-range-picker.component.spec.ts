@@ -172,6 +172,12 @@ describe('DateRangePickerComponent', () => {
     // PrimeNG's months are zero-based: 2026-8-10 is September 10th.
     expect([underlined('2026-8-10'), underlined('2026-8-11')]).toEqual([true, false]);
     expect(within(calendar).getByText(/A session the lake does not hold/)).not.toBeNull();
+    // PrimeNG labels the focusable day cell, which hides the text inside it from a screen reader: the mark is the cell's description.
+    const described = (date: string): string | null => {
+      const id = calendar.querySelector(`span[data-date="${date}"]`)?.getAttribute('aria-describedby') ?? null;
+      return id === null ? null : (document.getElementById(id)?.textContent ?? null);
+    };
+    expect([described('2026-8-10'), described('2026-8-11')]).toEqual(['A session the lake does not hold.', null]);
   });
 
   it('says the range is all held when it has no gap, and says so when the gaps could not be checked', async () => {

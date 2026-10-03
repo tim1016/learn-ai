@@ -5,6 +5,9 @@ import type { DataGaps, DateBounds } from '../date-picker';
 import { etIsoDate } from '../date/et-midnight';
 import { addDays, type IsoDate } from '../date/iso-date';
 
+/** The spans whose gaps are kept, and read again with the lake's holdings. A page shows one or two. */
+const KEPT_READS = 4;
+
 /**
  * The sessions a lake tree lacks inside a symbol's held span.
  *
@@ -12,6 +15,10 @@ import { addDays, type IsoDate } from '../date/iso-date';
  * between them may have no bars. The coverage endpoint knows which, one row
  * per scheduled session, so this asks it once per symbol, tree and span and
  * keeps the answer for every picker on the page.
+ *
+ * The endpoint reports the minute bars. A daily run reads the symbol's daily
+ * history instead, which this does not check, so a daily configuration is
+ * told nothing rather than something that may not be true of its run.
  */
 @Injectable({ providedIn: 'root' })
 export class HeldGapsService {
@@ -21,21 +28,35 @@ export class HeldGapsService {
 
   /**
    * The gaps inside ``bounds`` for ``symbol`` in ``mode``'s tree; null while
-   * they are being read, and when the span has no first or last day to read
-   * between. Safe to call from a ``computed``: the read behind a span is
-   * created once and shared.
+   * they are being read, when the span has no first or last day to read
+   * between, and for a run that does not read minute bars. Safe to call from
+   * a ``computed``: the read behind a span is created once and shared.
    */
-  gapsFor(mode: PriceAdjustmentMode, symbol: string, bounds: DateBounds): DataGaps | null {
+  gapsFor(mode: PriceAdjustmentMode, symbol: string, bounds: DateBounds, resolution: 'minute' | 'daily'): DataGaps | null {
     const { min, max } = bounds;
-    if (min === null || max === null) return null;
+    if (resolution !== 'minute' || min === null || max === null) return null;
     const key = `${mode}|${symbol}|${min}|${max}`;
     let read = this.reads.get(key);
     if (read === undefined) {
       // `resource()` installs an effect, which a reactive context forbids.
       read = untracked(() => resource({ loader: () => this.load(mode, symbol, min, max), injector: this.injector }));
       this.reads.set(key, read);
+      // The oldest span is let go, so a reload never re-reads every symbol the tab has shown.
+      if (this.reads.size > KEPT_READS) this.reads.delete(this.reads.keys().next().value as string);
     }
     return read.value() ?? null;
+  }
+
+  /**
+   * Reads ``mode``'s gaps again, because its holdings were just read again:
+   * a backfill may have filled a gap without moving the span's first or last
+   * day. The answer on screen stays until the new one arrives, and a read
+   * that failed is tried again.
+   */
+  reload(mode: PriceAdjustmentMode): void {
+    for (const [key, read] of this.reads) {
+      if (key.startsWith(`${mode}|`)) read.reload();
+    }
   }
 
   /** Reads the span in windows the coverage endpoint accepts; a session is held when its artifact is complete. */
