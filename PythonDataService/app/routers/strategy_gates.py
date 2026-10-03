@@ -155,7 +155,7 @@ def evaluate(
     try:
         gates = store.for_strategy(strategy_key)
         results, chart_computed, notices = evaluate_gates(
-            view, gates, request.candles, symbol=request.symbol, draft=request.draft
+            view, gates, request.candles, symbol=request.symbol, draft=request.draft, lead_in=request.lead_in
         )
     except GateExpressionError as exc:
         _refuse(status.HTTP_422_UNPROCESSABLE_ENTITY, "GATE_EXPRESSION_REFUSED", str(exc))

@@ -25,7 +25,7 @@ interface CalculatedIndicators {
   readonly error: string | null;
 }
 
-/** The catalogue indicators a viewer put on a strategy view, computed on its decision candles. */
+/** The catalogue indicators a viewer put on a strategy view, computed on its lead-in bars and decision candles. */
 export interface StrategyCatalogueIndicators {
   readonly catalog: ChartIndicatorCatalog;
   readonly chips: Signal<readonly TradingIndicatorChip[]>;
@@ -41,11 +41,14 @@ export interface StrategyCatalogueIndicators {
  * Catalogue indicators on a strategy view (#2639 D12). Call it in an
  * injection context, with the view the host read.
  *
- * These lines are the chart's own computation on the decision candles, never
- * the bot's: the strategy's recorded values stay the only lines drawn from
- * what the bot saw. The choice lasts for the visit and resets with the
- * strategy. While a newer read is computed the last lines stay drawn; points
- * are placed by bar close, so they never land on the wrong candle.
+ * These lines are the chart's own computation, never the bot's: the
+ * strategy's recorded values stay the only lines drawn from what the bot saw.
+ * They are computed over the view's lead-in bars and then its decision
+ * candles, so a line has warmed up by the first candle wherever the view
+ * carries enough lead-in (#2800). The choice lasts for the visit and resets
+ * with the strategy. While a newer read is computed the last lines stay
+ * drawn; points are placed by bar close, so they never land on the wrong
+ * candle and none is drawn for a lead-in bar.
  */
 export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | null>): StrategyCatalogueIndicators {
   const indicators = inject(BotChartIndicatorService);
@@ -69,7 +72,7 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
         ? undefined
         : { symbol: read.symbol, view: read, selected: chosen };
     },
-    stream: ({ params }) => indicators.calculateBars(params.symbol, strategyIndicatorBars(params.view.candles), params.selected).pipe(
+    stream: ({ params }) => indicators.calculateBars(params.symbol, strategyIndicatorBars(params.view), params.selected).pipe(
       map((response): CalculatedIndicators => ({
         strategyKey: params.view.strategy_key,
         results: response.indicators,

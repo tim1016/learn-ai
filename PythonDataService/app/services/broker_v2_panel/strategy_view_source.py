@@ -4,6 +4,10 @@ The candles are the bot's own decision bars and the numbers are the ones its
 Signal Program computed: decision receipts for the bars this run decided, and
 the run's before-start evaluations for the warmup bars behind its "bot
 started" line. Nothing here recomputes a strategy indicator.
+
+A bot's view carries no lead-in bars (#2800). Its before-start candles are
+already every earlier bar the bot kept, and bars from the lake are another
+vendor's, not the feed the bot read.
 """
 
 from __future__ import annotations

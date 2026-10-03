@@ -19,6 +19,7 @@ from app.config import settings
 from app.data_lake import run_materialization
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import polygon_mode_for
+from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.registry import strategy_program_version
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
@@ -26,9 +27,19 @@ from app.research.backtest_runs.records import persisted_execution_configuration
 from app.research.backtest_runs.repository import REPORT_TRADE_LIMIT, RunDetail, TradeRow
 from app.routers import backtest_runs
 from app.schemas.engine_backtest import EngineBacktestRequest
+from app.schemas.strategy_gates import CustomGateInput, GateCandle, GateEvaluationRequest
+from app.schemas.strategy_view import StrategyViewResponse
+from app.services import backtest_run_strategy_view, engine_backtest_service
 from app.services.backtest_run_strategy_view import _request_from_run, build_backtest_run_strategy_view
-from app.services.engine_backtest_service import SavedRunNotReplayable, execute_engine_backtest
-from app.utils.session_anchors import et_midnight_ms
+from app.services.engine_backtest_service import (
+    SavedRunNotReplayable,
+    execute_engine_backtest,
+    read_replay_lead_in,
+    replay_engine_run,
+)
+from app.services.strategy_gates import DRAFT_GATE_ID, evaluate_gates
+from app.services.strategy_view import ResolvedStrategyView
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
 
 pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
@@ -158,6 +169,132 @@ def test_a_saved_runs_view_replays_its_own_decisions_behind_its_warmup(saved_run
     # The run's deployed band labels the default gate.
     assert view.declaration.gates[0].label == "RSI in 45–75"
     assert {candle.outcome for candle in view.candles[26:]} <= {"no_action", "enter_intent", "exit_intent"}
+
+
+# The three sessions before the run's warmup day (2026-01-01 is a holiday).
+EARLIER_DAYS = (date(2025, 12, 30), date(2025, 12, 31), date(2026, 1, 2))
+
+
+def _seed_earlier(*days: date, minutes: int = 390) -> None:
+    adjusted_root = Path(settings.LEAN_DATA_WRITE_ROOT) / lake_subpath(polygon_mode_for(True))
+    for day in days:
+        seed_lake_minute_day(adjusted_root, "SPY", day, count=minutes)
+
+
+def _bars(view: StrategyViewResponse) -> list[tuple[int, float, float, float, float, float]]:
+    return [(bar.bar_close_ms, bar.open, bar.high, bar.low, bar.close, bar.volume) for bar in view.lead_in]
+
+
+def test_the_lead_in_is_the_decision_bars_the_run_would_have_staged_had_it_started_earlier(
+    saved_run: RunDetail,
+) -> None:
+    """Bar for bar what the engine stages over those sessions, and no bar it would not have decided on (#2800)."""
+    assert build_backtest_run_strategy_view(saved_run).lead_in == []  # the lake holds nothing earlier
+    first, middle, last = EARLIER_DAYS
+    _seed_earlier(first, last)
+    # The middle session stops five minutes early: its last 15-minute bar is short, and the strategy never decides on it.
+    _seed_earlier(middle, minutes=385)
+
+    view = build_backtest_run_strategy_view(saved_run)
+
+    staged: list[TradeBar] = []
+    started_earlier = _request_from_run(saved_run).model_copy(update={"warmup_from_date": first.isoformat()})
+    replay_engine_run(started_earlier, record=lambda bar, _decision: staged.append(bar))
+    before_the_run = [bar for bar in staged if bar.end_ms <= view.candles[0].bar_start_ms]
+    assert len(before_the_run) == 3 * 26 - 1
+    assert _bars(view) == [
+        (bar.end_ms, float(bar.open), float(bar.high), float(bar.low), float(bar.close), float(bar.volume))
+        for bar in before_the_run
+    ]
+    # The candles are the run's own, as before: the lead-in adds none.
+    assert [candle.phase for candle in view.candles] == ["before_start"] * 26 + ["decision"] * 26
+
+
+def test_a_lead_in_read_never_looks_back_past_its_session_bound(
+    saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A coarse timeframe gets the bars the bound allows, however many it asked for (#2800)."""
+    _seed_earlier(date(2025, 12, 29), *EARLIER_DAYS)
+    monkeypatch.setattr(engine_backtest_service, "MAX_LEAD_IN_SESSIONS", 3)
+    eight_hours_ms = 480 * 60_000
+
+    bars = read_replay_lead_in(_request_from_run(saved_run), timeframe_ms=eight_hours_ms, count=1_000)
+
+    # One 08:00–16:00 ET bar a session, from the three sessions the bound allows; the lake's fourth is not read.
+    assert [et_date_at_ms(bar.end_ms) for bar in bars] == list(EARLIER_DAYS)
+    assert {bar.end_ms - bar.start_ms for bar in bars} == {eight_hours_ms}
+
+
+def test_a_daily_run_reads_no_lead_in(saved_run: RunDetail) -> None:
+    """Its bars are the daily reader's, not minute bars consolidated, so the minute lake has none to offer."""
+    _seed_earlier(*EARLIER_DAYS)
+    request = _request_from_run(saved_run)
+
+    assert len(read_replay_lead_in(request, timeframe_ms=15 * 60_000, count=1_000)) == 3 * 26
+    daily = request.model_copy(update={"resolution": "daily"})
+    assert read_replay_lead_in(daily, timeframe_ms=15 * 60_000, count=1_000) == []
+
+
+def test_a_gate_reading_a_catalogue_indicator_is_judged_from_the_runs_first_candle(saved_run: RunDetail) -> None:
+    """What the page sends back, the view's candles and lead-in, is accepted and leaves no candle unjudged (#2800)."""
+    _seed_earlier(*EARLIER_DAYS)
+    view = build_backtest_run_strategy_view(saved_run)
+    request = GateEvaluationRequest(
+        symbol=view.symbol,
+        settings=view.settings,
+        candles=[
+            GateCandle(
+                bar_close_ms=candle.bar_close_ms,
+                open=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                volume=candle.volume,
+            )
+            for candle in view.candles
+        ],
+        lead_in=view.lead_in,
+        draft=CustomGateInput(label="Above EMA 20", expression="close - EMA20", sign="gt"),
+    )
+    resolved = ResolvedStrategyView.for_settings(view.strategy_key, request.settings, symbol=request.symbol)
+
+    def judged(lead_in: list) -> list[bool | None]:
+        results, _, _ = evaluate_gates(
+            resolved, [], request.candles, symbol=request.symbol, draft=request.draft, lead_in=lead_in
+        )
+        return results[DRAFT_GATE_ID]
+
+    assert None not in judged(request.lead_in)
+    # Without the lead-in the first 19 candles had no EMA20 to read.
+    assert judged([])[:19] == [None] * 19
+
+
+def test_a_day_the_lake_lacks_shortens_the_lead_in_and_never_fails_the_view(saved_run: RunDetail) -> None:
+    first, _missing, last = EARLIER_DAYS
+    _seed_earlier(first, last)
+
+    view = build_backtest_run_strategy_view(saved_run)
+
+    # Only the bars after the gap: a lead-in never jumps a missing day.
+    assert len(view.lead_in) == 26
+    assert {et_date_at_ms(bar.bar_close_ms) for bar in view.lead_in} == {last}
+    assert view.run_id == "backtest-run:7"
+
+
+def test_the_bars_the_candle_cap_leaves_out_become_lead_in(
+    saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    whole = build_backtest_run_strategy_view(saved_run)
+    monkeypatch.setattr(backtest_run_strategy_view, "MAX_STRATEGY_VIEW_CANDLES", 30)
+
+    capped = build_backtest_run_strategy_view(saved_run)
+
+    assert [candle.bar_close_ms for candle in capped.candles] == [candle.bar_close_ms for candle in whole.candles[-30:]]
+    assert _bars(capped) == [
+        (candle.bar_close_ms, candle.open, candle.high, candle.low, candle.close, candle.volume)
+        for candle in whole.candles[:-30]
+    ]
+    assert capped.notices == ["This run has 52 decision bars; the latest 30 are shown."]
 
 
 def test_a_replay_that_does_not_reproduce_the_runs_trades_is_refused(saved_run: RunDetail) -> None:

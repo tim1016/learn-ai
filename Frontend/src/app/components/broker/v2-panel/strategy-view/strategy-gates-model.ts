@@ -14,9 +14,10 @@ import type {
  * Custom Dark Bright Gates on the strategy view (#2639 D8–D10).
  *
  * The data plane judges every gate; this module only shapes the request from
- * the candles the page already shows and folds the answer back into the
- * view, so the picker, the chart and the popover treat a custom gate exactly
- * like the strategy's own rule.
+ * the candles the page already shows, with the view's lead-in bars for a
+ * catalogue indicator to warm up on (#2800), and folds the answer back into
+ * the view, so the picker, the chart and the popover treat a custom gate
+ * exactly like the strategy's own rule.
  */
 
 /** The id the data plane judges an unsaved draft under. */
@@ -24,6 +25,9 @@ export const DRAFT_GATE_ID = 'draft';
 
 /** The candle fields every gate can read. */
 const CANDLE_VARIABLES = ['open', 'high', 'low', 'close', 'volume'] as const;
+
+/** Said under the catalogue's title, on a bot's view and Strategy Lab's alike. */
+const CATALOGUE_NOTE = 'computed by the chart, not recorded by the strategy';
 
 /** A gate's results, tied to the candles they were judged on. */
 export interface GateEvaluation {
@@ -45,12 +49,21 @@ export function gateCandles(view: StrategyViewResponse): GateCandle[] {
   }));
 }
 
-/** Judge the strategy's saved gates (and `draft`) on `view`'s candles, under its deployed settings. */
+/**
+ * Judge the strategy's saved gates (and `draft`) on `view`'s candles, under its
+ * deployed settings. The view's lead-in bars go along; no gate is judged on them.
+ */
 export function gateEvaluationRequest(
   view: StrategyViewResponse,
   draft: CustomGateInput | null = null,
 ): GateEvaluationRequest {
-  return { symbol: view.symbol, settings: { ...(view.settings ?? {}) }, candles: gateCandles(view), draft };
+  return {
+    symbol: view.symbol,
+    settings: { ...(view.settings ?? {}) },
+    candles: gateCandles(view),
+    lead_in: view.lead_in ?? [],
+    draft,
+  };
 }
 
 /** "FOO7 − close > 0": the expression with the side of zero that is bright. */
@@ -129,9 +142,9 @@ export interface GateVariableGroup {
  * The names a gate can use, in the order the data plane resolves them: the
  * bot's recorded values, its deployed settings, the candle, then the
  * catalogue indicators the data plane says a gate can read, computed by the
- * chart from these candles. A catalogue name the bot already records is left
- * out: the data plane reads it as the bot's own value, so it would not be
- * chart-computed.
+ * chart from these candles and the view's lead-in bars before them. A
+ * catalogue name the bot already records is left out: the data plane reads it
+ * as the bot's own value, so it would not be chart-computed.
  */
 export function gateVariableGroups(
   view: StrategyViewResponse,
@@ -152,13 +165,13 @@ export function gateVariableGroups(
     catalogue === null
       ? {
           title: 'Catalogue',
-          note: 'chart-computed from these candles',
+          note: CATALOGUE_NOTE,
           chips: [],
           unavailable: 'The data plane did not list its catalogue. Refresh to try again.',
         }
       : {
           title: 'Catalogue',
-          note: 'chart-computed from these candles',
+          note: CATALOGUE_NOTE,
           chips: catalogue
             .filter((indicator) => !recorded.has(indicator.variable.toUpperCase()))
             .map((indicator) => ({ name: indicator.variable, hint: indicator.description })),

@@ -20,6 +20,7 @@ route (#2755); the reader and consolidator it composes keep their own tests.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -47,6 +48,20 @@ def _period_for(timespan: BarsTimespan, multiplier: int) -> timedelta:
     if timespan == "hour":
         return timedelta(hours=multiplier)
     return timedelta(days=multiplier)
+
+
+def consolidate_bars(source_bars: Iterable[TradeBar], period: timedelta) -> list[TradeBar]:
+    """Stream bars through one ``TradeBarConsolidator`` and flush the trailing working bar as the engine does."""
+    consolidator = TradeBarConsolidator(period)
+    fired: list[TradeBar] = []
+    consolidator.on_data_consolidated = fired.append
+    last: TradeBar | None = None
+    for bar in source_bars:
+        consolidator.update(bar)
+        last = bar
+    if last is not None:
+        consolidator.scan(last.end_ms)
+    return fired
 
 
 def read_consolidated_bars(
@@ -77,13 +92,4 @@ def read_consolidated_bars(
         coverage_resolution = "minute"
 
     coverage = check_availability(roots, symbol, start, end, resolution=coverage_resolution, session=session)
-
-    consolidator = TradeBarConsolidator(_period_for(timespan, multiplier))
-    fired: list[TradeBar] = []
-    consolidator.on_data_consolidated = fired.append
-    for bar in source_bars:
-        consolidator.update(bar)
-    if source_bars:
-        consolidator.scan(source_bars[-1].end_ms)
-
-    return ConsolidatedBars(bars=fired, coverage=coverage)
+    return ConsolidatedBars(bars=consolidate_bars(source_bars, _period_for(timespan, multiplier)), coverage=coverage)

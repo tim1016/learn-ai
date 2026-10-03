@@ -14,7 +14,7 @@ bot judged it).
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -29,6 +29,7 @@ from app.schemas.strategy_view import (
     DecisionExplanationView,
     ExplainedCheckView,
     ExplainedValueView,
+    LeadInBar,
     StrategyViewCandle,
     StrategyViewDeclarationView,
     StrategyViewGateView,
@@ -187,8 +188,14 @@ class ResolvedStrategyView:
         candles: list[StrategyViewCandle],
         notices: list[str],
         unexplained_decision_count: int = 0,
+        lead_in: Sequence[LeadInBar] = (),
     ) -> StrategyViewResponse:
-        """The strategy view for these candles, in bar order, with this view's declaration and settings."""
+        """The strategy view for these candles, in bar order, with this view's declaration and settings.
+
+        ``lead_in`` is the producer's earlier decision bars, oldest first and
+        all closing before the first candle, for catalogue indicators to warm
+        up on (#2800).
+        """
         return StrategyViewResponse(
             strategy_key=self.strategy_key,
             strategy_name=self.registration.display_name,
@@ -200,6 +207,7 @@ class ResolvedStrategyView:
             declaration=self.declaration(),
             settings=self.scalar_settings,
             candles=sorted(candles, key=lambda candle: candle.bar_close_ms),
+            lead_in=list(lead_in),
             unexplained_decision_count=unexplained_decision_count,
             notices=notices,
         )

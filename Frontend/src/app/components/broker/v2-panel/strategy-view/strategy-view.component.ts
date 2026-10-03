@@ -45,7 +45,7 @@ export class StrategyViewComponent {
   readonly failure = input<StrategyViewFailure | null>(null);
   readonly gate = input<StrategyViewGateView | null>(null);
   readonly selectedBarCloseMs = model<number | null>(null);
-  /** Catalogue lines the chart computed from these candles, and their legend chips. */
+  /** Catalogue lines the chart computed, and their legend chips. */
   readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
   readonly chartComputed = input<readonly TradingIndicatorChip[]>([]);
   /** The bot page's run facts for the chart's lanes, Now line and forming bar. */
