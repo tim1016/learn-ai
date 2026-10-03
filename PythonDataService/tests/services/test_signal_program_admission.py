@@ -784,6 +784,23 @@ def test_a_seal_naming_the_default_lookback_for_a_long_period_deploy_fails_close
 
     assert proof.state == "UNPROVEN"
     assert "warmup requirement" in proof.explanation
+    # Re-qualifying cannot repair a seal; only a new deploy seals the new lookback.
+    assert proof.next_step == "Deploy the bot again: its warmup history is now sized from its periods."
+
+
+@pytest.mark.parametrize("resolution_minutes", [391, 1440])
+def test_a_seal_on_a_bar_longer_than_a_session_still_names_the_default_lookback(resolution_minutes: int) -> None:
+    """Deploy now refuses such a bar (#2841); a seal built on one before that must not move.
+
+    No lookback can be sized for it, so the seal records the default days as
+    it always did, and a bot already bound to that seal still proves its build.
+    """
+    binding, seal = _off_validated_seal("sma_crossover", {"resolution_minutes": resolution_minutes})
+    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
+    assert contract is not None
+
+    assert seal.configured_signal.clock.warmup_lookback_days == contract.warmup_lookback_days
+    assert prove_running_program_build(binding, verified_at_ms=_NOW).state == "PROVEN"
 
 
 # --- Issue #1735: the wiring half of the build digest -------------------------

@@ -127,7 +127,7 @@ def _regular_session_ms() -> int:
     return max(window.close_ms_utc - window.open_ms_utc for window in session_windows_ms_utc(first, last))
 
 
-def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int:
+def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int | None:
     """The calendar days of lookback that hold ``bars`` whole decision bars, whenever the run starts.
 
     A lookback is the ``days`` × 24 hours before the start
@@ -146,9 +146,11 @@ def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int:
     The result depends on the bars and the cadence alone, never on the date,
     so a seal's lookback resolves to the same number whenever it is checked.
 
-    Zero when no bar is needed, and when the decision bar is longer than a
-    regular session: no whole bar closes inside one, so no lookback can be
-    promised to warm it.
+    Zero when no bar is needed. ``None`` when bars are needed and the decision
+    bar is longer than a regular session: the consolidator still closes bars
+    at such a cadence, but not on a grid that lines up with the session, so
+    how many one session closes is not defined and no lookback can be
+    promised to warm them.
 
     Two things sit outside the count. An unscheduled closure of several days
     can leave the window short; the run then starts unready and warms on live
@@ -163,9 +165,11 @@ def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int:
     Canonical implementation: this file.
     Validated against: tests/engine/strategy/test_signal_program_warmup_lookback.py
     """
-    bars_per_session = _regular_session_ms() // decision_timeframe_ms
-    if bars <= 0 or bars_per_session == 0:
+    if bars <= 0:
         return 0
+    bars_per_session = _regular_session_ms() // decision_timeframe_ms
+    if bars_per_session == 0:
+        return None
     sessions = -(-(bars + _WINDOW_EDGE_BARS) // bars_per_session)
     whole_weeks, last_week_sessions = divmod(sessions + _HOLIDAY_AND_EARLY_CLOSE_DAYS - 1, _SESSIONS_PER_WEEK)
     return _DAYS_PER_WEEK * whole_weeks + _WEEKEND_DAYS + last_week_sessions + 1
@@ -268,11 +272,31 @@ class SignalProgramContract:
         Never fewer than the static value. More when the longest series these
         parameters build needs it, at the cadence they run (#2841). It follows
         from the resolved series and cadence, so a program declares nothing
-        more for it.
+        more for it. The static value too when no lookback can be sized
+        (``warmup_lookback_refusal``), so a seal built at such a point reads
+        as it always has.
         """
+        return max(self.warmup_lookback_days, self._warmup_lookback_days_sized_for(params) or 0)
+
+    def warmup_lookback_refusal(self, params: StrategyParamsBase) -> str | None:
+        """Why no warmup lookback can be sized for ``params``, or ``None`` when one can (#2841).
+
+        A deploy refuses such parameters: the bot would start unwarmed, or
+        never decide.
+        """
+        if self._warmup_lookback_days_sized_for(params) is not None:
+            return None
+        decision_minutes = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms) // 60_000
+        return (
+            f"A {decision_minutes}-minute bar is longer than a regular trading session, so these periods "
+            f"cannot be warmed up from history. Use a bar of {_regular_session_ms() // 60_000} minutes or less."
+        )
+
+    def _warmup_lookback_days_sized_for(self, params: StrategyParamsBase) -> int | None:
+        """The days the longest series ``params`` build needs at their cadence; ``None`` when they cannot be counted."""
         bars = max((series.warmup_bars for series in self.resolved_signals(params)), default=0)
         decision_ms = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms)
-        return max(self.warmup_lookback_days, _warmup_lookback_days_holding(bars, decision_ms))
+        return _warmup_lookback_days_holding(bars, decision_ms)
 
     def __post_init__(self) -> None:
         # An empty wiring list is the dangerous shape, not a harmless one: it

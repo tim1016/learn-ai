@@ -129,9 +129,10 @@ def resolve_deploy_strategy_params(
 
     Raises ``ValueError`` with a human-readable message for an unknown
     strategy, a hidden/live-only parameter, a schema validation failure, a
-    combination the strategy's own rule refuses (``params_refusal``), or
-    periods whose warmup needs more history than a bot can load —
-    callers translate this into their own typed error shape.
+    combination the strategy's own rule refuses (``params_refusal``), a bar
+    no lookback can be sized for, or periods whose warmup needs more history
+    than a bot can load — callers translate this into their own typed error
+    shape.
     """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None:
@@ -151,9 +152,13 @@ def resolve_deploy_strategy_params(
     if refusal is not None:
         raise ValueError(f"Invalid strategy parameters: {refusal}")
     # A lookback the feed cannot load would be sealed here and refused at
-    # Start (#2841). A strategy with no contract seals no lookback to check.
+    # Start; one that cannot be sized would start the bot unwarmed (#2841).
+    # A strategy with no contract seals no lookback to check.
     contract = registration.signal_program_contract
     if contract is not None:
+        lookback_refusal = contract.warmup_lookback_refusal(validated)
+        if lookback_refusal is not None:
+            raise ValueError(f"Invalid strategy parameters: {lookback_refusal}")
         lookback_days = contract.resolved_warmup_lookback_days(validated)
         if lookback_days > MAX_WARMUP_LOOKBACK_DAYS:
             raise ValueError(

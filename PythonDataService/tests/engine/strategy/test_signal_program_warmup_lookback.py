@@ -3,13 +3,14 @@
 ``SignalProgramContract.resolved_warmup_lookback_days`` turns the longest
 series a deploy builds into calendar days of lookback. The rule is a fixed
 worst-case count, so a seal reads the same on any day. These tests hold it to
-the canonical NYSE calendar: on every minute of three years of possible
-starts, the window those days open holds at least the decision bars the
-longest series needs.
+the canonical NYSE calendar: on every minute of three and a half years of
+possible starts, the window those days open holds at least the decision bars
+the longest series needs.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from functools import cache
 
@@ -26,13 +27,14 @@ from tests._helpers.signal_program import LONG_PERIODS, OFF_VALIDATED_PERIODS
 
 _MINUTE_MS = 60_000
 
-# Every start in these three years is swept. They hold each stretch the
-# conversion must survive: three Thanksgiving weeks, Christmas on a Wednesday,
-# a Thursday and a Friday (the Friday leaves an early close, a holiday and a
-# weekend in a row), the 2025-01-09 day of mourning a week after New Year,
-# every three-day weekend, and both clock changes.
+# Every start in these three and a half years is swept. They hold each stretch
+# the conversion must survive: four Thanksgiving weeks (2027's is the one
+# nearest a clock change), Christmas on a Wednesday, a Thursday and a Friday
+# (the Friday leaves an early close, a holiday and a weekend in a row), the
+# 2025-01-09 day of mourning a week after New Year, every three-day weekend,
+# and both clock changes.
 _SWEEP_FIRST_DATE = date(2024, 7, 1)
-_SWEEP_LAST_DATE = date(2027, 6, 30)
+_SWEEP_LAST_DATE = date(2027, 12, 31)
 # Sessions before the sweep that its earliest starts look back on.
 _LONGEST_LOOKBACK_DAYS = 60
 
@@ -135,11 +137,37 @@ def test_the_default_lookback_cannot_warm_a_deploy_beyond_it(program_key: str, o
     assert lookback_days > default_days
 
 
-def test_a_decision_bar_longer_than_a_session_keeps_the_default_lookback() -> None:
-    """No whole daily bar closes inside regular hours, so no lookback is promised to warm one."""
+@pytest.mark.parametrize("resolution_minutes", [391, 480, 1440])
+def test_a_decision_bar_longer_than_a_session_has_no_sized_lookback(resolution_minutes: int) -> None:
+    """No lookback can be sized for a bar longer than a regular session, and the contract says so.
+
+    The runner does close bars at such a cadence, but off the session's grid,
+    so how many one session closes is not defined. Deploy refuses these
+    parameters on ``warmup_lookback_refusal``. The resolved value stays the
+    default, so a seal built at such a bar before the refusal reads as it did.
+    """
     registration = _STRATEGY_REGISTRY["sma_crossover"]
     contract = registration.signal_program_contract
     assert contract is not None
-    daily = registration.param_schema(resolution_minutes=1440)
+    long_bar = registration.param_schema(resolution_minutes=resolution_minutes)
 
-    assert contract.resolved_warmup_lookback_days(daily) == contract.warmup_lookback_days
+    refusal = contract.warmup_lookback_refusal(long_bar)
+    assert refusal is not None
+    assert f"A {resolution_minutes}-minute bar is longer than a regular trading session" in refusal
+    assert contract.resolved_warmup_lookback_days(long_bar) == contract.warmup_lookback_days
+
+
+def test_a_program_with_no_series_has_nothing_to_size_on_any_bar() -> None:
+    """``deployment_validation`` builds no series, so no bar length leaves it unwarmed or refuses it.
+
+    No registered program pairs that shape with a configurable bar, so the
+    long bar is put on a copy of its contract.
+    """
+    registration = _STRATEGY_REGISTRY["deployment_validation"]
+    assert registration.signal_program_contract is not None
+    contract = replace(registration.signal_program_contract, decision_timeframe_ms=1440 * _MINUTE_MS)
+    defaults = registration.param_schema()
+
+    assert contract.resolved_signals(defaults) == ()
+    assert contract.warmup_lookback_refusal(defaults) is None
+    assert contract.resolved_warmup_lookback_days(defaults) == contract.warmup_lookback_days

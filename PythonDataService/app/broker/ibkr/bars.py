@@ -65,9 +65,9 @@ NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 # phase opened is not a stall and cannot kill the run or re-request the line.
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
-# Measured: 10 days of 1-minute history returned in 0.6 s; 20 days took 48 s (#2841).
-_HISTORICAL_BARS_FIXED_TIMEOUT_DAYS = 10
-_HISTORICAL_BARS_TIMEOUT_S_PER_FURTHER_DAY = 6.0
+# Two measurements, nothing between them: 10 days of 1-minute history in 0.6 s, 20 days in 48 s (#2841).
+_HISTORICAL_BARS_SHORT_REQUEST_MAX_DAYS = 10
+_HISTORICAL_BARS_LONG_REQUEST_TIMEOUT_S = 75.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
 _REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
@@ -781,11 +781,12 @@ def _contract_venue(contract: object) -> str | None:
 def historical_bars_timeout_s(lookback_days: int) -> float:
     """How long a ``lookback_days`` request for 1-minute history is given to answer.
 
-    The fixed timeout up to ten days, the longest request measured to return
-    at once; six more seconds for each day past that.
+    The short timeout up to ten days, the longest request measured to return
+    at once; the long one for every request past that.
     """
-    further_days = max(lookback_days - _HISTORICAL_BARS_FIXED_TIMEOUT_DAYS, 0)
-    return _HISTORICAL_BARS_TIMEOUT_S + _HISTORICAL_BARS_TIMEOUT_S_PER_FURTHER_DAY * further_days
+    if lookback_days <= _HISTORICAL_BARS_SHORT_REQUEST_MAX_DAYS:
+        return _HISTORICAL_BARS_TIMEOUT_S
+    return _HISTORICAL_BARS_LONG_REQUEST_TIMEOUT_S
 
 
 async def fetch_historical_minute_bars(
@@ -813,6 +814,10 @@ async def fetch_historical_minute_bars(
                 useRTH=use_rth,
                 formatDate=2,
                 keepUpToDate=False,
+                # ib_async's own timeout (60 s by default) ends a slow request
+                # with an empty list, not an error. 0 turns it off, so
+                # `timeout_s` alone decides and a timeout is reported as one (#2841).
+                timeout=0,
             ),
             timeout=timeout_s,
         )

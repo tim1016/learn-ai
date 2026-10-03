@@ -323,7 +323,12 @@ def prove_running_program_build(
     configured = seal.configured_signal
     failed = next((check for check in _seal_checks(binding, seal, contract) if not check.holds), None)
     if failed is not None:
-        return _unproven(binding.strategy_key, verified_at_ms, explanation=failed.explanation)
+        return _unproven(
+            binding.strategy_key,
+            verified_at_ms,
+            explanation=failed.explanation,
+            **({"next_step": failed.next_step} if failed.next_step else {}),
+        )
     try:
         record_imported_program_sources()
         running_digest = running_artifact_digest(contract)
@@ -683,12 +688,14 @@ class _SealCheck:
     from the conditions they described, and whose every failure collapsed
     into one sentence -- an operator who overrode a parameter read the same
     message as one whose account identity had drifted. Each row carries its
-    own explanation, so the refusal says which agreement broke.
+    own explanation, so the refusal says which agreement broke. A row whose
+    remedy is not the shared one carries its own ``next_step`` too.
     """
 
     name: str
     holds: bool
     explanation: str
+    next_step: str | None = None
 
 
 def _seal_checks(
@@ -808,6 +815,9 @@ def _seal_checks(
             sealed_params is not None
             and configured.clock.warmup_lookback_days == contract.resolved_warmup_lookback_days(sealed_params),
             "The sealed warmup requirement no longer matches the registered contract.",
+            # A seal from before #2841 names the default days for periods that
+            # now resolve more; qualifying the code again cannot change a seal.
+            next_step="Deploy the bot again: its warmup history is now sized from its periods.",
         ),
         # `parameters_match_validated_settings` is deliberately not a row here.
         # It says whether the corpus *covers* this configuration, not whether

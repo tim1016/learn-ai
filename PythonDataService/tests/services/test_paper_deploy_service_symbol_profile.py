@@ -189,7 +189,33 @@ def test_deploy_refuses_exactly_the_periods_whose_warmup_history_a_bot_cannot_lo
         resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides)
 
 
+@pytest.mark.parametrize("resolution_minutes", [391, 480, 1440])
+def test_deploy_refuses_a_bar_longer_than_a_regular_session(resolution_minutes: int) -> None:
+    """#2841: SMA on such a bar was accepted and sealed its default seven days.
+
+    The bot then started unwarmed, or on a 1440-minute bar never decided at
+    all: the days such a bar needs cannot be counted.
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Invalid strategy parameters: A {resolution_minutes}-minute bar is longer than a regular trading "
+            r"session, so these periods cannot be warmed up from history\. Use a bar of 390 minutes or less\."
+        ),
+    ):
+        resolve_deploy_strategy_params("sma_crossover", _SYMBOL, {"resolution_minutes": resolution_minutes})
+
+
+def test_deploy_sizes_the_history_a_bar_one_session_long_needs() -> None:
+    """A regular session holds one whole 390-minute bar, so its lookback is counted, and refused for its length.
+
+    SMA's default periods need 60 days at that bar.
+    """
+    with pytest.raises(ValueError, match=rf"need 60 days .* at most {MAX_WARMUP_LOOKBACK_DAYS}\b"):
+        resolve_deploy_strategy_params("sma_crossover", _SYMBOL, {"resolution_minutes": 390})
+
+
 @pytest.mark.parametrize("strategy_key", sorted(_STRATEGY_REGISTRY))
 def test_deploy_accepts_every_registered_strategy_at_its_own_defaults(strategy_key: str) -> None:
-    """#2841: the lookback limit must never refuse the periods a strategy is registered with."""
+    """#2841: neither lookback refusal may refuse the periods a strategy is registered with."""
     assert resolve_deploy_strategy_params(strategy_key, _SYMBOL, {}).diverges_from_defaults == ()

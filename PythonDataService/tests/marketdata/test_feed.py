@@ -686,7 +686,7 @@ async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("lookback_days", "timeout_s"), [(5, 15.0), (18, 63.0)])
+@pytest.mark.parametrize(("lookback_days", "timeout_s"), [(5, 15.0), (18, 75.0)])
 async def test_recent_closed_bars_gives_a_long_lookback_longer_to_answer(
     monkeypatch: pytest.MonkeyPatch, lookback_days: int, timeout_s: float
 ) -> None:
