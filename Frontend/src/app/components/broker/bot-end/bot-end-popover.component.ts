@@ -63,10 +63,11 @@ export class BotEndPopoverComponent {
     this.editor().revealErrors();
   }
 
-  /** The fields take the keyboard as they open over the page. */
+  /** The fields take the keyboard as they open over the page, and the date's calendar is put away as they close. */
   protected onToggle(event: Event): void {
     if (!('newState' in event)) return;
     this.openState.set(event.newState === 'open');
     if (event.newState === 'open') this.editor().focus();
+    else this.editor().closeCalendar();
   }
 }

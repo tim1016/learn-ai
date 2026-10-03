@@ -399,12 +399,13 @@ describe("StrategyLab configuration and runner", () => {
     const sessions = signal<TradingSessions | null>(null);
     const lastCompleted = signal<string | null>(null);
 
-    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. */
-    function labBeforeTheCalendar(): StrategyLabConfigStore {
+    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. `link` is the launch link's query, applied once the strategies arrive. */
+    function labBeforeTheCalendar(link: { from?: string; to?: string } = {}): StrategyLabConfigStore {
       sessions.set(null);
       lastCompleted.set(null);
       TestBed.resetTestingModule();
       configureLab();
+      TestBed.overrideProvider(ActivatedRoute, { useValue: { queryParamMap: of(convertToParamMap(link)) } });
       TestBed.overrideProvider(TradingCalendarService, { useValue: { sessions, lastCompleted, problem: signal(null), retry: () => undefined } });
       TestBed.overrideProvider(ProviderBoundsService, {
         useValue: { bounds: computed(() => providerBounds(STANDARD_DATE_WORLD.providerFloor, lastCompleted())) },
@@ -431,6 +432,36 @@ describe("StrategyLab configuration and runner", () => {
       calendarArrives();
 
       expect(store.range()).toMatchObject(expected);
+    });
+
+    it.each([
+      // The end is kept and the start is a month before it, not the start of the window the lab had opened on.
+      { link: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
+      // An end past the last readable day is kept for the picker to refuse; the start is still a month the run can read.
+      { link: { to: "2026-12-31" }, expected: { from: "2026-08-19", to: "2026-12-31" } },
+    ])("fills the other date of a one-date launch link applied after the window started: $link", ({ link, expected }) => {
+      const store = labBeforeTheCalendar(link);
+      TestBed.tick();
+      calendarArrives();
+      expect(store.range()).toMatchObject({ from: "2026-08-19", to: "2026-09-18" });
+
+      // The link is applied once the strategies have loaded.
+      store.strategies.set([STRATEGY]);
+      TestBed.tick();
+
+      expect(store.range()).toMatchObject(expected);
+    });
+
+    it("keeps a date the picker refused before the calendar was read, and puts no starting window over it", () => {
+      const store = labBeforeTheCalendar();
+      store.range.update((range) => ({ ...range, to: "2026-13-45" }));
+      TestBed.tick();
+
+      // The picker hands back an empty date for the field it cannot use; the text stays in the field.
+      store.changeRange({ ...store.range(), to: "" });
+      calendarArrives();
+
+      expect(store.range()).toMatchObject({ from: "", to: "" });
     });
 
     it("is the last month of what the run can read, set once the calendar has been read and never again", () => {

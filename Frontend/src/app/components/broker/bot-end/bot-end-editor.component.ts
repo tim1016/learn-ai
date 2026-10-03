@@ -86,6 +86,11 @@ export class BotEndEditorComponent {
     else this.dateField().focus();
   }
 
+  /** Puts the date's calendar away, e.g. when the editor closes. */
+  closeCalendar(): void {
+    this.dateField().closeCalendar();
+  }
+
   /** Says what each field needs now, e.g. when the owner asks to save fields that name no minute. */
   revealErrors(): void {
     this.endForm.date().markAsTouched();

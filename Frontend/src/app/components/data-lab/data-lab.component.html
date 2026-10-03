@@ -46,8 +46,8 @@
       <span>Dates</span>
       <app-date-range-picker
         label="Dates"
-        [from]="draftFromIso()"
-        [to]="draftToIso()"
+        [(from)]="draftFromIso"
+        [(to)]="draftToIso"
         [bounds]="dateBounds()"
         [sessionsOnly]="false"
         [hostOffers]="presetOffers()"

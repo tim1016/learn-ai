@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SamplingCardComponent } from './sampling-card.component';
+import { SamplingCardComponent, type SamplingChange } from './sampling-card.component';
 import type { TickerRange } from '../ticker-range-picker.types';
 
 describe('SamplingCardComponent', () => {
@@ -13,6 +13,7 @@ describe('SamplingCardComponent', () => {
 
   let fixture: ComponentFixture<SamplingCardComponent>;
   let component: SamplingCardComponent;
+  let changes: SamplingChange[];
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
@@ -23,6 +24,8 @@ describe('SamplingCardComponent', () => {
     fixture = TestBed.createComponent(SamplingCardComponent);
     component = fixture.componentInstance;
     fixture.componentRef.setInput('value', baseValue);
+    changes = [];
+    component.changed.subscribe((change) => changes.push(change));
   });
 
   it('renders the three resolution toggles by default', () => {
@@ -49,11 +52,11 @@ describe('SamplingCardComponent', () => {
     }
   });
 
-  it('setMultiplier updates value().multiplier', () => {
+  it('hands its host only the field a control set, never the range it was given', () => {
     fixture.componentRef.setInput('availableMultipliers', [1, 5, 15]);
     fixture.detectChanges();
     component.setMultiplier(15);
-    expect(component.value().multiplier).toBe(15);
+    expect(changes).toEqual([{ multiplier: 15 }]);
   });
 
   it('effectiveMultiplier defaults to 1 when undefined on the value', () => {
@@ -65,7 +68,7 @@ describe('SamplingCardComponent', () => {
     fixture.componentRef.setInput('sessionMode', 'disabled');
     fixture.detectChanges();
     component.setSession('extended');
-    expect(component.value().session).toBeUndefined();
+    expect(changes).toEqual([]);
   });
 
   it('hides the entire session group when sessionMode=hidden', () => {

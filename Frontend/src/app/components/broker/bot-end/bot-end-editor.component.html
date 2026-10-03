@@ -13,7 +13,7 @@
         [attr.aria-describedby]="clockError() === null ? marketId : marketId + ' ' + errorId"
       />
     </label>
-    <!-- Under the time it restates: the same minute in market time, or "—" while the fields name none. -->
+    <!-- Beside the time it restates: the same minute in market time, or "—" while the fields name none. -->
     <p class="bot-end-editor__market" [id]="marketId">Market time <app-timestamp-display [value]="typedAtMs()" mode="et" granularity="time" /></p>
   </div>
   @if (clockError(); as message) {
