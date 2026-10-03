@@ -1883,6 +1883,46 @@ async def test_the_same_settlement_asked_for_again_returns_its_receipt_and_does_
     assert repo.custody_transitions() == ledger
 
 
+@pytest.mark.parametrize("alpaca_filled_it", [False, True], ids=["absent", "exists-filled"])
+async def test_a_settlements_first_answer_carries_the_time_its_row_was_recorded_as_every_replay_does(
+    crashed_with_exposure,  # noqa: F811
+    alpaca_filled_it: bool,
+) -> None:
+    """The clock moves on while a settlement is written; its receipt is dated by its own row.
+
+    The first answer read the clock again once everything was written, so it
+    was dated later than the row, and the same request asked again was
+    answered with another time. Both now carry the row's.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered" if alpaca_filled_it else "never_arrives",))
+    attestation = ABSENT
+    if alpaca_filled_it:
+        _exit_id, attestation = await _a_stopped_bot_whose_closing_order_alpaca_has_unseen(repo, alpaca)
+        alpaca.fills(_closing_order(repo).client_order_id)
+    else:
+        await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    presented = await _presented(current_context)
+    append = repo.append_transition
+
+    def append_transition(transition: TransitionInput, **kwargs: object) -> object:
+        committed = append(transition, **kwargs)  # type: ignore[arg-type]
+        clock.advance(7)
+        return committed
+
+    repo.append_transition = append_transition  # type: ignore[method-assign]
+
+    first = await _settle(facade, current_context, attestation, presented=presented)
+    again = await _settle(facade, current_context, attestation, presented=presented)
+
+    recorded_at_ms = _attestation_row(repo)["recorded_at_ms"]
+    assert (first.applied, again.applied) == (True, False)
+    assert first.receipt_id == again.receipt_id
+    assert first.recorded_at_ms == again.recorded_at_ms == recorded_at_ms
+    assert repo.clock() > recorded_at_ms, "the clock had moved on by the time the first answer was made"
+
+
 async def test_a_settlement_asked_again_by_a_page_that_names_no_order_is_found_by_its_token(
     crashed_with_exposure,  # noqa: F811
 ) -> None:

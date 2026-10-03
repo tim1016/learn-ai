@@ -1259,8 +1259,18 @@ def _settled(
     *,
     attestation: SettlementAttestation,
 ) -> UnknownOrderSettlementReceipt:
+    """The receipt of the settlement just written: its own row, as a replay reads it.
+
+    Dated by the row and not by the clock again, which has moved on by now:
+    the same request asked again is answered from that row
+    (:func:`recorded_settlement`), and must be answered with the same time.
+    """
     effect = repo.effect_operation(presented.effect_operation_id)
     assert effect is not None
+    row = repo.last_order_transition(
+        order_ref=presented.order_ref, transition_kind=ORDER_OUTCOME_ATTESTED
+    )
+    assert row is not None and row["sequence"] == committed.sequence
     logger.warning(
         "an operator settled a closing order whose outcome was unknown",
         extra={
@@ -1276,8 +1286,8 @@ def _settled(
         },
     )
     return UnknownOrderSettlementReceipt(
-        sequence=committed.sequence,
-        recorded_at_ms=repo.clock(),
+        sequence=row["sequence"],
+        recorded_at_ms=row["recorded_at_ms"],
         order_ref=presented.order_ref,
         attestation=attestation,
     )
