@@ -139,6 +139,8 @@ def test_qualified_presets_resolve_to_the_exact_registry_corpus_without_changing
         assert registry_point_matches(contract, {**preset.parameters, "symbol": preset.symbol})
         assert contract.validated_settings == before
         assert "symbol" not in preset.parameters
+        # The form submits the preset as it stands, so Deploy must take it (#2841).
+        resolve_deploy_strategy_params(key, preset.symbol, dict(preset.parameters))
         for symbol in contract.validated_symbols:
             assert _qualified_configuration(key, symbol).symbol == symbol
 

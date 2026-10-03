@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
-    AccountOpenWork,
+    OpenOrdersThenPositions,
     read_open_orders_then_positions,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
@@ -175,12 +175,14 @@ class ClaimedBrokerIO:
 
     async def observe_open_orders_then_positions(
         self, read: BrokerReadPort
-    ) -> AccountOpenWork | BrokerError:
+    ) -> OpenOrdersThenPositions | BrokerError:
         """The account's open orders, then its positions, or a value-domain error (#2839).
 
         Read under the claim like every other broker contact of a resolution,
         with :meth:`observe_activity_evidence`'s shape: a failed read is the
-        caller's to refuse on and never escapes the pass.
+        caller's to refuse on and never escapes the pass. The error alone
+        means the open orders were not read; a positions read that failed
+        after them is the error beside the orders.
         """
         self._renew()
         try:
