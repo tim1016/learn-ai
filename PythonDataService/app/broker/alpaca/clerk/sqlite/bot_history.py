@@ -176,11 +176,15 @@ def project_custody_history(
     fees: BudgetFees | None,
     fees_unavailable: str | None = None,
     strategy_instance_ids: Sequence[str] | None = None,
+    dormant: bool = False,
 ) -> CustodyHistory:
     """Project every bot (or the named ones) on the caller's snapshot.
 
     ``fees`` is the canonical fee reconciler's answer for this snapshot, or
     ``None`` with ``fees_unavailable`` naming why it could not be read.
+    ``dormant`` is a database no Clerk reconciles again; each bot's
+    ``live_custody`` is then read as ``strategy_instances_with_live_custody``
+    reads such a store.
 
     Formula: transactions = |effective fills| (per run: those whose order's
       effect operation names the run); orders = order rows by provenance,
@@ -265,7 +269,7 @@ def project_custody_history(
         for row in conn.execute("SELECT strategy_instance_id, committed_cents FROM deployment_budgets")
     }
     holding = bots_holding_money(conn)
-    live_custody = reads.strategy_instances_with_live_custody(conn)
+    live_custody = reads.strategy_instances_with_live_custody(conn, dormant=dormant)
     results: dict[str, BotResult] = {}
     money_unavailable = fees_unavailable
     if fees is not None and money_unavailable is None:
@@ -414,6 +418,7 @@ def read_custody_history(
     fee_evidence_checked_at_ms: int | None,
     strategy_instance_ids: Sequence[str] | None = None,
     memo: RevisionMemo[CustodyHistory] | None = None,
+    dormant: bool = False,
 ) -> CustodyHistory:
     """``project_custody_history`` on its own query-only snapshot of a custody file.
 
@@ -422,7 +427,8 @@ def read_custody_history(
     process's fee-evidence freshness (``None`` for a file no running Clerk
     owns: a real account's fees are then unknown, while a simulated one's
     need no broker evidence). A ``memo`` answers again at an unchanged
-    custody revision without projecting (``RevisionMemo``). Blocking work:
+    custody revision without projecting (``RevisionMemo``), so one memo is
+    never shared by a ``dormant`` read and one that is not. Blocking work:
     callers on the event loop run it in a worker thread.
     """
     from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
@@ -433,6 +439,7 @@ def read_custody_history(
             return project_custody_history(
                 conn, fees=fees if fees.known else None, strategy_instance_ids=strategy_instance_ids,
                 fees_unavailable=None if fees.known else "Fee evidence is unresolved: " + "; ".join(fees.unresolved),
+                dormant=dormant,
             )
 
     # Unknown money is kept only for a file no running Clerk owns: with no

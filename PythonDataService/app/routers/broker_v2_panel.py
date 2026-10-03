@@ -266,7 +266,8 @@ async def get_panel_profile(broker: str) -> PanelProfile:
 
 async def _catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     try:
-        return await ds.get_catalog(broker, account_id)
+        # Home is this route's one reader.
+        return await ds.get_catalog(broker, account_id, home=True)
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 

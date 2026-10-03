@@ -20,7 +20,11 @@ from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelo
 from app.broker.alpaca.clerk.sqlite import bot_history as custody_history
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import (
+    submit_retire_strategy_instance,
+    submit_start_run,
+    submit_stop_run,
+)
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -285,6 +289,57 @@ async def test_a_live_accounts_shadow_bots_come_from_its_own_shadow_database(
     # their pages -- and a Dry Run's -- open.
     assert {"done", "live", "dry-1"} <= {bot.strategy_instance_id for bot in history.bots}
     assert all(bot.page_unavailable_reason is None for bot in history.bots if bot.strategy_instance_id != "rehearsal")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("left", "status", "transactions"),
+    [
+        ("nothing", ("cleared", "Cleared"), 2),
+        ("its shares", ("holding", "Stopped · still holding"), 1),
+        ("an entry the broker never answered", ("finished", "Finished"), 0),
+    ],
+    ids=["traded-and-flat", "stranded-position", "unanswered-entry"],
+)
+async def test_a_retired_shadow_bot_reads_cleared_once_its_account_is_live_only_if_its_records_hold_nothing(
+    lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+    left: str, status: tuple[str, str], transactions: int,
+) -> None:
+    """No fold ends a filled ENTER, so a bot that traded is one whose custody
+    "can still change" for good, and a cleared one read "Finished". Nothing
+    reconciles a graduated account's Shadow database again, so that filled
+    ENTER no longer counts and a retired bot of it is cleared (#2694). Only
+    that: a bot retired with its shares unsold, or with an entry the broker
+    never answered, is not cleared -- it has no page, so History is the one
+    place that says so."""
+    shadow = ClerkSqliteRepository.initialize(
+        account_id=f"shadow:{_ACCOUNT}", artifacts_root=lane.db_path.parents[3], clock=_TestClock(NOON),
+    )
+    try:
+        _register(shadow, "rehearsal")
+        submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        bought = _enter(shadow, "rehearsal", "run-r", "enter-r")
+        if left != "an entry the broker never answered":
+            _ack(shadow, bought, "filled")
+            _append_slice(shadow, bought, execution_id="r-buy", quantity=1, source_event_at_ms=NOON - 2, fee=0)
+        if left == "nothing":
+            _record_sale(shadow, bought, key="r-sell", price=110, at_ms=NOON - 1)
+        submit_stop_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        submit_retire_strategy_instance(
+            shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", retired_at_ms=NOON, clock=shadow.clock,
+        )
+        assert shadow.strategy_instances_with_live_custody() == {"rehearsal"}
+    finally:
+        shadow.close()
+    monkeypatch.setattr(
+        bot_history, "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id=_ACCOUNT, account_mode="live", repository=lane),
+    )
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    rehearsal = next(bot for bot in history.bots if bot.strategy_instance_id == "rehearsal")
+    assert (rehearsal.status, rehearsal.status_label, rehearsal.transaction_count) == (*status, transactions)
 
 
 def _shadow_rehearsal(lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> Path:

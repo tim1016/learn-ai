@@ -14,6 +14,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from app.broker.alpaca.clerk.account_authority import (
+    AccountAuthorityIdentityError,
+    shadow_account_id_for_live_account,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -75,6 +79,23 @@ class ForeignBinding:
     strategy_instance_id: str
     sealed_account_id: str
     installed_account_id: str
+
+    @property
+    def rehearsed_on_installed_account(self) -> bool:
+        """Whether the binding is sealed on the installed account's own Shadow store (#2694).
+
+        The one rule for the foreign store Clear and Home may read in the
+        installed Clerk's place: ``shadow:<installed account>``, where that
+        account rehearsed before it went live. Another account's ``shadow:``
+        store is as foreign as another real account's, and a Clear on this
+        account must never retire a registration there. An installed id that
+        has no Shadow store of its own -- it is itself a ``shadow:`` or
+        ``sim:`` id -- pairs with none.
+        """
+        try:
+            return self.sealed_account_id == shadow_account_id_for_live_account(self.installed_account_id)
+        except AccountAuthorityIdentityError:
+            return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,12 +331,15 @@ class BotBootRecovery:
         periodic duty settle and Clear read it too (#2589).
 
         A Dry Run binding is never foreign, however its ``sim:`` custody id
-        compares: the registry routes it to its own per-instance authority,
-        so the projector that would repair it is not the primary one. That
-        routing is *read* here through ``lifecycle_projector_for``, never
-        re-derived, so this predicate cannot drift from the selector that
-        owns it -- and a ``sim:`` binding is excluded because of where it
-        routes, not because of how its id is spelled.
+        compares: the registry routes it to its own per-instance authority on
+        its mode (``BindingAuthoritySelector.for_binding``), and it is passed
+        over here on that same mode, before any projector is asked for. A
+        stopped Dry Run's ``sim:`` runtime is closed and its projector cannot
+        be composed, so asking for one made this question raise for a bot
+        that is never foreign (#2694). Every other binding's routing is
+        *read* through ``lifecycle_projector_for``, never re-derived, so this
+        predicate cannot drift from the selector that owns it. No binding is
+        excluded because of how its id is spelled.
 
         Corruption is not foreignness: an unreadable binding, a non-Alpaca
         identity, and a historical IBKR binding keep raising exactly as they
@@ -327,7 +351,7 @@ class BotBootRecovery:
         report -- it closes the start gate on its own.
         """
         binding = self._binding_for(strategy_instance_id)
-        if binding is None or binding.sealed_account_id is None:
+        if binding is None or binding.sealed_account_id is None or binding.mode == "dry_run":
             return None
         # The custody id the installed primary authority holds -- the same
         # ``account_id`` a ``ClerkCustodySnapshot`` carries into Start

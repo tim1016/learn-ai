@@ -18,7 +18,13 @@ from typing import Any
 
 import pytest
 
-from app.broker.v2panel.action_policy import ArchiveVerdict, archive_action, evaluate_archive
+from app.broker.v2panel.action_policy import (
+    ArchiveVerdict,
+    RehearsalRecords,
+    archive_action,
+    evaluate_archive,
+    evaluate_rehearsal_custody,
+)
 from app.schemas.broker_v2_panel import PanelAction
 
 
@@ -78,10 +84,10 @@ def test_archive_refuses_a_dead_process_whose_run_never_settled() -> None:
 
 @pytest.mark.parametrize("phase", ["OFF_DUTY", "ON_DUTY"])
 def test_archive_refuses_a_bot_sealed_on_an_account_the_clerk_does_not_hold(phase: str) -> None:
-    """A live account's shadow rehearsal after graduation (#2589): nothing here
-    can prove it holds nothing, and no wait changes that -- so it is refused
-    for its account, and ahead of a not-yet-settled run, whose words would
-    promise a clear that never comes."""
+    """A bot sealed on another account that keeps no records this lane can
+    read (#2589): nothing here can prove it holds nothing, and no wait changes
+    that -- so it is refused for its account, and ahead of a not-yet-settled
+    run, whose words would promise a clear that never comes."""
     verdict = evaluate_archive(
         running=False,
         phase=phase,
@@ -93,6 +99,27 @@ def test_archive_refuses_a_bot_sealed_on_an_account_the_clerk_does_not_hold(phas
     )
 
     assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_SEALED_ACCOUNT_CUSTODY")
+
+
+def test_shadow_records_that_show_nothing_held_make_a_rehearsal_bot_eligible() -> None:
+    """#2694: a graduated Shadow store keeps the one proof a bot sealed on
+    another account can offer, so such a bot is no longer refused for its
+    account."""
+    assert evaluate_rehearsal_custody(RehearsalRecords(readable=True)) == ArchiveVerdict(eligible=True)
+
+
+def test_a_rehearsal_bot_is_refused_for_what_its_shadow_records_show_it_holds() -> None:
+    verdict = evaluate_rehearsal_custody(RehearsalRecords(readable=True, held="10 SPY"))
+
+    assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_STILL_HOLDS", held="10 SPY")
+
+
+def test_shadow_records_that_could_not_be_read_prove_nothing() -> None:
+    """A held lease, a mismatched identity or an unreadable file is never an
+    eligible Clear."""
+    verdict = evaluate_rehearsal_custody(RehearsalRecords(readable=False))
+
+    assert verdict == ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE")
 
 
 def test_archive_refuses_while_an_effect_is_still_unresolved() -> None:

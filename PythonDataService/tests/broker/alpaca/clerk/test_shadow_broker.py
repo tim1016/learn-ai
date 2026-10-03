@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -17,11 +18,13 @@ from app.broker.alpaca.clerk.shadow_broker import (
     SHADOW_BROKER_ID,
     EvidenceLedgers,
     NoSubmitAlpacaTradePort,
+    ShadowBookUnreadable,
     ShadowFillBindingError,
     ShadowNamespacePoisoned,
     ShadowNamespaceUnproven,
     ShadowPorts,
     compose_shadow_ports,
+    open_book_orders,
     verify_shadow_namespace_empty,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
@@ -567,3 +570,58 @@ async def test_shadow_limit_expires_at_the_calendar_early_close(tmp_path: Path) 
     order = await ports.trade.get_order_by_client_order_id(ref)
     assert order.status == "canceled"
     assert order.canceled_at_ms == bounds.close_ms
+
+
+def _open_orders(tmp_path: Path, sid: str = SID) -> list[str | None]:
+    return [
+        order.client_order_id
+        for order in open_book_orders(
+            artifacts_root=tmp_path, account_id="shadow:9LIVE0001", strategy_instance_id=sid
+        )
+    ]
+
+
+async def test_the_books_open_orders_are_one_bots_resting_orders_read_without_settling(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], tmp_path: Path,
+) -> None:
+    """#2694: a graduated account's book is read as it was left. A filled
+    order is not open; a resting one is its own bot's alone; and the read
+    settles nothing, even once a later bar would have touched the limit."""
+    ports, bars, _live, clock = world
+    filled = _retain(bars, minute=600, close="100.25")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:filled", filled)
+    await ports.trade.submit(_market_leg(), client_order_id=f"{NAMESPACE}:filled")
+    decision = _retain(bars, minute=1020, close="100.00", low="99.50", phase="POST")
+    ports.trade.bind_evaluated_bar(f"{NAMESPACE}:resting", decision)
+    await ports.trade.submit(_extended_leg(100.50), client_order_id=f"{NAMESPACE}:resting")
+    touching = _retain(bars, minute=1022, close="100.60", low="100.40", phase="POST")
+    clock.now_ms = touching.end_ms + 1
+    before = ports.book._ledger.path.read_bytes()
+
+    assert _open_orders(tmp_path) == [f"{NAMESPACE}:resting"]
+    assert _open_orders(tmp_path, "another-bot") == []
+    assert ports.book._ledger.path.read_bytes() == before
+
+
+def test_a_book_that_was_never_written_holds_no_open_order(tmp_path: Path) -> None:
+    assert _open_orders(tmp_path) == []
+
+
+def test_an_open_order_no_bot_minted_counts_against_every_bot(tmp_path: Path) -> None:
+    """Nobody can say whose it is, so no bot is proven clear of it."""
+    path = tmp_path / "accounts" / "alpaca" / "shadow:9LIVE0001" / SYNTHESIZED_ORDER_LEDGER_FILENAME
+    path.parent.mkdir(parents=True)
+    unowned = _vendor_order("not-a-program-order").model_copy(update={"status": "new"})
+    path.write_text(json.dumps({"seq": 1, "order": unowned.model_dump(mode="json")}) + "\n", encoding="utf-8")
+
+    assert _open_orders(tmp_path) == ["not-a-program-order"]
+    assert _open_orders(tmp_path, "another-bot") == ["not-a-program-order"]
+
+
+def test_a_book_that_cannot_be_parsed_is_no_witness(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / "alpaca" / "shadow:9LIVE0001" / SYNTHESIZED_ORDER_LEDGER_FILENAME
+    path.parent.mkdir(parents=True)
+    path.write_text("not json\n", encoding="utf-8")
+
+    with pytest.raises(ShadowBookUnreadable, match="cannot be read"):
+        _open_orders(tmp_path)

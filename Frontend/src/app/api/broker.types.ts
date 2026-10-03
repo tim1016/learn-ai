@@ -7759,6 +7759,8 @@ export interface components {
             needs_attention: boolean;
             /** Open Pnl */
             open_pnl: number | null;
+            /** Page Unavailable Reason */
+            page_unavailable_reason?: string | null;
             /**
              * Phase
              * @enum {string}

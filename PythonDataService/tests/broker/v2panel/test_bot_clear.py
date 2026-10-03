@@ -31,7 +31,12 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    close_synthetic_clerk_runtimes,
+    get_clerk_runtime,
+    set_active_clerk_runtime,
+)
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
@@ -49,6 +54,9 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_v2_panel import BotClearRequest, PanelActionRequest, PanelActionResult
+from app.schemas.deployment_budget import DeployBudgetConsent
+from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
+from app.services import market_liveness
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.broker_v2_panel import bot_clear, panel_data_source, panel_scope
@@ -56,6 +64,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     reset_idempotency_store_for_testing,
 )
+from app.utils.timestamps import now_ms_utc
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_position_fixture, _make_held_position
 from tests.broker.v2panel.conftest import account_snapshot
@@ -259,7 +268,7 @@ async def test_an_unknown_bot_is_refused_and_never_aborts_its_siblings(lane: _La
     ]
     unknown = result.legs[1].error
     assert unknown is not None
-    assert (unknown.outcome, unknown.reason_code) == ("conflict", None)
+    assert (unknown.outcome, unknown.reason_code) == ("conflict", "CLEAR_BOT_NOT_FOUND")
     assert unknown.message == "No bot 'not-a-bot' is bound to broker 'alpaca'."
     assert [call[0] for call in lane.calls] == [_FINISHED, _DRY_RUN]
     assert (result.applied_count, result.refused_count) == (2, 1)
@@ -472,6 +481,43 @@ class _Account:
         self._stopped(sid)
         self.alpaca.positions = [_broker_position_fixture("SPY", quantity=10.0)]
 
+    async def stopped_dry_run(self, sid: str) -> None:
+        """A Dry Run that ran and stopped flat in its own simulated account, which is closed again."""
+        binding = BrokerBotBinding(
+            strategy_instance_id=sid,
+            strategy_key="deployment_validation",
+            broker="alpaca",
+            symbol="SPY",
+            mode="dry_run",
+            quantity=1,
+            action_plan=alpaca_v1_action_plan("SPY"),
+            run_id=f"run-{sid}",
+            created_at_ms=1,
+            sealed_account_id=f"sim:{sid}",
+            exit_terms=DEPLOY_EXIT_TERMS,
+            budget_consent=DeployBudgetConsent(
+                committed_cents=100_000, risk_revision=0, actor="owner", request_fingerprint="reviewed",
+                world="synthetic",
+            ),
+        )
+        self.runner._bindings.record_launch(binding, launch_reason="deploy")
+        # The Deploy priced its budget from a fresh IBKR book.
+        now_ms = now_ms_utc()
+        market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
+            source=MarketStatusSource.IBKR, connected=True, observed_at_ms=now_ms, connection_changed_at_ms=now_ms,
+            symbol_statuses=(), quotes=(
+                TopOfBookQuote(symbol="SPY", bid=600.0, ask=600.0, source="ibkr.market_data.status", observed_at_ms=now_ms),
+            ),
+        ), now_ms=now_ms)
+        simulator = self.runner._authority_for(binding)
+        await simulator.ensure_recoverable()
+        runtime = get_clerk_runtime(f"sim:{sid}")
+        assert runtime is not None and runtime.clerk is not None
+        await runtime.clerk.register_strategy_run(binding)
+        await runtime.clerk.stop_strategy_run(strategy_instance_id=sid, run_id=binding.run_id, reason="done")
+        await simulator.release_after_run_end()
+        assert get_clerk_runtime(f"sim:{sid}") is None
+
     async def requests_per_pass(self) -> int:
         """What one sweep pass costs at Alpaca -- and the verdict it leaves standing."""
         before = self.alpaca.requests
@@ -483,6 +529,7 @@ class _Account:
 async def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Account]:
     reset_broker_registry_for_testing()
     reset_idempotency_store_for_testing()
+    market_liveness.reset_market_liveness_store_for_testing()
     alpaca = _Alpaca()
     get_broker_registry().register(alpaca)  # type: ignore[arg-type]
 
@@ -500,11 +547,13 @@ async def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncItera
     try:
         yield _Account(repo=repo, alpaca=alpaca, facade=facade, runner=runner, runner_root=runner_root)
     finally:
+        await close_synthetic_clerk_runtimes()
         set_active_clerk_runtime(None)
         set_bot_task_registry(None)
         repo.close()
         reset_broker_registry_for_testing()
         reset_idempotency_store_for_testing()
+        market_liveness.reset_market_liveness_store_for_testing()
 
 
 async def test_clearing_150_finished_bots_reconciles_once_within_the_bound(account: _Account) -> None:
@@ -645,3 +694,24 @@ async def test_a_dead_bot_whose_run_never_settled_stays_on_home_until_recovery_s
 
     assert [(leg.strategy_instance_id, leg.outcome) for leg in settled.legs] == [("spy-dead-1", "applied")]
     assert await panel_data_source.get_catalog("alpaca", ACCT) == []
+
+
+async def test_a_stopped_dry_run_clears_beside_an_account_bot_from_one_batch(account: _Account) -> None:
+    """A Dry Run that has stopped since the service started has its simulated
+    account closed. Asking whether such a bot is sealed on another account
+    once needed that account open, and refused: nothing in the batch was
+    cleared and the whole request failed (#2694). A Dry Run is never sealed
+    on another account, and every leg gets its own answer."""
+    account.finished("spy-done-1")
+    await account.stopped_dry_run("dry-done-1")
+    await account.requests_per_pass()
+
+    result = await bot_clear.clear_bots(
+        "alpaca", ACCT, _request("spy-done-1", "dry-done-1"), operator_identity="owner"
+    )
+
+    assert [(leg.strategy_instance_id, leg.outcome) for leg in result.legs] == [
+        ("spy-done-1", "applied"), ("dry-done-1", "applied"),
+    ], [leg.error for leg in result.legs if leg.error]
+    assert account.runner.status("alpaca", "dry-done-1").phase == "RETIRED"
+

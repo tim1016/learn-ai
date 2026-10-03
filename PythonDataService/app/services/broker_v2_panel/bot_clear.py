@@ -46,7 +46,7 @@ from app.services.broker_v2_panel.cohort_execution import (
     count_outcomes,
     execute_cohort_legs,
 )
-from app.services.broker_v2_panel.panel_errors import PanelDataError
+from app.services.broker_v2_panel.panel_errors import PanelDataError, UnknownBotError
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.utils.timestamps import now_ms_utc
 
@@ -55,6 +55,10 @@ logger = logging.getLogger(__name__)
 #: The one per-bot action a clear leg runs. Fixed here, never taken from the
 #: request, so this endpoint cannot be steered to a different mutation.
 CLEAR_ACTION_ID = "archive"
+#: A leg whose bot presented no Clear because it could not be read: no bot by
+#: that id, or its Clerk unavailable just now. The words are the read's own.
+CLEAR_BOT_NOT_FOUND = "CLEAR_BOT_NOT_FOUND"
+CLEAR_BOT_UNAVAILABLE = "CLEAR_BOT_UNAVAILABLE"
 
 
 def _refused(sid: str, *, message: str, why: str | None, reason_code: str | None) -> CohortLegResult:
@@ -78,10 +82,14 @@ def _refused(sid: str, *, message: str, why: str | None, reason_code: str | None
 async def _prepare(broker: str, account_id: str, sid: str) -> CohortLegCommand | CohortLegResult:
     """The leg's command from its own presented archive action, or its refusal."""
     try:
-        panel = await panel_data_source.get_panel(broker, account_id, sid)
+        action = await panel_data_source.presented_archive(broker, account_id, sid)
     except PanelDataError as error:
-        return _refused(sid, message=str(error), why=error.detail, reason_code=None)
-    action = next((candidate for candidate in panel.actions if candidate.action_id == CLEAR_ACTION_ID), None)
+        return _refused(
+            sid,
+            message=str(error),
+            why=error.detail,
+            reason_code=CLEAR_BOT_NOT_FOUND if isinstance(error, UnknownBotError) else CLEAR_BOT_UNAVAILABLE,
+        )
     if action is None:
         return _refused(
             sid,

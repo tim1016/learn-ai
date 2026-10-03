@@ -408,6 +408,7 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
         lambda: SimpleNamespace(
             artifacts_root=tmp_path,
             binding_for_control=lambda *_: SimpleNamespace(mode="trade", broker="alpaca"),
+            foreign_binding=lambda _sid: None,
         ),
     )
 

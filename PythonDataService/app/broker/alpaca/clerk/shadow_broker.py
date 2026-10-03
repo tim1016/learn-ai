@@ -668,13 +668,7 @@ def compose_shadow_ports(
     _accounts_root, account_dir = account_paths(artifacts_root, account_id)
     account_dir.mkdir(parents=True, exist_ok=True)
     evidence = EvidenceLedgers(artifacts_root)
-    ledger = SynthesizedOrderLedger(
-        account_id=account_id,
-        path=confined_account_file(artifacts_root, account_id, SYNTHESIZED_ORDER_LEDGER_FILENAME),
-        trusted_root=account_dir,
-        verify_bar=evidence.verify,
-        label="shadow_order",
-    )
+    ledger = _order_ledger(artifacts_root, account_id, evidence)
     book = ShadowOrderBook(
         ledger=ledger,
         evidence=evidence,
@@ -689,14 +683,59 @@ def compose_shadow_ports(
     )
 
 
-def _clerk_minted(client_order_id: str | None) -> bool:
-    if not client_order_id:
-        return False
+def _order_ledger(
+    artifacts_root: Path, account_id: str, evidence: EvidenceLedgers
+) -> SynthesizedOrderLedger:
+    """One ``shadow:`` authority's order WAL, in its own custody directory."""
+    _accounts_root, account_dir = account_paths(artifacts_root, account_id)
+    return SynthesizedOrderLedger(
+        account_id=account_id,
+        path=confined_account_file(artifacts_root, account_id, SYNTHESIZED_ORDER_LEDGER_FILENAME),
+        trusted_root=account_dir,
+        verify_bar=evidence.verify,
+        label="shadow_order",
+    )
+
+
+class ShadowBookUnreadable(RuntimeError):
+    """A ``shadow:`` order book cannot be read, so it is no witness to what it holds."""
+
+
+def open_book_orders(
+    *, artifacts_root: Path, account_id: str, strategy_instance_id: str
+) -> tuple[BrokerOrder, ...]:
+    """The orders one bot still has open in a ``shadow:`` book, read as the book was left (#2694).
+
+    A plain read: nothing is settled, so a graduated account's book is never
+    written again. An open order whose id names no minting bot is counted
+    against every bot, since nobody can say whose it is. A book that was
+    never written holds none.
+    """
+    ledger = _order_ledger(artifacts_root, account_id, EvidenceLedgers(artifacts_root))
     try:
-        parse_order_ref(client_order_id)
+        orders = ledger.latest_orders()
+    except (RuntimeError, OSError, ValueError) as error:
+        raise ShadowBookUnreadable(f"the order book of {account_id!r} cannot be read: {error}") from error
+    own = build_bot_order_namespace(strategy_instance_id)
+    return tuple(
+        order
+        for order in orders
+        if order.status not in _TERMINAL and _minting_namespace(order.client_order_id) in (own, None)
+    )
+
+
+def _minting_namespace(client_order_id: str | None) -> str | None:
+    """The order namespace that minted ``client_order_id``; ``None`` when it names none."""
+    if not client_order_id:
+        return None
+    try:
+        return parse_order_ref(client_order_id)[0]
     except OrderRefParseError:
-        return False
-    return True
+        return None
+
+
+def _clerk_minted(client_order_id: str | None) -> bool:
+    return _minting_namespace(client_order_id) is not None
 
 
 async def verify_shadow_namespace_empty(read: BrokerReadPort) -> None:
@@ -734,11 +773,13 @@ __all__ = [
     "EvidenceLedgers",
     "NoSubmitAlpacaTradePort",
     "ShadowAccountReadPort",
+    "ShadowBookUnreadable",
     "ShadowFillBindingError",
     "ShadowNamespacePoisoned",
     "ShadowNamespaceUnproven",
     "ShadowOrderBook",
     "ShadowPorts",
     "compose_shadow_ports",
+    "open_book_orders",
     "verify_shadow_namespace_empty",
 ]

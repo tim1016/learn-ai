@@ -117,6 +117,9 @@ _SCHEMA_WHY = "are kept in a record format this version cannot read"
 #: One memo per database no running Clerk owns, for this process's life:
 #: an account's Dry Runs and its other world, each kept to its last answer.
 _SOURCE_MEMOS: dict[Path, RevisionMemo[CustodyHistory]] = {}
+#: The same, for Home's read of a Shadow world's named bots: a memo keeps one
+#: answer, and History's own read of that database names other bots.
+_REHEARSAL_MEMOS: dict[Path, RevisionMemo[CustodyHistory]] = {}
 #: How many of an account's databases one History read reads at once.
 _SOURCES_READ_AT_ONCE = 4
 
@@ -154,6 +157,11 @@ class _Source:
     #: Why its bots' pages cannot open: the account's workspace reads its own
     #: world and its Dry Runs, never its other world (``_sibling_sources``).
     page_unavailable_reason: str | None = None
+    #: No Clerk will ever reconcile it again: a live account's Shadow world
+    #: after graduation. A filled ENTER's effect is never ended there, so a
+    #: bot's live custody is read as Clear reads its effects (#2694): a
+    #: retired bot of it is cleared unless its records still show a holding.
+    dormant: bool = False
 
 
 async def account_bot_history(
@@ -181,7 +189,7 @@ async def account_bot_history(
             _Read(source.world, source.strategy_instance_id, partial(
                 read_custody_history, source.path, now_ms=now_ms, fee_evidence_checked_at_ms=None,
                 strategy_instance_ids=only if source.strategy_instance_id is None else (source.strategy_instance_id,),
-                memo=_SOURCE_MEMOS.setdefault(source.path, RevisionMemo()),
+                memo=_SOURCE_MEMOS.setdefault(source.path, RevisionMemo()), dormant=source.dormant,
             ), page_unavailable_reason=source.page_unavailable_reason)
             for source in (*_sibling_sources(facade), *_dry_run_sources(broker, only=strategy_instance_id))
         ),
@@ -196,6 +204,31 @@ async def account_bot_history(
     )
     gaps = tuple(gap for _, read_gaps in answers for gap in read_gaps)
     return AccountBotHistory(account_id=resolved, observed_at_ms=now_ms, bots=tuple(bots), gaps=gaps)
+
+
+async def shadow_rehearsal_bots(
+    facade: SqliteAlpacaClerkFacade, *, account_id: str, strategy_instance_ids: Sequence[str],
+) -> tuple[BotHistoryBot, ...]:
+    """The named bots of a graduated Live account's Shadow world, as History words them (#2694).
+
+    Home's Finished fold lists a rehearsal bot from this read. An account
+    with no such world, or one whose database cannot be read, answers none
+    here; History names that gap.
+    """
+    only = tuple(strategy_instance_ids)
+    now_ms = now_ms_utc()
+    bots: list[BotHistoryBot] = []
+    for source in _sibling_sources(facade):
+        if source.world != "shadow":
+            continue
+        read = _Read(source.world, None, partial(
+            read_custody_history, source.path, now_ms=now_ms, fee_evidence_checked_at_ms=None,
+            strategy_instance_ids=only, memo=_REHEARSAL_MEMOS.setdefault(source.path, RevisionMemo()),
+            dormant=source.dormant,
+        ), page_unavailable_reason=source.page_unavailable_reason)
+        read_bots, _gaps = await _read_source(read, account_id=account_id, limit=asyncio.Semaphore(1))
+        bots.extend(read_bots)
+    return tuple(bots)
 
 
 class _Read(NamedTuple):
@@ -249,7 +282,7 @@ def _sibling_sources(facade: SqliteAlpacaClerkFacade) -> tuple[_Source, ...]:
         return ()
     world = authority_kind_for_account(sibling, account_mode="live")
     return (_Source(
-        path=path, world=world,
+        path=path, world=world, dormant=world == "shadow",
         page_unavailable_reason=(
             f"This bot ran in the account's {_OTHER_WORLD_NAMES[world]} world, which the account's pages "
             "don't open, so it has no page of its own. History keeps its record."
@@ -413,4 +446,4 @@ def _usd(amount: Decimal | None) -> str | None:
     return None if amount is None else display_dollars(amount)
 
 
-__all__ = ["account_bot_history", "compose_bots"]
+__all__ = ["account_bot_history", "compose_bots", "shadow_rehearsal_bots"]

@@ -215,6 +215,10 @@ class _FakeRegistry:
         """No boot restoration is in flight in this harness (#2582)."""
         return None
 
+    def foreign_binding(self, sid: str) -> None:
+        """Every bot in this harness is sealed on the installed account (#2694)."""
+        return None
+
     def bot_end(self, broker: str, sid: str) -> BotEndView:
         """No end: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
         self.status(broker, sid)

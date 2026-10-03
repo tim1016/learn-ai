@@ -49,8 +49,17 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON, ScheduledEnd
-from app.broker.v2panel.action_policy import ArchiveVerdict, evaluate_archive
+from app.broker.v2panel.action_policy import (
+    REHEARSAL_RECORDS_UNAVAILABLE_COPY,
+    REHEARSAL_STILL_HOLDS_COPY,
+    ArchiveVerdict,
+    RehearsalRecords,
+    evaluate_archive,
+    evaluate_archive_duty,
+    evaluate_rehearsal_custody,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateRepo,
@@ -92,6 +101,8 @@ from app.services.bot_binding_authority import (
     BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
     BindingAuthority,
     BindingAuthoritySelector,
+    RehearsalRecordsUnavailable,
+    SealedShadowBindingAuthority,
     UnboundDryRunAuthority,
 )
 from app.services.bot_binding_repository import (
@@ -104,6 +115,7 @@ from app.services.bot_boot_recovery import (
     BootRecoveryReport,
     BotBootRecovery,
     BotRecoveryCandidate,
+    ForeignBinding,
 )
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
@@ -356,6 +368,8 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
         "shortly, usually within a minute; then you can clear the bot. A Dry "
         "Run's is recorded when the service next starts.",
     ),
+    "ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE": REHEARSAL_RECORDS_UNAVAILABLE_COPY,
+    "ARCHIVE_REHEARSAL_STILL_HOLDS": REHEARSAL_STILL_HOLDS_COPY,
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "This account cannot prove the bot is flat.",
         "A bot is cleared only on proof that it holds nothing. Choose Reconcile "
@@ -370,6 +384,12 @@ _ARCHIVE_REFUSAL: dict[str | None, tuple[str, str]] = {
         "Its clearing conditions are no longer met.",
     ),
 }
+
+
+def _archive_refusal(verdict: ArchiveVerdict) -> BotRunnerError:
+    """The commit-time refusal an ineligible verdict is answered with."""
+    headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
+    return BotRunnerError(headline.format(held=verdict.held), detail=detail, reason_code=verdict.cause)
 
 
 #: One lane-level start gate: raises :class:`RunAdmissionRefusedError` when
@@ -977,13 +997,28 @@ class BotTaskRegistry:
                     detail="The roster has no binding for this instance.",
                 )
             status = self.status(broker, strategy_instance_id)
+            # The one classification, which the duty settle reads too (#2589).
+            foreign = self._boot_recovery.foreign_binding(strategy_instance_id)
+            # Only the installed account's own Shadow store is read and
+            # retired in: a bot sealed on another account's is refused for
+            # its account below, and that store is never opened (#2694).
+            rehearsal = (
+                self._authorities.sealed_shadow(binding, account_id=foreign.sealed_account_id)
+                if foreign is not None and foreign.rehearsed_on_installed_account
+                else None
+            )
+            if rehearsal is not None:
+                return await self._archive_rehearsal_locked(
+                    broker, status, rehearsal, updated_by=updated_by, reason=reason
+                )
             try:
-                verdict = await self._archive_verdict(binding, status, reconciled)
+                verdict = await self._archive_verdict(
+                    binding, status, reconciled, sealed_elsewhere=foreign is not None
+                )
                 if verdict.already_retired:
                     return status
                 if not verdict.eligible:
-                    headline, detail = _ARCHIVE_REFUSAL[verdict.cause]
-                    raise BotRunnerError(headline, detail=detail, reason_code=verdict.cause)
+                    raise _archive_refusal(verdict)
                 self._lifecycle_projector_for_instance(strategy_instance_id).retire(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
@@ -999,18 +1034,114 @@ class BotTaskRegistry:
                 # SQLite authority for the rest of the process lifetime.
                 await self._authority_for(binding).release_if_unused()
 
+    def foreign_binding(self, strategy_instance_id: str) -> ForeignBinding | None:
+        """Why the installed authority does not custody this bot, if so.
+
+        ``BotBootRecovery.foreign_binding``, the one classification, for a
+        reader outside the runner: such a bot has no custody record in the
+        installed Clerk, so it has no page there (#2694).
+        """
+        return self._boot_recovery.foreign_binding(strategy_instance_id)
+
+    async def _archive_rehearsal_locked(
+        self,
+        broker: str,
+        status: BotStatusView,
+        authority: SealedShadowBindingAuthority,
+        *,
+        updated_by: str,
+        reason: str | None,
+    ) -> BotStatusView:
+        """Clear a bot sealed on the installed account's graduated ``shadow:`` store, on that store's own records (#2694).
+
+        The installed Clerk holds no custody for it, so the proof that it
+        holds nothing is read from the store it rehearsed on, and the
+        retirement is written there; the installed authority writes nothing
+        (ADR 0050). The duty record answers first, and then the store is
+        never opened.
+        """
+        sid = status.strategy_instance_id
+        verdict = evaluate_archive_duty(running=status.running, phase=status.phase)
+        if verdict is None:
+            verdict = await self._retire_on_shadow_records(
+                sid, authority, updated_by=updated_by, reason=reason or f"Panel archive by {updated_by}"
+            )
+        if verdict.already_retired:
+            return status
+        if not verdict.eligible:
+            raise _archive_refusal(verdict)
+        return self.status(broker, sid)
+
+    async def _retire_on_shadow_records(
+        self,
+        strategy_instance_id: str,
+        authority: SealedShadowBindingAuthority,
+        *,
+        updated_by: str,
+        reason: str,
+    ) -> ArchiveVerdict:
+        """What the sealed store's records prove of the bot, retiring it there when they prove it holds nothing.
+
+        One opening, so one execution lease covers the proof and the
+        retirement it permits.
+
+        A store that already holds the retirement is not asked for it again:
+        an earlier Clear committed it there and then failed to record it
+        here. The store keeps one retirement per bot, under its first
+        reason, and refuses a second under any other as a conflict, so what
+        it holds is recorded as it stands.
+        """
+        try:
+            async with authority.custody_for_clear() as (custody, projector):
+                if projector.is_retired(strategy_instance_id=strategy_instance_id):
+                    projector.refresh(
+                        strategy_instance_id=strategy_instance_id,
+                        now_ms=self._now_ms(),
+                        updated_by=updated_by,
+                        reason=reason,
+                    )
+                    return ArchiveVerdict(eligible=True)
+                verdict = evaluate_rehearsal_custody(
+                    RehearsalRecords(readable=True, held=None if custody.holds_nothing else custody.held_phrase)
+                )
+                if verdict.eligible:
+                    projector.retire(
+                        strategy_instance_id=strategy_instance_id,
+                        now_ms=self._now_ms(),
+                        updated_by=updated_by,
+                        reason=reason,
+                    )
+                return verdict
+        except (RehearsalRecordsUnavailable, ExecutionLeaseLost) as exc:
+            # A lease lost at the retirement applied nothing: a mutation
+            # renews the lease before it writes. Unread records, like a lost
+            # lease, prove nothing, and the bot stays as it is.
+            logger.warning(
+                "A rehearsal bot's Shadow records could not be read or leased; it is not cleared",
+                extra={
+                    "action": "archive_rehearsal_records_unavailable",
+                    "strategy_instance_id": strategy_instance_id,
+                    "sealed_account_id": authority.account_id,
+                    "error": str(exc),
+                },
+            )
+            return evaluate_rehearsal_custody(RehearsalRecords(readable=False))
+
     async def _archive_verdict(
         self,
         binding: BrokerBotBinding,
         status: BotStatusView,
         reconciled: ReconciliationCut | None,
+        *,
+        sealed_elsewhere: bool,
     ) -> ArchiveVerdict:
         """The shared archive rule, answered under the bot's lock against fresh custody."""
-        if self._boot_recovery.foreign_binding(binding.strategy_instance_id) is not None:
+        if sealed_elsewhere:
             # The installed Clerk holds no custody for a bot sealed on another
-            # account (the one classification, which the duty settle reads
-            # too), so there is none to read: as under a freeze, the facts
-            # below prove nothing, and the rule refuses on the account first.
+            # account, and only its own ``shadow:`` store keeps records to
+            # read in its place (``_archive_rehearsal_locked``): as under a
+            # freeze, the facts below prove nothing, and the rule refuses on
+            # the account first.
             return evaluate_archive(
                 running=status.running,
                 phase=status.phase,

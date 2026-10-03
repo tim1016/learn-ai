@@ -929,6 +929,38 @@ describe('AlpacaHomeComponent', () => {
       expect(retry.strategy_instance_ids).toEqual(['dry-old', 'old-bot', 'older-bot']);
     });
 
+    it('names a Shadow rehearsal bot without linking it, says why it has no page, and clears it (#2694)', async () => {
+      const reason =
+        'This bot ran in the account\'s Shadow world, which the account\'s pages don\'t open, so it has no page of its own. ' +
+        'History keeps its record.';
+      const rows = [
+        ...catalog(),
+        fakeCatalogBot({
+          strategy_instance_id: 'spy-rehearsal', group: 'finished', running: false, phase: 'OFF_DUTY',
+          desired_state: 'STOPPED', ended_at_ms: 1_699_500_000_000, trade_count: 2, final_result_usd: '1.50',
+          world_label: 'SHADOW · simulated fills on your live account', page_unavailable_reason: reason,
+        }),
+      ];
+      const { panel } = await renderHome({ getCatalog: () => Promise.resolve(rows) });
+      await screen.findByText('spy-ema-20260929-0931', { selector: 'a' });
+      const fold = finishedFold();
+
+      const row = within(fold).getByText('spy-rehearsal').closest('tr');
+      if (row === null) throw new Error('spy-rehearsal has no row.');
+      // Its page would not be found, and it cannot be deployed again from one: no link at all.
+      expect(within(row).queryByRole('link')).toBeNull();
+      expect(within(row).getByText(reason)).toBeTruthy();
+      expect(within(row).getByText('SHADOW · simulated fills on your live account')).toBeTruthy();
+      expect(within(row).getByText('$1.50')).toBeTruthy();
+
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select spy-rehearsal' }));
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (1)' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 1' }));
+
+      await vi.waitFor(() => expect(panel.clearBots).toHaveBeenCalledTimes(1));
+      expect(panel.clearBots.mock.calls[0][1].strategy_instance_ids).toEqual(['spy-rehearsal']);
+    });
+
     it('sends nothing when the confirmation is cancelled, and hands the keyboard back', async () => {
       const { panel } = await renderHome();
       const fold = finishedFold();

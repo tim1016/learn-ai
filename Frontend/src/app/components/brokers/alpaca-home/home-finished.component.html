@@ -39,8 +39,13 @@
                      (change)="toggle(row.bot.strategy_instance_id)" />
             </td>
             <td>
-              <a class="home-finished__sid" [routerLink]="row.page">{{ row.bot.strategy_instance_id }}</a>
-              @if (row.dryRun) { <span class="home-finished__chip">{{ row.bot.world_label }}</span> }
+              @if (row.noPage === null) {
+                <a class="home-finished__sid" [routerLink]="row.page">{{ row.bot.strategy_instance_id }}</a>
+              } @else {
+                <span class="home-finished__sid home-finished__sid--no-page">{{ row.bot.strategy_instance_id }}</span>
+              }
+              @if (row.dryRun || row.noPage !== null) { <span class="home-finished__chip">{{ row.bot.world_label }}</span> }
+              @if (row.noPage; as reason) { <p class="home-finished__no-page">{{ reason }}</p> }
             </td>
             <td>
               @if (row.bot.ended_at_ms !== null && row.bot.ended_at_ms !== undefined) {
@@ -52,8 +57,10 @@
             <td class="home-finished__num">{{ row.bot.trade_count ?? 'unknown' }}</td>
             <td class="home-finished__num">{{ (row.bot.final_result_usd | authoredUsd) ?? 'unknown' }}</td>
             <td>
-              <a class="home-finished__again" [routerLink]="row.again.commands" [queryParams]="row.again.queryParams"
-                 [attr.aria-label]="row.againLabel">Deploy again</a>
+              @if (row.noPage === null) {
+                <a class="home-finished__again" [routerLink]="row.again.commands" [queryParams]="row.again.queryParams"
+                   [attr.aria-label]="row.againLabel">Deploy again</a>
+              }
             </td>
           </tr>
         }
