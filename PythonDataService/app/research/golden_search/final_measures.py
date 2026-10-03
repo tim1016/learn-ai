@@ -7,6 +7,8 @@ receipt froze them on a frequency plan, else the calendar's):
     fraction) over its window's y trading years; −100% for a loss of the
     whole account (r = −1), none when r is missing or below −1;
   * trades per trading year = trades / y (``compare_measures.trades_per_year``);
+  * a window with no trading session (y = 0, possible only on a legacy
+    fixed-floor plan) has no yearly rate: both read none, whatever the run;
   * Sharpe and worst fall as the engine reported them;
   * change = final − development, none unless both exist.
 A failed or missing run has no measures, never zero.
@@ -18,7 +20,7 @@ Validated against: tests/research/golden_search/test_final_measures.py.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from fractions import Fraction
 from typing import Any
 
@@ -49,13 +51,18 @@ def _measure(key: str, label: str, development: float | None, final: float | Non
     return {"key": key, "label": label, "development": development, "final": final, "change": None if development is None or final is None else final - development}
 
 
+def _yearly(rate: Callable[[Mapping[str, Any] | None, Fraction], float | None], metrics: Mapping[str, Any] | None, years: Fraction) -> float | None:
+    """A yearly rate, or none over a window that holds no trading session."""
+    return None if years <= 0 else rate(metrics, years)
+
+
 def final_comparison(
     development: Mapping[str, Any] | None, final: Mapping[str, Any] | None, *, development_years: Fraction, final_years: Fraction
 ) -> list[dict[str, Any]]:
     """Each measure on the development period and on the final test, with the change between them."""
     return [
-        _measure("annualized_return", "Annualized return", annualized_return(development, development_years), annualized_return(final, final_years)),
+        _measure("annualized_return", "Annualized return", _yearly(annualized_return, development, development_years), _yearly(annualized_return, final, final_years)),
         _measure("sharpe_ratio", "Sharpe", _value(development, "sharpe_ratio"), _value(final, "sharpe_ratio")),
         _measure("max_drawdown_pct", "Worst fall", _value(development, "max_drawdown_pct"), _value(final, "max_drawdown_pct")),
-        _measure("trades_per_year", "Trades a trading year", trades_per_year(development, development_years), trades_per_year(final, final_years)),
+        _measure("trades_per_year", "Trades a trading year", _yearly(trades_per_year, development, development_years), _yearly(trades_per_year, final, final_years)),
     ]

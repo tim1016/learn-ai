@@ -40,3 +40,11 @@ def test_each_measure_sits_beside_its_development_value_with_the_change() -> Non
 def test_a_failed_development_run_leaves_every_change_empty() -> None:
     rows = final_comparison(metrics(None, status="failed").as_dict(), metrics(0.9).as_dict(), development_years=Fraction(1), final_years=Fraction(1))
     assert all(row["development"] is None and row["change"] is None for row in rows)
+
+
+def test_a_final_window_without_a_session_has_no_yearly_rate_whatever_the_run() -> None:
+    # A legacy fixed-floor plan can freeze a final window with no session: its rates read none, completed or failed.
+    for final in (metrics(0.9).as_dict(), metrics(None, status="failed").as_dict()):
+        rows = {row["key"]: row for row in final_comparison(metrics(1.5).as_dict(), final, development_years=Fraction(1), final_years=Fraction(0))}
+        assert rows["annualized_return"]["final"] is None and rows["trades_per_year"]["final"] is None
+        assert rows["annualized_return"]["change"] is None
