@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitAckedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
+    UnknownOutcomeNotice,
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
     order_observation_advances,
@@ -1108,6 +1109,7 @@ def fold_uncertain(
     why: str,
     transition_kind: str = "ORDER_SUBMIT_UNCERTAIN",
     answered_as_client_order_id: str | None = None,
+    notice: UnknownOutcomeNotice | None = None,
 ) -> None:
     """A lost/timed-out broker response — never a terminal outcome (R4).
 
@@ -1120,11 +1122,17 @@ def fold_uncertain(
     ``answered_as_client_order_id`` is the other client order id a submit was
     answered under, when it was (#2845); recorded on the facts, it keeps the
     order from ever being sent again on the Clerk's own initiative.
+
+    ``notice`` is what the open notice says of this order when the broker did
+    answer and the outcome is still unknown (#2854). Without one the notice
+    keeps what it said: that a broker response was lost or timed out, or the
+    notice an earlier fold recorded
+    (``uncertainty_folds.open_or_refresh_unknown_outcome``).
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     facts = OrderSubmitUncertainFacts(
-        why=why, answered_as_client_order_id=answered_as_client_order_id
+        why=why, answered_as_client_order_id=answered_as_client_order_id, notice=notice
     )
     repo.append_transition(
         TransitionInput(

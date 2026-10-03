@@ -345,6 +345,8 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
     case 'date': {
       const key = dateProblemKey(edit.field);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(edit.raw)) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a date as YYYY-MM-DD.') };
+      // A date field reports each keystroke of the year as a whole date (0002, 0020, 0202, then 2022); moving the plan's date on those would rewrite the field mid-typing.
+      if (edit.raw < '1000') return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a four-digit year.') };
       // Dates typed by hand no longer follow a month count, so the count (and the server's cut) is dropped rather than left to contradict them.
       const { finalMonths: _dated, finalSessionsCut: _cut, ...rest } = draft;
       return { ...rest, protocol: setDate(protocol, edit.field, edit.raw), problems: withProblem(problems, key, null) };

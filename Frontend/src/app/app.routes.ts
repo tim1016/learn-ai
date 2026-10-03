@@ -3,6 +3,7 @@ import { Router, Routes, type RedirectFunction, type Route } from "@angular/rout
 import { alpacaSurfaceRedirectGuard } from "./fleet/alpaca-surface-redirect.guard";
 import { homeRedirectGuard } from "./fleet/home-redirect.guard";
 import { dropRetiredLensGuard } from "./fleet/retired-lens.guard";
+import { EntryComponent } from "./components/entry/entry.component";
 import { brokerClerkRedirectGuard } from "./fleet/broker-clerk-redirect.guard";
 
 const loadBrokerLaneUnavailable = () =>
@@ -64,7 +65,17 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
 ];
 
 export const routes: Routes = [
-  { path: "", redirectTo: "/data-lab", pathMatch: "full" },
+  {
+    // The app opens on the entry painting, whose "I'm In" leads to Data Lab.
+    // There is no sign-in behind it: every other address still opens directly.
+    // Loaded with the app, not lazily: the shell learns a page is chromeless
+    // only once its route is active, so a lazy chunk would leave the top bar
+    // on screen over the root address until it arrived.
+    path: "",
+    pathMatch: "full",
+    component: EntryComponent,
+    data: { fullBleed: true, chromeless: true },
+  },
   { path: "lean-lab", redirectTo: "strategy-lab", pathMatch: "full" },
   {
     path: "strategy-docs",

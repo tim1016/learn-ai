@@ -1560,8 +1560,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # the honest figure.
             #
             # But this field governs a second thing: `replay_warmup_bars`
-            # (app/services/bot_trade_strategy_warmup.py) sizes
-            # crash-candidate recreation from it. At zero the replay has no
+            # (app/services/bot_trade_strategy_warmup.py) sizes its
+            # history fetch from it (#2314). At zero the replay has no
             # window to rebuild from: `recent_closed_bars(lookback_days=0)`
             # builds the IBKR duration string "0 D", which is not valid. That
             # failure used to degrade silently to a cold start, switching off

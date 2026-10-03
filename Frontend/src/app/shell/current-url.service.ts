@@ -13,13 +13,28 @@ import { filter, map, startWith } from 'rxjs/operators';
 @Injectable({ providedIn: 'root' })
 export class CurrentUrlService {
   private readonly router = inject(Router);
+  private readonly navigationEnds = this.router.events.pipe(
+    filter((event): event is NavigationEnd => event instanceof NavigationEnd),
+  );
 
   readonly url = toSignal(
-    this.router.events.pipe(
-      filter((event): event is NavigationEnd => event instanceof NavigationEnd),
+    this.navigationEnds.pipe(
       map((event) => event.urlAfterRedirects),
       startWith(this.router.url),
     ),
     { initialValue: this.router.url },
+  );
+
+  /**
+   * The active route tree, renewed after every completed navigation.
+   *
+   * `url` cannot stand in for this. The app boots with `url` already at the
+   * root address, so a first navigation that ends there leaves `url`
+   * unchanged, and anything derived from it would keep the answer it computed
+   * before any route was active.
+   */
+  readonly activeRoute = toSignal(
+    this.navigationEnds.pipe(map(() => this.router.routerState.snapshot.root)),
+    { initialValue: this.router.routerState.snapshot.root, equal: () => false },
   );
 }

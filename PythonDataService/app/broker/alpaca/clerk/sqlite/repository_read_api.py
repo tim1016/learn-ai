@@ -353,6 +353,29 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return row is not None
 
+    def count_order_transitions(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+        transition_kind: str,
+        at_most: int,
+    ) -> int:
+        """How many transitions of one kind an order has, counted no further than ``at_most`` (#2854).
+
+        The database counts; no row is built in Python (#1942). ``at_most``
+        bounds the read as well as the answer: the order's index is walked in
+        sequence order and the walk stops at the ``at_most``-th match. A
+        caller that only tells "fewer than N" from "N or more" therefore
+        stops reading an order's history once it holds N of the kind.
+        """
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS matches FROM (SELECT 1 FROM custody_transitions "
+                "WHERE order_ref = ? AND transition_kind = ? LIMIT ?)",
+                (order_ref, transition_kind, at_most),
+            ).fetchone()
+            return int(row["matches"])
+
     def strategy_instances(self: ClerkSqliteRepository) -> list[dict]:
         with self._write_lock:
             return reads.strategy_instances(self._conn)
@@ -525,6 +548,25 @@ class ClerkSqliteRepositoryReadApi:
                 symbols=symbols,
                 exclude_client_order_ids=exclude_client_order_ids,
                 rested_since_ms=rested_since_ms,
+                limit=limit,
+            )
+
+    def failed_exit_orders_unproven_at_broker(
+        self: ClerkSqliteRepository,
+        *,
+        symbols: frozenset[str],
+        exclude_client_order_ids: frozenset[str],
+        rested_since_ms: int,
+        failed_since_ms: int,
+        limit: int,
+    ) -> list[str]:
+        with self._write_lock:
+            return reads.failed_exit_orders_unproven_at_broker(
+                self._conn,
+                symbols=symbols,
+                exclude_client_order_ids=exclude_client_order_ids,
+                rested_since_ms=rested_since_ms,
+                failed_since_ms=failed_since_ms,
                 limit=limit,
             )
 
