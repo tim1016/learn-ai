@@ -1280,7 +1280,8 @@ async def read_account_custody(
     Each uncleanly ended bot's cut is read beside the Clerk's latest published
     pass for it, read before the snapshot as the bot's own page reads it
     (#2839): under that pass its notice offers Flatten exactly when its page
-    does.
+    does. A bot started or resumed while those passes were read is no longer
+    an ended one, so its lifecycle is asked again once the snapshot is open.
     """
     ended, unreadable = await asyncio.to_thread(_uncleanly_ended, facade)
     passes = {bot.sid: await facade.published_pass(bot.sid) for bot in ended}
@@ -1290,7 +1291,8 @@ async def read_account_custody(
         try:
             with reader.snapshot():
                 projection = reader.account_snapshot()
-                return projection, *_unclean_ends(reader, ended, passes, account_id=facade.account_id)
+                still_ended = [bot for bot in ended if _still_uncleanly_ended(facade.repository, bot)]
+                return projection, *_unclean_ends(reader, still_ended, passes, account_id=facade.account_id)
         finally:
             reader.close()
 
@@ -1325,6 +1327,23 @@ def _uncleanly_ended(
         if outcome is not None and ended_uncleanly(kind=outcome.kind, running=status.running):
             ended.append(_EndedBot(sid=sid, symbol=status.symbol, kind=outcome.kind))
     return ended, unreadable
+
+
+def _still_uncleanly_ended(repository: ClerkSqliteRepository, bot: _EndedBot) -> bool:
+    """Whether this bot's lifecycle still says its run ended uncleanly. Blocking.
+
+    A lifecycle that can no longer be read keeps the bot: its notice is the
+    safe side.
+    """
+    registration = repository.strategy_instance(bot.sid)
+    if registration is None:
+        return False
+    try:
+        status = build_roster_status("alpaca", registration, repository)
+    except SqliteCatalogProjectionUnavailable:
+        return True
+    outcome = status.duty_outcome
+    return outcome is not None and ended_uncleanly(kind=outcome.kind, running=status.running)
 
 
 def _unclean_ends(

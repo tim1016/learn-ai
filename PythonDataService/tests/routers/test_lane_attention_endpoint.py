@@ -712,6 +712,51 @@ async def test_the_desks_notice_of_an_ended_bot_offers_flatten_when_the_clerks_o
         assert shown["explanation"].endswith(closing)
 
 
+async def test_a_bot_resumed_while_the_desk_is_being_read_gets_no_run_ended_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2839: the desk classed its ended bots before it read their passes, so a bot resumed in between was told its run had ended."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from app.engine.live.bot_lifecycle_state import (
+        BotLifecyclePhase,
+        BotLifecycleStateRecord,
+        stable_bot_lifecycle_state_path,
+    )
+    from app.services.broker_v2_panel import sqlite_roster_status
+
+    clock = _Clock()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock)
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+    repo.register_strategy_instance(strategy_instance_id="paper-0", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
+    _end_uncleanly(tmp_path, "paper-0", at_ms=_T0)
+    _hold_position(repo, "paper-0", 3)
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
+    read_pass = facade.published_pass
+
+    async def resumed_while_the_pass_is_read(strategy_instance_id: str):
+        submit_start_run(
+            repo, account_id=ACCOUNT, strategy_instance_id="paper-0", lifecycle_run_id="run-resumed", clock=repo.clock
+        )
+        stable_bot_lifecycle_state_path(tmp_path, "paper-0").write_text(BotLifecycleStateRecord(
+            phase=BotLifecyclePhase.ON_DUTY, active_run_id="run-resumed", last_transition_at_ms=_T0 + 1_000,
+            duty_outcome=None,
+        ).model_dump_json())
+        return await read_pass(strategy_instance_id)
+
+    monkeypatch.setattr(facade, "published_pass", resumed_while_the_pass_is_read)
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,
+    ))
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            desk = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT}/snapshot")
+    finally:
+        repo.close()
+
+    assert desk.status_code == 200
+    assert desk.json()["exposure_notices"] == []
+
+
 async def test_a_crashed_bot_whose_run_row_is_still_active_but_holds_shares_is_one_stopped_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
