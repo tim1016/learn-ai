@@ -203,6 +203,68 @@ A bridge engineer tests a bridge with more weight than it should ever carry. If 
 
 The **By month** tab of Compare's evidence shows the selected candidate's development months, and how much of its result rests on its best month or its best few trades. The decision summary's Concentration row reports the same measure.
 
+### Month calendar {#month-calendar}
+
+#### The question it answers
+
+Which months of the development period made money for the selected candidate, which lost it, and do the good and bad months fall in any pattern?
+
+#### What you're looking at
+
+A calendar with a row for each year and a column for each month. Each cell is one month of the development period, counted by its Eastern dates. Its colour is the month's net profit: green for a gain, red for a loss, the deeper the colour the bigger the amount, with $0 in the middle. Each cell also prints its amount with its sign, so the colour is never the only cue. A month outside the development period has no cell; it is never drawn as $0.
+
+A month's net profit is the change in the account over the month, from the last session close of the month before (or the starting capital, for the first month) to the month's last session close:
+
+$$\text{net profit}_m = \text{equity at the end of } m - \text{equity at the end of the month before}$$
+
+A trade counts in the month it exits. Hover a cell to see the month's net profit, its return on the equity it started with, and how many trades closed in it.
+
+#### How to read it
+
+1. Read each row as a year and each column as a month. A month outside the development period has no cell.
+2. Find the strongest colours: green months made the most, red months lost the most. Each cell prints its amount with its sign.
+3. Look along each row for runs of red. Losing months in a row are harder to sit through than the same losses spread out.
+4. Compare the same month across years. A month that is good every year may be a pattern; one good year is not.
+
+#### Good signs and warning signs
+
+- Good: green spread across most of the calendar, with the red months small and scattered.
+- Warning: one or two deep green cells and pale colours elsewhere. The result rests on a few months; "Without its best" shows how much.
+- Warning: a long run of red. A stretch like that is when people abandon a strategy.
+
+#### An everyday comparison
+
+A shop's monthly takings on a wall calendar. A good year can come from steady months, or from one holiday rush that covered for everything else.
+
+### Monthly net profit {#monthly-net}
+
+#### The question it answers
+
+How did the selected candidate's development net profit move from one month to the next?
+
+#### What you're looking at
+
+One bar per month in time order: the same monthly net profit as the month calendar. A bar above $0 is a gain, in green; one below $0 is a loss, in red. The axis is in dollars.
+
+Hover a bar to see the month's net profit, its return and how many trades closed in it. The table lists every month's values. The chart describes how performance changed; it claims no model of why.
+
+#### How to read it
+
+1. Read the bars left to right: each is one month’s net profit, a gain above $0 and a loss below.
+2. Look for one bar much taller than the rest. A result that rests on one month is fragile; “Without its best” shows how much.
+3. Check whether the losing months cluster together or are spread out.
+4. Hover a month for its return and how many trades closed in it.
+
+#### Good signs and warning signs
+
+- Good: most bars above $0, of similar heights.
+- Warning: the bars shrink over time. Recent months earn less than early ones.
+- Warning: one bar taller than all the others put together.
+
+#### An everyday comparison
+
+A runner's monthly mileage. Steady months build fitness; one huge month followed by little says more about that month than about the runner.
+
 ### Profit concentration curve {#concentration-curve}
 
 #### The question it answers
@@ -284,3 +346,181 @@ The rule sets a floor. Passing it does not show that the profit was evenly sprea
 #### An everyday comparison
 
 A student's term grade looks strong. The teacher drops the best test, then separately the best few homework scores, and checks whether the grade still passes. If it fails either way, the grade depended on a couple of lucky days.
+
+## Compare: trades
+
+The **Trades** tab of Compare's evidence shows the selected candidate's development trades one by one. Each trade counts its net profit: its P&L before fees less its entry and exit commission. The engine already applies slippage to the fill prices.
+
+$$\text{net profit of a trade} = \text{price change} \times \text{quantity} - 2 \times \text{commission per order}$$
+
+The charts are drawn only when the trades, each net of its commission, add up to the run's net profit within a cent. When they do not, for example because a position was still open when the period ended, the tab says so and draws nothing. Nothing is rescaled to make them fit.
+
+### Trade timeline {#trade-timeline}
+
+#### The question it answers
+
+When did the selected candidate make its development profit, trade by trade?
+
+#### What you're looking at
+
+Two parts share one time axis, in Eastern dates. The upper line is the running net profit: after each trade exits, the net profit of that trade and every trade before it. It steps at each exit and stays level until the next. A dashed line marks $0. Beneath it, each trade is a thin bar at its exit time, as tall as its own net profit: green for a gain, red for a loss.
+
+$$\text{running net profit after trade } k = \sum_{i \le k} \text{net profit of trade } i$$
+
+The trades are in exit order. Hover a trade to see its full record: when it entered and exited (in your local time), its entry and exit prices, quantity, P&L before fees, net profit, the running total, the decision bars it was held, the RSI at entry and why it exited. The table lists every trade.
+
+#### How to read it
+
+1. Follow the upper line: the running net profit after each trade, in exit order.
+2. Find where it rose most. Profit made in a few short stretches is less dependable than a steady climb.
+3. Find the line’s lowest point. Below $0 there means the trades had lost money overall by then.
+4. Read the bars beneath: each trade’s own net profit, at its exit.
+5. Hover a trade for its full record: times, prices, quantity, P&L before and after commission, bars held, RSI at entry and why it exited.
+
+#### Good signs and warning signs
+
+- Good: a line that climbs across the whole period, with no long flat or falling stretches.
+- Warning: a line that is flat for most of the period and jumps in one place.
+- Warning: a line that ends near where it was long ago. The later trades gave back what the earlier ones made.
+
+#### An everyday comparison
+
+A savings account statement: each deposit or withdrawal, with the balance after it. A balance that grows with every pay cheque is steadier than one carried by a single windfall.
+
+### Trade net profit histogram {#trade-histogram}
+
+#### The question it answers
+
+What do the selected candidate's wins and losses look like: many small ones, or a few big ones?
+
+#### What you're looking at
+
+Each bar counts the development trades whose net profit falls in its range. The ranges are all the same width, set by the Freedman–Diaconis rule from how spread out the middle half of the trades is:
+
+$$\text{bin width} = 2 \times \text{IQR} \times n^{-1/3}$$
+
+where IQR is the gap between the 25th and 75th percentile of the trades' net profits and n is the number of trades. The bins are lined up so that $0 is always an edge: no bin holds both a win and a loss. Bins left of $0 hold losing trades, in red; the rest, in green. Empty bins between are kept, at zero trades.
+
+When the middle half of the trades are all the same, the width falls back to the trades' full range divided by Sturges' bin count; an extreme outlier can widen the bins so that there are never more than 60; and when every trade nets the same, there is one bin.
+
+Hover a bar to see its range and how many trades, wins and losses it holds.
+
+#### How to read it
+
+1. Each bar counts the trades whose net profit falls in its range. Bars left of $0 are losing trades.
+2. Read the winning side: are the wins many and small, or few and large?
+3. Compare the tails. A long tail on the losing side means a few trades lost far more than usual.
+4. Hover a bar for its range and how many trades fell in it.
+
+#### Good signs and warning signs
+
+- Good: losses bunched close to $0, with the winning side reaching further out.
+- Warning: a long tail of losses. Occasional large losses can undo many small wins.
+- Warning: most trades in the bins just left of $0. Commission alone may be turning small moves into losses.
+
+#### An everyday comparison
+
+A teacher's spread of test scores. The average can hide whether most students did fine and a few failed badly, or everyone scraped by.
+
+### Hold time against net profit {#hold-time}
+
+#### The question it answers
+
+Does holding a trade for longer help or hurt the selected candidate's results?
+
+#### What you're looking at
+
+Each dot is a development trade. Across is how many decision bars it was held; up is its net profit. A decision bar is the strategy's own bar: the program decides on 15-minute bars, so a trade held 5 bars was held for 75 minutes of trading.
+
+$$\text{bars held} = \text{the number of decision bars that close after the entry and by the exit}$$
+
+The bars are counted on the trading calendar: nights, weekends and holidays hold none, and a half-day holds fewer. They are counted between the entry and exit fills, so a trade can show a bar more than the strategy's hold, for example when an exit decided at the last bar of a session fills in the next one. Circles are trades the strategy closed itself. Diamonds are trades closed because the tested window ended. A dashed line marks $0.
+
+A strategy that exits after a fixed number of bars puts most of its trades in one column. That column's spread of results is what the hold time delivers.
+
+Hover a dot to see the trade's record.
+
+#### How to read it
+
+1. Each dot is a trade: the decision bars it was held across, and its net profit.
+2. Read the circles: trades the strategy closed itself. A strategy that exits on a timer holds most of its trades for the same number of bars.
+3. Find any diamonds: trades closed because the tested window ended, not by the strategy.
+4. Compare the spread above and below $0 at each hold. If longer holds lose more often, holding longer is not helping.
+
+#### Good signs and warning signs
+
+- Good: at the strategy's own hold, more dots above $0 than below, and the wins reaching further than the losses.
+- Warning: a few diamonds with large results. The window's end, not the strategy, closed those trades, and they may not repeat.
+- Warning: where holds vary, the longer ones mostly below $0.
+
+#### An everyday comparison
+
+Leaving bread in the oven for a fixed time. If the loaves on the timer come out well most days, the timer works; if they burn as often as not, the time is wrong.
+
+### RSI at entry against net profit {#entry-rsi}
+
+#### The question it answers
+
+Within the RSI gates the strategy enters between, do some RSI readings lead to better trades than others?
+
+#### What you're looking at
+
+Each dot is a development trade: across is the RSI the strategy saw when it decided to enter, and up is the trade's net profit. The two dashed lines are this candidate's lower and upper RSI gates; every entry falls between them.
+
+The level lines are band averages. The space between the gates is cut every 5 RSI points, and each band's line is the average net profit of the trades that entered in it:
+
+$$\text{band average} = \frac{\text{net profit of the trades entered in the band}}{\text{number of those trades}}$$
+
+A band runs up to, but not including, its upper edge; the last band includes the upper gate. A band no trade entered in has no line. A trade with no RSI recorded is in no band, and the summary says how many.
+
+Hover a dot for the trade, or a band's line for its trade count and average.
+
+#### How to read it
+
+1. Each dot is a trade: the RSI the strategy saw when it decided to enter, and the trade’s net profit.
+2. The dashed lines are the RSI gates. Every entry falls between them.
+3. Read the level lines: the average net profit of the trades in each 5-point band.
+4. Look for a band whose average is clearly better or worse than the rest, and check its trade count before trusting it.
+
+#### Good signs and warning signs
+
+- Good: similar band averages across the gates. The result does not depend on a narrow slice of RSI.
+- Warning: one band carries the profit and the others lose. Tighter gates might look better, but that is a new search on the same data, which is how a result gets overfitted.
+- Warning: a striking band average built on two or three trades.
+
+#### An everyday comparison
+
+A fishing log by water temperature. If every catch came at one narrow temperature, that may be real, or it may be a handful of lucky days.
+
+### Entry time and weekday {#entry-time}
+
+#### The question it answers
+
+Do the selected candidate's trades do better or worse at some times of day or on some weekdays?
+
+#### What you're looking at
+
+A grid with a row for each weekday and a column for each Eastern half hour of the trading session. Each trade sits in the cell of the weekday and half hour it entered in, in Eastern time whatever your own time zone. The number in a cell is how many trades entered then. A cell with no number had no entries.
+
+A cell's colour is the average net profit of its trades: green for a gain, red for a loss, deeper for more. A cell with fewer than five trades is grey with a dashed outline instead: its average rests on too few trades to mean much.
+
+$$\text{cell average} = \frac{\text{total net profit of the cell's trades}}{\text{number of those trades}}$$
+
+Hover a cell for its trade count, average and total net profit.
+
+#### How to read it
+
+1. Each cell is a weekday and an Eastern half hour; its number is how many trades entered then.
+2. Read the coloured cells: green where those trades made money on average, red where they lost.
+3. Grey cells hold too few trades to judge. Don’t read a pattern into them.
+4. Look for a row or column that is red or green across several cells. A real pattern shows in more than one cell.
+
+#### Good signs and warning signs
+
+- Good: no strong pattern, or one that holds across several neighbouring cells with plenty of trades.
+- Warning: most cells grey. The development period has too few trades to say anything about timing.
+- Warning: one bright cell among grey and pale ones. Treat it as luck until more data says otherwise.
+
+#### An everyday comparison
+
+A café's takings by hour and weekday. A busy Saturday morning across many weeks is a pattern worth staffing for; one big Tuesday at 3 pm is not.

@@ -982,6 +982,7 @@ class GoldenSearchEntryTimes(_Wire):
 
 class GoldenSearchTradeChartsMeasured(_Wire):
     status: Literal["measured"]
+    bar_span_ms: int = Field(description="The strategy's decision bar, in ms; a day or longer means one bar per session.")
     trades: list[GoldenSearchTradeRecord] = Field(description="In exit order.")
     histogram: GoldenSearchHistogram
     entry_rsi: GoldenSearchEntryRsi

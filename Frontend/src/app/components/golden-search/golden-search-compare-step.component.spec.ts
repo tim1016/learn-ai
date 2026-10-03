@@ -8,7 +8,18 @@ import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateDetail, CandidateKey, StudyCommand, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { candidateDetail, decisionSummary, emaCapability, evidenceCandidate, evidenceView, frequencyProtocol, studyDetail, tradeActivity } from './testing/fixtures';
+import {
+  candidateDetail,
+  decisionSummary,
+  emaCapability,
+  evidenceCandidate,
+  evidenceView,
+  frequencyProtocol,
+  studyDetail,
+  tradeActivity,
+  tradeCharts,
+  UNRECONCILED,
+} from './testing/fixtures';
 
 interface FakeService {
   candidate: ReturnType<typeof vi.fn<(id: string, key: CandidateKey) => Promise<CandidateDetail>>>;
@@ -247,12 +258,13 @@ describe('GoldenSearchCompareStepComponent', () => {
     ]);
 
     // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.
+    // Seven charts on the step, and the Trades tab's five.
     const live = () => charts.filter((chart) => !chart.disposed);
-    await waitFor(() => expect(live()).toHaveLength(7));
+    await waitFor(() => expect(live()).toHaveLength(12));
     view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
     await view.fixture.whenStable();
     expect(service.candidate).toHaveBeenCalledTimes(3);
-    expect(live().map((chart) => chart.options.length)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 12 }, () => 1));
   });
 
   it('About this chart opens the guide beside the chart, at that chart’s section', async () => {
@@ -266,23 +278,42 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(drawer.visible()).toBe(true);
   });
 
-  it('By month and Trades show the selected candidate’s development months and decisions', async () => {
+  it('By month charts the selected candidate’s development months, each value in a table', async () => {
     await renderStep();
 
     fireEvent.click(evidenceTab('By month'));
-    const months = await screen.findByRole('table', { name: /net result by month for all-period fit/i });
-    expect(within(months).getAllByRole('row')[2].textContent).toMatch(/2025-12-01\s*-0\.7%\s*-\$700\s*9/);
+    const calendar = await screen.findByRole('region', { name: 'Month calendar' });
+    expect((await within(calendar).findByRole('img')).getAttribute('aria-label')).toContain(
+      "All-period fit's development net profit for each of its 2 months, Nov 2025 to Dec 2025, a row per year.",
+    );
+    const bars = region('Monthly net profit');
+    fireEvent.click(within(bars).getByRole('button', { name: 'Show as table' }));
+    expect(within(bars).getAllByRole('row')[2].textContent).toMatch(/2025-12-01\s*-\$700\s*-0\.7%\s*9/);
+  });
+
+  it('Trades charts every development trade with its full record, and says why when the trades do not add up', async () => {
+    await renderStep();
 
     fireEvent.click(evidenceTab('Trades'));
-    const trades = screen.getByRole('table', { name: /development trades of all-period fit/i });
-    const first = within(trades).getAllByRole('row')[1].textContent ?? '';
-    expect(first).toMatch(/2025-12-23/);
-    expect(first).toContain('Entry at $590.10 · RSI 58.2');
-    expect(first).toContain('Hold Complete · Exit at $592.50');
-    // The server's trade P&L is price change times quantity: it is labelled before fees, never net.
-    expect(within(trades).getByRole('columnheader', { name: 'P&L before fees' })).toBeTruthy();
-    expect(within(trades).queryByRole('columnheader', { name: /net p&l/i })).toBeNull();
-    expect(first).toContain('+$243.00');
+    const timeline = await screen.findByRole('region', { name: 'Trade timeline' });
+    expect((await within(timeline).findByRole('img')).getAttribute('aria-label')).toContain(
+      "All-period fit's 2 trades in exit order, each net of commission; their running net profit ends at +$151.00.",
+    );
+    fireEvent.click(within(timeline).getByRole('button', { name: 'Show as table' }));
+    const first = within(timeline).getAllByRole('row')[1].textContent ?? '';
+    // Prices, P&L before fees, its net of commission and the running total, to the cent; bars held, RSI at entry and the exit.
+    expect(first).toMatch(/\$590\.10\s*\$592\.50\s*77\s*\+\$243\.00\s*\+\$243\.00\s*\+\$243\.00\s*4\s*58\.2\s*Exited by the strategy/);
+    for (const name of ['Trade net profit histogram', 'Hold time against net profit', 'RSI at entry against net profit', 'Entry time and weekday']) {
+      expect(within(region(name)).getByRole('img')).toBeTruthy();
+    }
+    const times = region('Entry time and weekday');
+    fireEvent.click(within(times).getByRole('button', { name: 'Show as table' }));
+    expect(within(times).getAllByRole('row')[1].textContent).toMatch(/Tue 15:00\s*1\s*\+\$243\.00\s*\+\$243\.00\s*too few trades/);
+
+    // Trades that do not account for the run's net profit draw no trade chart; the server says why.
+    fireEvent.click(screen.getByRole('button', { name: /current settings frozen incumbent/i }));
+    expect(within(screen.getByRole('region', { name: 'Candidate evidence' })).getByText(UNRECONCILED)).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Trade timeline' })).toBeNull();
   });
 
   it('By month shows how much of the selected result rests on its best trades or month, each value in a table, and says why when unmeasured', async () => {
@@ -309,7 +340,7 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(within(region('Without its best')).queryByRole('img')).toBeNull();
   });
 
-  it('a trade worth less than a dollar keeps its cents, and a month without a defined return reads — with no bar', async () => {
+  it('a trade worth less than a dollar keeps its cents, and a month without a defined return reads —', async () => {
     const service = fakeService();
     service.candidate.mockImplementation(async (_id: string, key: CandidateKey) => {
       const detail = candidateDetail(key);
@@ -319,22 +350,22 @@ describe('GoldenSearchCompareStepComponent', () => {
         ...detail,
         development: {
           ...development,
-          monthly: [{ month_start_ms: development.monthly[0].month_start_ms, net_profit: -40, return_fraction: null, trades: 1 }],
-          trades: [{ ...development.trades[0], quantity: 1, pnl: 0.4 }],
+          monthly: [{ ...development.monthly[0], net_profit: -40, return_fraction: null, trades: 1 }],
+          trade_charts: tradeCharts([{ quantity: 1, pnl: 0.4, net_profit: 0.4, running_net_profit: 0.4 }]),
         },
       };
     });
     await renderStep(studyDetail('awaiting_candidate'), service);
 
     fireEvent.click(evidenceTab('By month'));
-    const months = await screen.findByRole('table', { name: /net result by month for all-period fit/i });
-    const month = within(months).getAllByRole('row')[1];
-    expect(month.textContent).toMatch(/2025-11-01\s*—\s*-\$40\s*1/);
-    expect(month.querySelector<HTMLElement>('.bar')?.style.width).toBe('0%');
+    const bars = await screen.findByRole('region', { name: 'Monthly net profit' });
+    fireEvent.click(within(bars).getByRole('button', { name: 'Show as table' }));
+    expect(within(bars).getAllByRole('row')[1].textContent).toMatch(/2025-11-01\s*-\$40\s*—\s*1/);
 
     fireEvent.click(evidenceTab('Trades'));
-    const trades = screen.getByRole('table', { name: /development trades of all-period fit/i });
-    expect(within(trades).getAllByRole('row')[1].textContent).toContain('+$0.40');
+    const timeline = screen.getByRole('region', { name: 'Trade timeline' });
+    fireEvent.click(within(timeline).getByRole('button', { name: 'Show as table' }));
+    expect(within(timeline).getAllByRole('row')[1].textContent).toContain('+$0.40');
   });
 
   it('a detail read that fails says so in the equity panel and the tabs, and one retry restores both', async () => {
@@ -349,7 +380,7 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(alert.textContent).toContain('could not be loaded');
     fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
 
-    expect(await screen.findByRole('table', { name: /development trades of all-period fit/i })).not.toBeNull();
+    expect(await within(await screen.findByRole('region', { name: 'Trade timeline' })).findByRole('img')).not.toBeNull();
     expect(within(equity).queryByRole('alert')).toBeNull();
   });
 
@@ -420,7 +451,11 @@ describe('GoldenSearchCompareStepComponent', () => {
 
     fireEvent.click(evidenceTab('By month'));
     await within(await screen.findByRole('region', { name: 'Profit concentration curve' })).findByRole('img');
-    for (const name of ['Profit concentration curve', 'Without its best']) fireEvent.click(within(region(name)).getByRole('button', { name: 'Show as table' }));
+    for (const name of ['Month calendar', 'Monthly net profit', 'Profit concentration curve', 'Without its best']) fireEvent.click(within(region(name)).getByRole('button', { name: 'Show as table' }));
+    expect(await check()).toEqual([]);
+    fireEvent.click(evidenceTab('Trades'));
+    await within(await screen.findByRole('region', { name: 'Trade timeline' })).findByRole('img');
+    for (const toggle of screen.getAllByRole('button', { name: 'Show as table' })) fireEvent.click(toggle);
     expect(await check()).toEqual([]);
   });
 });

@@ -13,6 +13,7 @@ import type {
   GoldenSearchDefaults,
   GoldenSearchPreflight,
   MeasuredConcentration,
+  MeasuredTradeCharts,
   Metrics,
   PairMap,
   PairMapCell,
@@ -26,6 +27,7 @@ import type {
   StudyProgress,
   StudyState,
   TradeActivity,
+  TradeRecord,
   ValidationView,
 } from '../golden-search.types';
 
@@ -457,6 +459,51 @@ export function evidenceView(overrides: Partial<EvidenceView> = {}): EvidenceVie
   };
 }
 
+/** The server's reason for trades that do not add up to their run's net profit. */
+export const UNRECONCILED = 'Its trades add up to $100.00 after commission, but the run’s net profit is $250.00, so the trades do not account for the whole result.';
+
+/** Two development trades at no commission (+$243 on Tuesday, then -$92 closed by the window's end on Wednesday) and what the server makes of them. */
+export function tradeCharts(trades: Partial<TradeRecord>[] = [{}, {}]): MeasuredTradeCharts {
+  const base: TradeRecord[] = [
+    { entry_ms: etMidnightMs('2025-12-23') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-23') + 16 * 3600_000, entry_price: 590.1, exit_price: 592.5, quantity: 77, pnl: 243, net_profit: 243, running_net_profit: 243, bars_held: 4, entry_rsi: 58.2, exit_kind: 'strategy', exit_reason: 'Exited by the strategy' },
+    { entry_ms: etMidnightMs('2025-12-24') + 10 * 3600_000, exit_ms: etMidnightMs('2025-12-24') + 12 * 3600_000, entry_price: 594, exit_price: 592.8, quantity: 77, pnl: -92, net_profit: -92, running_net_profit: 151, bars_held: 8, entry_rsi: 54, exit_kind: 'window_end', exit_reason: 'Closed at the end of the tested window' },
+  ];
+  return {
+    status: 'measured',
+    bar_span_ms: 15 * 60_000,
+    trades: trades.map((overrides, i) => ({ ...base[i], ...overrides })),
+    histogram: {
+      bin_width: 200,
+      bins: [
+        { low: -200, high: 0, trades: 1, wins: 0, losses: 1 },
+        { low: 0, high: 200, trades: 0, wins: 0, losses: 0 },
+        { low: 200, high: 400, trades: 1, wins: 1, losses: 0 },
+      ],
+    },
+    entry_rsi: {
+      status: 'measured',
+      gate_low: 50,
+      gate_high: 70,
+      bands: [
+        { low: 50, high: 55, trades: 1, mean_net_profit: -92 },
+        { low: 55, high: 60, trades: 1, mean_net_profit: 243 },
+        { low: 60, high: 65, trades: 0, mean_net_profit: null },
+        { low: 65, high: 70, trades: 0, mean_net_profit: null },
+      ],
+      unbanded: 0,
+    },
+    entry_times: {
+      weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+      half_hours: ['09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30'],
+      min_trades: 5,
+      cells: [
+        { weekday: 1, half_hour: 11, trades: 1, mean_net_profit: 243, total_net_profit: 243, too_few: true },
+        { weekday: 2, half_hour: 1, trades: 1, mean_net_profit: -92, total_net_profit: -92, too_few: true },
+      ],
+    },
+  };
+}
+
 export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateDetail> = {}): CandidateDetail {
   const end = { all_period: 0.087, recent: 0.116, incumbent: 0.052 }[key];
   const days = [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')];
@@ -478,14 +525,11 @@ export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateD
         { ms: days[2], drawdown: 0 },
       ],
       monthly: [
-        { month_start_ms: etMidnightMs('2025-11-01'), net_profit: 1100, return_fraction: 0.011, trades: 12 },
-        { month_start_ms: etMidnightMs('2025-12-01'), net_profit: -700, return_fraction: -0.007, trades: 9 },
+        { month_start_ms: etMidnightMs('2025-11-01'), year: 2025, month: 11, net_profit: 1100, return_fraction: 0.011, trades: 12 },
+        { month_start_ms: etMidnightMs('2025-12-01'), year: 2025, month: 12, net_profit: -700, return_fraction: -0.007, trades: 9 },
       ],
-      trades: [
-        { entry_ms: etMidnightMs('2025-12-23') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-23') + 16 * 3600_000, entry_price: 590.1, exit_price: 592.5, quantity: 77, pnl: 243, pnl_pct: 0.0041, indicators: { rsi: 58.2, ema5: 590, ema10: 589.4 }, exit_reason: 'HOLD_COMPLETE' },
-        { entry_ms: etMidnightMs('2025-12-24') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-24') + 17 * 3600_000, entry_price: 594, exit_price: 592.8, quantity: 77, pnl: -92, pnl_pct: -0.0015, indicators: { rsi: 54 }, exit_reason: null },
-      ],
-      // The two trades above, best first, at no commission: 243 then 151 of 151.
+      trade_charts: key === 'incumbent' ? { status: 'missing', reason: UNRECONCILED } : tradeCharts(),
+      // The two trades of the trade charts, best first, at no commission: 243 then 151 of 151.
       concentration_curve: {
         points: [
           { trades: 0, share_of_trades: 0, share_of_profit: 0, net_profit: 0 },

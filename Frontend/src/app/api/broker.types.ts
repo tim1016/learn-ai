@@ -15060,6 +15060,11 @@ export interface components {
         };
         /** GoldenSearchTradeChartsMeasured */
         GoldenSearchTradeChartsMeasured: {
+            /**
+             * Bar Span Ms
+             * @description The strategy's decision bar, in ms; a day or longer means one bar per session.
+             */
+            bar_span_ms: number;
             /** Entry Rsi */
             entry_rsi: components["schemas"]["GoldenSearchEntryRsiMeasured"] | components["schemas"]["GoldenSearchEntryRsiMissing"];
             entry_times: components["schemas"]["GoldenSearchEntryTimes"];

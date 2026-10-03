@@ -23,8 +23,23 @@
       <p class="muted" role="status">Loading the candidates' detail runs…</p>
     } @else if (selectedRun(); as run) {
       @if (active() === 'months') {
-        <app-golden-search-monthly [monthly]="run.monthly" [candidateLabel]="row.candidate.label" />
-        <app-golden-search-grid class="concentration">
+        <app-golden-search-grid>
+          <app-golden-search-panel chart="month-calendar" data-span="6">
+            @if (monthCalendar(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="calendarHeight()" [minWidth]="440" />
+            } @else {
+              <p class="muted">No month closed inside this run.</p>
+            }
+            <p caption class="caption">{{ row.candidate.label }} · development months, by their Eastern dates. A trade counts in the month it exits.</p>
+          </app-golden-search-panel>
+          <app-golden-search-panel chart="monthly-net" data-span="6">
+            @if (monthlyNet(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="220" />
+            } @else {
+              <p class="muted">No month closed inside this run.</p>
+            }
+            <p caption class="caption">Net monthly results. This describes changing performance; no alpha model or causal decay claim is implied.</p>
+          </app-golden-search-panel>
           <app-golden-search-panel chart="concentration-curve" data-span="6">
             @if (curve(); as spec) {
               <app-golden-search-chart [spec]="spec" [height]="260" />
@@ -42,8 +57,43 @@
             <p caption class="caption">Concern when the result without its best month or its best 5% of trades is $0 or less. It informs your choice; it gates nothing.</p>
           </app-golden-search-panel>
         </app-golden-search-grid>
+      } @else if (tradesNote(); as note) {
+        <p class="muted">{{ note }}</p>
       } @else {
-        <app-golden-search-trades [trades]="run.trades" [candidateLabel]="row.candidate.label" />
+        <app-golden-search-grid>
+          <app-golden-search-panel chart="trade-timeline" data-span="12">
+            @if (timeline(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="320" />
+            }
+            <p caption class="caption">{{ row.candidate.label }} · development trades at their exits, each net of its entry and exit commission.</p>
+          </app-golden-search-panel>
+          <app-golden-search-panel chart="trade-histogram" data-span="4">
+            @if (histogram(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="220" />
+            }
+            <p caption class="caption">Bins by the Freedman–Diaconis rule, with $0 as an edge.</p>
+          </app-golden-search-panel>
+          <app-golden-search-panel chart="hold-time" data-span="4">
+            @if (holdTime(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="220" />
+            }
+            <p caption class="caption">Decision bars counted on the trading calendar: nights, weekends and holidays hold none.</p>
+          </app-golden-search-panel>
+          <app-golden-search-panel chart="entry-rsi" data-span="4">
+            @if (entryRsi(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="220" />
+            } @else if (entryRsiNote(); as note) {
+              <p class="muted">{{ note }}</p>
+            }
+            <p caption class="caption">The RSI the strategy recorded when it decided to enter, between this candidate's gates.</p>
+          </app-golden-search-panel>
+          <app-golden-search-panel chart="entry-time" data-span="12">
+            @if (entryTime(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="220" [minWidth]="560" />
+            }
+            <p caption class="caption">Entries by Eastern weekday and half hour. A grey cell holds too few trades to judge.</p>
+          </app-golden-search-panel>
+        </app-golden-search-grid>
       }
     } @else {
       <p class="muted">No development detail run is recorded for {{ row.candidate.label }}.</p>

@@ -23320,6 +23320,11 @@
       "GoldenSearchTradeChartsMeasured": {
         "additionalProperties": false,
         "properties": {
+          "bar_span_ms": {
+            "description": "The strategy's decision bar, in ms; a day or longer means one bar per session.",
+            "title": "Bar Span Ms",
+            "type": "integer"
+          },
           "entry_rsi": {
             "discriminator": {
               "mapping": {
@@ -23359,6 +23364,7 @@
         },
         "required": [
           "status",
+          "bar_span_ms",
           "trades",
           "histogram",
           "entry_rsi",

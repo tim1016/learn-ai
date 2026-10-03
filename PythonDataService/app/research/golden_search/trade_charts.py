@@ -304,6 +304,7 @@ def trade_charts(
         entry_rsi = rsi_bands(rsis, rsi_gates)
     return {
         "status": "measured",
+        "bar_span_ms": bar_span_ms,
         "trades": records,
         "histogram": histogram(nets),
         "entry_rsi": entry_rsi,

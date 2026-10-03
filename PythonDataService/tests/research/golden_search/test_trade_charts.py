@@ -197,7 +197,7 @@ def test_each_trade_carries_its_net_running_net_and_hold_in_exit_order() -> None
     late = _trade(_et(day, 11, 0), _et(day, 15, 0), -40.0, window_end=True)
     early = _trade(_et(day, 10, 0), _et(day, 10, 30), 100.0)
     charts = _charts([late, early], 60.0)
-    assert charts["status"] == "measured"
+    assert charts["status"] == "measured" and charts["bar_span_ms"] == FIFTEEN_MINUTES
     rows = [(t["net_profit"], t["running_net_profit"], t["bars_held"], t["exit_kind"], t["exit_reason"]) for t in charts["trades"]]
     assert rows == pytest.approx([(100.0, 100.0, 2, "strategy", STRATEGY_EXIT), (-40.0, 60.0, 16, "window_end", EXIT_AT_WINDOW_END)], abs=1e-9, rel=0)
     assert charts["trades"][0]["pnl"] == pytest.approx(102.0, abs=1e-9, rel=0)

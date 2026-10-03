@@ -3,6 +3,9 @@
 declare module 'echarts/lib/chart/bar/install' {
   export { BarChart as install } from 'echarts/charts';
 }
+declare module 'echarts/lib/chart/heatmap/install' {
+  export { HeatmapChart as install } from 'echarts/charts';
+}
 declare module 'echarts/lib/chart/line/install' {
   export { LineChart as install } from 'echarts/charts';
 }
@@ -20,6 +23,9 @@ declare module 'echarts/lib/component/marker/installMarkLine' {
 }
 declare module 'echarts/lib/component/tooltip/install' {
   export { TooltipComponent as install } from 'echarts/components';
+}
+declare module 'echarts/lib/component/visualMap/installVisualMapContinuous' {
+  export { VisualMapContinuousComponent as install } from 'echarts/components';
 }
 declare module 'echarts/lib/renderer/installCanvasRenderer' {
   export { CanvasRenderer as install } from 'echarts/renderers';

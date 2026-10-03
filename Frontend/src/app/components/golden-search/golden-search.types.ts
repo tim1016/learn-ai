@@ -260,8 +260,14 @@ export type DailyEquityPoint = Schemas['GoldenSearchEquityPoint'];
 export type DrawdownPoint = Schemas['GoldenSearchDrawdownPoint'];
 /** `return_fraction` is null when the month started without positive equity to divide by. */
 export type MonthlyResult = Schemas['GoldenSearchMonthlyResult'];
-/** `pnl` is the price change times filled quantity, before fees. */
-export type CandidateTrade = Schemas['GoldenSearchTrade'];
+/** One development trade with its net of commission, running net profit and decision bars held; `pnl` is before fees. */
+export type TradeRecord = Schemas['GoldenSearchTradeRecord'];
+/** The development run's trade charts, or why its trades cannot be drawn (they do not add up to its net profit, say). */
+export type TradeCharts = Schemas['GoldenSearchTradeChartsMeasured'] | Schemas['GoldenSearchTradeChartsMissing'];
+export type MeasuredTradeCharts = Schemas['GoldenSearchTradeChartsMeasured'];
+export type TradeHistogram = Schemas['GoldenSearchHistogram'];
+export type MeasuredEntryRsi = Schemas['GoldenSearchEntryRsiMeasured'];
+export type EntryTimes = Schemas['GoldenSearchEntryTimes'];
 /** `value` is a fraction of starting capital. */
 export type CumulativeReturnPoint = Schemas['GoldenSearchCumulativeReturnPoint'];
 /** The development run's running share of net profit, trades best first; `reason` says why none is drawn. */
