@@ -243,10 +243,9 @@ async def test_replay_of_a_clean_stop_never_fabricates_crash_evidence(
 async def test_a_never_run_instance_gets_no_crash_evidence_from_cold_warmup(
     tmp_path: Path,
 ) -> None:
-    """A brand-new instance's very first warmup replays retained history
-    that predates its own existence (the ledger is shared across bots on a
-    symbol). None of that is a crash artifact: with no prior durable
-    decision receipt at all, replay must never flag a candidate."""
+    """A brand-new instance's very first warmup replays bars that predate
+    its own existence. None of that is a crash artifact: with no prior
+    durable decision receipt at all, replay must never flag a candidate."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _FakeClerk(repository=repo)
@@ -256,9 +255,8 @@ async def test_a_never_run_instance_gets_no_crash_evidence_from_cold_warmup(
     try:
         bars = _ema_parity_bars_through_first_exit()
 
-        # A cold-start bot whose symbol's history is already retained in the
-        # shared ledger: recent_closed_bars hands it the full window on its
-        # very first run, with no live bars of its own yet.
+        # A cold-start bot: recent_closed_bars hands it the full window on
+        # its very first run, with no live bars of its own yet.
         await bot_trade_strategy.run_trade_bot(_binding(run_id="run-1"), _PhaseFeed(retained_bars=bars))
 
         receipts = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=500)

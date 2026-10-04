@@ -145,7 +145,11 @@ async def replay_warmup_bars(
     earlier run of this instance on record
     (:attr:`CapturedDecisions.ran_before`, #2859): a bar that run was handed
     live and left no receipt for is the crash's, and such a bar is never
-    ``history``. With neither a decision nor an earlier run, every bucket
+    ``history``. The run record does not itself show that run saw the bar;
+    the bar does. A run warms on its own instance's ledger, which no other
+    bot retains into (``account_authority.evidence_account_id_for``), so a
+    bar there that is not ``history`` was handed live to an earlier run of
+    this instance. With neither a decision nor an earlier run, every bucket
     here predates this instance's own live-decision authority and none of
     it can be a genuine
     crash artifact. FR-016 is scoped to sealed signal programs, and since
