@@ -43,6 +43,16 @@ end found late (the Clerk was down) is carried out when the Clerk is back.
 
 A sale waiting for the open is also the owner's to know about: the lane's
 attention bell lists it (:func:`end_sales_waiting_for_open`) until it is sent.
+
+No sale is accepted while the Clerk has stopped exiting the bot's position by
+itself (``EXIT_STUCK``, #2854): the end stays pending, the bell and the bot's
+page say why (:func:`end_sales_waiting_for_operator`), and once the bot is
+flat the end is recorded carried out with nothing sold. A sale of the end's
+own that ended failed does not complete an end still pending either: its send
+was lost and an operator settled it as not sent, which opens that episode
+(``unknown_order_attestation``), and its holding is left to the operator with
+the rest. A sale accepted before the episode opened and still in progress is
+sent as accepted; a store this code wrote holds none.
 """
 
 from __future__ import annotations
@@ -55,6 +65,7 @@ from functools import partial
 from typing import Protocol
 
 from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.ended_run_close import (
@@ -72,6 +83,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import unresolved_order_refs, working_order_refs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.uncertainty import automatic_exit_stopped
 from app.broker.contract.ports import BrokerTradePort
 from app.schemas.bot_end import BotEnd
 
@@ -79,6 +91,10 @@ logger = logging.getLogger(__name__)
 
 #: The ``operator_reason`` of the STOP the Clerk commits at a bot's end.
 SCHEDULED_END_REASON = "scheduled_end"
+
+#: The bell's line for an end whose sale the Clerk leaves to the operator
+#: (:func:`end_sales_waiting_for_operator`, #2854).
+SCHEDULED_END_WAITS_FOR_OPERATOR = "SCHEDULED_END_WAITS_FOR_OPERATOR"
 
 
 @dataclass(frozen=True)
@@ -262,15 +278,27 @@ async def finish_bots_at_their_end(
             )
 
 
-def _sales_owed(repo: ClerkSqliteRepository, schedule: BotEndSchedule, end: ScheduledEnd) -> list[OwedClose]:
+def _sales_owed(
+    repo: ClerkSqliteRepository, schedule: BotEndSchedule, end: ScheduledEnd, *, left_to_operator: bool = False
+) -> list[OwedClose]:
     """What a SELL end still has to sell: nothing while the bot's run is ACTIVE, or once the end is gone.
 
     The end is read again right before the sale: the owner's Stop in the
     same minute cancels it (Stop keeps the shares), and an edit replaces it.
+    Nothing either while the Clerk has stopped exiting the bot by itself
+    (#2854): those sales are the operator's, and ``left_to_operator`` asks
+    for exactly them instead -- every holding the end's own sale has not
+    taken or, once accepted, ended failed on, the operator's Flatten working
+    on it or not.
     """
     sid = end.strategy_instance_id
     if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]):
         return []
+    if automatic_exit_stopped(repo, sid) != left_to_operator:
+        return []
+    if left_to_operator:
+        holdings = bot_holdings(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+        return [holding.close for holding in holdings if holding.state != "closing"]
     return closes_owed_under(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
 
 
@@ -316,8 +344,11 @@ def _carried_out(repo: ClerkSqliteRepository, end: ScheduledEnd, *, sells: bool)
     outcome not yet known, by the STOP proof's own definitions -- can still
     fill outside an EXIT's custody; and, for a SELL end, every holding's sale
     is accepted -- from then on it is that EXIT's, held for the open if it
-    must be. A holding another EXIT still owns keeps the end pending until
-    that EXIT resolves.
+    must be, and the watchdog's to send again if it ended failed. A holding
+    another EXIT still owns keeps the end pending until that EXIT resolves.
+    While the Clerk has stopped exiting the bot by itself nothing of its own
+    sells a holding, an accepted sale that ended failed included, so only a
+    flat bot's end is carried out (#2854).
     """
     sid = end.strategy_instance_id
     if repo.active_run(sid) is not None:
@@ -327,10 +358,10 @@ def _carried_out(repo: ClerkSqliteRepository, end: ScheduledEnd, *, sells: bool)
         return False
     if not sells or end.end.end_action == "KEEP":
         return True
-    return all(
-        holding.state == "closing"
-        for holding in bot_holdings(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
-    )
+    holdings = bot_holdings(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+    if automatic_exit_stopped(repo, sid):
+        return not holdings
+    return all(holding.state in ("closing", "failed") for holding in holdings)
 
 
 def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:
@@ -341,7 +372,7 @@ def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:
 
 @dataclass(frozen=True)
 class EndSaleWaiting:
-    """A bot's end sale held for the next regular open, not yet sent."""
+    """A bot's end sale not sent: held for the next regular open, or left to the operator."""
 
     strategy_instance_id: str
     symbol: str
@@ -378,12 +409,55 @@ def end_sales_waiting_for_open(repo: ClerkSqliteRepository) -> list[EndSaleWaiti
     return waiting
 
 
+def end_sales_waiting_for_operator(
+    repo: ClerkSqliteRepository, strategy_instance_ids: Sequence[str] | None = None
+) -> list[EndSaleWaiting]:
+    """Each due end sale not accepted because the Clerk stopped exiting its bot's position by itself (#2854).
+
+    What :func:`_sales_owed` leaves to the operator, by its own rule, read from
+    the end schedule and the ledger with nothing recorded for it: the wait
+    ends once the bot is flat or its end is cancelled. Every live bot's,
+    unless ``strategy_instance_ids`` names them.
+    """
+    schedule = installed_bot_end_schedule()
+    if schedule is None or is_synthetic_account_id(repo.account_id):
+        return []
+    sids = _live_registrations(repo) if strategy_instance_ids is None else strategy_instance_ids
+    # Asked on every poll of the bell: the runner is read only for a bot the Clerk has stopped exiting.
+    stopped = [sid for sid in sids if automatic_exit_stopped(repo, sid)]
+    now_ms = repo.clock()
+    return [
+        EndSaleWaiting(close.strategy_instance_id, close.symbol, repo.position(close.strategy_instance_id, close.symbol))
+        for end in schedule.pending_ends(stopped)
+        if end.end.end_action == "SELL" and end.end.end_at_ms <= now_ms
+        for close in _sales_owed(repo, schedule, end, left_to_operator=True)
+    ]
+
+
+def end_sale_waits_for_operator_words(waiting: EndSaleWaiting) -> str:
+    """Why a sale :func:`end_sales_waiting_for_operator` lists was not sent, and what completes the end.
+
+    The sale is never sent later: the operator closes the position, and the end completes without one.
+    """
+    long = waiting.quantity > 0
+    order = "sale" if long else "buy-back"
+    return (
+        f"The Clerk stopped exiting this bot's position by itself, so the end's {order} of "
+        f"{quantity_text(abs(waiting.quantity))} {waiting.symbol} was not sent. "
+        f"{'Sell the position' if long else 'Buy the position back'} or write it off from the bot's page; "
+        f"the end then completes with no {order}."
+    )
+
+
 __all__ = [
     "SCHEDULED_END_REASON",
+    "SCHEDULED_END_WAITS_FOR_OPERATOR",
     "BotEndSchedule",
     "EndSaleWaiting",
     "ScheduledEnd",
+    "end_sale_waits_for_operator_words",
     "end_sales_waiting_for_open",
+    "end_sales_waiting_for_operator",
     "fence_bots_at_their_end",
     "finish_bots_at_their_end",
     "install_bot_end_schedule",

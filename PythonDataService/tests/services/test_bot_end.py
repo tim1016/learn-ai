@@ -278,7 +278,7 @@ def test_the_end_preview_with_no_end_field_previews_the_default() -> None:
         pytest.param(None, True, None, id="running-with-no-end"),
         pytest.param(_at(_WEDNESDAY, 15, 59), True, None, id="running-before-its-end"),
         pytest.param(_at(_WEDNESDAY, 15, 59), False, None, id="died-before-its-end"),
-        pytest.param(_at(_WEDNESDAY, 11), True, "This bot's end has come; the Clerk is carrying it out.", id="end-has-come"),
+        pytest.param(_at(_WEDNESDAY, 11), True, "This bot's end has come, so it can no longer be changed.", id="end-has-come"),
         pytest.param(None, False, "This bot has stopped, so it has no end to change.", id="stopped-with-no-end"),
     ],
 )
@@ -296,6 +296,8 @@ def test_end_edit_refusal_is_the_one_answer_for_the_edit_and_the_view(
 
     assert (None if refusal is None else str(refusal)) == refused
     assert refusal is None or refusal.http_status == 409
+    # An end that has come may be the Clerk's to carry out or the operator's to complete (#2854): neither is named.
+    assert refusal is None or "Clerk" not in f"{refusal} {refusal.next_action}"
     assert view.editable is (refused is None)
 
 
