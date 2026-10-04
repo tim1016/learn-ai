@@ -59,6 +59,7 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
     exit_in_progress,
     exit_unconfirmed,
     has_bot_scoped_custody_problem,
+    terminal_exposure_notices,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -528,6 +529,56 @@ async def test_clear_gives_the_settle_actions_own_refusal_for_an_order_that_cann
     assert sell.blockers[0].detail == (
         f'"Settle the uncertain order" cannot be used now: {settle_refused} {what_then}'
     )
+
+
+_HELD_BEHIND_THE_ORDER = (
+    "The Clerk sent a closing order for this bot and could not confirm it, so the app cannot "
+    "vouch for what this bot holds. The ended run manages nothing. The Clerk holds the position "
+    "and starts no other closing order for this bot, and Flatten is refused while that order is "
+    "unconfirmed."
+)
+
+
+@pytest.mark.parametrize(
+    ("submit", "way_on"),
+    [
+        pytest.param("never_arrives", 'Use "Settle the uncertain order" on the bot\'s page.', id="settling-is-offered"),
+        pytest.param(
+            settling._AnsweredAs(None),
+            '"Settle the uncertain order" cannot be used now: Alpaca answered this order\'s send with '
+            "an order that names no client order id, so the Clerk has no id to read that order by and "
+            "cannot tell what it did. The Clerk keeps the position held. This action cannot settle the "
+            "order. Look at this account's orders at Alpaca for the order it answered with. No action "
+            "of the Clerk settles this order yet.",
+            id="settling-is-refused",
+        ),
+    ],
+)
+async def test_an_ended_bots_notice_says_its_closing_order_is_unconfirmed_and_how_it_is_settled(
+    started_bot, submit: settling._SubmitFate, way_on: str
+) -> None:
+    """A bot whose run ended uncleanly holds its position behind a closing order the Clerk could not confirm (#2854).
+
+    Its notice said "Reconcile now re-reads the account at Alpaca; Flatten
+    becomes available once the position is proven". No read shows that
+    order, and Flatten stays refused. The notice now says what the Clerk did
+    and holds, and points at the settle action on the bot's page -- or, for
+    an order that action is refused for, gives its reason and next step.
+    """
+    repo, _never_receives, _facade = started_bot
+    alpaca = settling._AlpacaAccount(repo, repo.clock, submits=(submit,))
+    await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+
+    (notice,) = terminal_exposure_notices(
+        _projection(repo), sid=settling.SID, symbol="SPY", kind="EXITED_UNVERIFIED", running=False,
+        pass_proof=None,
+    )
+
+    assert (notice.kind, notice.label, notice.action_label) == (
+        "position_unverified", "A closing order could not be confirmed", "Open bot",
+    )
+    assert notice.explanation == f"{_HELD_BEHIND_THE_ORDER} {way_on}"
+    assert "Reconcile now" not in notice.explanation
 
 
 async def test_the_run_summary_says_a_closing_order_is_unconfirmed_never_that_a_sale_is_queued(
