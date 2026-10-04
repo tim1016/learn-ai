@@ -41,6 +41,9 @@
   }
 } @else {
   <p-popover ariaLabel="Calendar">
-    <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" (picked)="pick($event.from)" />
+    <!-- A template, so the month is built when the calendar opens and not with every field on the page. -->
+    <ng-template #content>
+      <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" (picked)="pick($event.from)" />
+    </ng-template>
   </p-popover>
 }

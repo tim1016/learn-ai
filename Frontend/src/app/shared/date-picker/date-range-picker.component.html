@@ -71,14 +71,17 @@
   </p>
 
   <p-popover #popover ariaLabel="Calendar">
-    <app-date-calendar
-      mode="range"
-      [from]="checked().from.date"
-      [to]="checked().to.date"
-      [bounds]="bounds()"
-      [sessions]="sessions()"
-      [marked]="unheldDays()"
-      (picked)="setRange($event); popover.hide()"
-    />
+    <!-- A template, so the two months are built when the calendar opens and not with every picker on the page. -->
+    <ng-template #content>
+      <app-date-calendar
+        mode="range"
+        [from]="checked().from.date"
+        [to]="checked().to.date"
+        [bounds]="bounds()"
+        [sessions]="sessions()"
+        [marked]="unheldDays()"
+        (picked)="setRange($event); popover.hide()"
+      />
+    </ng-template>
   </p-popover>
 </div>
