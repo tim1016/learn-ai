@@ -31,7 +31,10 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
-from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    EXIT_REDRIVE_DECISION_PREFIX,
+    SCHEDULED_END_DECISION_PREFIX,
+)
 from app.broker.alpaca.clerk.sqlite.facts import UnknownOutcomeNotice
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
@@ -73,7 +76,6 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
     RESEND_AFTER_MS,
     SETTLE_NEXT_STEP,
     SWEEP_INTERVAL_MS,
-    WAIT_MS,
     _a_second_exit_is_refused,
     _Alpaca,
     _closing_order,
@@ -92,6 +94,8 @@ from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
     _context_of,
     _exit_not_flat,
     _flatten,
+    _flatten_exit,
+    _stopped_bot_offered_its_flatten,
 )
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
@@ -137,12 +141,6 @@ type _Pass = Callable[[], Awaitable[object]]
 def _shares(expected: float) -> object:
     """A share quantity, compared at the ledger's own tolerance for one: absolute, with no relative part."""
     return pytest.approx(expected, abs=POSITION_QTY_EPSILON, rel=0)
-
-
-def test_the_lost_send_leaves_too_late_for_a_second_one_inside_the_session() -> None:
-    """What these tests rest on: the order is sent in the session, and its wait ends after the close."""
-    assert CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS + WAIT_MS > CLOSE_MS
-    assert CLOSE_MS < NEXT_OPEN_MS
 
 
 async def _a_running_bot_loses_its_exit_just_before_the_close(repo: ClerkSqliteRepository, alpaca: _Alpaca) -> str:
@@ -221,7 +219,7 @@ async def test_a_closing_order_lost_before_the_close_keeps_custody_past_it_and_i
 async def test_an_order_held_overnight_is_looked_up_at_the_next_open_and_never_sent_again(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
-    """The next session opens, where a market order can go out again: yesterday's is not sent (design call 3).
+    """The next session opens, where a market order can go out again: yesterday's is not sent (#2854).
 
     Every pass still asks Alpaca for the order by its client order id. No
     pass sends it, however long the session has been open, and the one notice
@@ -275,6 +273,128 @@ async def test_a_running_bots_next_exit_decision_is_answered_as_in_progress_and_
     assert receipt.explanation is not None and receipt.explanation.startswith(f"EXIT_IN_PROGRESS: existing EXIT {exit_id}")
     assert _ledger_rows(repo) == rows
     _is_held(repo, exit_id)
+
+
+# ── an operator's Flatten, the watchdog's re-drive, a restart ────────────────
+
+
+async def test_an_operators_flatten_lost_before_the_close_is_held_and_not_sent_again_at_the_next_open(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """An operator's Flatten leaves 20 s before the close and its answer is lost.
+
+    A Flatten is set against the account before every send, and the account
+    still holds the shares the next morning, where a market order can go
+    out. It is held like any sent order all the same: one submit, custody
+    kept, the one notice.
+    """
+    repo, clock = crashed_with_exposure
+    _walk_clock_to(repo, CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS)
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives",))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    await _flatten(facade, current_context)
+    exit_id, closing = _flatten_exit(repo), _closing_order(repo)
+    assert _exit_state(repo, exit_id) == "unknown" and len(alpaca.sent) == 1
+
+    async def sweep() -> object:
+        return await facade.reconcile_account(trigger="AUTOMATIC")
+
+    await _passes_across_the_close(repo, sweep)
+    await _passes_across_the_next_open(repo, sweep)
+
+    assert len(alpaca.sent) == 1, "yesterday's Flatten was sent again"
+    assert alpaca.holds == _shares(10)
+    _is_held(repo, exit_id)
+    assert _notices_recorded(repo, closing) == [HELD_PAST_SESSION]
+
+
+async def test_a_watchdog_re_drive_lost_before_the_close_is_held_and_not_sent_again_at_the_next_open(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Alpaca refuses a bot's exit; the watchdog sends it again 15 s before the close, and that answer is lost.
+
+    The re-drive is an order of its own, under its own client order id. Past
+    the close it is held as any sent order is: the watchdog starts no further
+    re-drive behind it that night or after the next open, and nothing tells
+    the exit as stuck.
+    """
+    repo, clock = crashed_with_exposure
+    policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+    alpaca = _Alpaca(repo, clock, submits=(REFUSED, "never_arrives"))
+    _walk_clock_to(repo, CLOSE_MS - SWEEP_INTERVAL_MS - policy.after_ms)
+    refused_exit = await _the_runner_sends_the_exit(repo, alpaca)
+    assert _exit_state(repo, refused_exit) == "failed"
+    sweep = _the_sweep(repo, alpaca)
+
+    await _passes(repo, sweep, policy.after_ms // SWEEP_INTERVAL_MS)
+
+    refused, redriven = alpaca.sent
+    assert redriven.at_ms == CLOSE_MS - SWEEP_INTERVAL_MS
+    assert (redriven.leg.side, redriven.leg.quantity) == ("sell", _shares(10))
+    assert redriven.client_order_id != refused.client_order_id
+    (redrive,) = [
+        order
+        for order in repo.orders_for_strategy(SID)
+        if order.role == "REDUCING" and EXIT_REDRIVE_DECISION_PREFIX in order.effect_operation_id
+    ]
+    assert _exit_state(repo, redrive.effect_operation_id) == "unknown"
+
+    await _passes_across_the_close(repo, sweep)
+    await _passes_across_the_next_open(repo, sweep)
+
+    assert len(alpaca.sent) == 2, "a re-drive was sent beside the one whose outcome is unknown"
+    assert _exit_state(repo, redrive.effect_operation_id) == "unknown"
+    active = repo.active_exit_for_strategy(SID)
+    assert active is not None and active.effect_operation_id == redrive.effect_operation_id
+    assert repo.position(SID, "SPY") == _shares(10)
+    assert _notices_recorded(repo, redrive) == [HELD_PAST_SESSION]
+    assert _open_episode(repo, EXIT_STUCK_REASON_CODE) is None
+
+
+async def test_a_clerk_restarted_the_next_morning_still_holds_the_order_and_says_so_once(tmp_path: Path) -> None:
+    """The Clerk's process stops overnight with the order held, and starts again after the next open.
+
+    Startup recovery retires the run and drives every unfinished operation.
+    It looks the held order up and does not send it, and neither do the
+    passes after it. The notice recorded the evening before is still the
+    only one.
+    """
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
+    )
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_running_bot_loses_its_exit_just_before_the_close(repo, alpaca)
+    await _passes_across_the_close(repo, _the_sweep(repo, alpaca))
+    _is_held(repo, exit_id)
+    closing = _closing_order(repo)
+    repo.close()
+
+    clock.value = NEXT_OPEN_MS + 60_000
+    restarted = ClerkSqliteRepository.open(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    try:
+        # Alpaca as the new process finds it: the order never arrived, and the shares are still there.
+        the_next_morning = _Alpaca(restarted, clock)
+        facade = SqliteAlpacaClerkFacade(
+            account_mode="paper", repo=restarted, read=the_next_morning, trade=the_next_morning
+        )
+
+        await facade.recover()
+        await _passes(restarted, _the_sweep(restarted, the_next_morning), PASSES_ACROSS_THE_OPEN)
+
+        assert the_next_morning.sent == [], "the restarted Clerk sent yesterday's order again"
+        assert the_next_morning.looked_up.count(closing.client_order_id) > PASSES_ACROSS_THE_OPEN
+        assert restarted.active_run(SID) is None
+        _is_held(restarted, exit_id)
+        assert _notices_recorded(restarted, closing) == [HELD_PAST_SESSION]
+    finally:
+        restarted.close()
 
 
 # ── the sale at a bot's scheduled end ────────────────────────────────────────

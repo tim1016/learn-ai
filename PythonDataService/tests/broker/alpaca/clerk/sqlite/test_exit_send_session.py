@@ -63,6 +63,7 @@ from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import SymbolTradingStatusEvidence, TopOfBookQuote
 from app.services.market_liveness import unknown_market_liveness
+from app.services.session_authority import scheduled_exchange_phase_at_ms
 from app.utils.timestamps import to_ms_utc
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _covering_read, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
@@ -73,9 +74,14 @@ from tests.broker.alpaca.clerk.sqlite.test_exit import (
     _FakeTrade,
     _make_entry,
 )
+from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
+    HELD_PAST_SESSION_EXPLANATION,
+    SETTLE_NEXT_STEP,
+)
 
 _ET = ZoneInfo("America/New_York")
 _WEDNESDAY = date(2026, 9, 2)
+_THURSDAY = date(2026, 9, 3)
 _EARLY_CLOSE_DAY = date(2026, 11, 27)  # the day after Thanksgiving: the close is 13:00
 _POLICY = ProgramLegPolicy(
     window=ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60),
@@ -586,6 +592,68 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
         if row["transition_kind"] == "EXIT_NOT_FLAT"
     ]
     assert "confirmed" not in json.loads(not_flat["facts_json"])["reason"]
+
+
+@pytest.mark.parametrize(
+    ("sent_at", "bound", "resumed_at", "day", "session_at_resume"),
+    [
+        pytest.param((9, 29, 10), (9, 30), (9, 30, 20), _THURSDAY, "RTH", id="a-pre-market-limit"),
+        pytest.param((19, 59, 10), (20, 0), (20, 0, 20), _WEDNESDAY, "CLOSED", id="an-after-hours-limit"),
+    ],
+)
+async def test_an_extended_hours_limit_sent_and_lost_keeps_custody_once_its_bound_has_passed(
+    repo: ClerkSqliteRepository,
+    sent_at: tuple[int, int, int],
+    bound: tuple[int, int],
+    resumed_at: tuple[int, int, int],
+    day: date,
+    session_at_resume: str,
+) -> None:
+    """A limit priced for PRE or POST is sent, its answer is lost, and the Clerk next drives it past its bound (#2854).
+
+    The order carries its client identity, so it is replayed exactly or not
+    at all, and past the bound it was priced for it is not replayed. It was
+    sent, so it may be at Alpaca: the EXIT stays ``unknown`` with custody of
+    the position, nothing is sent, and no ``EXIT_NOT_FLAT`` releases the
+    entry for an exit under a new identity.
+
+    The pre-market limit is held with the regular session open, where
+    Alpaca would work it until the after-hours close: the notice says the
+    order will not be sent again, and never that its session has ended.
+    """
+    _walk_clock_to(repo, _at(*sent_at, day=day) - 10_000)
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    effect_operation_id = _accept_program_exit(
+        repo,
+        entry_ref,
+        shape=LegShape(
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=99.80,
+            extended_hours=True,
+            side=OrderSide.SELL,
+        ),
+        valid_until_ms=_at(*bound, day=day),
+    )
+    _walk_clock_to(repo, _at(*sent_at, day=day))
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch(), read=None)
+    ((sent, _),) = lost.submit_calls
+    assert (sent.order_type, sent.limit_price, sent.extended_hours) == (OrderType.LIMIT, 99.8, True)
+
+    _walk_clock_to(repo, _at(*resumed_at, day=day))  # past the 30 s submit-absence grace and the limit's bound
+    assert scheduled_exchange_phase_at_ms(repo.clock()) == session_at_resume
+    resumed = _FakeTrade(lookup_results=[None])
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch(), read=None)
+
+    assert resumed.submit_calls == [] and len(resumed.lookup_calls) == 1
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    assert repo.active_exit_for_order(entry_ref) is not None
+    assert _exit_not_flat(repo) is None
+    held = _open_unknown_outcome(repo)
+    assert held is not None
+    assert (held["explanation"], held["next_step"]) == (HELD_PAST_SESSION_EXPLANATION, SETTLE_NEXT_STEP)
 
 
 # ── #2440 review batch 2 ──────────────────────────────────────────────────────
