@@ -26,7 +26,11 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
@@ -171,20 +175,29 @@ class _TestDecisionReceiptRepository:
         self._rows[(strategy_instance_id, bar_ref)] = row
         return row
 
+    def strategy_ran_before(self, *, strategy_instance_id: str, lifecycle_run_id: str) -> bool:
+        """This store keeps no run record: every run reads as the instance's first."""
+        del strategy_instance_id, lifecycle_run_id
+        return False
+
     def decision_receipt_tail(
         self,
         *,
         strategy_instance_id: str,
         limit: int,
+        before_seq: int | None = None,
     ) -> list[DecisionReceiptResource]:
         """FR-016: warmup replay reads this to reapply known dispositions.
 
         Dict insertion order matches ascending ``seq`` order here (``seq``
         is assigned once at append), mirroring the real repository's
-        "bounded newest suffix in ascending sequence order".
+        "bounded newest suffix in ascending sequence order". ``before_seq``
+        reads the suffix older than that sequence, as the real one does.
         """
         matching = [
-            row for (sid, _bar_ref), row in self._rows.items() if sid == strategy_instance_id
+            row
+            for (sid, _bar_ref), row in self._rows.items()
+            if sid == strategy_instance_id and (before_seq is None or row.seq < before_seq)
         ]
         matching.sort(key=lambda row: row.seq)
         return matching[-limit:] if limit > 0 else []
@@ -442,8 +455,29 @@ class _FakeEffectResult:
         self.child_order_refs = (order_ref,)
 
 
+ACCEPTED_IN_STORE = "accepted_in_store"
+"""``_FakeClerk`` effect state: an ENTER accepted through the real store and left working."""
+
+FAILED_AFTER_ACCEPTANCE = "failed_after_acceptance"
+"""``_FakeClerk`` effect state: an ENTER accepted through the real store that then failed at submission."""
+
+_STORE_ENTER_STATES = frozenset({ACCEPTED_IN_STORE, FAILED_AFTER_ACCEPTANCE})
+
+
 class _FakeClerk:
-    """Minimal active-SQLite Clerk double capturing semantic operations."""
+    """Minimal active-SQLite Clerk double capturing semantic operations.
+
+    ``effect_state`` sets how every decision is answered. With a real
+    repository the double also writes the decision's receipt:
+
+    - ``"rejected"`` -- refused before custody: a ``blocked`` receipt, no
+      effect.
+    - ``ACCEPTED_IN_STORE`` / ``FAILED_AFTER_ACCEPTANCE`` -- the ENTER is
+      accepted through the store's own intake (:meth:`_accept_enter_in_store`),
+      so its effect row is the real one.
+    - any other state -- the receipt alone, naming no effect. The store has
+      no effect row for it, so a reader of effects finds none.
+    """
 
     authority_kind = "sqlite"
     account_id = "PA-TEST"
@@ -570,6 +604,14 @@ class _FakeClerk:
             "decision_evidence": decision_evidence,
         }
         self.calls.append(call)
+        if self._effect_state in _STORE_ENTER_STATES:
+            return self._accept_enter_in_store(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                purpose=purpose,
+                quantity=quantity,
+                decision_evidence=decision_evidence,
+            )
         if decision_evidence is not None and isinstance(
             self.repository, ClerkSqliteRepository
         ):
@@ -578,7 +620,9 @@ class _FakeClerk:
                 "bar_ref": decision_evidence.bar_ref,
                 "decision_id": decision_evidence.evaluation_id,
                 "evaluation_id": decision_evidence.evaluation_id,
-                "run_id": run_id,
+                # The real Clerk names its own run id on an effect and the
+                # lifecycle run id on a refusal; a Resume reads both (#2859).
+                "run_id": run_id if rejected else f"{strategy_instance_id}:{run_id}",
                 "reason_code": (
                     "CLERK_ADMISSION_REJECTED"
                     if rejected
@@ -605,4 +649,70 @@ class _FakeClerk:
         return _FakeEffectResult(
             order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}",
             state=self._effect_state,
+        )
+
+    def _accept_enter_in_store(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        purpose,
+        quantity: int,
+        decision_evidence,
+    ) -> _FakeEffectResult:
+        """Accept one ENTER through the real store's intake, as the real Clerk does (#2859).
+
+        The real Clerk accepts an ENTER in one transaction (``accept_enter``)
+        -- the effect, its order and the protected ``enter_intent`` receipt
+        naming that effect -- and only then reaches for the broker. The
+        receipt is never amended. ``ACCEPTED_IN_STORE`` stops there, with the
+        effect ``accepted``. ``FAILED_AFTER_ACCEPTANCE`` is the ENTER the
+        broker then refuses (``submit_accepted_enter``): the effect ends
+        ``failed`` and the runner is answered ``rejected``, as it is for a
+        refusal, while the receipt still reads ``enter_intent``. The store
+        creates an effect row no other way, which is why these two states go
+        through it.
+
+        As in the real Clerk, the run must be registered first, and an ENTER
+        left working refuses the next one. These states model no EXIT.
+        """
+        assert isinstance(self.repository, ClerkSqliteRepository), "a store ENTER needs the real store"
+        assert purpose is EffectPurpose.ENTER, "the store ENTER states model no EXIT"
+        assert decision_evidence is not None, "the Clerk receipts an ENTER from its decision evidence"
+        accepted = accept_enter(
+            self.repository,
+            account_id="PA-TEST",
+            strategy_instance_id=strategy_instance_id,
+            decision_id=decision_evidence.evaluation_id,
+            lifecycle_run_id=run_id,
+            leg=BrokerOrderLeg(symbol=decision_evidence.symbol, side="buy", quantity=quantity),
+            decision_receipt=AtomicDecisionReceipt(
+                outcome=decision_evidence.outcome,
+                symbol=decision_evidence.symbol,
+                decision_id=decision_evidence.evaluation_id,
+                observed_at_ms=decision_evidence.observed_at_ms,
+                facts_json=canonicalize(
+                    {
+                        "bar_ref": decision_evidence.bar_ref,
+                        "decision_id": decision_evidence.evaluation_id,
+                        "evaluation_id": decision_evidence.evaluation_id,
+                        "reason_code": decision_evidence.reason_code,
+                        "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
+                    }
+                ),
+            ),
+        )
+        assert accepted.effect_operation_id is not None and accepted.order_ref is not None
+        failed = self._effect_state == FAILED_AFTER_ACCEPTANCE
+        if failed:
+            fold_failed(
+                self.repository,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                summary_code="ORDER_SUBMIT_FAILED",
+                reason="The order did not reach the broker.",
+                why="The test broker refused this order.",
+            )
+        return _FakeEffectResult(
+            order_ref=accepted.order_ref, state="rejected" if failed else "accepted"
         )

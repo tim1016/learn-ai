@@ -8,8 +8,8 @@ import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
 import { RESEARCH_DEFAULT_FILL_MODE, type FillModeName } from "../../models/fill-mode";
 import type { PriceAdjustmentMode } from "../../shared/data-lake";
-import { ProviderBoundsService, TradingCalendarService, UNBOUNDED, heldBounds, offerQuickRanges, type DateBounds } from "../../shared/date-picker";
-import { TickerCatalogService } from "../../shared/ticker-catalog";
+import { ProviderBoundsService, TradingCalendarService, UNBOUNDED, offerQuickRanges, type DataGaps, type DateBounds } from "../../shared/date-picker";
+import { HeldGapsService, TickerCatalogService, heldBoundsFor } from "../../shared/ticker-catalog";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 import {
   leanValidationTemplateForStrategy,
@@ -41,6 +41,7 @@ export class StrategyLabConfigStore {
   private readonly route = inject(ActivatedRoute);
   private readonly tickerCatalog = inject(TickerCatalogService);
   private readonly providerBounds = inject(ProviderBoundsService);
+  private readonly heldGaps = inject(HeldGapsService);
   private readonly calendar = inject(TradingCalendarService);
   /** Whether the window has held both its dates yet; it is started once, never again after that. */
   private windowStarted = false;
@@ -215,13 +216,16 @@ export class StrategyLabConfigStore {
     if (this.autoFetch()) return this.providerBounds.bounds();
     const mode = this.adjustmentMode();
     const symbol = this.effectiveSymbol();
-    const view = untracked(() => this.tickerCatalog.viewFor(mode));
-    // Not a verdict until the tree has answered: say so rather than "no held days".
-    const unavailable = view.unavailable();
-    if (unavailable !== null) return { ...UNBOUNDED, unknown: `The lake's holdings could not be read: ${unavailable}` };
-    if (!view.resolved()) return { ...UNBOUNDED, unknown: "The lake's holdings are being read." };
-    const held = view.pool().find((option) => option.symbol === symbol);
-    return heldBounds(symbol, held?.firstHeld ?? null, held?.lastHeld ?? null);
+    return heldBoundsFor(untracked(() => this.tickerCatalog.viewFor(mode)), symbol);
+  });
+
+  /**
+   * The sessions the tree lacks inside the held span, for a run that reads the
+   * tree as it stands. A run that fetches missing days has no gaps to show.
+   */
+  readonly dateGaps = computed<DataGaps | null>(() => {
+    if (!this.readsLake() || this.autoFetch()) return null;
+    return this.heldGaps.gapsFor(this.adjustmentMode(), this.effectiveSymbol(), this.dateBounds(), this.resolution());
   });
 
   /** A date field holds no usable date: the picker hands over an empty one until it does. */
@@ -263,7 +267,9 @@ export class StrategyLabConfigStore {
       if (range.from !== "" && range.to !== "") this.windowStarted = true;
       if (this.windowStarted) return;
       const bounds = this.dateBounds();
-      const endingOn = range.to === "" ? bounds : { ...bounds, max: range.to };
+      // A given end past the last readable day cannot end the month: the picker refuses it.
+      const unreadable = bounds.max !== null && range.to > bounds.max;
+      const endingOn = range.to === "" || unreadable ? bounds : { ...bounds, max: range.to };
       const [lastMonth] = offerQuickRanges(["1M"], endingOn, this.calendar.sessions(), this.calendar.lastCompleted());
       if (lastMonth.range === null) return;
       const from = range.from === "" ? lastMonth.range.from : range.from;
@@ -503,11 +509,14 @@ export class StrategyLabConfigStore {
     if (params.engine) this.engine.set(params.engine);
     const strategy = params.strategy ? this.findStrategy(params.strategy) : null;
     const resolution = this.resolveResolution(strategy, params.resolution);
+    // A link naming one date only has its other date filled from the one it names, not left as it was.
+    const oneDate = (params.from === undefined) !== (params.to === undefined);
+    if (oneDate) this.windowStarted = false;
     this.range.update((range) => ({
       ...range,
       symbol: params.symbol?.toUpperCase() ?? range.symbol,
-      from: params.from ?? range.from,
-      to: params.to ?? range.to,
+      from: params.from ?? (oneDate ? "" : range.from),
+      to: params.to ?? (oneDate ? "" : range.to),
       resolution,
     }));
 

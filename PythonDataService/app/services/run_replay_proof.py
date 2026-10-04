@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.broker.alpaca.clerk.sqlite.decision_receipts import ENTER_OUTCOMES, EXIT_OUTCOMES
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASON_CODES
 from app.engine.strategy.signal_program import Settlement, trace_root
@@ -49,8 +50,8 @@ class LiveDecisionRecord:
 
 
 _OUTCOMES_BY_STAGED_KIND: dict[str, frozenset[str]] = {
-    "ENTER": frozenset({"enter_intent", "entered"}),
-    "EXIT": frozenset({"exit_intent", "exited"}),
+    "ENTER": ENTER_OUTCOMES,
+    "EXIT": EXIT_OUTCOMES,
 }
 
 EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(

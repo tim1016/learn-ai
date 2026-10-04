@@ -13,25 +13,15 @@
         (retryVendor)="retryVendorCatalog()"
       />
     </div>
-    <div class="field">
-      <label for="backfill-start">Backfill start date</label>
-      <input
-        id="backfill-start"
-        class="field__input"
-        type="date"
-        [value]="startTradingDate()"
-        [attr.min]="providerHistoryStart()"
-        (input)="onStart($event)"
-      />
-    </div>
-    <div class="field">
-      <label for="backfill-end">Backfill end date</label>
-      <input
-        id="backfill-end"
-        class="field__input"
-        type="date"
-        [value]="endTradingDate()"
-        (input)="onEnd($event)"
+    <div class="field field--dates">
+      <span>Backfill dates</span>
+      <app-date-range-picker
+        label="Backfill dates"
+        [from]="startTradingDate()"
+        [to]="endTradingDate()"
+        [bounds]="dateBounds()"
+        [sessionsOnly]="false"
+        (changed)="onDates($event)"
       />
     </div>
     <div class="field field--check">

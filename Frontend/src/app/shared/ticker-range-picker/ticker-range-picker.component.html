@@ -35,7 +35,8 @@
 
     @if (!hideSampling()) {
       <app-sampling-card
-        [(value)]="value"
+        [value]="value()"
+        (changed)="patch($event)"
         [availableResolutions]="availableResolutions()"
         [availableMultipliers]="availableMultipliers()"
         [sessionMode]="sessionMode()"
@@ -59,7 +60,7 @@
             <button
               type="button"
               class="advisory__btn"
-              (click)="onAdvisoryAction(a.action)"
+              (click)="patch(a.action.patch)"
             >
               {{ a.action.label }} →
             </button>

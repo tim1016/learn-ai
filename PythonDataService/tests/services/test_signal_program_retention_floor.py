@@ -98,9 +98,10 @@ def test_source_bar_stream_covers_warmup_plus_one_open_cycle(key: str, overrides
 
 @pytest.mark.parametrize(("key", "overrides"), _SEALED_POINTS)
 def test_receipt_window_covers_one_open_cycle(key: str, overrides: dict[str, int]) -> None:
-    """Replay restages an EXIT a crash left staged only while the ENTER that
-    opened its position is still in the receipt read: a rotated-out ENTER is
-    replayed as discarded, the replay stays flat, and the EXIT is never named."""
+    """Inside the window replay reapplies every decision a run made. Older
+    than it, replay reads one: the ENTER of a position still open where the
+    window starts (#2859). So a cycle that fits the window is replayed whole,
+    refusals and all, and only a longer one rests on that single read."""
     registration = _STRATEGY_REGISTRY[key]
     contract = registration.signal_program_contract
     assert contract is not None

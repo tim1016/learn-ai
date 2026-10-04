@@ -317,6 +317,29 @@ ledger holds an attestation that did not take effect. For this one state the
 "never out-of-band" consequence above is narrowed: the operator first looks
 at Alpaca, then acts through the Clerk.
 
+A closing order that executed where no read of orders shows it is caught only
+by Alpaca's position, set against the Clerk's records. So "no such order"
+judges every order in the symbol that the Clerk did not place, sent since the
+closing order was created, by its side. One on the other side that filled
+anything refuses: only a trade on the other side can offset the closing
+order's own and leave the position agreeing with the records after it traded.
+One on the closing order's own side that has ended does not refuse, filled or
+not: it is what an operator leaves who closed the position by hand at Alpaca,
+and what it filled can only carry Alpaca's position further from the records,
+so it hides nothing. An order on either side that ended with nothing filled
+does not refuse. Each order taken is recorded on the attestation. A position
+that differs from the Clerk's records is taken only under an open
+`POSITION_DRIFT` that names the symbol, and the operator then writes the
+missing shares off. The Clerk reads the symbol's orders before the positions
+and once more after them, and refuses when the later read shows an order, a
+state or a filled quantity the earlier did not: no fill is taken that the
+position lacks.
+
+After "no such order" is taken under a recorded difference, the watchdog
+sends nothing while the position differs. The sale at a bot's scheduled end
+is given the same check by a separate change (#2854 item 8), and this action
+is offered on no operator surface before that change lands.
+
 Known gap: an order Alpaca answered under another client order id cannot be
 taken up yet. "No such order" rests on the Clerk's own read of that order.
 While it is working neither attestation settles the EXIT; once it has ended

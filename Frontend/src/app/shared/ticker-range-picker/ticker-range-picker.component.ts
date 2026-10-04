@@ -9,7 +9,6 @@ import { TimeWindowCardComponent } from './parts/time-window-card.component';
 import {
   computeAdvisories,
   type Advisory,
-  type AdvisoryAction,
   type Resolution,
   type TickerOption,
   type TickerRange,
@@ -83,8 +82,8 @@ export class TickerRangePickerComponent {
 
   readonly advisories = computed<readonly Advisory[]>(() => computeAdvisories(this.value()));
 
-  /** Applies an advisory's one-click patch to ``value``. */
-  onAdvisoryAction(action: AdvisoryAction): void {
-    this.value.set({ ...this.value(), ...action.patch });
+  /** Merges a change into the value held now: an advisory's one-click patch, or what the sampling card set. */
+  protected patch(change: Partial<TickerRange>): void {
+    this.value.set({ ...this.value(), ...change });
   }
 }

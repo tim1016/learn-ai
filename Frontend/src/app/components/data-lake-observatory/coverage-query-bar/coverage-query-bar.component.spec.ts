@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -120,15 +121,27 @@ describe('CoverageQueryBarComponent', () => {
   });
 
   it('refuses an inverted window', async () => {
-    const { applied } = await renderBar();
+    const { applied, fixture } = await renderBar();
 
-    fireEvent.input(screen.getByLabelText('Start trading date'), {
-      target: { value: '2026-05-30' },
-    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2026-05-30' } });
+    await fixture.whenStable();
 
     expect(screen.getByText('The start date is after the end date.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Load coverage' }));
     expect(applied).not.toHaveBeenCalled();
+  });
+
+  it('queries the window as typed when Enter is pressed in a date field (#2858)', async () => {
+    const { applied, fixture } = await renderBar();
+    const start = screen.getByRole<HTMLInputElement>('textbox', { name: 'Start date' });
+
+    // Enter submits the form. The typed date is taken first, whether or not the browser reports a change before it submits.
+    await userEvent.clear(start);
+    await userEvent.type(start, '2026-05-19{Enter}');
+    await fixture.whenStable();
+
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(applied).toHaveBeenCalledWith(expect.objectContaining({ startTradingDate: '2026-05-19', endTradingDate: '2026-05-22' }));
   });
 
   it('accepts a window exactly at the range cap', async () => {

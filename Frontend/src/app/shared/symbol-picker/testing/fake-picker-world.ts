@@ -17,13 +17,15 @@ import {
   fakeTickerCatalog,
   provideFakeTickerCatalog,
 } from '../../ticker-catalog/testing/fake-ticker-catalog';
+import { HeldGapsService } from '../../ticker-catalog/held-gaps.service';
 import { SymbolPickerComponent } from '../symbol-picker.component';
 
 /**
  * The test world a host spec needs to render anything that embeds the
  * picker family: a fake lake catalog, a fake vendor catalog, a fake
- * coverage gate, and a fake trading calendar and provider history for the
- * date picker, so no spec mounts the real HTTP/gate chain by accident.
+ * coverage gate, a fake trading calendar and provider history for the
+ * date picker, and no known gaps in the held span, so no spec mounts the
+ * real HTTP/gate chain by accident.
  *
  * `provideFleetDirectory` is the precedent: one composition point per
  * cross-cutting fake, instead of every spec re-stating the trio.
@@ -67,6 +69,8 @@ export function fakePickerWorld(
       provideFakeVendorCatalog(vendor),
       provideFakeEnsureCoverage(coverage),
       ...provideFakeDateWorld(),
+      // No gaps are known unless a spec provides its own: the real service reads the coverage endpoint.
+      { provide: HeldGapsService, useValue: { gapsFor: () => null, reload: () => undefined } },
     ],
   };
 }

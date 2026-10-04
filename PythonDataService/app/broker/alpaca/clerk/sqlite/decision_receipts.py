@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -68,6 +69,13 @@ QUARANTINE_OUTCOME: DecisionOutcome = "decision_bar_quarantined"
 # when its bucket was decided -- so the only one that can sit out of bar
 # order (#2850).
 CRASH_CANDIDATE_OUTCOME: DecisionOutcome = "candidate_uncaptured_at_crash"
+
+# Named for the same reason: these are the outcomes a strategy's position
+# moved on, which a Resume's replay reapplies, the replay proof aligns on and
+# the store reads to find the position still open at the start of its window
+# (#2859).
+ENTER_OUTCOMES: frozenset[DecisionOutcome] = frozenset({"enter_intent", "entered"})
+EXIT_OUTCOMES: frozenset[DecisionOutcome] = frozenset({"exit_intent", "exited"})
 
 
 class DecisionReceipt(BaseModel):
@@ -457,14 +465,7 @@ def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | No
     """
     if not window or window[0].seq == 1:
         return None
-    oldest_decided = next(
-        (
-            receipt
-            for receipt in window
-            if receipt.intent_id is not None and receipt.outcome != CRASH_CANDIDATE_OUTCOME
-        ),
-        None,
-    )
+    oldest_decided = next((receipt for receipt in window if _written_when_decided(receipt)), None)
     if oldest_decided is not None:
         close_ms = json.loads(oldest_decided.facts_json).get("decision_bar_close_ms")
         if isinstance(close_ms, int):
@@ -479,6 +480,102 @@ def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | No
         },
     )
     return None
+
+
+def run_first_closes_ms(receipts: Sequence[DecisionReceiptResource]) -> frozenset[int]:
+    """The decision-bar close of every run's first decision in ``receipts``, but the first run's (#2859).
+
+    ``receipts`` is in sequence order. A run starts flat: the runner drops
+    whatever position its warmup rebuilt before it takes its first live bar,
+    and that bar belongs to the first bucket the run decides. A Resume that
+    replays these decisions drops the position the run before it left at
+    that bucket, and no earlier: the earlier run keeps its position up to
+    there, through the bucket a crash may have left it staging.
+
+    A run is read from the run id its own decisions carry, never from a gap
+    in time. A row :func:`rotated_out_before_ms` passes over was not written
+    when its bucket was decided, so it does not say which run decided that
+    bucket; a row that names no run or no bar close is not evidence of
+    either. The first run in ``receipts`` is left out: nothing here says
+    where it started.
+
+    A run that receipted no decision leaves no boundary here.
+    """
+    closes: set[int] = set()
+    deciding_run: str | None = None
+    for receipt in receipts:
+        if not _written_when_decided(receipt):
+            continue
+        facts = json.loads(receipt.facts_json)
+        run = _lifecycle_run_id(facts.get("run_id"), strategy_instance_id=receipt.strategy_instance_id)
+        close_ms = facts.get("decision_bar_close_ms")
+        if run is None or not isinstance(close_ms, int):
+            continue
+        if deciding_run is not None and run != deciding_run:
+            closes.add(close_ms)
+        deciding_run = run
+    return frozenset(closes)
+
+
+def _entry_held_into(
+    window: Sequence[DecisionReceiptResource],
+    older: Sequence[DecisionReceiptResource],
+) -> DecisionReceiptResource | None:
+    """The ENTER among ``older`` whose position was still open where ``window`` starts (#2859).
+
+    ``older`` is the newest rows stored from before ``window``, in sequence
+    order. Only the newest ENTER or EXIT among them matters: an EXIT is
+    taken as a close, whatever came before it
+    (:meth:`SqliteDecisionReceipts.entry_held_into` says what that gives
+    up). An ENTER is still open
+    at the window's start only when the run that made it also made the
+    window's oldest decision -- any other run started flat after it. When
+    either row names no run that cannot be shown, and nothing is returned.
+    """
+    at_window_start = next((receipt for receipt in window if _written_when_decided(receipt)), None)
+    last_moved_on = _last_moved_on(older)
+    if at_window_start is None or last_moved_on is None or last_moved_on.outcome not in ENTER_OUTCOMES:
+        return None
+    entering_run = _run_of(last_moved_on)
+    if entering_run is None or entering_run != _run_of(at_window_start):
+        return None
+    return last_moved_on
+
+
+def _last_moved_on(receipts: Sequence[DecisionReceiptResource]) -> DecisionReceiptResource | None:
+    """The newest decision in ``receipts`` the position moved on: an ENTER or an EXIT."""
+    return next(
+        (
+            receipt
+            for receipt in reversed(receipts)
+            if receipt.intent_id is not None and receipt.outcome in ENTER_OUTCOMES | EXIT_OUTCOMES
+        ),
+        None,
+    )
+
+
+def _run_of(receipt: DecisionReceiptResource) -> str | None:
+    """The lifecycle run ``receipt`` names, or ``None`` when it names none."""
+    return _lifecycle_run_id(
+        json.loads(receipt.facts_json).get("run_id"),
+        strategy_instance_id=receipt.strategy_instance_id,
+    )
+
+
+def _written_when_decided(receipt: DecisionReceiptResource) -> bool:
+    """Whether ``receipt`` was written when its bucket was decided, by the run that decided it."""
+    return receipt.intent_id is not None and receipt.outcome != CRASH_CANDIDATE_OUTCOME
+
+
+def _lifecycle_run_id(run_id: object, *, strategy_instance_id: str) -> str | None:
+    """The lifecycle run a receipt names, whichever writer wrote it.
+
+    The runner records the lifecycle run id; the Clerk records its own run
+    id on an effect, ``<instance>:<lifecycle run>``.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    return run_id.removeprefix(f"{strategy_instance_id}:")
 
 
 def _bar_ref(facts_json: str) -> str | None:
@@ -613,12 +710,121 @@ class SqliteDecisionReceipts:
         (#1740). Older ``protected_*`` rows are not returned: a Resume does
         replay buckets older than this window (#2314), and it leaves them
         out of crash-candidate flagging rather than reading their
-        dispositions (#2850).
+        dispositions (#2850). The one older disposition it does read is
+        :meth:`entry_held_into`.
         """
         return self._repository.decision_receipt_tail(
             strategy_instance_id=self._strategy_instance_id,
             limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
         )
+
+    def ran_before(self, lifecycle_run_id: str) -> bool:
+        """Whether the Clerk has a run of this instance on record besides ``lifecycle_run_id`` (#2859).
+
+        A run is recorded before its runner can exist, so one that died on
+        its first decision is on record though it left no receipt.
+        """
+        return self._repository.strategy_ran_before(
+            strategy_instance_id=self._strategy_instance_id,
+            lifecycle_run_id=lifecycle_run_id,
+        )
+
+    def entry_held_into(
+        self, window: Sequence[DecisionReceiptResource]
+    ) -> DecisionReceiptResource | None:
+        """The ENTER still open where ``window`` starts, when it is older than the window (#2859).
+
+        ``window`` is one :meth:`retained_window` read. An ENTER receipt is
+        protected, so it stays stored after the window has moved past it.
+        Without it a Resume replays the window flat, never restages the EXIT
+        of a position held for longer than the window, and a crash that left
+        that EXIT staged goes unnamed.
+
+        The read is bounded: the newest ``MAX_DECISION_RECEIPTS_PER_STRATEGY``
+        rows stored from before the window, which are protected rows only
+        (the prune keeps no ordinary row there). A position held through
+        more refusals than that is not found, and that is logged.
+
+        An ENTER receipt alone does not say a position was opened: the Clerk
+        writes it when it accepts the ENTER and never amends it. So the
+        ENTER's effect is read with it (:meth:`_entered`), and an ENTER whose
+        effect ended failed is not returned.
+
+        An EXIT's effect is not read: every EXIT is taken as a close. An EXIT
+        refused as it is sent ends failed, the runner is answered as for a
+        refusal and the run goes on holding. But an EXIT that is sent,
+        committed by the runner and ended unfilled afterwards ends failed
+        too, with the run flat in its own state. The effect does not say
+        which. The one stored fact that does, the holding a decision's
+        explanation records, is display evidence (ADR 0043), which replay
+        does not read. What this gives up: a position still held after an
+        EXIT refused as it was sent is replayed flat, as every position older
+        than the window was before this read, and a crash that left its EXIT
+        staged goes unnamed. Passing a failed EXIT over would instead replay
+        a position the run had closed, and name an EXIT no live run staged.
+        """
+        if not window or window[0].seq == 1:
+            return None
+        older = self._repository.decision_receipt_tail(
+            strategy_instance_id=self._strategy_instance_id,
+            limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
+            before_seq=window[0].seq,
+        )
+        held = _entry_held_into(window, older)
+        if (
+            held is None
+            and len(older) == MAX_DECISION_RECEIPTS_PER_STRATEGY
+            and _last_moved_on(older) is None
+        ):
+            logger.warning(
+                "no entry or exit among the newest receipts stored before the retained window",
+                extra={
+                    "action": "decision_receipt_held_entry_unknown",
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "first_read_seq": older[0].seq,
+                    "first_retained_seq": window[0].seq,
+                },
+            )
+        return held if held is not None and self._entered(held) else None
+
+    def _entered(self, entry: DecisionReceiptResource) -> bool:
+        """Whether the ENTER that ``entry`` receipts has an effect on record that did not end failed (#2859).
+
+        The Clerk can accept an ENTER and then not send it: its own check
+        just before broker contact refuses it, or the broker does. The
+        effect ends failed, the runner is answered as it is for a refusal
+        and discards the candidate, and the strategy stays flat -- while the
+        receipt, written at acceptance, still reads ``enter_intent``.
+        Replayed as an entry, it stages an EXIT no live run staged.
+
+        An ENTER whose order was sent and ended unfilled afterwards ends
+        failed too, though the runner had committed it and the run went on
+        holding it in its own state. Replay takes that one as flat as well,
+        which is how it replayed every ENTER older than the window before
+        this read existed.
+
+        The read is one effect row by its id. A receipt that names no
+        effect on record does not show a position either: that is logged,
+        and the ENTER is not returned.
+        """
+        effect_operation_id = json.loads(entry.facts_json).get("effect_operation_id")
+        effect = (
+            self._repository.effect_operation(effect_operation_id)
+            if isinstance(effect_operation_id, str)
+            else None
+        )
+        if effect is None:
+            logger.warning(
+                "the entry stored before the retained window names no effect on record",
+                extra={
+                    "action": "decision_receipt_held_entry_effect_unknown",
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "entry_seq": entry.seq,
+                    "effect_operation_id": effect_operation_id,
+                },
+            )
+            return False
+        return effect.state not in FAILED_EFFECT_STATES
 
 
 def _read_limit(requested: int) -> int:

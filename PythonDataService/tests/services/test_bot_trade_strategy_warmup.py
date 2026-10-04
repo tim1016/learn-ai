@@ -151,7 +151,7 @@ async def test_replay_warmup_bars_requests_the_larger_contract_lookback_from_the
         captured_decisions=None,
     )
 
-    assert result is None
+    assert result == []
     assert feed.recorded_lookback_days == 7
 
 
@@ -615,7 +615,7 @@ def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_c
                 facts={"bar_ref": f"SPY@{index}", "reason_code": "NO_ACTION"},
             )
 
-        captured = captured_decision_outcomes(receipts)
+        captured = captured_decision_outcomes(receipts, run_id="run-1")
     finally:
         repo.close()
 

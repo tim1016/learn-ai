@@ -1,3 +1,4 @@
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { ActivatedRoute, provideRouter } from '@angular/router';
 import { render, screen, waitFor } from '@testing-library/angular';
 import { of } from 'rxjs';
@@ -15,6 +16,7 @@ describe('WalkForwardStudyPageComponent', () => {
     const view = await render(WalkForwardStudyPageComponent, {
       providers: [
         provideRouter([]),
+        ...fakePickerWorld().providers,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(new Map([['search', 'grid-1']])) } },
         { provide: GridSearchService, useValue: { loadStrategies: vi.fn(async () => []), get: gridGet, preflight: vi.fn() } },
         { provide: WalkForwardStudyService, useValue: { list, get: vi.fn(async () => study), preflight: vi.fn() } },

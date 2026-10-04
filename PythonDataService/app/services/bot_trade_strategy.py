@@ -578,7 +578,7 @@ async def _warm_up_signal_strategy(
     *,
     captured_decisions: CapturedDecisions | None,
     record_before_start: BeforeStartSink | None = None,
-) -> StrategyEvaluation | None:
+) -> list[StrategyEvaluation]:
     """Replay recent closed bars so indicators are ready before live
     decisions begin, reapplying each bucket's own known Clerk disposition
     so position-lifecycle state carries forward correctly (FR-016).
@@ -586,7 +586,7 @@ async def _warm_up_signal_strategy(
     The replay itself -- indicator/lifecycle reconstruction and
     crash-candidate detection -- lives in
     ``bot_trade_strategy_warmup.replay_warmup_bars``; see that function's
-    docstring for the full FR-016 rationale. This wrapper only shapes a
+    docstring for the full FR-016 rationale. This wrapper only shapes each
     recovered candidate into the adapter's own ``StrategyEvaluation``
     surface, which is why the warmup module never needs to import
     anything back from this one (see the module docstring on
@@ -600,9 +600,13 @@ async def _warm_up_signal_strategy(
         captured_decisions=captured_decisions,
         record_before_start=record_before_start,
     )
-    if uncaptured is None:
-        return None
-    candidate_bar, candidate_stage = uncaptured
+    return [_crash_recovered_evaluation(bar, stage) for bar, stage in uncaptured]
+
+
+def _crash_recovered_evaluation(
+    candidate_bar: MarketDataBar, candidate_stage: EvaluationStage
+) -> StrategyEvaluation:
+    """One bucket a crash left staged, as the evaluation the runner records and discards."""
     intent = candidate_stage.decision.intent
     assert intent is not None  # narrowed by replay_warmup_bars's own `is not None` check
     return StrategyEvaluation(
@@ -641,7 +645,7 @@ async def _signal_strategy_evaluations(
     strategy.ctx = context
     strategy.initialize()
     context.set_signal_intent_executor(_RecordingSignalIntentExecutor())
-    uncaptured_candidate = await _warm_up_signal_strategy(
+    uncaptured_candidates = await _warm_up_signal_strategy(
         runtime,
         context,
         feed,
@@ -653,7 +657,7 @@ async def _signal_strategy_evaluations(
     # the first place a mis-shaped decision clock shows up. Drain here too, or
     # a run that never reaches a live bar would never report why.
     runtime.surface_quarantines(binding)
-    if uncaptured_candidate is not None:
+    for uncaptured_candidate in uncaptured_candidates:
         yield uncaptured_candidate
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
@@ -906,7 +910,7 @@ async def run_trade_bot(
         async for evaluation in strategy_evaluations(
             binding,
             run_feed,
-            captured_decisions=captured_decision_outcomes(decision_receipts),
+            captured_decisions=captured_decision_outcomes(decision_receipts, run_id=binding.run_id),
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
@@ -1375,7 +1379,7 @@ async def run_dry_run_bot(
         async for evaluation in strategy_evaluations(
             binding,
             retained_feed,
-            captured_decisions=captured_decision_outcomes(decision_receipts),
+            captured_decisions=captured_decision_outcomes(decision_receipts, run_id=binding.run_id),
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),

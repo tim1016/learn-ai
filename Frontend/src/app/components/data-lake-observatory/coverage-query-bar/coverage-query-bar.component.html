@@ -17,24 +17,15 @@
       (retryVendor)="retryVendorCatalog()"
     />
   </div>
-  <div class="field">
-    <label for="lake-start">Start trading date</label>
-    <input
-      id="lake-start"
-      class="field__input"
-      type="date"
-      [value]="draft().startTradingDate"
-      (input)="onStart($event)"
-    />
-  </div>
-  <div class="field">
-    <label for="lake-end">End trading date</label>
-    <input
-      id="lake-end"
-      class="field__input"
-      type="date"
-      [value]="draft().endTradingDate"
-      (input)="onEnd($event)"
+  <div class="field field--dates">
+    <span>Trading dates</span>
+    <app-date-range-picker
+      label="Trading dates"
+      [from]="draft().startTradingDate"
+      [to]="draft().endTradingDate"
+      [ranges]="quickRanges"
+      [sessionsOnly]="false"
+      (changed)="onDates($event)"
     />
   </div>
   <div class="field">

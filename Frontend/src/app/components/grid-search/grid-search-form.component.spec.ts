@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { DateBounds } from '../../shared/date-picker';
+import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
+import { etIsoDate } from '../../shared/date/et-midnight';
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { HeldGapsService } from '../../shared/ticker-catalog';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { sweepableStrategy as strategy } from './testing/fixtures';
 import { GridSearchFormComponent } from './grid-search-form.component';
@@ -21,7 +26,7 @@ const PLAN: GridSearchPreflight = {
 async function renderForm(strategies: StrategyInfo[], service: Partial<GridSearchService>) {
   const view = await render(GridSearchFormComponent, {
     inputs: { strategies, preflightDebounceMs: 0 },
-    providers: [{ provide: GridSearchService, useValue: { preflight: vi.fn(async (_spec: GridSearchSpecRequest) => PLAN), launch: vi.fn(async (_spec: GridSearchSpecRequest) => 'job-1'), ...service } }],
+    providers: [...fakePickerWorld().providers, { provide: GridSearchService, useValue: { preflight: vi.fn(async (_spec: GridSearchSpecRequest) => PLAN), launch: vi.fn(async (_spec: GridSearchSpecRequest) => 'job-1'), ...service } }],
   });
   return view;
 }
@@ -116,7 +121,55 @@ describe('GridSearchFormComponent', () => {
     expect(spec?.symbol).toBe('SPY');
     expect(spec?.measure).toBe('sharpe_ratio');
     expect(spec?.min_trades).toBe(5);
-    expect(spec?.end_ms ?? 0).toBeGreaterThan(spec?.start_ms ?? 0);
+    // The window opens on the last 24 whole months the lake holds for SPY (held 2024-01-02 to 2026-09-18).
+    expect([etIsoDate(spec?.start_ms ?? 0), etIsoDate((spec?.end_ms ?? 0) - 1)]).toEqual(['2024-09-19', '2026-09-18']);
+  });
+
+  it("reads the gaps in the symbol's held span and counts them under the window (#2858)", async () => {
+    const gapsFor = vi.fn((_mode: string, symbol: string, bounds: DateBounds) =>
+      symbol === 'SPY' && bounds.max !== null ? { unheldMs: new Set(['2025-03-03', '2025-03-04'].map(sessionOpenMs)), problem: null } : null,
+    );
+    await render(GridSearchFormComponent, {
+      inputs: { strategies: [strategy()], preflightDebounceMs: 0 },
+      providers: [...fakePickerWorld().providers, { provide: HeldGapsService, useValue: { gapsFor } }, { provide: GridSearchService, useValue: { preflight: vi.fn(async () => PLAN), launch: vi.fn() } }],
+    });
+
+    await waitFor(() => expect(screen.getByText(/sessions, 2 not held/)).not.toBeNull());
+    expect(gapsFor).toHaveBeenCalledWith('polygon_split_adjusted', 'SPY', expect.objectContaining({ min: '2024-01-02', max: '2026-09-18' }), 'minute');
+  });
+
+  it('opens on as many whole months as a short history holds, and does not reopen a window the operator emptied (#2858)', async () => {
+    const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => PLAN);
+    // Held for a little over three months: 24 whole months do not fit, three do.
+    const world = fakePickerWorld([{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2026-06-10', lastHeld: '2026-09-18' }]);
+    const view = await render(GridSearchFormComponent, {
+      inputs: { strategies: [strategy()], preflightDebounceMs: 0 },
+      providers: [...world.providers, { provide: GridSearchService, useValue: { preflight, launch: vi.fn() } }],
+    });
+    await waitFor(() => expect(preflight).toHaveBeenCalled());
+    const spec = preflight.mock.lastCall?.[0];
+    expect([etIsoDate(spec?.start_ms ?? 0), etIsoDate((spec?.end_ms ?? 0) - 1)]).toEqual(['2026-06-19', '2026-09-18']);
+
+    const start = screen.getByRole<HTMLInputElement>('textbox', { name: 'Start date' });
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    fireEvent.change(start, { target: { value: '' } });
+    fireEvent.change(end, { target: { value: '' } });
+    await view.fixture.whenStable();
+
+    expect([start.value, end.value]).toEqual(['', '']);
+  });
+
+  it('holds the launch while a date field holds no usable date, and says to pick the dates (#2858)', async () => {
+    const preflight = vi.fn(async (_spec: GridSearchSpecRequest) => PLAN);
+    await renderForm([strategy()], { preflight });
+    await waitFor(() => expect(preflight).toHaveBeenCalled());
+    const asked = preflight.mock.calls.length;
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2024-09' } });
+
+    await waitFor(() => expect(screen.getByText('Pick the dates to search over.')).not.toBeNull());
+    expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(preflight.mock.calls.length).toBe(asked);
   });
 
   it('launches a decision-minute-open search that charges no fee unless asked (#2599, #2601)', async () => {
