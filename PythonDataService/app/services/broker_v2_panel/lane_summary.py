@@ -50,6 +50,7 @@ from app.broker.alpaca.clerk.sqlite.projections import project_uncertainties
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.scheduled_end import (
+    SCHEDULED_END_WAITS_FOR_OPERATOR,
     EndSaleWaiting,
     end_sale_waits_for_operator_words,
     end_sales_waiting_for_open,
@@ -132,7 +133,7 @@ async def lane_attention_read() -> LaneAttentionRead:
     ended uncleanly and that no check against Alpaca has since vouched
     for, the account's own standing (an authority that is
     not serving, or what the latest cached account observation says), a bot's
-    end sale waiting for the next open or the operator, and an account that has not switched
+    end sale waiting for the next open or left to the operator, and an account that has not switched
     to budgets. A lane with no authority at all, or one awaiting the owner's
     activation, answers empty rather than unknown.
     """
@@ -254,7 +255,7 @@ def _end_sale_items(repository: ClerkSqliteRepository) -> list[LaneAttentionItem
     The owner chose to be told (grill 2026-09-29, "Alert bell too"): the bot
     reached its end while the market was closed, so the sale it scheduled
     waits for the open. The line clears the moment the sale is sent.
-    A sale waiting for the operator is a line too, until the bot is flat (#2854).
+    A sale left to the operator is a line too, until the bot is flat (#2854).
     Blocking: runs off the event loop.
     """
     now_ms = repository.clock()
@@ -285,7 +286,7 @@ def _end_sale_item(waiting: EndSaleWaiting, *, opens_at_ms: int, now_ms: int) ->
 def _end_sale_for_operator_item(waiting: EndSaleWaiting) -> LaneAttentionItem:
     sid = waiting.strategy_instance_id
     return LaneAttentionItem(
-        condition_id=f"end-sale-waits:{sid}", reason_code="SCHEDULED_END_WAITS_FOR_OPERATOR", kind="exit",
+        condition_id=f"end-sale-waits:{sid}", reason_code=SCHEDULED_END_WAITS_FOR_OPERATOR, kind="exit",
         severity="warning", strategy_instance_id=sid, symbol=waiting.symbol,
         headline=f"{sid} reached its end. {end_sale_waits_for_operator_words(waiting)}", action=_OPEN_BOT,
     )

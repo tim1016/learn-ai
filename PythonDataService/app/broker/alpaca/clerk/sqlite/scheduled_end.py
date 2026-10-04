@@ -87,6 +87,10 @@ logger = logging.getLogger(__name__)
 #: The ``operator_reason`` of the STOP the Clerk commits at a bot's end.
 SCHEDULED_END_REASON = "scheduled_end"
 
+#: The bell's line for an end whose sale the Clerk leaves to the operator
+#: (:func:`end_sales_waiting_for_operator`, #2854).
+SCHEDULED_END_WAITS_FOR_OPERATOR = "SCHEDULED_END_WAITS_FOR_OPERATOR"
+
 
 @dataclass(frozen=True)
 class ScheduledEnd:
@@ -269,15 +273,21 @@ async def finish_bots_at_their_end(
             )
 
 
-def _sales_owed(repo: ClerkSqliteRepository, schedule: BotEndSchedule, end: ScheduledEnd) -> list[OwedClose]:
+def _sales_owed(
+    repo: ClerkSqliteRepository, schedule: BotEndSchedule, end: ScheduledEnd, *, left_to_operator: bool = False
+) -> list[OwedClose]:
     """What a SELL end still has to sell: nothing while the bot's run is ACTIVE, or once the end is gone.
 
     The end is read again right before the sale: the owner's Stop in the
     same minute cancels it (Stop keeps the shares), and an edit replaces it.
-    Nothing either while the Clerk has stopped exiting the bot by itself (#2854).
+    Nothing either while the Clerk has stopped exiting the bot by itself
+    (#2854): those sales are the operator's, and ``left_to_operator`` asks
+    for exactly them instead.
     """
     sid = end.strategy_instance_id
-    if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]) or automatic_exit_stopped(repo, sid):
+    if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]):
+        return []
+    if automatic_exit_stopped(repo, sid) != left_to_operator:
         return []
     return closes_owed_under(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
 
@@ -349,7 +359,7 @@ def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:
 
 @dataclass(frozen=True)
 class EndSaleWaiting:
-    """A bot's end sale not yet sent: held for the next regular open, or waiting for the operator."""
+    """A bot's end sale not sent: held for the next regular open, or left to the operator."""
 
     strategy_instance_id: str
     symbol: str
@@ -391,21 +401,23 @@ def end_sales_waiting_for_operator(
 ) -> list[EndSaleWaiting]:
     """Each due end sale not accepted because the Clerk stopped exiting its bot's position by itself (#2854).
 
-    What :func:`_sales_owed` withholds, read from the end schedule and the
-    ledger with nothing recorded for it: the wait ends once the bot is flat or
-    its end is cancelled. Every live bot's, unless ``strategy_instance_ids`` names them.
+    What :func:`_sales_owed` leaves to the operator, by its own rule, read from
+    the end schedule and the ledger with nothing recorded for it: the wait
+    ends once the bot is flat or its end is cancelled. Every live bot's,
+    unless ``strategy_instance_ids`` names them.
     """
     schedule = installed_bot_end_schedule()
     if schedule is None or is_synthetic_account_id(repo.account_id):
         return []
     sids = _live_registrations(repo) if strategy_instance_ids is None else strategy_instance_ids
-    stopped = [sid for sid in sids if automatic_exit_stopped(repo, sid) and repo.active_run(sid) is None]
+    # Asked on every poll of the bell: the runner is read only for a bot the Clerk has stopped exiting.
+    stopped = [sid for sid in sids if automatic_exit_stopped(repo, sid)]
     now_ms = repo.clock()
     return [
-        EndSaleWaiting(end.strategy_instance_id, close.symbol, repo.position(end.strategy_instance_id, close.symbol))
+        EndSaleWaiting(close.strategy_instance_id, close.symbol, repo.position(close.strategy_instance_id, close.symbol))
         for end in schedule.pending_ends(stopped)
         if end.end.end_action == "SELL" and end.end.end_at_ms <= now_ms
-        for close in closes_owed_under(repo, end.strategy_instance_id, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+        for close in _sales_owed(repo, schedule, end, left_to_operator=True)
     ]
 
 
@@ -426,6 +438,7 @@ def end_sale_waits_for_operator_words(waiting: EndSaleWaiting) -> str:
 
 __all__ = [
     "SCHEDULED_END_REASON",
+    "SCHEDULED_END_WAITS_FOR_OPERATOR",
     "BotEndSchedule",
     "EndSaleWaiting",
     "ScheduledEnd",
