@@ -1,4 +1,6 @@
-import { HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   SqliteExtendedLimitPricing,
@@ -6,7 +8,9 @@ import type {
   SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
+import { resourceTarget, withCommand } from '../../../../fleet/resource-target';
 import { fakeBotPanelView, fakePanelAction } from '../../../../testing/bot-panel-fixtures';
+import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { PanelActionResult } from '../lib/broker-v2-panel.types';
 import {
   flattenUnderway,
@@ -144,6 +148,44 @@ describe('the flatten sequence', () => {
     expect(reports.at(-1)).toEqual([
       'sell', 'running', 'Outside regular hours this sale needs a limit price. Set it below.',
     ]);
+  });
+
+  it('stops on the lane’s own refusal of Reconcile, after one request under its key (#2874)', async () => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    const service = TestBed.inject(BrokerV2PanelService);
+    const http = TestBed.inject(HttpTestingController);
+    const lane = resourceTarget('alpaca', 'clrk_spec', {
+      accountId: 'PA9', entityId: 'spy-a', bindingGeneration: 3, routingEpoch: 4,
+    });
+    const bot = '/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-a';
+    const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const reports: [string, string, string | null][] = [];
+    const checkPlan = vi.fn();
+
+    // The page's own binding: the panel read, and each command under a key of its own.
+    const outcome = runFlattenSequence({
+      readPanel: () => service.getPanel(lane, 'spy-a'),
+      runAction: (action) => service.runBotAction(withCommand(lane, 'bot_action', 'reconcile-key-1'), 'spy-a', action),
+      checkPlan,
+      report: (step, state, message) => reports.push([step, state, message]),
+    }, { symbol: 'SPY', quantity: 3 });
+    http.expectOne(`${bot}/panel`).flush(fakeBotPanelView({ actions: [fakePanelAction('reconcile_now')] }));
+    await tick();
+    http.expectOne(`${bot}/actions/quiesce`).flush(
+      { detail: { outcome: 'conflict', message: 'The custody state changed.', why: 'Refresh, then flatten again.' } },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await tick();
+
+    // Nothing follows the refusal: no second Reconcile under the spent key,
+    // which the coordinator would answer in place of the lane.
+    http.verify();
+    await expect(outcome).resolves.toMatchObject({
+      kind: 'failed', step: 'reconcile',
+      rejection: { outcome: 'conflict', message: 'The custody state changed.', why: 'Refresh, then flatten again.' },
+    });
+    expect(reports).toEqual([['reconcile', 'running', null], ['reconcile', 'failed', 'The custody state changed.']]);
+    expect(checkPlan).not.toHaveBeenCalled();
   });
 });
 

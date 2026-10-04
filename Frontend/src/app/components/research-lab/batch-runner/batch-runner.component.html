@@ -26,6 +26,7 @@
   <!-- Ticker universe + dates + sampling — owned by the multi-ticker picker. -->
   <app-multi-ticker-range-picker
     [(value)]="range"
+    [showAutoFetch]="false"
     [availableResolutions]="availableResolutions"
     [availableMultipliers]="availableMultipliers"
     title="Cross-sectional data"

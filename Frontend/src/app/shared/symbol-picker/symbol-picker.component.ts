@@ -18,8 +18,8 @@ import type { TickerOption, TickerRange } from '../ticker-range-picker/ticker-ra
  * badge and the ensure-coverage gate. A host that owns its membership
  * outright passes `universe` instead: a closed list, never gated (ADR 0066).
  * The `TickerRange` projection pins
- * `from`/`to` to placeholders so the card's snap-to-held-window behavior is
- * a no-op here: only the symbol crosses back.
+ * `from`/`to` to placeholders and turns the card's window move off: only the
+ * symbol crosses back.
  */
 @Component({
   selector: 'app-symbol-picker',
@@ -31,6 +31,7 @@ import type { TickerOption, TickerRange } from '../ticker-range-picker/ticker-ra
       [adjustmentMode]="adjustmentMode()"
       [label]="label()"
       [universe]="universe()"
+      [movesWindow]="false"
       [value]="projection()"
       (valueChange)="onRangePatch($event)"
     />
