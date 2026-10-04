@@ -87,7 +87,7 @@ class GoldenSearchRefusal(ValueError):
         kind: RefusalKind = "invalid",
         field: str | None = None,
         study: StudyRow | None = None,
-        refusals: tuple[dict[str, str | None], ...] = (),
+        refusals: tuple[dict[str, Any], ...] = (),
     ) -> None:
         super().__init__(message)
         self.code = code

@@ -28,10 +28,16 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 
 
 class FoldPlanError(ValueError):
-    """The range, training length and test length do not produce whole folds."""
+    """The range, training length and test length do not produce whole folds.
 
-    def __init__(self, message: str, *, nearest_valid_ends: tuple[date, ...] = ()) -> None:
-        super().__init__(message)
+    ``nearest_valid_ends`` are exclusive ends the planner accepts. The message
+    names them as inclusive end dates; ``reason`` is the refusal without them,
+    for a caller whose form shows the boundary another way.
+    """
+
+    def __init__(self, reason: str, *, nearest_valid_ends: tuple[date, ...] = ()) -> None:
+        super().__init__(reason + _named(nearest_valid_ends))
+        self.reason = reason
         self.nearest_valid_ends = nearest_valid_ends
 
 
@@ -79,37 +85,49 @@ def _inclusive(end_exclusive: date) -> str:
     return (end_exclusive - timedelta(days=1)).isoformat()
 
 
+def _named(ends: tuple[date, ...]) -> str:
+    """The valid ends as a refusal names them; nothing when it has none to name."""
+    if not ends:
+        return ""
+    if len(ends) == 1:
+        return f"; the earliest valid end date (inclusive) is {_inclusive(ends[0])}"
+    return "; nearest valid end dates (inclusive): " + ", ".join(_inclusive(day) for day in ends)
+
+
+def _whole_fold_ends(start: date, months: int, training_months: int, test_months: int) -> tuple[date, ...]:
+    """The ends nearest ``months`` after ``start`` that divide into whole folds.
+
+    The last one at or before it and the first one after; only the earliest
+    valid end when no fold fits before it.
+    """
+    folds_below = (months - training_months) // test_months
+    counts = (folds_below, folds_below + 1) if folds_below >= 1 else (1,)
+    return tuple(add_months(start, training_months + folds * test_months) for folds in counts)
+
+
 def plan_folds(*, start: date, end_exclusive: date, training_months: int, test_months: int) -> list[FoldPlan]:
     """Whole folds over ``[start, end_exclusive)``; refuses anything else, naming the nearest valid ends."""
     if training_months < 1 or test_months < 1:
         raise FoldPlanError("training and test lengths must be at least one month")
     total = whole_months_between(start, end_exclusive)
     if total is None:
-        below = max((m for m in range(1, 600) if add_months(start, m) <= end_exclusive), default=None)
-        nearest = tuple(add_months(start, m) for m in ((below, below + 1) if below else (1,)))
+        # Whole months alone are not enough: an end named here must pass the fold rule below too.
+        below = max((m for m in range(1, 600) if add_months(start, m) <= end_exclusive), default=0)
         raise FoldPlanError(
-            f"the range must be a whole number of months from {start.isoformat()}; nearest valid end dates (inclusive): "
-            + ", ".join(_inclusive(day) for day in nearest),
-            nearest_valid_ends=nearest,
+            f"the range must be a whole number of months from {start.isoformat()}",
+            nearest_valid_ends=_whole_fold_ends(start, below, training_months, test_months),
         )
     remaining = total - training_months
     if remaining < test_months:
-        needed = add_months(start, training_months + test_months)
         raise FoldPlanError(
-            f"{total} months leave no room for a single fold after {training_months} months of training and "
-            f"{test_months} months of test; the earliest valid end date (inclusive) is {_inclusive(needed)}",
-            nearest_valid_ends=(needed,),
+            f"{total} months leave no room for a single fold after {training_months} months of training and {test_months} months of test",
+            nearest_valid_ends=_whole_fold_ends(start, total, training_months, test_months),
         )
     folds_below = remaining // test_months
     if remaining % test_months != 0:
-        nearest = (
-            add_months(start, training_months + folds_below * test_months),
-            add_months(start, training_months + (folds_below + 1) * test_months),
-        )
         raise FoldPlanError(
-            f"{total} months do not divide into whole folds of {test_months} months after {training_months} "
-            f"months of training; nearest valid end dates (inclusive): {_inclusive(nearest[0])}, {_inclusive(nearest[1])}",
-            nearest_valid_ends=nearest,
+            f"{total} months do not divide into whole folds of {test_months} months after {training_months} months of training",
+            nearest_valid_ends=_whole_fold_ends(start, total, training_months, test_months),
         )
     plans: list[FoldPlan] = []
     for index in range(folds_below):

@@ -22986,6 +22986,16 @@
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "nearest_valid_ms": {
+            "description": "The nearest instants `field` would accept instead, when the server can name them; empty otherwise.",
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Nearest Valid Ms",
+            "type": "array"
           }
         },
         "required": [

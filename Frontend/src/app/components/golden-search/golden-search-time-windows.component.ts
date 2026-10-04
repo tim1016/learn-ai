@@ -1,11 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
-import { etIsoDate } from '../../shared/date/et-midnight';
 import { DateFieldComponent } from '../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
-import { dateProblemKey, numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
+import { dateProblemKey, numberProblemKey, shownDate, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
 import { dateInputId, numberInputId, type PlanProblem } from './golden-search-plan-problems';
 import type { GoldenSearchPreflight, ProtocolRequest } from './golden-search.types';
 
@@ -24,7 +23,8 @@ function percentAlong(ms: number, start: number, end: number): number {
 /**
  * The plan's time windows (#2696): the fold and final-test lengths in months
  * (the server lays the dates out from them), the three dates themselves with
- * the server's refusal of each under its field (#2858), and a bar showing
+ * the server's refusal of each under its field and the dates it would take
+ * instead (#2858), and a bar showing
  * development, the folds' test windows and the
  * sealed final test as the server laid them out, with the final test's
  * exposure and the warmup every run is primed with.
@@ -55,7 +55,13 @@ export class GoldenSearchTimeWindowsComponent {
   protected readonly exposureClaims = EXPOSURE_CLAIMS;
   protected readonly dates = computed(() => {
     const p = this.protocol();
-    return { development_start: etIsoDate(p.development_start_ms), final_start: etIsoDate(p.final_start_ms), final_end: etIsoDate(p.final_end_ms - 1) };
+    return { development_start: shownDate('development_start', p.development_start_ms), final_start: shownDate('final_start', p.final_start_ms), final_end: shownDate('final_end', p.final_end_ms) };
+  });
+  /** The dates the server would take instead of each one it refused; a click on one sets the date. */
+  protected readonly offers = computed(() => {
+    const refusals = this.refusals();
+    const offered = (field: ProtocolDateField): readonly string[] => refusals.filter((refusal) => refusal.target === dateInputId(field)).flatMap((refusal) => refusal.offers);
+    return { development_start: offered('development_start'), final_start: offered('final_start'), final_end: offered('final_end') };
   });
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */

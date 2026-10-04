@@ -41,7 +41,7 @@
       @for (offer of offers(); track offer.key) {
         <button
           type="button"
-          class="date-range__range"
+          class="date-control__choice date-range__range"
           [class.date-range__range--active]="active() === offer.key"
           [attr.aria-pressed]="active() === offer.key"
           [attr.aria-disabled]="offer.unavailable !== null"

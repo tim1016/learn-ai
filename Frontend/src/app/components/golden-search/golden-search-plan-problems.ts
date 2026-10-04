@@ -5,7 +5,7 @@
  * name, so the plan footer can take the trader straight to the field.
  */
 
-import { problemField, type KnobNumberField, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
+import { problemField, shownDate, type KnobNumberField, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
 import type { KnobPlan, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
 export interface PlanProblem {
@@ -13,6 +13,8 @@ export interface PlanProblem {
   readonly text: string;
   /** The id of the input to fix, or null when no single input owns the problem. */
   readonly target: string | null;
+  /** The dates the target would take instead, as its field shows them; empty when the server named none. */
+  readonly offers: readonly string[];
 }
 
 export const NUMBER_FIELD_LABELS: Readonly<Record<ProtocolNumberField, string>> = {
@@ -64,6 +66,14 @@ export function dateInputId(field: ProtocolDateField): string {
 export const FILL_MODE_INPUT_ID = 'gs-plan-fill-mode';
 export const PAIR_AUDITS_INPUT_ID = 'gs-plan-pair-audits';
 
+/** The date field that shows each interval instant the server names: development's end is the day the final test starts. */
+const REFUSAL_DATE_FIELDS: Readonly<Record<string, ProtocolDateField>> = {
+  development_start_ms: 'development_start',
+  development_end_ms: 'final_start',
+  final_start_ms: 'final_start',
+  final_end_ms: 'final_end',
+};
+
 /** The input each refusal field the server names belongs to; knob fields are resolved per knob. */
 export const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
   'policy.min_trades': numberInputId('min_trades'),
@@ -80,10 +90,7 @@ export const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
   'execution.commission_per_order': numberInputId('commission_per_order'),
   'execution.slippage_per_share': numberInputId('slippage_per_share'),
   'execution.fill_mode': FILL_MODE_INPUT_ID,
-  development_start_ms: dateInputId('development_start'),
-  development_end_ms: dateInputId('final_start'),
-  final_start_ms: dateInputId('final_start'),
-  final_end_ms: dateInputId('final_end'),
+  ...Object.fromEntries(Object.entries(REFUSAL_DATE_FIELDS).map(([field, date]) => [field, dateInputId(date)])),
   pair_audits: PAIR_AUDITS_INPUT_ID,
 };
 
@@ -121,13 +128,13 @@ export function unreadableProblems(problems: ReadonlyMap<string, string>, capabi
     const named = problemField(key);
     switch (named?.kind) {
       case 'knob':
-        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field) };
+        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field), offers: [] };
       case 'number':
-        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field) };
+        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field), offers: [] };
       case 'date':
-        return { key, text: `${DATE_FIELD_LABELS[named.field]}: ${message}`, target: dateInputId(named.field) };
+        return { key, text: `${DATE_FIELD_LABELS[named.field]}: ${message}`, target: dateInputId(named.field), offers: [] };
       default:
-        return { key, text: message, target: null };
+        return { key, text: message, target: null, offers: [] };
     }
   });
 }
@@ -138,5 +145,13 @@ export function refusalProblems(refusals: readonly ProtocolRefusal[], knobs: rea
     key: `${refusal.code}:${refusal.field ?? ''}:${refusal.message}`,
     text: refusal.message,
     target: refusalTarget(refusal.field, knobs),
+    offers: offeredDates(refusal),
   }));
+}
+
+/** The dates the server would take instead of the one it refused, as the refused date's field shows them. */
+function offeredDates(refusal: ProtocolRefusal): string[] {
+  const field = refusal.field === null ? undefined : REFUSAL_DATE_FIELDS[refusal.field];
+  // A data plane older than this page names no dates.
+  return field === undefined ? [] : (refusal.nearest_valid_ms ?? []).map((ms) => shownDate(field, ms));
 }

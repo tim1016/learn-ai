@@ -623,20 +623,31 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(field.getAttribute('aria-invalid')).toBe('false');
   });
 
-  it("shows the server's refusal of a date under the date it names, where the fold rule can be read (#2858)", async () => {
+  it("shows the server's refusal of a date under the date it names, with the dates it would take one click away (#2858)", async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
-    const message = '45 months do not divide into whole folds of 2 months after 6 months of training; nearest valid end dates (inclusive): 2025-09-30, 2025-11-30';
-    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'FOLDS_INVALID', field: 'development_end_ms', message }] }));
+    const message = '45 months do not divide into whole folds of 2 months after 6 months of training; the final test can start on 2025-10-01 or 2025-12-01';
+    const nearest_valid_ms = [etMidnightMs('2025-10-01'), etMidnightMs('2025-12-01')];
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'FOLDS_INVALID', field: 'development_end_ms', message, nearest_valid_ms }] }));
 
     fireEvent.change(screen.getByLabelText('Development from'), { target: { value: '2022-01-01' } });
 
-    const boundary = screen.getByLabelText('Final test from (development ends the day before)');
+    const boundary = screen.getByLabelText<HTMLInputElement>('Final test from (development ends the day before)');
     await waitFor(() => expect(boundary.getAttribute('aria-invalid')).toBe('true'));
     const note = view.container.querySelector(`[id="${boundary.getAttribute('aria-describedby')}"]`);
     expect(note?.textContent).toContain(message);
     expect(screen.getByLabelText('Development from').getAttribute('aria-invalid')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Use 2025-10-01' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use 2025-12-01' }));
+
+    // The offered date is the field's own: the day the final test starts, which is also where development ends.
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].final_start_ms).toBe(etMidnightMs('2025-12-01')));
+    expect(service.preflight.mock.lastCall?.[0].development_end_ms).toBe(etMidnightMs('2025-12-01'));
+    expect(boundary.value).toBe('2025-12-01');
+    await waitFor(() => expect(boundary.getAttribute('aria-invalid')).toBe('false'));
+    expect(screen.queryByRole('button', { name: /^Use \d{4}-/ })).toBeNull();
   });
 
   it('a date typed by hand while dates are being laid out wins: the late layout is dropped and the month count cleared', async () => {
