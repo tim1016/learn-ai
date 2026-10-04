@@ -187,6 +187,34 @@ def test_a_run_up_the_lake_cannot_supply_before_development_is_refused_never_car
     assert [refusal.code for refusal in plan.refusals] == ["RUN_UP_HISTORY_MISSING"] and plan.run_up is None
 
 
+def test_a_development_start_inside_a_hole_in_the_lake_is_refused_naming_the_earliest_start_it_can_serve(tmp_path: Path) -> None:
+    symbol = unique_symbol()
+    # The lake holds the symbol from 2024-09-04; development is asked from 2024-06-01, ten whole months before its end.
+    seed_lake(tmp_path, symbol, start=date(2024, 9, 4))
+    asked = protocol_from_request(plan_request(symbol, development_start_ms=et_midnight_ms(date(2024, 6, 1))))
+
+    [refusal] = review_plan(asked, roots=[tmp_path]).refusals
+
+    # 2024-09-01 keeps whole folds too, but its run-up would fall before the lake's first session.
+    assert (refusal.code, refusal.field) == ("RUN_UP_HISTORY_MISSING", "development_start_ms")
+    assert refusal.nearest_valid_ms == (et_midnight_ms(date(2024, 10, 1)),)
+    assert refusal.message.endswith(" The earliest start the lake can serve with whole folds is 2024-10-01.")
+    moved = review_plan(replace(asked, development_start_ms=refusal.nearest_valid_ms[0]), roots=[tmp_path])
+    assert moved.refusals == () and moved.run_up is not None
+
+
+def test_a_run_up_refusal_names_no_start_when_no_later_one_keeps_a_fold(tmp_path: Path) -> None:
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol, start=DEVELOPMENT[0])
+    # Two months of training and one of test fill the three development months: one fold, none to drop.
+    plan = review_plan(protocol_from_request(plan_request(symbol, training_months=2)), roots=[tmp_path])
+
+    [refusal] = plan.refusals
+
+    assert refusal.code == "RUN_UP_HISTORY_MISSING" and refusal.nearest_valid_ms == ()
+    assert refusal.message.endswith("the run-up is never carved from the scored range.")
+
+
 def test_missing_sessions_are_a_refusal_in_the_preflight_not_an_error(tmp_path: Path) -> None:
     symbol = unique_symbol()
     seed_lake(tmp_path, symbol, end=date(2025, 4, 20))
