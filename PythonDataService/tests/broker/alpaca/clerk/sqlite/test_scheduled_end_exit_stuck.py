@@ -258,12 +258,16 @@ async def _end_lines(repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatc
     ]
 
 
-def _end_on_the_bots_page(repo: ClerkSqliteRepository) -> BotEndView:
-    """The bot's end as its page shows it: the runner's words, or the Clerk's while the end waits for the operator."""
+def _end_on_the_bots_page(repo: ClerkSqliteRepository, end: ScheduledEnd | None = None) -> BotEndView:
+    """The bot's end as its page shows it: the runner's words, or the Clerk's while the end waits for the operator.
+
+    The suite's bot and end, unless ``end`` names another's.
+    """
+    end = end or _the_end()
     words = bot_end_view(
-        RecordedEnd.scheduled(_the_end().end), now_ms=repo.clock(), dry_run=False, running=False, use_rth=True,
+        RecordedEnd.scheduled(end.end), now_ms=repo.clock(), dry_run=False, running=False, use_rth=True,
     )
-    return panel_data_source.end_with_waiting_sale(words, repo, SID)
+    return panel_data_source.end_with_waiting_sale(words, repo, end.strategy_instance_id)
 
 
 _SALE_LEFT_TO_THE_OPERATOR = (
