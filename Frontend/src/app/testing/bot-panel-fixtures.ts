@@ -372,7 +372,7 @@ export function fakeSqliteSettleAction(overrides: Partial<PanelAction> = {}): Pa
       consequence: 'The Clerk reads Alpaca again and settles the order only if what it reads agrees with '
         + 'what you said. It sends no order. This cannot be undone.',
       confirm_label: 'Settle the order',
-      required_token: '',
+      required_token: 'SETTLE',
     },
     evidence_refs: ['order:learn-ai/spy-momentum-01/v1:close-1'],
     settlement: {

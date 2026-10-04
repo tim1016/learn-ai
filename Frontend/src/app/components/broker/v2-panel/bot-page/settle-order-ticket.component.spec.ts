@@ -8,14 +8,26 @@ import type { SqliteAttestationFindings, SqliteUnknownOrderAttestation } from '.
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeSqliteSettleAction, panelRefusalBody } from '../../../../testing/bot-panel-fixtures';
 import type { PanelAction } from '../lib/broker-v2-panel.types';
-import { SettleOrderTicketComponent, type SettlementCheck } from './settle-order-ticket.component';
+import {
+  SettleOrderTicketComponent,
+  offersSettlement,
+  type SettleAction,
+  type SettlementCheck,
+} from './settle-order-ticket.component';
 
 type Check = (attestation: SqliteUnknownOrderAttestation) => Promise<SettlementCheck>;
 type Settle = (attestation: SqliteUnknownOrderAttestation) => Promise<void>;
 
-const ACTION = fakeSqliteSettleAction();
+/** The settle action as the page hands it to the ticket: one that offers its order. */
+function settleAction(overrides: Partial<PanelAction> = {}): SettleAction {
+  const action = fakeSqliteSettleAction(overrides);
+  if (!offersSettlement(action)) throw new Error('The settle fixture carries its order.');
+  return action;
+}
+
+const ACTION = settleAction();
 const { settlement: SETTLEMENT, confirmation: CONFIRMATION } = ACTION;
-if (!SETTLEMENT || !CONFIRMATION) throw new Error('The settle fixture carries its order and its confirmation.');
+if (!CONFIRMATION) throw new Error('The settle fixture carries its confirmation.');
 const ORDER_ID = '61e69015-8549-4bfd-b9c3-01e75843f47d';
 const READ_AT_MS = 1_700_000_100_000;
 
@@ -60,7 +72,7 @@ function answered(findings: SqliteAttestationFindings): SettlementCheck {
 }
 
 async function renderTicket(
-  options: { action?: PanelAction; check?: Check; settle?: Settle; locked?: boolean } = {},
+  options: { action?: SettleAction; check?: Check; settle?: Settle; locked?: boolean } = {},
 ) {
   const check = vi.fn<Check>(options.check ?? (() => Promise.resolve(answered(NOTHING_AT_ALPACA))));
   const settle = vi.fn<Settle>(options.settle ?? (() => Promise.resolve()));
@@ -131,6 +143,24 @@ describe('SettleOrderTicketComponent (#2854)', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('asks for the word the backend’s confirmation names, not one of its own', async () => {
+    const worded = settleAction({ confirmation: { ...CONFIRMATION, required_token: 'AGREE' } });
+    const { settle, user } = await renderTicket({ action: worded });
+    await user.click(screen.getByRole('radio', { name: /^Alpaca has no such order/ }));
+    await user.click(checkButton());
+    await user.click(await within(ticket()).findByRole('button', { name: 'Settle the order…' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Settle the uncertain order?' });
+    const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Settle the order' });
+    await user.type(within(dialog).getByRole('textbox'), 'SETTLE');
+    expect(confirm.disabled).toBe(true);
+    await user.clear(within(dialog).getByRole('textbox'));
+    await user.type(within(dialog).getByRole('textbox'), 'AGREE');
+    await user.click(confirm);
+
+    expect(settle).toHaveBeenCalledExactlyOnceWith({ kind: 'absent' });
+  });
+
   it('asks for the Alpaca order id with "Alpaca shows it", trims it, and settles on that order', async () => {
     const { check, settle, user } = await renderTicket({ check: () => Promise.resolve(answered(IT_IS_THIS_ORDER)) });
 
@@ -184,14 +214,10 @@ describe('SettleOrderTicketComponent (#2854)', () => {
   });
 
   it('shows the backend’s own message for an id it cannot read (422) and for a refused check (409)', async () => {
+    const notAnOrderId = 'That is not an Alpaca order id. Copy the order id from the order\'s page at Alpaca; '
+      + 'it looks like 904837e3-3b76-47ec-b432-046db621571b.';
     const notAnId = new HttpErrorResponse({
-      status: 422,
-      error: {
-        detail: [{
-          type: 'uuid_parsing', loc: ['body', 'attestation', 'broker_order_id'], input: 'close-1',
-          msg: 'Input should be a valid UUID, invalid length: expected length 32 for simple format, found 7',
-        }],
-      },
+      status: 422, error: { detail: { reason: 'not_an_alpaca_order_id', message: notAnOrderId } },
     });
     const sentAgain = new HttpErrorResponse({
       status: 409,
@@ -206,8 +232,7 @@ describe('SettleOrderTicketComponent (#2854)', () => {
 
     // No second validator here: the id went to the backend as typed, and its answer is shown.
     expect(check).toHaveBeenLastCalledWith({ kind: 'exists', broker_order_id: 'close-1' });
-    expect((await within(ticket()).findByRole('alert')).textContent)
-      .toContain('Input should be a valid UUID, invalid length: expected length 32 for simple format, found 7');
+    expect((await within(ticket()).findByRole('alert')).textContent).toContain(notAnOrderId);
 
     await user.click(checkButton());
     expect((await within(ticket()).findByRole('alert')).textContent)
@@ -248,6 +273,67 @@ describe('SettleOrderTicketComponent (#2854)', () => {
     expect(within(ticket()).queryByRole('alert')).toBeNull();
   });
 
+  it('moves the keyboard to what the Clerk found, and to a refused settlement, as each arrives', async () => {
+    const busy = new HttpErrorResponse({
+      status: 409,
+      error: panelRefusalBody({ message: 'The Clerk is working on this exit right now.', why: null, next_action: null }),
+    });
+    const { user } = await renderTicket({ settle: () => Promise.reject(busy) });
+    await user.click(screen.getByRole('radio', { name: /^Alpaca has no such order/ }));
+
+    // The check button is disabled while it asks, which drops the keyboard: the answer picks it up.
+    await user.click(checkButton());
+    const found = await within(ticket()).findByRole('status', { name: 'What the Clerk found' });
+    await vi.waitFor(() => expect(document.activeElement).toBe(found));
+    expect(ticket().contains(document.activeElement)).toBe(true);
+
+    // The confirmation is gone once confirmed: the refusal picks the keyboard up.
+    await user.click(settleButton());
+    await confirmSettle(user);
+    const refused = await within(ticket()).findByRole('alert');
+    await vi.waitFor(() => expect(document.activeElement).toBe(refused));
+    expect(ticket().contains(document.activeElement)).toBe(true);
+  });
+
+  it('moves the keyboard to a refused check', async () => {
+    const stale = new HttpErrorResponse({
+      status: 409,
+      error: { detail: { reason: 'stale_action_token', message: 'The recovery evidence changed. Refresh before confirming the action.' } },
+    });
+    const { user } = await renderTicket({ check: () => Promise.reject(stale) });
+    await user.click(screen.getByRole('radio', { name: /^Alpaca has no such order/ }));
+
+    await user.click(checkButton());
+
+    const refused = await within(ticket()).findByRole('alert');
+    await vi.waitFor(() => expect(document.activeElement).toBe(refused));
+    expect(ticket().contains(document.activeElement)).toBe(true);
+  });
+
+  it('never shows a check’s answer that lands after the page presented the action anew', async () => {
+    let answerLate: (check: SettlementCheck) => void = () => undefined;
+    const check = vi.fn<Check>().mockReturnValueOnce(new Promise((resolve) => { answerLate = resolve; }));
+    const { settle, user, rerender } = await renderTicket({ check });
+    const noSuchOrder = (): HTMLInputElement => screen.getByRole('radio', { name: /^Alpaca has no such order/ });
+    await user.click(noSuchOrder());
+    await user.click(checkButton());
+
+    // The Clerk sent the order again while it was checking: the action comes back under a new token.
+    await rerender({ inputs: { action: settleAction({ concurrency_token: 'sent-again' }) }, partialUpdate: true });
+    answerLate(answered(NOTHING_AT_ALPACA));
+    await vi.waitFor(() => expect(noSuchOrder().disabled).toBe(false));
+
+    // The keyboard stays on the ticket, which shows no answer.
+    await vi.waitFor(() => expect(document.activeElement).toBe(ticket()));
+
+    // The same thing said of the new send: what was read for the old one is not its answer.
+    await user.click(noSuchOrder());
+    expect(within(ticket()).queryByRole('status', { name: 'What the Clerk found' })).toBeNull();
+    expect(within(ticket()).queryByRole('button', { name: 'Settle the order…' })).toBeNull();
+    expect(checkButton().disabled).toBe(false);
+    expect(settle).not.toHaveBeenCalled();
+  });
+
   it('holds every control still while another command on the bot is on its way', async () => {
     const { check } = await renderTicket({ locked: true });
 
@@ -266,9 +352,7 @@ describe('SettleOrderTicketComponent (#2854)', () => {
     await within(ticket()).findByRole('status', { name: 'What the Clerk found' });
 
     // The Clerk sent the order again: the page presents the action anew, with a new token.
-    await rerender({
-      inputs: { action: fakeSqliteSettleAction({ concurrency_token: 'sent-again' }) }, partialUpdate: true,
-    });
+    await rerender({ inputs: { action: settleAction({ concurrency_token: 'sent-again' }) }, partialUpdate: true });
 
     expect(within(ticket()).queryByRole('status', { name: 'What the Clerk found' })).toBeNull();
     expect(within(ticket()).getAllByRole<HTMLInputElement>('radio').some((radio) => radio.checked)).toBe(false);

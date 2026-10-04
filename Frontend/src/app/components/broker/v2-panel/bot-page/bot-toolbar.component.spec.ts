@@ -15,7 +15,7 @@ import {
   fakeSqliteStopAction,
 } from '../../../../testing/bot-panel-fixtures';
 import type { ManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
-import type { BotPanelView, ToolbarActionView } from '../lib/broker-v2-panel.types';
+import type { BotPanelView, PanelAction, ToolbarActionView } from '../lib/broker-v2-panel.types';
 import { BotToolbarComponent } from './bot-toolbar.component';
 
 const DEPLOY_AGAIN = { commands: ['/brokers', 'alpaca', 'deploy'], queryParams: { from: 'spy-momentum-01' } };
@@ -53,11 +53,15 @@ function runningPanel(): BotPanelView {
   };
 }
 
-async function renderToolbar(panel: BotPanelView, manualOrder: ManualOrderTicketNavigation | null = null) {
+async function renderToolbar(
+  panel: BotPanelView,
+  manualOrder: ManualOrderTicketNavigation | null = null,
+  ticketActionId: PanelAction['action_id'] | null = null,
+) {
   const actionRequested = vi.fn();
   const buildProof = vi.fn();
   const view = await render(BotToolbarComponent, {
-    inputs: { panel, deployAgain: DEPLOY_AGAIN, manualOrder },
+    inputs: { panel, deployAgain: DEPLOY_AGAIN, manualOrder, ticketActionId },
     on: { actionRequested, buildProof },
     providers: [provideRouter([])],
   });
@@ -112,11 +116,12 @@ describe('BotToolbarComponent (#2794)', () => {
   it('offers Settle the uncertain order in Fix, as a danger action that opens the host’s ticket (#2854)', async () => {
     const user = userEvent.setup();
     const settle = fakeSqliteSettleAction();
+    // The host says which action opens its ticket; the toolbar derives nothing from the action.
     const { actionRequested } = await renderToolbar(fakeBotPanelView({
       health: { ...fakeBotPanelView().health, running: false },
       exposure: { SPY: 10 },
       actions: [fakePanelAction('reconcile_now', { label: 'Reconcile now' }), settle],
-    }));
+    }), null, settle.action_id);
 
     const fix = within(screen.getByRole('toolbar', { name: 'Actions for this bot' })).getByRole('group', { name: 'Fix' });
     const button = within(fix).getByRole('button', { name: 'Settle the uncertain order' });

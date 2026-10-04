@@ -42,6 +42,7 @@
             [pending]="actionPending()"
             [deployAgain]="deployAgain()"
             [manualOrder]="manualOrderNavigation()"
+            [ticketActionId]="settleOffer()?.action_id ?? null"
             (actionRequested)="onActionRequested($event)"
             (changeEnd)="endCard()?.openEditor()"
             (buildProof)="proofOpen.set(true)"
@@ -73,7 +74,7 @@
           [check]="ticket.check"
           [settle]="ticket.settle"
           [locked]="actionPending()"
-          (closed)="settleTicket.set(null)"
+          (closed)="settleDraft.set(null)"
         />
       }
 

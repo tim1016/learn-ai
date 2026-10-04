@@ -193,6 +193,8 @@ export class BotToolbarComponent {
   readonly pending = input(false);
   readonly deployAgain = input.required<AccountWorkspaceLink>();
   readonly manualOrder = input<ManualOrderTicketNavigation | null>(null);
+  /** The action a press of which opens the host's own ticket, which confirms there (#2854); the host says which. */
+  readonly ticketActionId = input<PanelAction['action_id'] | null>(null);
 
   readonly actionRequested = output<PanelActionTrigger>();
   readonly changeEnd = output();
@@ -247,11 +249,6 @@ export class BotToolbarComponent {
 
   protected panelAction(entry: ToolbarActionView): PanelAction | null {
     return this.actionsById().get(entry.action_id) ?? null;
-  }
-
-  /** An action that carries the order it settles is confirmed in the host's ticket, not in the button's dialog (#2854). */
-  protected opensTicket(action: PanelAction): boolean {
-    return action.settlement != null;
   }
 
   protected showLabel(entry: ToolbarActionView): boolean {

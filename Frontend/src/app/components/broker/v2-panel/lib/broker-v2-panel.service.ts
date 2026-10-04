@@ -397,8 +397,8 @@ export class BrokerV2PanelService {
    *
    * `attestation` is what the operator says Alpaca shows for an uncertain
    * closing order (#2854); only that action's ticket passes one. Its action
-   * carries a confirmation, so it is never resubmitted here either: a retry
-   * is the ticket's own, under the key its target was frozen with.
+   * carries a confirmation, so it is never resubmitted here either: a second
+   * try is the owner's own, and a command of its own under a new key.
    *
    * This is the single public action entry point, so every caller (the bot
    * page AND Home) shares the same policy and there is no bare, dead-ending

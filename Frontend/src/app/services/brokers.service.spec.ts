@@ -49,7 +49,11 @@ describe('BrokersService', () => {
       attestation: 'exists', would_settle: true, refusal_reason_code: null,
       lines: ['It carries this order’s client order id, symbol, side and quantity.'], observed_at_ms: 1,
     };
-    const promise = service.checkSqliteSettlement(TEST_CLERK_ID, 'PA1', 'sid-1', 'settle-token', attestation);
+    const promise = service.checkSqliteSafeFlatten(
+      TEST_CLERK_ID, 'PA1',
+      { action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token', attestation },
+      'sid-1',
+    );
     const request = httpMock.expectOne(
       `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA1/custody/bots/sid-1/recovery-actions/check`,
     );
