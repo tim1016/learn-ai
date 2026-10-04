@@ -55,6 +55,9 @@ class RecoveryResult:
     reason_code: str
     explanation: str
     allowed_from_ms: int | None = None
+    # What the operator does about a failure a reconciliation cannot cure (#2854):
+    # the next step of the ``EXIT_STUCK`` episode the failure escalates to.
+    next_step: str | None = None
 
 
 def latest_exit_recovery(

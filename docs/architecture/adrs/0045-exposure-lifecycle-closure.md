@@ -414,3 +414,9 @@ no check of the account, and that sale does not keep to the stuck exit's hold
 either: an end left pending behind a held order puts its sale in once the
 order is settled as "no such order". Both are a separate change (#2854
 item 8).
+
+A held order is also work in flight on its symbol: while it stands the Clerk
+re-drives no other bot's failed exit of that symbol, and such an exit is told
+as stuck after the usual eight regular-session minutes. That bot's notices
+name the bot whose order is held and say to settle it from that bot's page,
+since no reconciliation settles an order no read shows.

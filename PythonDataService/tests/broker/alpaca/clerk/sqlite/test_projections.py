@@ -399,7 +399,7 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
         headline="Automatic exit re-drives stopped",
         explanation="The re-drive budget is spent.",
         operator_impact="New exposure is paused for this strategy.",
-        next_step="Flatten the position.",
+        next_step="Run Reconcile now, then execute the presented safe flatten.",
         evidence_refs=("order:exit:spy-bot",),
         severity="error",
     )
@@ -420,7 +420,8 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
         (OTHER_SID, "EXIT_NOT_FLAT"): future_at_ms,
     }
     # Y m8: the escalated episode's own next step pointed at the time it no
-    # longer shows; it now says the automatic attempts stopped.
+    # longer shows; it now says the automatic attempts stopped, and then what
+    # the EXIT_STUCK beside it says to do (#2854).
     next_steps = {
         item.strategy_instance_id: item.next_step
         for item in snapshot.uncertainties

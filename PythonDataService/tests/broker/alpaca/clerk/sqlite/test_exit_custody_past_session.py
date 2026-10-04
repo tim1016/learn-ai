@@ -34,6 +34,8 @@ from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.facts import UnknownOutcomeNotice
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, ProjectedUncertainty
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -47,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_STUCK_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import RedriveThenEscalate, reason_age_policy
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
@@ -61,6 +64,7 @@ from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
     _clock_at,
+    _make_held_position,
     _TestClock,
     _walk_clock_to,
 )
@@ -76,12 +80,19 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
     _exit_state,
     _notices_recorded,
     _passes,
+    _Refused,
     _sent_after_the_first_ms,
     _the_open_notice,
     _the_runner_sends_the_exit,
     _the_sweep,
 )
-from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of, _exit_not_flat, _flatten
+from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
+    SIBLING_RUN_ID,
+    SIBLING_SID,
+    _context_of,
+    _exit_not_flat,
+    _flatten,
+)
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
     RUN_ID,
@@ -641,6 +652,151 @@ async def test_the_run_ends_under_stop_and_flatten_is_refused_with_the_way_to_se
     assert catalog["settle_unknown_exit_order"].available is True
     assert len(alpaca.sent) == 1
     _is_held(repo, exit_id)
+
+
+# ── another bot on the same symbol ───────────────────────────────────────────
+
+THIRD_SID = "third-bot"
+THIRD_RUN_ID = "third-run-1"
+# What Alpaca answers the other bot's own closing order with: any outright refusal fails that exit.
+REFUSED = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+SETTLE_ACTION = f'"{_CUSTODY_ENTRIES["settle_unknown_exit_order"].label}"'
+
+
+async def _another_bot_holds_ten_spy(repo: ClerkSqliteRepository, sid: str, run_id: str) -> str:
+    """A second running bot on SPY in the same account, holding 10 of its own. Returns its entry."""
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=sid, symbol="SPY", config_hash=f"h-{sid}"
+    )
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    return await _make_held_position(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, run_id=run_id,
+        decision_id=f"{sid}-enter-1", execution_id=f"{sid}-exec-1",
+    )
+
+
+async def _the_bot_decides_to_exit(
+    repo: ClerkSqliteRepository, alpaca: _Alpaca, *, sid: str, run_id: str, entry_ref: str
+) -> str:
+    """Another bot's own exit decision, driven once by its runner. Returns the EXIT's effect."""
+    accepted = accept_exit(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=f"{sid}-exit-1",
+        lifecycle_run_id=run_id, entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY,
+        read=None,
+    )
+    return accepted.effect_operation_id
+
+
+def _the_page_of(repo: ClerkSqliteRepository, sid: str) -> ClerkProjection:
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        page = reader.bot_snapshot(sid)
+    finally:
+        reader.close()
+    assert page is not None
+    return page
+
+
+def _notice(page: ClerkProjection, reason_code: str) -> ProjectedUncertainty:
+    (notice,) = [item for item in page.uncertainties if item.reason_code == reason_code]
+    return notice
+
+
+@pytest.mark.parametrize(
+    ("also_held", "why", "next_step"),
+    [
+        pytest.param(
+            False,
+            f"Another bot, {SID}, has a closing order for SPY that the Clerk sent and could not confirm. "
+            "While that order's outcome is unknown, the Clerk does not send this bot's exit again by "
+            f"itself. That order is settled from the page of {SID} ({SETTLE_ACTION}).",
+            f"Open {SID} and settle its closing order ({SETTLE_ACTION}). Then run Reconcile now and "
+            "execute the presented safe flatten for this bot.",
+            id="one-bots-order-is-held",
+        ),
+        pytest.param(
+            True,
+            f"Other bots ({SID}, {THIRD_SID}) have closing orders for SPY that the Clerk sent and could "
+            "not confirm. While their outcomes are unknown, the Clerk does not send this bot's exit "
+            f"again by itself. Each order is settled from its own bot's page ({SETTLE_ACTION}).",
+            f"Open each of {SID}, {THIRD_SID} and settle its closing order ({SETTLE_ACTION}). Then run "
+            "Reconcile now and execute the presented safe flatten for this bot.",
+            id="two-bots-orders-are-held",
+        ),
+    ],
+)
+async def test_another_bots_exit_held_up_by_the_unconfirmed_order_names_its_bot_and_says_to_settle_it(
+    crashed_with_exposure,  # noqa: F811
+    also_held: bool,
+    why: str,
+    next_step: str,
+) -> None:
+    """One bot's exit is lost and held overnight; the next morning Alpaca refuses another bot's exit of the same symbol.
+
+    The held order is work in flight on SPY, so the watchdog never sends the
+    other bot's exit again while its outcome is unknown, and after eight
+    regular-session minutes of that the exit is told as stuck. It was told
+    only that "the Clerk still has work in flight", with "Run Reconcile now"
+    as its next step, which cannot settle an order no read shows. The other
+    bot's page now names the bot whose order is held and says to settle that
+    order from that bot's page, while it waits and once it is stuck. Nothing
+    is sent that was not sent before.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", *(["never_arrives"] if also_held else []), REFUSED))
+    other_entry = await _another_bot_holds_ten_spy(repo, SIBLING_SID, SIBLING_RUN_ID)
+    alpaca.holds = 20.0
+    held = await _a_running_bot_loses_its_exit_just_before_the_close(repo, alpaca)
+    if also_held:
+        third_entry = await _another_bot_holds_ten_spy(repo, THIRD_SID, THIRD_RUN_ID)
+        alpaca.holds = 30.0
+        third_exit = await _the_bot_decides_to_exit(
+            repo, alpaca, sid=THIRD_SID, run_id=THIRD_RUN_ID, entry_ref=third_entry
+        )
+        assert _exit_state(repo, third_exit) == "unknown"
+    lost = len(alpaca.sent)
+    sweep = _the_sweep(repo, alpaca)
+    await _passes_across_the_close(repo, sweep)
+    _walk_clock_to(repo, NEXT_OPEN_MS + 60_000)
+
+    refused_exit = await _the_bot_decides_to_exit(
+        repo, alpaca, sid=SIBLING_SID, run_id=SIBLING_RUN_ID, entry_ref=other_entry
+    )
+    refused_at_ms = clock()
+    assert _exit_state(repo, refused_exit) == "failed" and _exit_not_flat(repo, SIBLING_SID) is not None
+    policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
+
+    # Past the watchdog's settle age the re-drive is due, and is held up by the unconfirmed order.
+    await _passes(repo, sweep, policy.after_ms // SWEEP_INTERVAL_MS + 1)
+    waiting = _notice(_the_page_of(repo, SIBLING_SID), EXIT_NOT_FLAT_REASON_CODE).recovery_status
+    assert waiting is not None
+    assert (waiting.kind, waiting.reason_code, waiting.explanation) == ("on_hold", "EXIT_OTHER_ORDER_WORKING", why)
+
+    def stuck() -> dict | None:
+        return repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=SIBLING_SID
+        )
+
+    failure_budget_ms = policy.after_ms * (policy.max_count + 1)
+    while stuck() is None:
+        assert clock() - refused_at_ms <= policy.after_ms + failure_budget_ms, "never told as stuck"
+        await _passes(repo, sweep, 1)
+
+    assert len(alpaca.sent) == lost + 1, "the other bot's exit was sent again beside an unconfirmed order"
+    page = _the_page_of(repo, SIBLING_SID)
+    told = _notice(page, EXIT_STUCK_REASON_CODE)
+    assert told.explanation == (
+        f"10 SPY remains attributed after {failure_budget_ms} ms of observed regular-session failures: {why}"
+    )
+    assert told.next_step == page.guidance.next_step == next_step
+    assert _notice(page, EXIT_NOT_FLAT_REASON_CODE).next_step == (
+        f"Automatic attempts to reduce this position have stopped. {next_step}"
+    )
+    _is_held(repo, held)
 
 
 # ── what is unchanged ────────────────────────────────────────────────────────

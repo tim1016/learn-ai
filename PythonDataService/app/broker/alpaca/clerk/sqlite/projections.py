@@ -148,16 +148,16 @@ def project_uncertainties(
     )
 
 
-_REDRIVES_STOPPED_NEXT_STEP = (
-    "Automatic attempts to reduce this position have stopped. Run Reconcile now, then "
-    "execute the presented safe flatten."
-)
-"""An escalated ``EXIT_NOT_FLAT``'s next step (#2440 review).
+_REDRIVES_STOPPED = "Automatic attempts to reduce this position have stopped."
+"""How an escalated ``EXIT_NOT_FLAT``'s next step begins (#2440 review).
 
 The episode's own next step was written when the watchdog was still going to
-try, and may point at the time it no longer shows. Not so the notice of an
-exit an operator settled as not sent (#2854): the watchdog never tried for
-it, and its own next step already says what the operator does."""
+try, and may point at the time it no longer shows. What the operator does now
+is the next step of the ``EXIT_STUCK`` episode beside it, which follows this
+sentence: a reconciliation and a flatten, or first the settling of another
+bot's closing order (#2854). Not so the notice of an exit an operator settled
+as not sent (#2854): the watchdog never tried for it, and its own next step
+already says what the operator does."""
 
 
 _UNREADABLE_LOGGED: set[tuple[str, int]] = set()
@@ -195,7 +195,9 @@ def _projected_uncertainty(
     ``stuck`` is the open ``EXIT_STUCK`` episode beside an ``EXIT_NOT_FLAT``
     one, under which the Clerk sends nothing for the position by itself.
     """
-    redrives_stopped = stuck is not None and attested_absent_order_ref(stuck) is None
+    next_step = row["next_step"]
+    if stuck is not None and attested_absent_order_ref(stuck) is None:
+        next_step = f"{_REDRIVES_STOPPED} {stuck['next_step']}"
     stopped_because = RECOVERY_STOPPED_AFTER_FAILURES if stuck is None else recovery_stopped_because(stuck)
     recovery_status = None
     try:
@@ -230,7 +232,7 @@ def _projected_uncertainty(
         headline=row["headline"],
         explanation=row["explanation"],
         operator_impact=row["operator_impact"],
-        next_step=_REDRIVES_STOPPED_NEXT_STEP if redrives_stopped else row["next_step"],
+        next_step=next_step,
         observed_at_ms=row["observed_at_ms"],
         evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
         evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
