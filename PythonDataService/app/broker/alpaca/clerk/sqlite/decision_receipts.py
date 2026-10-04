@@ -524,8 +524,10 @@ def _entry_held_into(
     """The ENTER among ``older`` whose position was still open where ``window`` starts (#2859).
 
     ``older`` is the newest rows stored from before ``window``, in sequence
-    order. Only the newest ENTER or EXIT among them matters: after an EXIT
-    the position was closed, whatever came before it. An ENTER is still open
+    order. Only the newest ENTER or EXIT among them matters: an EXIT is
+    taken as a close, whatever came before it
+    (:meth:`SqliteDecisionReceipts.entry_held_into` says what that gives
+    up). An ENTER is still open
     at the window's start only when the run that made it also made the
     window's oldest decision -- any other run started flat after it. When
     either row names no run that cannot be shown, and nothing is returned.
@@ -747,6 +749,19 @@ class SqliteDecisionReceipts:
         writes it when it accepts the ENTER and never amends it. So the
         ENTER's effect is read with it (:meth:`_entered`), and an ENTER whose
         effect ended failed is not returned.
+
+        An EXIT's effect is not read: every EXIT is taken as a close. An EXIT
+        refused as it is sent ends failed, the runner is answered as for a
+        refusal and the run goes on holding. But an EXIT that is sent,
+        committed by the runner and ended unfilled afterwards ends failed
+        too, with the run flat in its own state. The effect does not say
+        which. The one stored fact that does, the holding a decision's
+        explanation records, is display evidence (ADR 0043), which replay
+        does not read. What this gives up: a position still held after an
+        EXIT refused as it was sent is replayed flat, as every position older
+        than the window was before this read, and a crash that left its EXIT
+        staged goes unnamed. Passing a failed EXIT over would instead replay
+        a position the run had closed, and name an EXIT no live run staged.
         """
         if not window or window[0].seq == 1:
             return None
