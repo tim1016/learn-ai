@@ -81,6 +81,19 @@ describe('DateRangePickerComponent', () => {
     expect(host.from()).toBe('2026-09-14');
   });
 
+  it('takes a character typed into the date a field holds, so a date is edited in place', async () => {
+    const { view, host, start, end } = await renderPicker();
+
+    // The caret before each day's last digit: the new digit is typed, then the old one deleted.
+    await userEvent.type(start, '8{Delete}', { initialSelectionStart: 9, initialSelectionEnd: 9 });
+    await userEvent.type(end, '7{Delete}', { initialSelectionStart: 9, initialSelectionEnd: 9 });
+    await userEvent.tab();
+    await view.fixture.whenStable();
+
+    expect([start.value, end.value]).toEqual(['2026-08-18', '2026-09-17']);
+    expect([host.from(), host.to()]).toEqual(['2026-08-18', '2026-09-17']);
+  });
+
   it('keeps a half-typed date in the field, says why, and hands the host an empty date until it is whole', async () => {
     const { host, start, retype } = await renderPicker();
 
