@@ -264,7 +264,7 @@ async def _end_lines(repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatc
 
 
 def _end_on_the_bots_page(repo: ClerkSqliteRepository) -> BotEndView:
-    """The bot's end as its page shows it: the runner's words, with the Clerk's reason as its notice."""
+    """The bot's end as its page shows it: the runner's words, or the Clerk's while the end waits for the operator."""
     words = bot_end_view(
         RecordedEnd.scheduled(_the_end().end), now_ms=repo.clock(), dry_run=False, running=False, use_rth=True,
     )
@@ -293,14 +293,20 @@ async def test_the_end_sale_waits_while_the_clerk_has_stopped_exiting_the_bot_by
     assert repo.position(SID, "SPY") == 10
     told = (
         "The Clerk stopped exiting this bot's position by itself, so the end's sale of 10 SPY was not sent. "
-        "It waits until the position is sold or written off from the bot's page."
+        "Sell the position or write it off from the bot's page; the end then completes with no sale."
     )
     [line] = await _end_lines(repo, monkeypatch)
     assert (line.condition_id, line.reason_code) == (f"end-sale-waits:{SID}", "SCHEDULED_END_WAITS_FOR_OPERATOR")
     assert (line.kind, line.severity, line.symbol, line.action.destination) == ("exit", "warning", "SPY", "bot")
     assert (line.strategy_instance_id, line.headline) == (SID, f"{SID} reached its end. {told}")
     page = _end_on_the_bots_page(repo)
-    assert (page.status, page.notice) == ("ending", told)
+    assert (page.status, page.notice, page.waits_for_operator) == ("ending", told, True)
+    assert page.explanation == (
+        "Its end has come and the bot is stopped. The Clerk sent no order for the position the bot holds."
+    ), "the page still says the Clerk sells the shares on its next pass"
+    assert page.edit_refusal == "This bot's end has come; it completes once the bot holds no position.", (
+        "the page still says the Clerk is carrying the end out"
+    )
     waited = [row for row in repo.custody_transitions() if row["transition_kind"] == "EXIT_MARKET_HOLD"]
     assert waited == [], "the wait is read from the records, never written pass after pass"
 
@@ -329,7 +335,8 @@ async def test_writing_the_position_off_completes_the_end_with_no_sale(
     assert [end for end, _at_ms in schedule.carried_out] == [_the_end()]
     assert _end_sales(repo) == [] and _sent(market) == refused
     assert await _end_lines(repo, monkeypatch) == []
-    assert _end_on_the_bots_page(repo).notice is None
+    page = _end_on_the_bots_page(repo)
+    assert (page.notice, page.waits_for_operator) == (None, False)
 
 
 async def test_the_operators_sale_completes_the_end_with_no_sale_of_its_own(
@@ -420,7 +427,7 @@ async def test_a_short_bots_end_waits_too_and_is_told_as_a_buy_back(
     assert schedule.carried_out == []
     told = (
         "The Clerk stopped exiting this bot's position by itself, so the end's buy-back of 10 SPY was not sent. "
-        "It waits until the position is bought back or written off from the bot's page."
+        "Buy the position back or write it off from the bot's page; the end then completes with no buy-back."
     )
     [line] = await _end_lines(repo, monkeypatch)
     assert line.headline == f"{SID} reached its end. {told}"

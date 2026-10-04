@@ -211,6 +211,21 @@ def bot_end_view(
     )
 
 
+def bot_end_view_waiting_for_operator(view: BotEndView, *, why: str) -> BotEndView:
+    """``view``, an end that has come, while the Clerk leaves the bot's position to the operator (#2854).
+
+    The Clerk sends no order at such an end and is not carrying it out, so the
+    words that say it is are replaced. ``why`` is the Clerk's own account of
+    what it did not send and what completes the end; it is the notice.
+    """
+    return view.model_copy(update={
+        "explanation": "Its end has come and the bot is stopped. The Clerk sent no order for the position the bot holds.",
+        "notice": why,
+        "waits_for_operator": True,
+        "edit_refusal": "This bot's end has come; it completes once the bot holds no position.",
+    })
+
+
 def resolved_bot_end_view(resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool) -> BotEndView:
     """An end the Deploy form chose, before its bot exists, with the notice when its time was moved.
 
@@ -341,6 +356,7 @@ __all__ = [
     "BotEndRefused",
     "ResolvedBotEnd",
     "bot_end_view",
+    "bot_end_view_waiting_for_operator",
     "default_bot_end",
     "end_edit_refusal",
     "resolve_bot_end",

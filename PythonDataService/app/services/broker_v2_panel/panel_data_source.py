@@ -70,6 +70,7 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     live_state_binding_repository,
 )
+from app.services.bot_end import bot_end_view_waiting_for_operator
 from app.services.bot_runner import (
     BotTaskRegistry,
     get_bot_task_registry,
@@ -594,13 +595,15 @@ async def _get_panel_with_entries_from_authority(
 
 
 def end_with_waiting_sale(end: BotEndView | None, repository: ClerkSqliteRepository, sid: str) -> BotEndView | None:
-    """The runner's words for the bot's end, with the Clerk's as its notice while its sale waits for the operator (#2854)."""
+    """The runner's words for the bot's end, or the Clerk's while the end waits for the operator (#2854)."""
     if end is None or end.status != "ending":
         return end
     waiting = end_sales_waiting_for_operator(repository, [sid])
     if not waiting:
         return end
-    return end.model_copy(update={"notice": " ".join(end_sale_waits_for_operator_words(sale) for sale in waiting)})
+    return bot_end_view_waiting_for_operator(
+        end, why=" ".join(end_sale_waits_for_operator_words(sale) for sale in waiting)
+    )
 
 
 @dataclass(frozen=True)

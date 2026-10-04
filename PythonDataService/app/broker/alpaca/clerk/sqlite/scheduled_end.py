@@ -410,12 +410,17 @@ def end_sales_waiting_for_operator(
 
 
 def end_sale_waits_for_operator_words(waiting: EndSaleWaiting) -> str:
-    """Why a sale :func:`end_sales_waiting_for_operator` lists was not sent, and what ends its wait."""
+    """Why a sale :func:`end_sales_waiting_for_operator` lists was not sent, and what completes the end.
+
+    The sale is never sent later: the operator closes the position, and the end completes without one.
+    """
     long = waiting.quantity > 0
-    order = f"{'sale' if long else 'buy-back'} of {quantity_text(abs(waiting.quantity))} {waiting.symbol}"
+    order = "sale" if long else "buy-back"
     return (
-        f"The Clerk stopped exiting this bot's position by itself, so the end's {order} was not sent. "
-        f"It waits until the position is {'sold' if long else 'bought back'} or written off from the bot's page."
+        f"The Clerk stopped exiting this bot's position by itself, so the end's {order} of "
+        f"{quantity_text(abs(waiting.quantity))} {waiting.symbol} was not sent. "
+        f"{'Sell the position' if long else 'Buy the position back'} or write it off from the bot's page; "
+        f"the end then completes with no {order}."
     )
 
 
