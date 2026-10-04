@@ -12,6 +12,7 @@ import asyncio
 import json
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -1975,10 +1976,13 @@ async def test_a_waiting_market_recovery_reduction_never_waits_outside_the_regul
 async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_releasably(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """#2229: created at 10:00, its submit lost to an outage; the resubmission
-    after 16:00 folds the EXIT releasably instead of holding the entry all
-    night behind an unsent market order. No market order is ever queued to the
-    next open."""
+    """#2229: created at 10:00 and never sent -- the Clerk was interrupted
+    before its submit; the submission after 16:00 folds the EXIT releasably
+    instead of holding the entry all night behind an unsent market order. No
+    market order is ever queued to the next open.
+
+    Never sent, nothing of it can be at the broker. A reduction that was sent
+    and whose answer was lost keeps custody past the close instead (#2854)."""
     _walk_clock_to(repo, FIXTURE_RTH_MS)
     entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
@@ -1996,12 +2000,19 @@ async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_rele
         entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
-    outage = _FakeTrade(
-        lookup_results=[recovered, recovered],
-        submit_error=BrokerUnavailable("broker is down"),
-    )
-    await resolve_accepted_exit(repo, accepted=accepted, trade=outage, pricing=UNPRICEABLE_RECOVERY, read=None)
-    assert len(outage.submit_calls) == 1
+
+    def interrupted_once_the_order_exists(_symbol: str, _now_ms: int) -> None:
+        if any(order.role == "REDUCING" for order in repo.orders_for_strategy(SID)):
+            raise asyncio.CancelledError
+
+    interrupted = _FakeTrade(lookup_results=[recovered, recovered])
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_accepted_exit(
+            repo, accepted=accepted, trade=interrupted, read=None,
+            pricing=replace(UNPRICEABLE_RECOVERY, liveness_source=interrupted_once_the_order_exists),
+        )
+    assert interrupted.submit_calls == []
+    assert any(order.role == "REDUCING" for order in repo.orders_for_strategy(SID))
 
     _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
     after_close = _FakeTrade(lookup_results=[None])

@@ -313,6 +313,25 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return None if row is None else writes.row_to_payload(row)
 
+    def last_order_notice_transition(self: ClerkSqliteRepository, *, order_ref: str) -> dict | None:
+        """The latest ``ORDER_SUBMIT_UNCERTAIN`` of one order that recorded a notice, or ``None`` (#2854).
+
+        A notice is recorded once, on the row that changes what the operator
+        is told of the order; the passes that then find it still unknown
+        record none. So a caller about to record one asks here whether the
+        order's newest already says it. The order's index is walked back from
+        its newest row and stops at the first that carries a notice (#1942).
+        """
+        with self._write_lock:
+            row = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                "WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_UNCERTAIN' "
+                "AND json_extract(facts_json, '$.notice') IS NOT NULL "
+                "ORDER BY sequence DESC LIMIT 1",
+                (order_ref,),
+            ).fetchone()
+            return None if row is None else writes.row_to_payload(row)
+
     def first_effect_transition(
         self: ClerkSqliteRepository,
         *,

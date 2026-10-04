@@ -45,7 +45,10 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import SafeFlattenExecutionError
-from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_NOT_FLAT_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+)
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition, OrderSide
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -578,22 +581,36 @@ async def test_a_deferred_flatten_the_account_still_covers_is_sent_by_the_reconc
 
 
 @pytest.mark.parametrize(
-    ("at_alpaca", "reason_code"),
+    ("at_alpaca", "the_check_answered"),
     [
-        pytest.param(_account_holds_nothing, FLATTEN_NOT_COVERED_AT_BROKER, id="the-account-is-flat-by-now"),
-        pytest.param(_its_positions_cannot_be_read, FLATTEN_COVER_UNPROVEN, id="the-positions-read-fails"),
+        pytest.param(
+            _account_holds_nothing,
+            "Alpaca holds no SPY, less than the 10 this flatten would sell; nothing was sent.",
+            id="the-account-is-flat-by-now",
+        ),
+        pytest.param(
+            _its_positions_cannot_be_read,
+            "The Clerk could not read the Alpaca account just before sending this flatten",
+            id="the-positions-read-fails",
+        ),
     ],
 )
 async def test_a_resumed_flatten_is_checked_again_before_it_is_sent_again(
     crashed_with_exposure,  # noqa: F811
     at_alpaca: Callable[[_Account], None],
-    reason_code: str,
+    the_check_answered: str,
 ) -> None:
     """A submit that was lost is sent again only once proven absent -- and only if still covered.
 
     The open orders are read and do not list the Flatten's order, so nothing
     says it reached Alpaca: an account that no longer covers it, or whose
     positions cannot be read, refuses the resend.
+
+    The refusal does not fail the EXIT (#2854). The earlier send's answer was
+    lost, and what the account no longer holds may be what that send sold:
+    failed, the EXIT would release a position its own order may have closed.
+    It stays ``unknown`` with custody kept, and the bot's page says what the
+    check answered and that the order is settled from there.
     """
     repo, clock = crashed_with_exposure
     account = _Account(holds=10.0)
@@ -616,9 +633,24 @@ async def test_a_resumed_flatten_is_checked_again_before_it_is_sent_again(
 
     assert resumed.submit_calls == []
     assert account.reads == ["orders", "positions"]
-    refusal = flatten_send_refusal(repo, effect_operation_id)
-    assert refusal is not None and refusal.reason_code == reason_code
-    assert _exit_not_flat(repo) is not None
+    assert flatten_send_refusal(repo, effect_operation_id) is None
+    assert _exit_not_flat(repo) is None
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None
+    held = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=ORDER_OUTCOME_UNKNOWN_REASON_CODE, strategy_instance_id=SID
+    )
+    assert held is not None
+    assert held["explanation"].startswith(
+        "The Clerk sent an order to sell 10 SPY and could not confirm it. Before sending it again "
+        f"the Clerk checked the account: {the_check_answered}"
+    )
+    assert held["explanation"].endswith(
+        "The earlier send may have reached Alpaca, so the Clerk holds the shares and sends no "
+        "other order for this bot."
+    )
+    assert 'settle the order from the bot\'s page ("Settle the uncertain order")' in held["next_step"]
 
 
 def _its_own_order_alone_is_open(account: _Account, own_order: BrokerOrder) -> None:

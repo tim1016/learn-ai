@@ -19,6 +19,7 @@ and first driven at 16:01 used to submit a market DAY SELL with
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections.abc import Iterator
@@ -261,8 +262,9 @@ async def test_a_market_leg_whose_submit_was_lost_before_the_close_is_not_resent
 
     The order already has its client identity, so it is replayed exactly or
     not at all — never re-priced under the same identity. Past the close it
-    is not replayed: the EXIT folds releasably for the operator, and the
-    watchdog's re-drive prices a fresh after-hours limit.
+    is not replayed. It was sent, so it may be at the broker: the EXIT is not
+    failed and keeps custody of the position for an operator to settle
+    (#2854), and nothing re-drives it under a new identity.
     """
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     _walk_clock_to(repo, _at(15, 59, 50))
@@ -283,9 +285,11 @@ async def test_a_market_leg_whose_submit_was_lost_before_the_close_is_not_resent
 
     assert resumed.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None and effect.state == "failed"
-    assert repo.active_exit_for_order(entry_ref) is None
-    assert _exit_not_flat(repo) is not None
+    assert effect is not None and effect.state == "unknown"
+    assert repo.active_exit_for_order(entry_ref) is not None
+    assert _exit_not_flat(repo) is None
+    held = _open_unknown_outcome(repo)
+    assert held is not None and "The order's session has ended" in held["explanation"]
 
 
 async def test_a_program_after_hours_limit_is_never_sent_past_the_session_it_was_priced_for(
@@ -522,10 +526,14 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
     """#2440 review: the fold copy is chosen from who priced the order being judged.
 
     An operator's market flatten, driven at 19:59:50, is re-priced by the Clerk
-    as an after-hours limit good until 20:00; the submit is lost. Resumed after
-    the close, the order is never replayed — and the operator is not told that
-    a price they never saw was "confirmed". This copy is what blocked the
-    #2230 review.
+    as an after-hours limit good until 20:00, and the Clerk is interrupted
+    before it sends it. Resumed after the close, the order is never sent — and
+    the operator is not told that a price they never saw was "confirmed". This
+    copy is what blocked the #2230 review.
+
+    The order was never sent, so nothing of it can be at the broker and its
+    EXIT fails releasably. One that was sent and lost keeps custody instead
+    (#2854) and folds no such copy.
     """
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     accepted = accept_recovery_exit(
@@ -537,14 +545,28 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
     )
     assert accepted.effect_operation_id is not None
     _walk_clock_to(repo, _at(19, 59, 50))
-    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    first = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=lost, pricing=_live_touch(),
-        read=_covering_read(),
+
+    def interrupted_once_the_order_exists(_symbol: str, _now_ms: int) -> None:
+        if any(order.role == "REDUCING" for order in repo.orders_for_strategy(SID)):
+            raise asyncio.CancelledError
+
+    never_reached = _acked()
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_exit(
+            repo, effect_operation_id=accepted.effect_operation_id, trade=never_reached,
+            pricing=replace(_live_touch(), liveness_source=interrupted_once_the_order_exists),
+            read=_covering_read(),
+        )
+    assert never_reached.submit_calls == []
+    (reducing,) = [order for order in repo.orders_for_strategy(SID) if order.role == "REDUCING"]
+    created_row = repo.first_order_transition(
+        order_ref=reducing.order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
     )
-    ((sent, _),) = lost.submit_calls
-    assert (sent.order_type, sent.limit_price, sent.extended_hours) == (OrderType.LIMIT, 99.8, True)
-    assert first.reducing_order_ref is not None
+    assert created_row is not None
+    created = ExitReducingOrderCreatedFacts.from_facts_json(created_row["facts_json"])
+    assert (created.order_type, created.limit_price, created.extended_hours, created.priced_by) == (
+        "limit", 99.8, True, "clerk",
+    )
 
     _walk_clock_to(repo, _at(20, 0, 40))  # past the 30 s submit-absence grace and the POST close
     resumed = _FakeTrade(lookup_results=[None])
@@ -560,7 +582,7 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
     assert "confirmed" not in episode["explanation"]
     (not_flat,) = [
         row
-        for row in repo.transitions_for_order(first.reducing_order_ref)
+        for row in repo.transitions_for_order(reducing.order_ref)
         if row["transition_kind"] == "EXIT_NOT_FLAT"
     ]
     assert "confirmed" not in json.loads(not_flat["facts_json"])["reason"]
@@ -994,17 +1016,17 @@ async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
         repo.close()
 
 
-async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_attempt(
+async def test_a_lost_submit_held_after_the_close_is_never_called_still_working(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """#2440 review M1: the working-order alarm never overwrites the send-time rule's notice.
+    """#2440 review M1: the working-order alarm never speaks of an order no read has shown.
 
     A market exit's submit is lost at 15:59; the Clerk restarts and resumes
     at 16:10. The send-time rule refuses to replay the market leg after the
-    close: the EXIT fails, the entry is released, and the operator is told
-    the exit could not be sent and when the watchdog next tries. That order
-    never reached Alpaca, so nothing may then call it "still working", tell
-    the operator to cancel it at the broker, or drop the next attempt.
+    close, and the order may be at Alpaca, so the EXIT keeps custody as an
+    unknown outcome and the operator is told to settle it (#2854). No read
+    has shown that order, so nothing may call it "still working" or tell the
+    operator to cancel it at the broker.
     """
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     effect_operation_id = _accept_program_exit(repo, entry_ref)
@@ -1017,31 +1039,28 @@ async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_a
 
     assert resumed.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None and effect.state == "failed"
-    assert repo.active_exit_for_order(entry_ref) is None
-    episode = _exit_not_flat(repo)
-    assert episode is not None
-    assert episode["headline"] == (
-        "An exit could not be sent after its session ended; the position is still open"
-    )
-    assert "still working" not in episode["explanation"]
-    assert "cancel it there" not in episode["next_step"]
-    # The watchdog's next try: its 120 s re-drive age, inside after-hours.
-    assert _next_attempt_at_ms(episode) is None  # No eligibility until a completed recovery evaluation.
-    assert _open_unknown_outcome(repo) is None
+    assert effect is not None and effect.state == "unknown"
+    assert repo.active_exit_for_order(entry_ref) is not None
+    assert _exit_not_flat(repo) is None
+    held = _open_unknown_outcome(repo)
+    assert held is not None
+    assert "still working" not in held["explanation"]
+    assert "cancel it there" not in held["next_step"]
+    assert "Settle the uncertain order" in held["next_step"]
 
 
-async def test_a_market_exit_re_sent_the_next_morning_is_dated_from_the_send_that_reached_the_broker(
+async def test_a_market_exit_lost_before_the_close_is_not_sent_again_the_next_morning(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """#2440 review: the still-working alarm dates a leg from its latest send, not its first.
+    """An order sent in an earlier session is looked up the next day, never sent again (#2854).
 
     A market exit's submit is lost at 15:59 and the broker stays unobservable
-    across the close. The next morning the exact lookup proves the order never
-    arrived, and the Clerk legitimately sends it again inside the regular
-    session. That order's session is Thursday's; dated from Wednesday's lost
-    send, it was "still working after its session ended" at 09:45 and the
-    operator was told to cancel a live regular-session exit at the broker.
+    across the close, so no pass judges the order until the next morning.
+    Then the exact lookup reads it absent inside the regular session, where
+    the send-time rule would send a market leg. It used to go out again
+    there, a day after the send whose answer was lost. Now it is not sent:
+    the EXIT keeps custody for an operator to settle, and nothing is alarmed
+    as working past a session.
     """
     thursday = date(2026, 9, 3)
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
@@ -1054,21 +1073,20 @@ async def test_a_market_exit_re_sent_the_next_morning_is_dated_from_the_send_tha
     await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch(), read=None)
 
     _walk_clock_to(repo, _at(9, 35, day=thursday))
-    resent = _FakeTrade(
+    next_morning = _FakeTrade(
         lookup_results=[None],
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resent, pricing=_live_touch(), read=None)
-    assert len(resent.submit_calls) == 1, "the order proven absent was not sent again"
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=next_morning, pricing=_live_touch(), read=None)
 
-    _walk_clock_to(repo, _at(9, 45, day=thursday))
-    still_working = _FakeTrade(
-        lookup_results=[_broker_order("placeholder", side="sell", status="accepted")]
-    )
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working, pricing=_live_touch(), read=None)
-
-    assert _exit_not_flat(repo) is None, "a regular-session exit was alarmed against yesterday's close"
+    assert next_morning.submit_calls == [], "yesterday's order was sent again"
+    assert len(next_morning.lookup_calls) == 1
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    assert _exit_not_flat(repo) is None
     assert repo.active_exit_for_order(entry_ref) is not None
+    held = _open_unknown_outcome(repo)
+    assert held is not None and "The order's session has ended" in held["explanation"]
 
 
 async def test_a_failed_lookup_past_the_session_raises_no_working_order_alarm(
