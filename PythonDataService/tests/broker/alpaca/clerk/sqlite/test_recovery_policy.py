@@ -1362,6 +1362,88 @@ def test_settling_is_the_bots_cure_and_the_accounts_catalog_says_where_it_is_don
     assert on_the_desk.settlement is None
 
 
+def test_a_flatten_refused_behind_an_unconfirmed_closing_order_says_to_settle_it() -> None:
+    """A Flatten is refused while the bot's closing order is unconfirmed, and no reconciliation cures that.
+
+    Its refusal used to say "Run Reconcile now", which finds nothing for an
+    order no read shows. It names the settle action instead. Any other
+    unknown outcome of the bot keeps the refusal it had.
+    """
+    held = _stopped_with_an_unknown_exit(
+        positions=_residue_context().positions,
+        uncertainties=(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"),),
+    )
+
+    def flatten(context: RecoveryPolicyContext) -> RecoveryCapability:
+        return next(
+            action for action in build_recovery_catalog(context) if action.action_id == "prepare_safe_flatten"
+        )
+
+    refused = flatten(held)
+    assert (refused.available, refused.unavailable_reason_code) == (False, "EXPOSURE_NOT_PROVEN")
+    assert refused.unavailable_reason == (
+        "The Clerk sent a closing order for this bot and could not confirm it, so a flatten could "
+        "close the position a second time."
+    )
+    assert refused.next_step == (
+        "Settle that order first: look at this account's orders at Alpaca, then use "
+        '"Settle the uncertain order".'
+    )
+
+    another_unknown = flatten(replace(held, unknown_exit_orders=()))
+    assert (another_unknown.available, another_unknown.unavailable_reason_code) == (False, "EXPOSURE_NOT_PROVEN")
+    assert another_unknown.unavailable_reason == (
+        "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
+    )
+    assert another_unknown.next_step == "Run Reconcile now and refresh the custody snapshot."
+
+
+@pytest.mark.parametrize(
+    ("unsettleable", "why_and_what_then"),
+    [
+        pytest.param(
+            {"unknown_exit_orders": (_unknown_exit_order(answered_as_client_order_id=""),)},
+            "Alpaca answered this order's send with an order that names no client order id, so the "
+            "Clerk has no id to read that order by and cannot tell what it did. The Clerk keeps the "
+            "position held. This action cannot settle the order. Look at this account's orders at "
+            "Alpaca for the order it answered with. No action of the Clerk settles this order yet.",
+            id="alpaca-answered-with-an-order-that-names-no-id",
+        ),
+        pytest.param(
+            {"now_ms": unknown_order_lookup_settles_at_ms(_unknown_exit_order()) - 1},
+            "The Clerk sent this order moments ago and may still find it at Alpaca by itself. Wait "
+            "for the Clerk's next check of the account.",
+            id="inside-the-wait-after-the-send",
+        ),
+    ],
+)
+def test_a_flatten_refused_behind_an_order_that_cannot_be_settled_yet_says_why_not(
+    unsettleable: dict[str, object], why_and_what_then: str
+) -> None:
+    """The refusal sent the operator to "Settle the uncertain order" while that action was itself refused (#2854).
+
+    The Flatten is refused for the same reason. Its next step is now the
+    settle action's own reason and next step, under the action's name, taken
+    from whether the catalog offers it for this order.
+    """
+    held = _stopped_with_an_unknown_exit(
+        positions=_residue_context().positions,
+        uncertainties=(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"),),
+        **unsettleable,
+    )
+    catalog = {action.action_id: action for action in build_recovery_catalog(held)}
+    settle, flatten = catalog["settle_unknown_exit_order"], catalog["prepare_safe_flatten"]
+
+    assert (settle.available, settle.needed) == (False, True)
+    assert f"{settle.unavailable_reason} {settle.next_step}" == why_and_what_then
+    assert (flatten.available, flatten.unavailable_reason_code) == (False, "EXPOSURE_NOT_PROVEN")
+    assert flatten.unavailable_reason == (
+        "The Clerk sent a closing order for this bot and could not confirm it, so a flatten could "
+        "close the position a second time."
+    )
+    assert flatten.next_step == f'"Settle the uncertain order" cannot be used now: {why_and_what_then}'
+
+
 def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> None:
     settlement = _settle(_stopped_with_an_unknown_exit()).settlement
 
@@ -1369,10 +1451,10 @@ def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> 
     assert (settlement.symbol, settlement.side, settlement.quantity) == ("SPY", "sell", 10.0)
     assert settlement.ticket == (
         "The Clerk sent an order to sell 10 SPY on Tue Nov 14, 17:13 ET and could not confirm it. "
-        "It holds the position and starts no other closing order for this bot. While the order's "
-        "session is open, the Clerk sends this same order again by itself, after a wait that grows "
-        "to 5 minutes and then stays there. If it does, look at Alpaca again and open this action "
-        "again."
+        "It holds the position and starts no other closing order for this bot. While the session "
+        "the order was sent in is open, the Clerk sends this same order again by itself, after a "
+        "wait that grows to 5 minutes and then stays there. If it does, look at Alpaca again and "
+        "open this action again. Once that session has ended, the Clerk never sends the order again."
     )
     answered = _settle(
         _stopped_with_an_unknown_exit(

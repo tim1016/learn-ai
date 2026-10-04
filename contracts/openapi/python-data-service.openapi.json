@@ -39098,6 +39098,11 @@
             "title": "Exit Queued",
             "type": "boolean"
           },
+          "exit_unconfirmed": {
+            "default": false,
+            "title": "Exit Unconfirmed",
+            "type": "boolean"
+          },
           "held": {
             "items": {
               "$ref": "#/components/schemas/HeldPositionFact"

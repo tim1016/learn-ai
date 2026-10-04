@@ -36,7 +36,11 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     RecoveryCapability,
 )
 from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
-from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    FRESH_EVIDENCE_MAX_AGE_MS,
+    UNCONDITIONAL_RECOVERY_ACTION_IDS,
+    settle_unavailable_words,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.action_policy import archive_action
 from app.broker.v2panel.vocabulary import copy_for
@@ -904,7 +908,10 @@ def terminal_exposure_notices(
     # A pass that vouches for what the bot holds, but that the page's own
     # gate did not accept in this cut, sends the owner to Reconcile now first.
     flatten_ready = _flatten_ready(projection)
-    if held is None:
+    settle = _settle_capability(projection) if projection.strategy_instance_id == sid else None
+    if settle is not None:
+        notices.append(_closing_order_unconfirmed(settle))
+    elif held is None:
         notices.append(_POSITION_UNVERIFIED)
     elif held:
         positions = ", ".join(f"{quantity:g} {held_symbol}" for held_symbol, quantity in held.items())
@@ -949,6 +956,36 @@ def exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
     )
 
 
+def _settle_capability(projection: ClerkProjection) -> RecoveryCapability | None:
+    """The settle action of this bot's cut while it has a closing order to settle, else ``None`` (#2854).
+
+    The recovery catalog authors it from the one read of such orders
+    (``unknown_exit_orders``): a closing order that was sent, that the bot's
+    open unknown-outcome episode names, and that Alpaca never acknowledged or
+    filled. The bell reads the same.
+    """
+    return next(
+        (
+            capability
+            for capability in projection.recovery_actions
+            if capability.action_id == "settle_unknown_exit_order" and capability.needed
+        ),
+        None,
+    )
+
+
+def exit_unconfirmed(projection: ClerkProjection, sid: str) -> bool:
+    """An exit whose closing order the Clerk sent and could not confirm (#2854).
+
+    The bot has a closing order to settle (:func:`_settle_capability`): the
+    Clerk holds the position and starts no other closing order for the bot,
+    so no sale is queued. An EXIT that is ``unknown`` for another reason is
+    not this: an order Alpaca acknowledged whose lookup failed is still being
+    worked, and its sale is still queued.
+    """
+    return projection.strategy_instance_id == sid and _settle_capability(projection) is not None
+
+
 # Every fix it names is on the bot's own page (hurdle H29): it never sends
 # the owner to the broker outside the app.
 _POSITION_UNVERIFIED = ExposureNoticeView(
@@ -961,6 +998,42 @@ _POSITION_UNVERIFIED = ExposureNoticeView(
         "position is proven."
     ),
 )
+_CLOSING_ORDER_UNCONFIRMED = (
+    "The Clerk sent a closing order for this bot and could not confirm it, so the app cannot "
+    "vouch for what this bot holds. The ended run manages nothing. The Clerk holds the position "
+    "and starts no other closing order for this bot, and Flatten is refused while that order is "
+    "unconfirmed."
+)
+
+
+def _closing_order_unconfirmed(settle: RecoveryCapability) -> ExposureNoticeView:
+    """An ended bot's position held behind a closing order the Clerk could not confirm (#2854).
+
+    ``_POSITION_UNVERIFIED`` said of it that Flatten becomes available once
+    Reconcile now has re-read the account. It does not: no read shows the
+    order, and Flatten stays refused while it is unconfirmed. The way on is
+    to settle the order, which is on the bot's own page. While ``settle``,
+    the bot's settle action, is itself refused, the notice gives its reason
+    and next step.
+
+    Refused because the Clerk's run for the bot is still active, it gives the
+    next step alone: the reason says to stop the bot as well, in a notice
+    that has just said its run ended.
+    """
+    if settle.available:
+        way_on = f'Use "{settle.label}" on the bot\'s page.'
+    else:
+        run_still_active = settle.unavailable_reason_code == "RUN_STILL_ACTIVE"
+        way_on = settle_unavailable_words(
+            None if run_still_active else settle.unavailable_reason, settle.next_step
+        )
+    return ExposureNoticeView(
+        kind="position_unverified",
+        label="A closing order could not be confirmed",
+        explanation=f"{_CLOSING_ORDER_UNCONFIRMED} {way_on}",
+    )
+
+
 _ENTRY_ORDER_WORKING = ExposureNoticeView(
     kind="entry_order_working",
     label="An entry order is still working",
@@ -1282,6 +1355,7 @@ __all__ = [
     "adapt_sqlite_panel",
     "build_sqlite_catalog",
     "exit_in_progress",
+    "exit_unconfirmed",
     "has_bot_scoped_custody_problem",
     "recent_fill_view",
 ]

@@ -4,8 +4,16 @@ An EXIT can fail while the outcome of its closing order is not known. An
 operator's Flatten whose send was lost finds its own order at Alpaca as it
 would be sent again, and is held. The order then fills where no read shows
 it: the open orders no longer list it, and its exact lookup still answers
-absent. The check before the next send finds the shares gone and fails the
-EXIT -- "nothing was sent" -- while its own order sold them.
+absent. The check before the next send finds the shares gone.
+
+That check used to fail the EXIT -- "nothing was sent" -- while its own order
+sold them. A closing order that was sent is no longer failed by the Clerk
+itself: its EXIT keeps custody until the order is found or an operator
+settles it. So the EXIT now fails when the operator, who sees no such order
+at Alpaca either, settles it as not sent. Either way the EXIT is failed with
+its order's outcome unknown and the position still attributed. Settled so,
+the position is left to the operator as a stuck exit: the Clerk sends no
+order for it by itself, and still looks the order up.
 
 Nothing was sold twice, but nothing looked the failed EXIT's order up again
 either: only a failed ENTER's order was. The position stayed attributed, and
@@ -25,17 +33,19 @@ from app.broker.alpaca.clerk.sqlite import reconcile as reconcile_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import flatten_send_refusal
-from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_BROKER
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
-from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, reconcile_account
-from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionError
-from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
+from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
+from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionError,
+    RecoveryExecutionRequest,
+    execute_recovery_action,
+)
+from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.clerk.sqlite.uncertainty import POSITION_DRIFT_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_STUCK_REASON_CODE, POSITION_DRIFT_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.contract.models import BrokerPosition
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.utils.session_anchors import et_date_at_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
     FIVE_MINUTES_OF_PASSES,
@@ -45,9 +55,9 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
     _closing_order,
     _exit_state,
     _passes,
-    _the_runner_sends_the_exit,
 )
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
+    _context_of,
     _exit_not_flat,
     _flatten,
     _stopped_bot_offered_its_flatten,
@@ -59,6 +69,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _position,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
 )
+from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import _open_episode
 
 # How long a closing order rests between two lookups: every other pass.
 REST_BETWEEN_LOOKUPS_MS = 30_000
@@ -73,6 +84,11 @@ def _position_drift(repo: ClerkSqliteRepository) -> dict | None:
     return repo.active_uncertainty(
         scope="ACCOUNT_CLERK", reason_code=POSITION_DRIFT_REASON_CODE, strategy_instance_id=None
     )
+
+
+def _exit_stuck(repo: ClerkSqliteRepository) -> dict | None:
+    """The bot's open episode under which the Clerk sends no order for its position by itself, if it has one."""
+    return _open_episode(repo, EXIT_STUCK_REASON_CODE)
 
 
 def _the_sweep(facade: SqliteAlpacaClerkFacade) -> Callable[[], Awaitable[AccountReconciliationResult]]:
@@ -95,6 +111,38 @@ def _closing_orders(repo: ClerkSqliteRepository) -> list[OrderResource]:
     return [order for order in repo.orders_for_strategy(SID) if order.role == "REDUCING"]
 
 
+async def _the_operator_settles_it_as_not_sent(repo: ClerkSqliteRepository, facade: SqliteAlpacaClerkFacade) -> None:
+    """The operator looks at Alpaca, sees no such order and says so, and the Clerk's own reads agree.
+
+    How an EXIT whose closing order was sent now ends with that order's
+    outcome unknown: the Clerk no longer fails it by itself. Dispatched as
+    the bot's page dispatches it; the EXIT ends as not sent, failed, with the
+    position still attributed and left to the operator: the exit is stuck,
+    so no pass that follows sends anything for the bot by itself.
+    """
+    current_context = _context_of(repo, SID)
+    presented = next(
+        action
+        for action in build_recovery_catalog(await current_context())
+        if action.action_id == "settle_unknown_exit_order"
+    )
+    assert presented.available, presented.unavailable_reason
+    settled = await execute_recovery_action(
+        facade,
+        request=RecoveryExecutionRequest(
+            action_id="settle_unknown_exit_order",
+            concurrency_token=presented.concurrency_token,
+            execution_ref=presented.execution_ref,
+            reason="Alpaca's order list shows no such order.",
+            attestation=OrderOutcomeAttestation(kind="absent"),
+            operator="ops-desk",
+        ),
+        current_context=current_context,
+    )
+    assert settled.applied is True
+    assert _exit_not_flat(repo) is not None and _exit_stuck(repo) is not None
+
+
 async def _a_flatten_failed_after_its_own_order_filled_unseen(
     repo: ClerkSqliteRepository, clock: _TestClock
 ) -> tuple[_Alpaca, SqliteAlpacaClerkFacade, str]:
@@ -114,41 +162,83 @@ async def _its_flatten_fails_after_its_own_order_fills_unseen(
     facade: SqliteAlpacaClerkFacade,
     current_context: Callable[[], Awaitable[RecoveryPolicyContext]],
 ) -> OrderResource:
-    """An operator's Flatten told "nothing was sent" while its own lost order sold the position.
+    """An operator's Flatten ended as not sent while its own lost order sold the position.
 
-    Its send's answer is lost and the order reaches Alpaca. Two passes on,
-    the account read made to send it again lists it, so it is held. It then
-    fills: no open order, no shares, and an exact lookup that still answers
-    absent. The next pass's check before the send fails the EXIT. Returns
-    the closing order, which names its failed EXIT.
+    :func:`_its_flatten_is_lost_and_its_order_is_held_at_alpaca`, then
+    :func:`_its_order_fills_unseen_and_is_settled_as_not_sent`. Returns the
+    closing order, which names its failed EXIT.
     """
-    earlier = {order.order_ref for order in _closing_orders(repo)}
     sent_before = len(alpaca.sent)
-    await _flatten(facade, current_context)
-    (closing,) = [order for order in _closing_orders(repo) if order.order_ref not in earlier]
-    exit_id = closing.effect_operation_id
-    alpaca.lists_among_its_open_orders(closing.client_order_id)
+    closing = await _its_flatten_is_lost_and_its_order_is_held_at_alpaca(repo, alpaca, facade, current_context)
+    await _its_order_fills_unseen_and_is_settled_as_not_sent(repo, alpaca, facade, closing)
+    assert len(alpaca.sent) == sent_before + 1
+    return closing
+
+
+def _driven_without_the_sweeps_account_read(
+    repo: ClerkSqliteRepository, alpaca: _Alpaca, exit_id: str
+) -> Callable[[], Awaitable[object]]:
+    """The EXIT driven as the sweep drives it, without the sweep's own account read first.
+
+    That read would fold an order the open orders list.
+    """
 
     async def the_exit_is_driven() -> object:
-        # Driven as the sweep drives it, without the sweep's own account read
-        # first: that read would fold an order the open orders list.
         return await resolve_exit(
             repo, effect_operation_id=exit_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY, read=alpaca
         )
 
-    await _passes(repo, the_exit_is_driven, RESEND_AFTER_MS // SWEEP_INTERVAL_MS)
-    assert _exit_state(repo, exit_id) == "unknown"
+    return the_exit_is_driven
 
+
+async def _its_flatten_is_lost_and_its_order_is_held_at_alpaca(
+    repo: ClerkSqliteRepository,
+    alpaca: _Alpaca,
+    facade: SqliteAlpacaClerkFacade,
+    current_context: Callable[[], Awaitable[RecoveryPolicyContext]],
+) -> OrderResource:
+    """An operator's Flatten whose send's answer is lost, while its order reaches Alpaca.
+
+    Two passes on, the account read made to send it again lists it, so it is
+    held: nothing is sent again, and its EXIT's outcome is unknown. Returns
+    the closing order.
+    """
+    earlier = {order.order_ref for order in _closing_orders(repo)}
+    await _flatten(facade, current_context)
+    (closing,) = [order for order in _closing_orders(repo) if order.order_ref not in earlier]
+    alpaca.lists_among_its_open_orders(closing.client_order_id)
+
+    await _passes(
+        repo,
+        _driven_without_the_sweeps_account_read(repo, alpaca, closing.effect_operation_id),
+        RESEND_AFTER_MS // SWEEP_INTERVAL_MS,
+    )
+    assert _exit_state(repo, closing.effect_operation_id) == "unknown"
+    return closing
+
+
+async def _its_order_fills_unseen_and_is_settled_as_not_sent(
+    repo: ClerkSqliteRepository, alpaca: _Alpaca, facade: SqliteAlpacaClerkFacade, closing: OrderResource
+) -> None:
+    """The held order fills where no read shows it, and the operator settles it as not sent.
+
+    No open order, no shares, and an exact lookup that still answers absent.
+    The next pass's check before the send finds the shares gone: it sends
+    nothing and keeps the EXIT's custody. The account reads as drifted, and
+    the operator, who sees no such order at Alpaca, settles it as not sent.
+    That fails the EXIT with the position still attributed.
+    """
+    exit_id = closing.effect_operation_id
     alpaca.fills(closing.client_order_id)
-    await _passes(repo, the_exit_is_driven, 1)
+    await _passes(repo, _driven_without_the_sweeps_account_read(repo, alpaca, exit_id), 1)
+
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert flatten_send_refusal(repo, exit_id) is None
+    assert (await _one_pass(repo, facade)).verdict == "position_drift"
+    await _the_operator_settles_it_as_not_sent(repo, facade)
 
     assert _exit_state(repo, exit_id) == "failed"
-    refusal = flatten_send_refusal(repo, exit_id)
-    assert refusal is not None and refusal.reason_code == FLATTEN_NOT_COVERED_AT_BROKER
-    assert "nothing was sent" in refusal.explanation
-    assert len(alpaca.sent) == sent_before + 1
     assert repo.position(SID, "SPY") == 10
-    return closing
 
 
 async def test_a_failed_flattens_own_order_that_filled_unseen_is_found_and_credited_once(
@@ -188,7 +278,7 @@ async def test_a_failed_flattens_own_order_that_filled_unseen_is_found_and_credi
         ("SELL", 10.0, 100.0)
     ]
     assert _position_drift(repo) is None
-    assert _exit_not_flat(repo) is None
+    assert _exit_not_flat(repo) is None and _exit_stuck(repo) is None
     # The EXIT's own record is not rewritten: it failed, and its order's fill is on its timeline.
     assert _exit_state(repo, exit_id) == "failed"
     assert len(alpaca.sent) == 1
@@ -356,9 +446,9 @@ async def _a_flatten_failed_uncovered_after_its_send_was_lost(
 ) -> tuple[SqliteAlpacaClerkFacade, OrderResource]:
     """An operator's Flatten is lost, and refused when it would be sent again: Alpaca then holds 6 of the 10.
 
-    The pass that refuses it fails the EXIT and looks its closing order up
-    once, while the symbol reads as drifted. Returns the account's facade and
-    the closing order.
+    The pass that refuses it keeps the EXIT's custody and reads the symbol as
+    drifted. The operator then settles the order as not sent, which fails the
+    EXIT. Returns the account's facade and the closing order.
     """
     facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
     await _flatten(facade, current_context)
@@ -368,6 +458,8 @@ async def _a_flatten_failed_uncovered_after_its_send_was_lost(
     refused = await _one_pass(repo, facade)
 
     assert refused.verdict == "position_drift"
+    assert _exit_state(repo, closing.effect_operation_id) == "unknown"
+    await _the_operator_settles_it_as_not_sent(repo, facade)
     assert _exit_state(repo, closing.effect_operation_id) == "failed"
     assert len(alpaca.sent) == 1
     return facade, closing
@@ -447,48 +539,6 @@ async def test_a_failed_exits_closing_order_the_open_orders_list_is_not_looked_u
     assert len(alpaca.sent) == 1
 
 
-async def test_an_exit_released_at_its_sessions_end_whose_lost_order_filled_is_found_too(
-    crashed_with_exposure,  # noqa: F811
-) -> None:
-    """Any EXIT that failed with a closing order it had sent is asked about, not an operator's Flatten alone.
-
-    A running bot's exit is lost a minute before the close, and its order
-    fills at Alpaca unseen. After the close the order cannot go out again, so
-    the EXIT fails and releases the position. The same lookup finds the fill.
-    """
-    repo, clock = crashed_with_exposure
-    close_ms = session_close_ms_utc(et_date_at_ms(clock()))
-    _walk_clock_to(repo, close_ms - 60_000)
-    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
-    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
-    closing = _closing_order(repo)
-    alpaca.fills(closing.client_order_id)
-    _walk_clock_to(repo, close_ms + 60_000)
-
-    async def one_pass() -> AccountReconciliationResult:
-        return await reconcile_account(
-            repo, read=alpaca, trade=alpaca, trigger="AUTOMATIC", pricing=UNPRICEABLE_RECOVERY
-        )
-
-    released = await one_pass()
-
-    assert _exit_state(repo, exit_id) == "failed"
-    assert released.verdict == "position_drift"
-    assert repo.position(SID, "SPY") == 10
-
-    alpaca.answers_its_lookup(closing.client_order_id)
-    _walk_clock_to(repo, repo.clock() + REST_BETWEEN_LOOKUPS_MS)
-    found = await one_pass()
-
-    assert found.verdict == "clean"
-    assert repo.position(SID, "SPY") == 0
-    assert [(fill["side"], fill["qty"], fill["price"]) for fill in repo.fills_for_order(closing.order_ref)] == [
-        ("SELL", 10.0, 100.0)
-    ]
-    assert _position_drift(repo) is None
-    assert len(alpaca.sent) == 1
-
-
 async def test_a_pass_looks_up_no_more_closing_orders_than_its_share_and_takes_them_in_turn(
     crashed_with_exposure,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -499,6 +549,7 @@ async def test_a_pass_looks_up_no_more_closing_orders_than_its_share_and_takes_t
     both orders are due a lookup in the same pass. With a share of one, that
     pass asks about one and the next pass about the other: neither is starved,
     and a pass's broker reads do not grow with the failed EXITs behind it.
+    Then both have rested, and the passes take them in the same turn again.
     """
     monkeypatch.setattr(reconcile_module, "MAX_FAILED_EXIT_ORDER_LOOKUPS", 1)
     repo, clock = crashed_with_exposure
@@ -516,6 +567,7 @@ async def test_a_pass_looks_up_no_more_closing_orders_than_its_share_and_takes_t
         alpaca.holds = 6.0
         _walk_clock_to(repo, repo.clock() + RESEND_AFTER_MS - SWEEP_INTERVAL_MS)
         await _one_pass(repo, facade)
+        await _the_operator_settles_it_as_not_sent(repo, facade)
         assert repo.active_exit_for_strategy(SID) is None
 
     await its_lost_flatten_is_refused_when_it_would_be_sent_again()
@@ -524,20 +576,20 @@ async def test_a_pass_looks_up_no_more_closing_orders_than_its_share_and_takes_t
     _walk_clock_to(repo, repo.clock() + 5_000)
     reconciled = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
     assert reconciled.verdict == "clean"
-    mark = len(alpaca.looked_up)
     await its_lost_flatten_is_refused_when_it_would_be_sent_again()
     (second,) = [ref for ref in closing_orders() if ref != first]
     assert len(alpaca.sent) == 2
 
-    # Both were due in the pass that failed the second Flatten: it asked about one, the newer.
-    assert lookups_since(mark)[-1:] == [second]
-    assert lookups_since(mark).count(first) == 0
+    async def asked_in_one_pass() -> list[str]:
+        mark = len(alpaca.looked_up)
+        await _one_pass(repo, facade)
+        return lookups_since(mark)
 
-    mark = len(alpaca.looked_up)
-    await _one_pass(repo, facade)
-    assert lookups_since(mark) == [first]
+    # Both have rested and are due in the same pass: it asks about one, and the next pass about the other.
+    _walk_clock_to(repo, repo.clock() + REST_BETWEEN_LOOKUPS_MS)
+    in_turn = [await asked_in_one_pass(), await asked_in_one_pass()]
+    assert sorted(in_turn) == sorted([[first], [second]])
 
-    mark = len(alpaca.looked_up)
-    await _one_pass(repo, facade)
-    assert lookups_since(mark) == [second]
+    # Each is due again a rest after it was asked: the same turn, one a pass.
+    assert [await asked_in_one_pass(), await asked_in_one_pass()] == in_turn
     assert len(alpaca.sent) == 2

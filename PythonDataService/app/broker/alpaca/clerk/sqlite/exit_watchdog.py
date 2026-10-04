@@ -52,6 +52,14 @@ one transition (``unknown_order_attestation``). No read of the account shows
 whether that order traded, so this watchdog never re-drives such an exit:
 every pass holds it as it holds an exit whose re-drives it gave up on, and
 the hold says which of the two it is.
+
+#2854: an EXIT whose closing order was sent and could not be confirmed stays
+``unknown`` with custody, possibly for days, and is work in flight on its
+symbol for as long. Another bot's re-drive on that symbol is refused while it
+stands, as behind any other work in flight, and escalates on the same clock.
+What that bot is told names the bot whose order it is and points at that
+bot's page. Its next step is its own safe flatten, which needs nothing of
+that order.
 """
 
 from __future__ import annotations
@@ -147,6 +155,11 @@ class _RedriveRefused(NamedTuple):
     message: str
     facts: dict[str, object]
     outcome: Literal["failure", "hold"] = "failure"
+    # What the operator is told, where it is more than the log line says, and
+    # the next step of the ``EXIT_STUCK`` episode a failure escalates to, where
+    # it says more than the default (#2854).
+    explanation: str | None = None
+    next_step: str | None = None
 
 
 @dataclass(frozen=True)
@@ -424,7 +437,10 @@ async def _recover_stale_exit(
                     "action": accepted.action, "account_id": repo.account_id,
                     "strategy_instance_id": sid, "symbol": cause.symbol, **accepted.facts,
                 })
-            return RecoveryResult(outcome, accepted.reason_code, accepted.message)
+            return RecoveryResult(
+                outcome, accepted.reason_code, accepted.explanation or accepted.message,
+                next_step=accepted.next_step,
+            )
         # ``_accept_admissible_redrive`` already checked the account for this
         # re-drive; the Flatten's send-time check is not its own (#2839).
         resolved = await resolve_accepted_exit(
@@ -486,6 +502,7 @@ def commit_recovery_evaluations(
             repo, redrive_policy=policy, stale_exit=stale, now_ms=repo.clock(),
             deferred_since_ms=None if exhausted else observation.first_failure_at_ms,
             failure_elapsed_ms=observation.failure_elapsed_ms, failure_reason=result.explanation,
+            next_step=result.next_step,
         )
 
 
@@ -520,6 +537,18 @@ def _accept_admissible_redrive(
             facts={}, outcome="hold",
         )
     if clerk_work_in_flight(repo, symbol):
+        unconfirmed_of = bots_with_an_unconfirmed_closing_order(repo, symbol, other_than=strategy_instance_id)
+        if unconfirmed_of:
+            explanation, next_step = _behind_unconfirmed_closing_orders(unconfirmed_of, symbol)
+            return _RedriveRefused(
+                action="exit_redrive_deferred_unconfirmed_closing_order", reason_code="EXIT_OTHER_ORDER_WORKING",
+                message=(
+                    "deferred a stuck-EXIT re-drive: another bot's closing order on the symbol "
+                    "was sent and could not be confirmed"
+                ),
+                facts={"strategy_attributed_qty": remaining, "unconfirmed_closing_order_of": list(unconfirmed_of)},
+                explanation=explanation, next_step=next_step,
+            )
         return _RedriveRefused(
             action="exit_redrive_deferred_work_in_flight", reason_code="EXIT_OTHER_ORDER_WORKING",
             message=(
@@ -593,6 +622,64 @@ def clerk_work_in_flight(repo: ClerkSqliteRepository, symbol: str) -> bool:
     )
 
 
+def bots_with_an_unconfirmed_closing_order(
+    repo: ClerkSqliteRepository, symbol: str, *, other_than: str
+) -> tuple[str, ...]:
+    """The other bots whose closing order on ``symbol`` the Clerk sent and could not confirm (#2854).
+
+    Work in flight (:func:`clerk_work_in_flight`) that only an operator may
+    end: such an EXIT stays ``unknown`` with custody until Alpaca shows its
+    order or the order is settled. Read from what the settle action itself is
+    presented from (``unknown_exit_orders``), so a bot is named exactly when
+    its page shows that order. The page cannot always settle it: settling is
+    refused for a running bot, inside the wait after a send, and for an order
+    Alpaca answered with one that names no client order id.
+    """
+    candidates = sorted({
+        effect.strategy_instance_id
+        for effect in repo.reconcilable_effect_operations()
+        if effect.kind == "EXIT" and effect.state == "unknown"
+        and effect.strategy_instance_id is not None and effect.strategy_instance_id != other_than
+    })
+    return tuple(
+        sid for sid in candidates
+        if any(order.symbol.upper() == symbol.upper() for order in repo.unknown_exit_orders(sid))
+    )
+
+
+def _behind_unconfirmed_closing_orders(bots: tuple[str, ...], symbol: str) -> tuple[str, str]:
+    """What a bot is told while other bots' unconfirmed closing orders hold its re-drive: why, and what to do (#2854).
+
+    The why is the hold's own reason and, if the hold outlasts the failure
+    budget, the reason ``EXIT_STUCK`` gives. The next step is ``EXIT_STUCK``'s:
+    by then the Clerk sends nothing more for this bot by itself, whatever
+    becomes of those orders, so it is the operator's own flatten of this bot.
+
+    That flatten needs nothing of those orders, and some of them no action
+    settles. Both texts are written once and stay on this bot's rows after
+    the orders are settled. So neither says to settle them first: each names
+    the bots whose pages show them.
+    """
+    flatten = "Run Reconcile now and execute the presented safe flatten for this bot."
+    if len(bots) == 1:
+        (bot,) = bots
+        return (
+            f"Another bot, {bot}, has a closing order for {symbol} that the Clerk sent and could not "
+            "confirm. While that order's outcome is unknown, the Clerk does not send this bot's exit "
+            f"again by itself. See {bot}'s page.",
+            f"{flatten} The Clerk does not send this bot's exit by itself again, even after {bot}'s "
+            f"closing order is settled; see {bot}'s page.",
+        )
+    names = ", ".join(bots)
+    return (
+        f"Other bots ({names}) have closing orders for {symbol} that the Clerk sent and could not "
+        "confirm. While their outcomes are unknown, the Clerk does not send this bot's exit again by "
+        "itself. See those bots' pages.",
+        f"{flatten} The Clerk does not send this bot's exit by itself again, even after the closing "
+        f"orders of {names} are settled; see their pages.",
+    )
+
+
 def _escalate_to_exit_stuck(
     repo: ClerkSqliteRepository,
     *,
@@ -601,11 +688,17 @@ def _escalate_to_exit_stuck(
     now_ms: int,
     deferred_since_ms: int | None,
     failure_elapsed_ms: int = 0, failure_reason: str = "",
+    next_step: str | None = None,
 ) -> None:
     """Escalate a stuck EXIT to EXIT_STUCK: re-drives exhausted, or deferred too long.
 
     ``deferred_since_ms`` is ``None`` for exhausted re-drives and the first
     deferral's clock otherwise; it only changes the operator-facing wording.
+    ``next_step`` is the failing result's own, where it has more to say than
+    a reconciliation and a flatten: behind another bot's unconfirmed closing
+    order the way on is still this bot's own flatten, and the step also says
+    that the Clerk sends nothing more for this bot by itself and names the
+    bot whose page shows that order (#2854).
     """
     sid = stale_exit.strategy_instance_id
     cause = stale_exit.cause
@@ -651,7 +744,7 @@ def _escalate_to_exit_stuck(
                 "New exposure stays on hold for this strategy and automatic "
                 "re-drives stopped. Exact operator reduction remains available."
             ),
-            next_step="Run Reconcile now, then execute the presented safe flatten.",
+            next_step=next_step or "Run Reconcile now, then execute the presented safe flatten.",
             evidence_refs=(episode_now["uncertainty_id"],),
             cause_facts=ExitStuckCause(
                 symbol=cause.symbol,

@@ -33,6 +33,17 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reason_policy
 
 logger = logging.getLogger(__name__)
 
+LOST_ANSWER_NOTICE = UnknownOutcomeNotice(
+    explanation="The broker response was lost or timed out.",
+    next_step="Reconcile now; cancellation and exact-identity lookup remain available.",
+)
+"""What the unknown-outcome episode says when it opens on a fold that records no notice: an answer was lost.
+
+A fold that records none leaves an open episode's words as they are, so one
+that must put them back to these after an earlier notice records this as its
+own (#2854).
+"""
+
 
 def _transition_sequence(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT MAX(sequence) AS seq FROM custody_transitions").fetchone()["seq"]
@@ -58,11 +69,7 @@ def _unknown_outcome_envelope(
             "New exposure and new reducing orders are on hold for the bot or ticket that "
             "placed this order until its exact broker identities are recovered."
         ),
-        next_step=(
-            "Reconcile now; cancellation and exact-identity lookup remain available."
-            if notice is None
-            else notice.next_step
-        ),
+        next_step=LOST_ANSWER_NOTICE.next_step if notice is None else notice.next_step,
         evidence_refs=[identity.order_ref for identity in cause.identities],
         cause_facts=cause.to_mapping(),
     )
@@ -302,7 +309,7 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     if active is None:
         cause = OrderOutcomeUnknownCause(identities=(identity,))
         facts = _unknown_outcome_envelope(
-            cause=cause, why="The broker response was lost or timed out.", notice=notice
+            cause=cause, why=LOST_ANSWER_NOTICE.explanation, notice=notice
         )
         conn.execute(
             "INSERT INTO uncertainties (uncertainty_id, scope, severity, "
@@ -616,6 +623,7 @@ def fold_uncertainty_resolved(conn: sqlite3.Connection, payload: dict[str, Any])
 
 
 __all__ = [
+    "LOST_ANSWER_NOTICE",
     "fold_uncertainty_raised",
     "fold_uncertainty_refreshed",
     "fold_uncertainty_resolved",

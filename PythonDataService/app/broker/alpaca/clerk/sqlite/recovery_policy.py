@@ -245,6 +245,10 @@ def _stop_confirmation(ctx: RecoveryPolicyContext) -> RecoveryConfirmation:
     )
 
 
+#: The settle action's name: its descriptor's label, and what every text that
+#: sends the operator to the action quotes (#2854).
+SETTLE_UNKNOWN_EXIT_ORDER_LABEL = "Settle the uncertain order"
+
 _DESCRIPTORS: tuple[_Descriptor, ...] = (
     _Descriptor(
         action_id="recover_exact_execution_evidence",
@@ -331,7 +335,7 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
     ),
     _Descriptor(
         action_id="settle_unknown_exit_order",
-        label="Settle the uncertain order",
+        label=SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
         explanation=(
             "Say what Alpaca shows for a closing order the Clerk could not confirm. "
             "The Clerk reads Alpaca itself first and sends no order."
@@ -800,6 +804,34 @@ def _account_evidence(
     return _pass_evidence(ctx, positions) or receipt
 
 
+# A Flatten is refused while a closing order of the bot is unconfirmed, and
+# no reconciliation cures that: the operator settles the order (#2854).
+_UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN = (
+    "The Clerk sent a closing order for this bot and could not confirm it, so a flatten could "
+    "close the position a second time."
+)
+_SETTLE_BEFORE_FLATTEN = (
+    "Settle that order first: look at this account's orders at Alpaca, then use "
+    f'"{SETTLE_UNKNOWN_EXIT_ORDER_LABEL}".'
+)
+
+
+def settle_unavailable_words(reason: str | None, next_step: str | None) -> str:
+    """Why the settle action cannot be used for the order it is needed for, and what to do meanwhile (#2854).
+
+    The settle capability's own unavailable reason and next step, under the
+    action's name. Said by whatever would otherwise point the operator at
+    settling -- a refused Flatten, a refused Clear, a notice -- while settling
+    is itself refused: for a running bot, inside the wait after a send, or
+    for an order Alpaca answered with one that names no client order id.
+    """
+    return " ".join(
+        part
+        for part in (f'"{SETTLE_UNKNOWN_EXIT_ORDER_LABEL}" cannot be used now:', reason, next_step)
+        if part
+    )
+
+
 def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
     non_finite_positions = _non_finite_positions(ctx)
@@ -820,6 +852,9 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     reason_code: str | None = None
     reason: str | None = None
     account_check: AccountCheckEvidence | None = None
+    # What to do about an unconfirmed closing order, by whether the settle
+    # action is available for it (#2854); ``None`` when that is not the refusal.
+    settle_first: str | None = None
     if non_finite_positions:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = (
@@ -833,7 +868,16 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason = "Cancel and prove every working order terminal before preparing reduction."
     elif relevant_uncertainties:
         reason_code = "EXPOSURE_NOT_PROVEN"
-        reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
+        settle = _settle_unknown_exit_order_decision(ctx)
+        if settle.needed:
+            reason = _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN
+            settle_first = (
+                _SETTLE_BEFORE_FLATTEN
+                if settle.available
+                else settle_unavailable_words(settle.reason, settle.next_step)
+            )
+        else:
+            reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
     else:
         checked = _account_evidence(ctx, positions, reconciliation_evidence)
         if isinstance(checked, AccountCheckEvidence):
@@ -914,6 +958,8 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             else (
                 "Cancel verified working orders first."
                 if working_orders
+                else settle_first
+                if settle_first is not None
                 else "Run Reconcile now and refresh the custody snapshot."
             )
         ),
@@ -1146,12 +1192,15 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     """What the operator is asked about ``order``, in the Clerk's own words (#2854).
 
     The ticket says what the Clerk does meanwhile, which is not nothing. It
-    starts no other closing order for the bot, but while the order's session
-    is open it sends this same order again by itself, after waits that grow
-    to a ceiling and then stay there (``exit_resolution.resend_wait_ms``),
-    and each send makes what the operator saw at Alpaca, and the action they
-    were presented, out of date. An order Alpaca answered under another
-    client order id is never sent again.
+    starts no other closing order for the bot, but while the session the
+    order was sent in is open it sends this same order again by itself, after
+    waits that grow to a ceiling and then stay there
+    (``exit_resolution.resend_wait_ms``), and each send makes what the
+    operator saw at Alpaca, and the action they were presented, out of date.
+    Once that session has ended it never sends the order again, on that day
+    or a later one, and the ticket says so: an operator reading it the next
+    morning must not wait for a send that will not come. An order Alpaca
+    answered under another client order id is never sent again.
     """
     side: Literal["buy", "sell"] = "sell" if order.side.upper() == "SELL" else "buy"
     sent = (
@@ -1161,10 +1210,11 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     holds = "holds the position and starts no other closing order for this bot"
     if order.answered_as_client_order_id is None:
         ticket = (
-            f"{sent} and could not confirm it. It {holds}. While the order's session is open, "
-            "the Clerk sends this same order again by itself, after a wait that grows to "
-            f"{RESEND_WAIT_CEILING_MS // 60_000} minutes and then stays there. If it does, look "
-            "at Alpaca again and open this action again."
+            f"{sent} and could not confirm it. It {holds}. While the session the order was "
+            "sent in is open, the Clerk sends this same order again by itself, after a wait "
+            f"that grows to {RESEND_WAIT_CEILING_MS // 60_000} minutes and then stays there. If "
+            "it does, look at Alpaca again and open this action again. Once that session has "
+            "ended, the Clerk never sends the order again."
         )
     else:
         ticket = (

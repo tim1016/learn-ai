@@ -121,6 +121,7 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     ended_uncleanly,
     exit_in_progress,
+    exit_unconfirmed,
     has_bot_scoped_custody_problem,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
@@ -660,6 +661,7 @@ def _with_bot_page(
         activity=evidence.economics.run_activity,
         budget=facade.repository.deployment_budget(sid),
         exit_in_progress=exit_in_progress(projection, sid),
+        exit_unconfirmed=exit_unconfirmed(projection, sid),
     )
     return panel.model_copy(
         update={

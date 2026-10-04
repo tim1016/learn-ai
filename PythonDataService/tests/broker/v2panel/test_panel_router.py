@@ -1862,7 +1862,7 @@ async def test_a_running_bot_page_leads_with_its_own_status_summary_and_toolbar(
     page = body["bot_page"]
     assert page["status"] == {"state": "running", "label": "Running", "reason": None}
     assert page["summary"]["text"] == "Running since Tue Nov 14 2023, 17:13 ET · 2 decisions, no trades."
-    assert page["summary"]["template_version"] == 1
+    assert page["summary"]["template_version"] == 2
     toolbar = {entry["action_id"]: entry for entry in page["toolbar"]}
     assert (toolbar["stop_bot_decisions"]["availability"], toolbar["stop_bot_decisions"]["primary"]) == (
         "available",

@@ -241,7 +241,9 @@ class UnknownOutcomeNotice:
     """What the operator is told about an order whose outcome is unknown for a reason other than a lost answer (#2854).
 
     The open ``ORDER_OUTCOME_UNKNOWN`` notice's explanation and next step, in
-    place of the text that says a broker response was lost or timed out.
+    place of the text that says a broker response was lost or timed out. A
+    later lost answer records that text as a notice of its own, to put it
+    back (``uncertainty_folds.LOST_ANSWER_NOTICE``).
     """
 
     explanation: str

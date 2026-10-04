@@ -373,3 +373,78 @@ While it is working neither attestation settles the EXIT; once it has ended
 without selling anything, "no such order" does. Once it has sold anything,
 was replaced, or cannot be read, neither attestation settles the EXIT and
 the Clerk keeps the position held.
+
+
+## 2026-10-03 amendment: a closing order that was sent keeps its position's custody past its session (#2854)
+
+Owner decision 2026-10-03: an uncertain exit keeps its position's custody past
+the session end until it is resolved.
+
+The send-time rule decides, as a reducing order is sent, whether it may go to
+the broker. An order it would not send was failed through `EXIT_NOT_FLAT`,
+which releases the position to another EXIT. That is still right for an order
+that was never sent. It was wrong for one that was sent and whose answer was
+lost: the order may be at Alpaca with no read showing it, and a running bot's
+next exit decision and the sale at a scheduled end are sent with no check of
+the account, so the position could be sold a second time under a new client
+order id.
+
+For an order with a recorded send on a real-broker port:
+
+- Once the session it was sent in has ended, its EXIT stays `unknown` and the
+  Clerk keeps the position. Nothing more is sent for the bot. The order itself
+  is never sent again, in that session or a later one, and no other EXIT is
+  accepted while this one stands.
+- The sale at a bot's scheduled end is included. The 2026-09-29 amendment
+  above has that sale hold outside the regular session and sell at the next
+  open; that now holds only for a sale that was never sent. A sale that was
+  sent is looked up the next day, not sent again.
+- An operator's Flatten that the account does not cover when it would be sent
+  again keeps custody the same way. A first send the account does not cover
+  still fails the EXIT (#2839).
+- The operator is told once, by the unknown-outcome notice on the bot's page.
+  The lane's attention line for it opens that page. Each pass still looks the
+  order up by its client order id and folds it if Alpaca shows it.
+- The way out is the operator's: they look at Alpaca and settle the order (the
+  amendment above). The Clerk does not release the position by itself. After
+  "no such order" the position stays with the bot and the Clerk still sends
+  nothing for it by itself: the operator sells it or writes it off.
+
+Unchanged: evidence that the bot is flat ends the EXIT first; a lost order is
+still sent again, under the same client order id, while its session is open
+(#2845); an order never sent still fails releasably, or holds for the next
+open when it sells only in regular hours.
+
+A Dry Run is exempt, and so is a live account's Shadow. A simulated port fills
+inside the send and reaches no broker, so nothing of its order can be there
+unseen. Its EXIT fails as before, which is what leaves a Dry Run's run-end
+close free to sell what its ended run still holds (the 2026-09-29 amendment
+above).
+
+Consequences. A position can now stay held overnight, with no bot managing it,
+until an operator settles its order; Clear and Flatten are refused meanwhile
+and name the settle action, or give that action's own reason while it cannot
+be used for the order. Settled as "no such order", the position is still
+held for the bot, now as a stuck exit the Clerk sends nothing for: Flatten is
+the operator's again, and Clear waits for the sale or the write-off. The
+stopped bot's budget stays committed, and a new Deploy is a new bot and is not
+blocked. A bot's own exit and the sale at a scheduled end are still sent with
+no check of the account; that is a separate change (#2854 item 8).
+
+The sale at a scheduled end does keep to the stuck exit's hold. An end left
+pending behind a held order puts no sale in once the order is settled as "no
+such order": that settlement opens `EXIT_STUCK`, and the end accepts no sale
+while it is open. The end stays pending until the operator sells the position
+or writes it off, and is then recorded carried out with nothing sold (the
+amendment of 2026-10-03 to the scheduled end, above).
+
+A held order is also work in flight on its symbol: while it stands the Clerk
+re-drives no other bot's failed exit of that symbol, and such an exit is told
+as stuck after the usual eight regular-session minutes. That bot's notices
+name the bot whose order is held and point at that bot's page, and they do
+not say to settle that order first. The blocked bot's next step is its own
+Reconcile now and safe flatten: that flatten needs nothing of the held order
+and is available the whole time, and the held order may be one no action
+settles. Once the blocked exit is `EXIT_STUCK` the watchdog never re-drives
+it, so the notice also says that the Clerk does not send that bot's exit by
+itself again, even after the other bot's order is settled.

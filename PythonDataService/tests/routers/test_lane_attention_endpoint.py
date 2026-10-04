@@ -24,6 +24,8 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RecoveryResult, record_exit_recovery
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -35,8 +37,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
+from app.broker.contract.errors import BrokerUnavailable
 from app.main import app
 from app.utils.timestamps import to_ms_utc
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
+from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
 
 ACCOUNT = "PA-BELL-1"
 _T0 = 1_788_040_000_000  # a fixed int64 ms UTC
@@ -476,6 +483,77 @@ async def test_a_bot_whose_exit_has_not_flattened_is_named_once(tmp_path: Path) 
         repo.close()
 
     assert [(item["kind"], item["strategy_instance_id"]) for item in items] == [("exit", "ema-1")]
+
+
+def _a_bot_on_the_real_clerk(tmp_path: Path) -> tuple[ClerkSqliteRepository, settling._AlpacaAccount]:
+    """A running bot's ledger in the regular session, and an Alpaca that never receives what is sent to it."""
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=settling.ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1",
+        config_json=_TRADE_CONFIG,
+    )
+    submit_start_run(
+        repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID, lifecycle_run_id=settling.RUN_ID
+    )
+    return repo, settling._AlpacaAccount(repo, clock, submits=("never_arrives",))
+
+
+async def test_a_bot_whose_closing_order_is_unconfirmed_is_one_line_that_opens_the_bot(tmp_path: Path) -> None:
+    """Home's line for an unconfirmed closing order opened the order records, which cannot settle it (#2854).
+
+    The Clerk holds the position behind that order, and the order is
+    settled on the bot's page ("Settle the uncertain order"). So the line
+    opens the bot. It is the bot's one line: the bot is not named again as
+    stopped and holding, under a Flatten that is refused.
+    """
+    repo, alpaca = _a_bot_on_the_real_clerk(tmp_path)
+    try:
+        await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+        assert len(repo.unknown_exit_orders(settling.SID)) == 1
+
+        items = await _attention(repo)
+    finally:
+        repo.close()
+
+    assert [
+        (item["reason_code"], item["kind"], item["action"], item["headline"])
+        for item in items if item["strategy_instance_id"] == settling.SID
+    ] == [(
+        "ORDER_OUTCOME_UNKNOWN", "exit", {"label": "Open bot", "destination": "bot"},
+        "A broker order outcome is unknown",
+    )]
+
+
+class _Unreachable(safe_flatten._FakeTrade):
+    """An Alpaca whose submit times out and whose lookups then fail too: the order's outcome stays unknown."""
+
+    def __init__(self) -> None:
+        super().__init__(submit_error=BrokerUnavailable("timeout"))
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> None:
+        raise BrokerUnavailable("alpaca timed out")
+
+
+async def test_an_entry_whose_outcome_is_unknown_still_opens_the_order_records(tmp_path: Path) -> None:
+    """Unchanged: an entry's unknown outcome is nothing the bot's page settles, so its line stays where it was."""
+    repo, _alpaca = _a_bot_on_the_real_clerk(tmp_path)
+    try:
+        await submit_enter(
+            repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID, decision_id="enter-1",
+            lifecycle_run_id=settling.RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"), trade=_Unreachable(),
+        )
+        assert repo.unknown_exit_orders(settling.SID) == ()
+
+        items = await _attention(repo)
+    finally:
+        repo.close()
+
+    assert [
+        (item["kind"], item["action"]) for item in items if item["reason_code"] == "ORDER_OUTCOME_UNKNOWN"
+    ] == [("out_of_sync", {"label": "Open order records", "destination": "activity"})]
 
 
 def _end_uncleanly(tmp_path: Path, sid: str, *, at_ms: int, kind: str = "EXITED_UNVERIFIED") -> None:

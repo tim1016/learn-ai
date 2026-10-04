@@ -21570,6 +21570,11 @@ export interface components {
             ending: "not_started" | "running" | "ended" | "on_schedule" | "stopped" | "halted" | "crashed" | "failed_to_start" | "exited_unverified" | "retired" | "unreadable";
             /** Exit Queued */
             exit_queued: boolean;
+            /**
+             * Exit Unconfirmed
+             * @default false
+             */
+            exit_unconfirmed?: boolean;
             /** Held */
             held: components["schemas"]["HeldPositionFact"][];
             /** Returned Usd */

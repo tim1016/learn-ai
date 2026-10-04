@@ -70,8 +70,11 @@ from tests.broker.alpaca.clerk.sqlite.test_failed_exit_closing_order_lookup impo
     A_LATER_RUN_ID,
     REST_BETWEEN_LOOKUPS_MS,
     _its_flatten_fails_after_its_own_order_fills_unseen,
+    _its_flatten_is_lost_and_its_order_is_held_at_alpaca,
+    _its_order_fills_unseen_and_is_settled_as_not_sent,
     _one_pass,
     _position_drift,
+    _the_operator_settles_it_as_not_sent,
     _the_sweep,
 )
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
@@ -99,10 +102,18 @@ class _AlpacaListingItsClosedOrders(_Alpaca):
     """Alpaca whose closed-orders page lists the orders that filled there, as a reconnect reads it."""
 
     async def list_orders(
-        self, *, status: str | None = None, limit: int | None = None, after_ms: int | None = None
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[BrokerOrder]:
         if status != "closed":
-            return await super().list_orders(status=status, limit=limit, after_ms=after_ms)
+            return await super().list_orders(
+                status=status, limit=limit, after_ms=after_ms, symbols=symbols, until_ms=until_ms
+            )
         return [order for order in self._has.values() if order.status == "filled"]
 
 
@@ -374,11 +385,12 @@ async def _a_closing_order_that_never_showed_is_written_off_and_then_sells(
     """The discharge did not account for the closing order, because the order had not filled.
 
     The Flatten's send was lost and no read showed its order. The shares left
-    the account another way, so the Flatten failed uncovered and the operator
-    discharged the 10. The order was at Alpaca all along: later than the
-    clocks can differ after the discharge read the account, it sells 10 the
-    account no longer holds, so Alpaca is short 10. Returns the account's
-    facade and that order.
+    the account another way, so the Flatten was not sent again; the operator
+    settled its order as not sent, which failed the EXIT, and discharged the
+    10. The order was at Alpaca all along: later than the clocks can differ
+    after the discharge read the account, it sells 10 the account no longer
+    holds, so Alpaca is short 10. Returns the account's facade and that
+    order.
     """
     facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
     await _flatten(facade, current_context)
@@ -386,6 +398,8 @@ async def _a_closing_order_that_never_showed_is_written_off_and_then_sells(
     alpaca.holds = 0.0
     _walk_clock_to(repo, repo.clock() + RESEND_AFTER_MS - SWEEP_INTERVAL_MS)
     assert (await _one_pass(repo, facade)).verdict == "position_drift"
+    assert _exit_state(repo, closing.effect_operation_id) == "unknown"
+    await _the_operator_settles_it_as_not_sent(repo, facade)
     assert _exit_state(repo, closing.effect_operation_id) == "failed"
     await facade.discharge_attributed_residue(strategy_instance_id=SID, symbol="SPY", reason=CHECKED_FLAT)
     assert (await _one_pass(repo, facade)).verdict == "clean"
@@ -528,8 +542,11 @@ async def test_a_short_bots_closing_buy_that_arrives_after_its_position_was_disc
     # ``fills`` moves the account as a sale does; this order bought the short back.
     alpaca.holds = 0.0
     await _passes(repo, the_exit_is_driven, 1)
-    assert _exit_state(repo, closing.effect_operation_id) == "failed"
+    assert _exit_state(repo, closing.effect_operation_id) == "unknown"
     assert repo.position(SID, "SPY") == -10
+    assert (await _one_pass(repo, facade)).verdict == "position_drift"
+    await _the_operator_settles_it_as_not_sent(repo, facade)
+    assert _exit_state(repo, closing.effect_operation_id) == "failed"
     assert (await _one_pass(repo, facade)).verdict == "position_drift"
     await facade.discharge_attributed_residue(strategy_instance_id=SID, symbol="SPY", reason=CHECKED_FLAT)
     assert (await _one_pass(repo, facade)).verdict == "clean"
@@ -587,6 +604,22 @@ async def _a_position_is_opened_and_then_discharged(
     discharge reads it: what every other bot is attributed there. A bot's
     later entry in the symbol, in a later run, names its own decision.
     """
+    await _a_position_is_opened(repo, sid=sid, run_id=run_id, symbol=symbol, side=side, decision_id=decision_id)
+    await _its_position_is_discharged(
+        repo, sid=sid, run_id=run_id, symbol=symbol, held=10.0 if side == "buy" else -10.0, alpaca_holds=alpaca_holds
+    )
+
+
+async def _a_position_is_opened(
+    repo: ClerkSqliteRepository,
+    *,
+    sid: str = SID,
+    run_id: str = RUN_ID,
+    symbol: str = "SPY",
+    side: str = "buy",
+    decision_id: str | None = None,
+) -> None:
+    """``sid`` enters 10 of ``symbol``, and the entry's fill arrives on the stream."""
     submission = await submit_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=decision_id or f"enter-{symbol}",
         lifecycle_run_id=run_id, leg=safe_flatten._leg(symbol=symbol, quantity=10, side=side),
@@ -595,9 +628,6 @@ async def _a_position_is_opened_and_then_discharged(
     entry = repo.order(submission.order_ref or "")
     assert entry is not None
     await _its_fill_arrives_on_the_stream(_the_bots_stream(repo), entry, side=side, symbol=symbol)
-    await _its_position_is_discharged(
-        repo, sid=sid, run_id=run_id, symbol=symbol, held=10.0 if side == "buy" else -10.0, alpaca_holds=alpaca_holds
-    )
 
 
 async def _its_position_is_discharged(
@@ -861,19 +891,26 @@ async def test_another_bots_discharge_does_not_end_the_lookups_of_this_bots_clos
     This bot's Flatten failed after its lost order filled unseen, and a
     sibling's SPY position is then discharged. The pass still asks Alpaca
     about this bot's closing order, and credits the fill it finds.
+
+    The sibling enters while this bot's closing order is still out: once the
+    account reads as drifted in SPY, no bot may enter it. Its position is
+    discharged after this bot's EXIT has failed: until then the Clerk has
+    work of its own in flight on the symbol, and discharges nothing in it.
     """
     repo, clock = crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
     facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
-    closing = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, current_context)
+    closing = await _its_flatten_is_lost_and_its_order_is_held_at_alpaca(repo, alpaca, facade, current_context)
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SIBLING_SID, symbol="SPY", config_hash="h2"
     )
     submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SIBLING_SID, lifecycle_run_id=SIBLING_RUN_ID
     )
-    await _a_position_is_opened_and_then_discharged(
-        repo, sid=SIBLING_SID, run_id=SIBLING_RUN_ID, alpaca_holds=10.0
+    await _a_position_is_opened(repo, sid=SIBLING_SID, run_id=SIBLING_RUN_ID)
+    await _its_order_fills_unseen_and_is_settled_as_not_sent(repo, alpaca, facade, closing)
+    await _its_position_is_discharged(
+        repo, sid=SIBLING_SID, run_id=SIBLING_RUN_ID, held=10.0, alpaca_holds=10.0
     )
     alpaca.answers_its_lookup(closing.client_order_id)
     looked_up_before = alpaca.looked_up.count(closing.client_order_id)

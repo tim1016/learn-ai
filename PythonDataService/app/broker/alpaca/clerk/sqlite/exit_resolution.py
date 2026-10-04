@@ -56,10 +56,27 @@ A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
 after its latest send (#2845). Each send made again waits longer than the
 last (:func:`resend_wait_ms`, #2854), and they go on only while the order may
-still be sent (:func:`_created_leg_may_be_sent`). Once its session has ended,
-a scheduled-end sale holds with custody kept and goes out again, under the
-same client order id, after the next open; any other EXIT fails and releases
-custody. An operator's Flatten the account no longer covers fails too (#2839).
+still be sent (:func:`_created_leg_may_be_sent`).
+
+An order sent to a real broker is never sent again once the session it was
+sent in has ended, and its EXIT does not fail (#2854, owner decision
+2026-10-03). The earlier send may have reached the broker with no read
+showing it, and a failed EXIT would release the position: the bot's next exit
+decision and the sale at a scheduled end send with no check of the account,
+and would sell it again under a new client order id. So the EXIT stays
+``unknown`` with custody kept (:func:`_hold_past_its_session`): past the
+order's own session, on any later day, and for a scheduled-end sale too,
+which is not sent again at the next open. The operator is told once, each
+pass still looks the order up and folds it if the broker shows it, and an
+operator who has looked at Alpaca settles it
+(``unknown_order_attestation``). An operator's Flatten that the account does
+not cover when it would be sent again keeps custody the same way
+(:func:`_hold_uncovered_resend`, #2839). Evidence that the bot is flat still
+comes first and ends the EXIT. An order never sent folds as before -- it
+fails releasably, or a scheduled-end sale holds for the next open -- and so
+does every order of a simulated port, which fills inside the send and
+reaches no broker: a Dry Run must never end the day holding.
+
 Three things guard a send made again. Whether
 the order ever reached the broker is read again in the run that records the
 send (:func:`_resend_still_proven_absent`). No refusal of a send made again
@@ -69,7 +86,10 @@ the broker answered under another client order id is never sent again: the
 same client order id cannot protect a second send from an order that may exist
 under a different one (:func:`_retain_answered_as_another_order`). In both of
 those the broker answered, so the open unknown-outcome notice says what it
-answered instead of that a response was lost (#2854).
+answered instead of that a response was lost (#2854). No notice outlasts a
+later send whose own answer is lost: after a refusal, and after the account
+check held a send, the notice then says a response was lost again
+(:func:`_lost_answer_after_a_notice`).
 """
 
 from __future__ import annotations
@@ -165,6 +185,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     uncertainty_envelope,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause, ExitStuckCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import LOST_ANSWER_NOTICE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import RedriveThenEscalate, reason_age_policy
 from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
 from app.broker.alpaca.config import BROKER_ID
@@ -831,7 +852,7 @@ def _raise_if_working_past_session(
     execute — so the watchdog finds no free entry and re-drives nothing. The
     copy holds no clock value, so a later pass re-raises it unchanged. The
     session is dated from the latest send: an order proven absent after a
-    lost submit is legitimately sent again, possibly the next day.
+    lost submit is legitimately sent again while its session is open.
     """
     submitted = repo.last_order_transition(
         order_ref=reducing.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
@@ -1045,6 +1066,7 @@ def _created_leg_may_be_sent(
     created: ExitReducingOrderCreatedFacts,
     order_ref: str,
     liveness: MarketLivenessFact | None,
+    sent_to_broker: bool,
 ) -> bool:
     """The send-time rule at (re)submission: ``True`` only to send the created order now.
 
@@ -1055,8 +1077,14 @@ def _created_leg_may_be_sent(
     left that exact identity's outcome unknown, and only proof recorded
     against it closes that episode (#2440 review). The order already carries
     its client identity, so its leg is never re-priced here: it is replayed
-    exactly or not at all. No longer sendable, it is not sent — the EXIT
-    folds releasably for the operator.
+    exactly or not at all.
+
+    No longer sendable, it is not sent, and what becomes of its EXIT turns on
+    ``sent_to_broker``: whether the order was sent before to a real broker.
+    One that was may be there, so its EXIT keeps custody as an unknown
+    outcome (:func:`_hold_past_its_session`, #2854). One never sent, or sent
+    only to a simulated port, folds releasably for the operator, or holds for
+    the next open when it sells only in the regular session.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -1064,12 +1092,22 @@ def _created_leg_may_be_sent(
     if not position_quantity_is_nonzero(remaining_qty):
         _fold_attributed_flat(repo, effect_operation_id, order_ref)
         return False
+    valid_until_ms = _created_leg_valid_until_ms(repo, effect_operation_id, created)
+    now_ms = repo.clock()
     verdict = _send_verdict(
         _accepted_facts(repo, effect_operation_id),
         extended_hours=created.extended_hours,
-        valid_until_ms=_created_leg_valid_until_ms(repo, effect_operation_id, created),
-        now_ms=repo.clock(), liveness=liveness,
+        valid_until_ms=valid_until_ms,
+        now_ms=now_ms, liveness=liveness,
     )
+    if sent_to_broker and _past_its_session(
+        repo, order_ref=order_ref, created=created, valid_until_ms=valid_until_ms,
+        now_ms=now_ms, verdict=verdict,
+    ):
+        _hold_past_its_session(
+            repo, effect_operation_id=effect_operation_id, order_ref=order_ref, created=created
+        )
+        return False
     if isinstance(verdict, LegRefusal):
         _fold_market_hold(repo, effect_operation_id, order_ref, created.symbol, verdict)
         return False
@@ -1110,6 +1148,226 @@ def _created_leg_valid_until_ms(
     if created.valid_until_ms is not None:
         return created.valid_until_ms
     return _accepted_facts(repo, effect_operation_id).reducing_valid_until_ms
+
+
+def _past_its_session(
+    repo: ClerkSqliteRepository,
+    *,
+    order_ref: str,
+    created: ExitReducingOrderCreatedFacts,
+    valid_until_ms: int | None,
+    now_ms: int,
+    verdict: ReducingLegVerdict | LegRefusal,
+) -> bool:
+    """Whether a reducing order sent before may no longer be sent again: the session it was sent in is over (#2854).
+
+    Over when the send-time rule would not send it now: a market leg outside
+    the regular session, a limit past its bound, a regular-session sale that
+    would wait for the next open. Over, too, in any later session in which
+    that rule would send it: an order sent in an earlier session is looked
+    up, never sent again (owner decision 2026-10-03). The session is the one
+    of the order's latest send, read from the canonical calendar
+    (``reducing_leg_session_end_ms``). A send whose session the calendar
+    cannot name is not shown to be inside an open one, so it is over.
+
+    A halt or an emergency close inside that session is not its end: the
+    order holds as before, and is sent again when the hold lifts.
+    """
+    if verdict in ("wait", "expired"):
+        return True
+    if isinstance(verdict, LegRefusal) and verdict.reason_code == SCHEDULED_END_WAITS_FOR_OPEN:
+        return True
+    latest = _latest_send(repo, order_ref)
+    if latest is None:
+        raise AssertionError(f"no recorded send for {order_ref!r}")
+    session_end_ms = reducing_leg_session_end_ms(
+        extended_hours=created.extended_hours,
+        valid_until_ms=valid_until_ms,
+        sent_at_ms=latest.requested["recorded_at_ms"],
+    )
+    return session_end_ms is None or now_ms >= session_end_ms
+
+
+# The settle action's label is spelled out here: ``recovery_policy``, which names it, imports this module.
+SETTLE_THE_ORDER_NEXT_STEP = (
+    "Look at this account's orders and position at Alpaca, then settle the order from the "
+    'bot\'s page ("Settle the uncertain order"). A bot that is still running is stopped first.'
+)
+"""What an operator does about a closing order the Clerk holds and will not settle by itself (#2854)."""
+
+
+def _what_is_held(created: ExitReducingOrderCreatedFacts) -> str:
+    """What a reducing order would have closed, as a notice names it: a sale's shares, a cover's short."""
+    return "the shares" if created.side.upper() == "SELL" else "the short position"
+
+
+def _hold_sent_order(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    why: str,
+    notice: UnknownOutcomeNotice,
+) -> bool:
+    """Keep custody of a reducing order that was sent and is not sent now, telling the operator once (#2854).
+
+    The EXIT stays ``unknown``: it is not failed and its entry is not
+    released. The passes come every few seconds and this can last overnight,
+    so the record is written when it changes what the operator is told, and
+    not again: a pass that finds the EXIT ``unknown`` and the order's newest
+    notice already this one writes nothing. Returns whether it wrote.
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    told = repo.last_order_notice_transition(order_ref=order_ref)
+    if (
+        effect.state == "unknown"
+        and told is not None
+        and OrderSubmitUncertainFacts.from_facts_json(told["facts_json"]).notice == notice
+    ):
+        return False
+    fold_uncertain(
+        repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why, notice=notice
+    )
+    return True
+
+
+def _hold_past_its_session(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    created: ExitReducingOrderCreatedFacts,
+) -> None:
+    """A reducing order sent to a real broker outlived its session with its outcome unknown: custody is kept (#2854).
+
+    Before this the EXIT failed here on the absence proof alone and released
+    the position (:func:`_fold_unsendable_leg`), or -- a scheduled-end sale --
+    held for the next open and was sent again then. Either way an order that
+    had reached the broker unseen could be followed by a second sale: the
+    bot's next exit decision and the sale at a scheduled end send with no
+    check of the account. Now nothing more is sent for the bot. The EXIT
+    stays ``unknown``, so no other EXIT is accepted for its entry, the
+    watchdog has no failed EXIT to re-drive, and the order itself is never
+    sent again, in this session or a later one. Each pass still looks it up
+    and folds it if the broker shows it. Otherwise it waits for an operator,
+    who looks at Alpaca and settles it (``unknown_order_attestation``).
+
+    The open notice says so in place of whatever it said while the order
+    could still go out, and it is recorded once (:func:`_hold_sent_order`).
+    It says nothing of a session having ended. :func:`_past_its_session` also
+    holds an order whose own bound for sending has passed while the broker
+    would still work it: a pre-market limit, past 09:30, works at the broker
+    until the after-hours close if it is there.
+    """
+    wrote = _hold_sent_order(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        why=(
+            "This reducing order was sent to the broker, its outcome is unknown, and it may no "
+            "longer be sent again. An earlier send may have reached the broker, so the EXIT is not "
+            "failed: custody is kept until the order is found or an operator settles it."
+        ),
+        notice=UnknownOutcomeNotice(
+            explanation=(
+                f"The Clerk sent an order to {_the_reduction(created)} and could not confirm it. "
+                "The Clerk will not send it again. The order may be at Alpaca, so the Clerk holds "
+                f"{_what_is_held(created)} and sends no other order for this bot."
+            ),
+            next_step=SETTLE_THE_ORDER_NEXT_STEP,
+        ),
+    )
+    if wrote:
+        logger.warning(
+            "a reducing order sent to the broker may no longer be sent again and its outcome is unknown; custody is kept",
+            extra={
+                "action": "reducing_order_held_past_session",
+                "account_id": repo.account_id,
+                "effect_operation_id": effect_operation_id,
+                "order_ref": order_ref,
+                "symbol": created.symbol,
+            },
+        )
+
+
+def _hold_uncovered_resend(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    reducing: OrderResource,
+    refusal: LegRefusal,
+) -> None:
+    """An operator's Flatten about to be sent again is not covered by the account: custody is kept (#2839, #2854).
+
+    A first send the account does not cover fails the EXIT
+    (:func:`_fold_flatten_uncovered`): nothing was sent before, so nothing of
+    it can be at the broker. A send made again is different. Its earlier
+    send's answer was lost, and what the account no longer holds may be what
+    that send closed. Failing the EXIT would release a position its own order
+    may have closed. So nothing is sent, and the EXIT stays ``unknown`` with
+    custody kept. While the order's session is open the account is read again
+    for each send the wait allows, and the order goes out if the account
+    covers it; past its session it is held as any sent order is
+    (:func:`_hold_past_its_session`).
+    """
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    wrote = _hold_sent_order(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=reducing.order_ref,
+        why=(
+            "The account check made before sending this reducing order again refused it. An "
+            "earlier send of it may have reached the broker, so the refusal does not prove "
+            f"nothing is working there, and custody is kept. The check's answer: {refusal.explanation}"
+        ),
+        notice=UnknownOutcomeNotice(
+            explanation=(
+                f"The Clerk sent an order to {_the_reduction(created)} and could not confirm it. "
+                f"Before sending it again the Clerk checked the account: {refusal.explanation} "
+                f"The earlier send may have reached Alpaca, so the Clerk holds {_what_is_held(created)} "
+                "and sends no other order for this bot."
+            ),
+            next_step=(
+                f"{SETTLE_THE_ORDER_NEXT_STEP} While the order's session is open the Clerk also "
+                "checks the account again by itself, and sends the order once the account covers it."
+            ),
+        ),
+    )
+    if wrote:
+        logger.warning(
+            "an operator's flatten was not sent again: the account check refused it; custody is kept",
+            extra={
+                "action": "flatten_resend_refused_by_account_check",
+                "account_id": repo.account_id,
+                "effect_operation_id": effect_operation_id,
+                "order_ref": reducing.order_ref,
+                "symbol": created.symbol,
+                "reason_code": refusal.reason_code,
+            },
+        )
+
+
+def _lost_answer_after_a_notice(repo: ClerkSqliteRepository, order_ref: str) -> UnknownOutcomeNotice | None:
+    """What the open notice says once a send made after a notice is lost too, or ``None`` to leave it as it is (#2854).
+
+    A lost answer records no notice: the notice it opens, or finds open,
+    already says a broker response was lost. That is not so once a notice has
+    been recorded for the order: that the account check held a send made
+    again (:func:`_hold_uncovered_resend`), or that Alpaca refused one
+    (:func:`_retain_refused_resend`). Those words are about the order before
+    this send. Left standing, they told the operator that nothing was sent,
+    and that the order goes out once the account covers it, after it had gone
+    out. So this send's lost answer records the lost-answer words as its own
+    notice. Once, as every notice is: ``None`` for an order with no notice,
+    and for one whose newest notice already says this.
+    """
+    told = repo.last_order_notice_transition(order_ref=order_ref)
+    if told is None:
+        return None
+    if OrderSubmitUncertainFacts.from_facts_json(told["facts_json"]).notice == LOST_ANSWER_NOTICE:
+        return None
+    return LOST_ANSWER_NOTICE
 
 
 @dataclass(frozen=True)
@@ -1746,7 +2004,8 @@ async def _refresh_or_resume_reducing_order(
     if await run(_absence_folds_uncertain):
         return
     # A reducing order whose submission was uncertain is only ever resumed —
-    # or released by the wait fold below it — on conclusive identity evidence
+    # or released by the wait fold below it, which since #2854 releases no
+    # order that was sent to a real broker — on conclusive identity evidence
     # (PR #2230 review): the request may have reached Alpaca, and a release
     # without proof would let a fresh EXIT mint a *different* client id while
     # the original might still execute, over-reducing the account.
@@ -1929,9 +2188,10 @@ async def _submit_reducing_order(
         # before any rule below can fold the EXIT over an order that arrived.
         # Whether its latest send was answered under another client order id
         # is read here too, as the pass that found it absent read it.
-        if repo.has_order_transition(
+        sent_before = repo.has_order_transition(
             order_ref=reducing.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
-        ) and (
+        )
+        if sent_before and (
             _retain_answered_as_another_order(
                 repo, effect_operation_id=effect_operation_id, reducing=reducing
             )
@@ -1940,6 +2200,11 @@ async def _submit_reducing_order(
             )
         ):
             return None
+        # Sent before to a real broker, the order may be there: where the
+        # rules below would fail the EXIT, they keep its custody (#2854). A
+        # simulated port fills inside the send, so its order is judged as one
+        # never sent is.
+        sent_to_broker = sent_before and not trade_port_folds_simulated_evidence(broker.trade)
         # A resubmission after an outage or a restart replays the leg created
         # earlier; the clock may have moved past where it could be sent.
         if not _created_leg_may_be_sent(
@@ -1947,19 +2212,27 @@ async def _submit_reducing_order(
             effect_operation_id=effect_operation_id,
             created=facts,
             order_ref=reducing.order_ref,
-             liveness=liveness,
+            liveness=liveness,
+            sent_to_broker=sent_to_broker,
         ):
             return None
         # The account does not cover an operator's Flatten (#2839). Refused
         # only once the send-time rule would send it, so a flat position or an
         # ended session is still told as itself.
         if uncovered is not None:
-            _fold_flatten_uncovered(
-                repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=uncovered
-            )
+            if sent_to_broker:
+                _hold_uncovered_resend(
+                    repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=uncovered
+                )
+            else:
+                _fold_flatten_uncovered(
+                    repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=uncovered
+                )
             return None
         # An EXIT with no decision bar is priced by the port before it is sent:
         # a no-submit world binds the price it fills at, or nothing goes out.
+        # No order sent before to a real broker is refused here: a real port
+        # binds every recovery, and refuses a run-end close on its first send.
         match _exit_intent(_accepted_facts(repo, effect_operation_id)):
             case "run_end_close":
                 bound = broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol)
@@ -1992,6 +2265,7 @@ async def _submit_reducing_order(
                 effect_operation_id=effect_operation_id,
                 order_ref=reducing.order_ref,
                 why=unavailable_why,
+                notice=_lost_answer_after_a_notice(repo, reducing.order_ref),
             )
         )
         return
@@ -2845,11 +3119,11 @@ def resend_wait_ms(sends: int) -> int:
 
     A send made again can be refused for as long as its cause stands, and no
     number of refusals ends the sends. Only the send-time rule does
-    (:func:`_created_leg_may_be_sent`): past the order's session a
-    scheduled-end sale holds for the next open, and any other EXIT fails and
-    releases custody. So the sends back off instead of asking the broker twice
-    a minute until then. Never shorter than the submit-absence wait, whatever
-    that is set to.
+    (:func:`_created_leg_may_be_sent`): past the order's session nothing is
+    sent again and custody is kept for an operator to settle
+    (:func:`_hold_past_its_session`). So the sends back off instead of asking
+    the broker twice a minute until then. Never shorter than the
+    submit-absence wait, whatever that is set to.
     """
     base_ms = submit_absence_grace_ms()
     if sends <= 1:

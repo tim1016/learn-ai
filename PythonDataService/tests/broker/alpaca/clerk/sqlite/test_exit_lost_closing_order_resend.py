@@ -52,7 +52,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitUncertainFacts,
     UnknownOutcomeNotice,
 )
-from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_BROKER
 from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
@@ -225,6 +224,22 @@ class _Alpaca(_Account):
         self.while_awaited.get(len(self.sent), lambda: None)()
         raise BrokerUnavailable("the submit timed out")
 
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
+    ) -> list[BrokerOrder]:
+        """Its open orders. Asked for every order since a time, as a settlement asks, it lists the same.
+
+        No order ends at this Alpaca where a read shows it: one that filled
+        unseen is listed nowhere, which is what "no read shows it" means.
+        """
+        return await super().list_orders(status=status, limit=limit, after_ms=after_ms)
+
     async def list_positions(self) -> list[BrokerPosition]:
         meanwhile, self.while_positions_are_read = self.while_positions_are_read, None
         if meanwhile is not None:
@@ -328,6 +343,16 @@ def _latest_unknown(repo: ClerkSqliteRepository, closing: OrderResource) -> Orde
     row = repo.last_order_transition(order_ref=closing.order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN")
     assert row is not None
     return OrderSubmitUncertainFacts.from_facts_json(row["facts_json"])
+
+
+def _notices_recorded(repo: ClerkSqliteRepository, closing: OrderResource) -> list[UnknownOutcomeNotice]:
+    """Every notice the Clerk recorded for the closing order, in the order it recorded them."""
+    recorded = [
+        OrderSubmitUncertainFacts.from_facts_json(row["facts_json"]).notice
+        for row in repo.transitions_for_order(closing.order_ref)
+        if row["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+    ]
+    return [notice for notice in recorded if notice is not None]
 
 
 def _the_open_notice(repo: ClerkSqliteRepository) -> ProjectedUncertainty | None:
@@ -877,6 +902,16 @@ REFUSED_AGAIN_NEXT_STEP = (
     "the Clerk sends the order again by itself, waiting longer after each refusal (up to 5 "
     "minutes), and takes it up as soon as Alpaca shows it."
 )
+# What the bot's page says of a closing sale that was sent, never confirmed, and may no longer be sent again (#2854).
+HELD_PAST_SESSION_EXPLANATION = (
+    "The Clerk sent an order to sell 10 SPY and could not confirm it. The Clerk will not send it "
+    "again. The order may be at Alpaca, so the Clerk holds the shares and sends no other order "
+    "for this bot."
+)
+SETTLE_NEXT_STEP = (
+    "Look at this account's orders and position at Alpaca, then settle the order from the bot's "
+    'page ("Settle the uncertain order"). A bot that is still running is stopped first.'
+)
 
 
 def _refused_again_explanation(alpacas_answer: str) -> str:
@@ -941,6 +976,30 @@ async def test_a_send_made_again_that_alpaca_refuses_is_told_in_alpacas_own_word
     assert _the_open_notice(repo) is None
 
 
+async def test_a_refusal_is_no_longer_told_once_a_later_send_of_the_order_is_lost(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Alpaca's refusal stayed on the bot's page after a later send of the same order went unanswered (#2854).
+
+    Alpaca refuses the send made again, and the page says what it answered.
+    The next send times out: that send is now the one whose outcome is
+    unknown, and the page says a broker response was lost.
+    """
+    repo, clock = crashed_with_exposure
+    refused = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused, "never_arrives"))
+    await _the_runner_sends_the_exit(repo, alpaca)
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=2)
+    told = _the_open_notice(repo)
+    assert told is not None and told.next_step == REFUSED_AGAIN_NEXT_STEP
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=3)
+
+    lost = _the_open_notice(repo)
+    assert lost is not None and lost.uncertainty_id == told.uncertainty_id
+    assert (lost.explanation, lost.next_step) == (LOST_ANSWER_EXPLANATION, LOST_ANSWER_NEXT_STEP)
+
+
 async def test_a_refused_send_made_again_is_not_repeated_once_its_session_has_ended(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
@@ -948,9 +1007,10 @@ async def test_a_refused_send_made_again_is_not_repeated_once_its_session_has_en
 
     A bot's exit is lost a minute before the close and refused when it is
     sent again, half a minute before it. Once the session has closed a market
-    order can no longer go out: nothing more is sent, the EXIT fails and
-    releases the position, and the bot's page shows that in place of the
-    refusal.
+    order can no longer go out, and nothing more is sent. The order may be at
+    Alpaca all the same, so the EXIT does not fail: it stays ``unknown`` with
+    custody of the position, and the bot's page says the order will not be
+    sent again and where it is settled, in place of the refusal.
     """
     repo, clock = crashed_with_exposure
     close_ms = session_close_ms_utc(et_date_at_ms(clock()))
@@ -968,10 +1028,12 @@ async def test_a_refused_send_made_again_is_not_repeated_once_its_session_has_en
 
     assert clock() > close_ms
     assert len(alpaca.sent) == 2
-    assert _exit_state(repo, exit_id) == "failed"
-    assert repo.active_exit_for_strategy(SID) is None
-    assert _the_open_notice(repo) is None
-    assert _exit_not_flat(repo) is not None
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None
+    assert _exit_not_flat(repo) is None
+    held = _the_open_notice(repo)
+    assert held is not None and held.uncertainty_id == told.uncertainty_id
+    assert (held.explanation, held.next_step) == (HELD_PAST_SESSION_EXPLANATION, SETTLE_NEXT_STEP)
 
 
 @pytest.mark.parametrize(
@@ -1395,12 +1457,20 @@ async def test_an_operators_flatten_whose_submit_never_arrived_is_sent_again_aft
 async def test_an_operators_flatten_is_not_sent_again_once_the_account_no_longer_covers_it(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
-    """The shares left the account while the Flatten's lost order waited: the passes send nothing."""
+    """The shares left the account while the Flatten's lost order waited: the passes send nothing.
+
+    The lost order may be what sold them, so the refusal does not fail the
+    EXIT (#2854): failed, it would release a position its own order may have
+    closed, for the next sale to sell again. It stays ``unknown`` with
+    custody, the bot's page says what the account check answered, and that is
+    recorded once however many passes find the same thing.
+    """
     repo, clock = crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("never_arrives",))
     facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
     await _flatten(facade, current_context)
     exit_id = _flatten_exit(repo)
+    closing = _closing_order(repo)
     alpaca.holds = 0.0
 
     async def the_sweep() -> object:
@@ -1409,11 +1479,80 @@ async def test_an_operators_flatten_is_not_sent_again_once_the_account_no_longer
     await _passes(repo, the_sweep, FIVE_MINUTES_OF_PASSES)
 
     assert len(alpaca.sent) == 1
-    refusal = flatten_send_refusal(repo, exit_id)
-    assert refusal is not None and refusal.reason_code == FLATTEN_NOT_COVERED_AT_BROKER
-    assert _exit_state(repo, exit_id) == "failed"
-    assert repo.active_exit_for_strategy(SID) is None
+    assert flatten_send_refusal(repo, exit_id) is None
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None
+    assert _exit_not_flat(repo) is None
     assert repo.position(SID, "SPY") == 10
+    held = _the_open_notice(repo)
+    assert held is not None
+    assert held.explanation == (
+        "The Clerk sent an order to sell 10 SPY and could not confirm it. Before sending it again "
+        "the Clerk checked the account: Alpaca holds no SPY, less than the 10 this flatten would "
+        "sell; nothing was sent. The earlier send may have reached Alpaca, so the Clerk holds the "
+        "shares and sends no other order for this bot."
+    )
+    assert held.next_step == (
+        f"{SETTLE_NEXT_STEP} While the order's session is open the Clerk also checks the account "
+        "again by itself, and sends the order once the account covers it."
+    )
+    assert len(_notices_recorded(repo, closing)) == 1
+
+    # The shares are back: the same order goes out on the next pass, as any covered send made again does.
+    alpaca.holds = 10.0
+    await _passes(repo, the_sweep, 1)
+
+    assert len(alpaca.sent) == 2
+    assert {sent.client_order_id for sent in alpaca.sent} == {closing.client_order_id}
+    assert _exit_state(repo, exit_id) == "in_progress"
+
+
+async def test_a_flatten_sent_again_once_the_account_covers_it_is_no_longer_told_as_held_by_the_account_check(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The bot's page said the account check had stopped a send after that send had gone out (#2854).
+
+    The Flatten's first send is lost and the account does not cover the send
+    made again, so the page says the check stopped it, that nothing was sent,
+    and that the order goes out once the account covers it. The shares come
+    back, the order goes out, and that send is lost too. The page now says
+    what is unknown of the order: a broker response was lost, as it said
+    before the check held the order. When the account stops covering the
+    order again, the page says what the check answered again.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", "never_arrives"))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    await _flatten(facade, current_context)
+    exit_id = _flatten_exit(repo)
+
+    async def the_sweep() -> object:
+        return await facade.reconcile_account(trigger="AUTOMATIC")
+
+    alpaca.holds = 0.0
+    await _passes(repo, the_sweep, RESEND_AFTER_MS // SWEEP_INTERVAL_MS)
+    held = _the_open_notice(repo)
+    assert held is not None
+    assert "the Clerk checked the account" in held.explanation and "nothing was sent" in held.explanation
+    assert len(alpaca.sent) == 1
+
+    alpaca.holds = 10.0
+    await _passes(repo, the_sweep, 1)
+
+    assert len(alpaca.sent) == 2
+    assert _exit_state(repo, exit_id) == "unknown"
+    lost_again = _the_open_notice(repo)
+    assert lost_again is not None and lost_again.uncertainty_id == held.uncertainty_id
+    assert (lost_again.explanation, lost_again.next_step) == (LOST_ANSWER_EXPLANATION, LOST_ANSWER_NEXT_STEP)
+
+    # The shares leave again while the order waits to be sent a third time: the check holds it, and says so.
+    alpaca.holds = 0.0
+    await _passes(repo, the_sweep, WAIT_AFTER_A_SECOND_SEND_MS // SWEEP_INTERVAL_MS)
+
+    assert len(alpaca.sent) == 2
+    held_again = _the_open_notice(repo)
+    assert held_again is not None
+    assert (held_again.explanation, held_again.next_step) == (held.explanation, held.next_step)
 
 
 async def test_a_flatten_whose_order_the_account_lists_is_never_sent_again_however_long_its_lookup_reads_absent(

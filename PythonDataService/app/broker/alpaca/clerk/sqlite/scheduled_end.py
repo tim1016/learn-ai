@@ -22,9 +22,11 @@ already died (grill 2026-09-29, decision 9). On the pass at or after the end:
    ``regular_session_only``: the EXIT machine sends it only as a market order
    inside the regular session, and outside it holds and sells at the next
    open, never after hours -- the watchdog's re-drives of it included
-   (``exit_resolution``, ``exit_watchdog``). A Dry Run's shares are not sold
-   here: #2641's run-end close sells them at the last price the run saw, on
-   this ending as on every other.
+   (``exit_resolution``, ``exit_watchdog``). A sale already sent whose answer
+   was lost is not sent again at the next open: its EXIT keeps custody until
+   Alpaca shows the order or an operator settles it (#2854). A Dry Run's
+   shares are not sold here: #2641's run-end close sells them at the last
+   price the run saw, on this ending as on every other.
 4. **Record** the end carried out, once the run is stopped, none of the
    bot's orders can still fill outside an EXIT's custody, and every holding
    a SELL owes has its sale accepted.
