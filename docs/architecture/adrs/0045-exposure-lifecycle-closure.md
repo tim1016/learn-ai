@@ -258,17 +258,18 @@ proof that lands after a later run of the bot began is recorded as the stopped
 run's alone -- its receipt and the replay receipt it owes -- never projected
 over the later run's.
 
-**Amended 2026-10-03 (#2854): the end's sale waits while `EXIT_STUCK` is
+**Amended 2026-10-03 (#2854): the end sells nothing while `EXIT_STUCK` is
 open.** That episode means the Clerk has stopped exiting the bot's position by
 itself and the position is the operator's; the watchdog sends nothing for it,
 and the end accepts no sale for it either. The end still stops the run and
-stays pending, and the bell and the bot page's End notice say so. Once the
+stays pending, and the bell and the bot page's End card say so. Once the
 operator's flatten or write-off leaves the bot flat, the end is recorded
-carried out with nothing sold. A sale accepted before this rule and still held
-for the open is not sent: its EXIT fails through `EXIT_NOT_FLAT`, as a Flatten
-the account does not cover does, so no EXIT holds the symbol and the
-operator's flatten and write-off stay admissible. A `sim:` authority is
-unchanged.
+carried out with nothing sold. A sale accepted before this rule is not sent:
+on the first pass that drives it -- held for the open or about to be sent
+again, and whatever the account then holds -- its EXIT fails through
+`EXIT_NOT_FLAT`, as a Flatten the account does not cover does, so no EXIT
+holds the symbol and the operator's flatten and write-off stay admissible. A
+`sim:` authority is unchanged.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
