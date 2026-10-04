@@ -74,8 +74,9 @@ Targets Angular 22.
   date), from `shared/date-picker`. Never write `<input type="date">`; a lint test fails
   on one.
 - The pickers hand over `YYYY-MM-DD` calendar dates: form state, a deviation ADR 0022 (f)
-  names. Convert to `int64 ms UTC` at the host's own HTTP call, with the anchor that
-  endpoint takes. A new endpoint takes ms, not a date string.
+  names. Build what the endpoint takes at the host's own HTTP call: `int64 ms UTC` at that
+  endpoint's anchor, or the date itself for an older endpoint that still takes one
+  (Research Lab's `from_date` / `to_date`). A new endpoint takes ms, not a date string.
 - The host states the bounds, because only it knows what its run reads: the provider's
   bound (`ProviderBoundsService`) for a run that fetches its own bars, the held span
   (`heldBoundsFor`) for a run that reads the lake as it stands. `app-ticker-range-picker`
