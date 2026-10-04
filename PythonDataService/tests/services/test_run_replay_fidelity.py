@@ -27,7 +27,9 @@ from tests._helpers.bot_runner.ema_parity import (
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
 
 _RTH_SESSION = RunDecisionSession(kind="rth", window=None)
-_NOTHING_CAPTURED = CapturedDecisions(outcomes={}, rotated_out_before_ms=None)
+_NOTHING_CAPTURED = CapturedDecisions(
+    outcomes={}, rotated_out_before_ms=None, run_first_closes_ms=frozenset(), ran_before=False
+)
 """A run that started with no decision receipt on file."""
 
 
@@ -328,6 +330,8 @@ async def _crash_setup() -> tuple[list, CapturedDecisions, LiveDecisionRecord]:
             if index != exit_idx
         },
         rotated_out_before_ms=None,
+        run_first_closes_ms=frozenset(),
+        ran_before=False,
     )
     return bars, captured, exit_record
 
