@@ -15,7 +15,7 @@ import {
   type SettlementCheck,
 } from './settle-order-ticket.component';
 
-type Check = (attestation: SqliteUnknownOrderAttestation) => Promise<SettlementCheck>;
+type Check = (attestation: SqliteUnknownOrderAttestation) => Promise<SettlementCheck | null>;
 type Settle = (attestation: SqliteUnknownOrderAttestation) => Promise<void>;
 
 /** The settle action as the page hands it to the ticket: one that offers its order. */
@@ -308,6 +308,20 @@ describe('SettleOrderTicketComponent (#2854)', () => {
     const refused = await within(ticket()).findByRole('alert');
     await vi.waitFor(() => expect(document.activeElement).toBe(refused));
     expect(ticket().contains(document.activeElement)).toBe(true);
+  });
+
+  it('shows nothing of a check the page answered itself, and leaves the keyboard where it is', async () => {
+    // The refusal came back after the ticket left that send of the order: the page has said it.
+    const { fixture, user } = await renderTicket({ check: () => Promise.resolve(null) });
+    await user.click(screen.getByRole('radio', { name: /^Alpaca has no such order/ }));
+
+    await user.click(checkButton());
+    await fixture.whenStable();
+
+    expect(checkButton().disabled).toBe(false);
+    expect(within(ticket()).queryByRole('alert')).toBeNull();
+    expect(within(ticket()).queryByRole('status', { name: 'What the Clerk found' })).toBeNull();
+    expect(document.activeElement).toBe(checkButton());
   });
 
   it('never shows a check’s answer that lands after the page presented the action anew', async () => {

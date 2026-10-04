@@ -74,7 +74,7 @@
           [check]="ticket.check"
           [settle]="ticket.settle"
           [locked]="actionPending()"
-          (closed)="settleDraft.set(null)"
+          (closed)="closeSettleTicket()"
         />
       }
 

@@ -13,6 +13,7 @@ import {
   output,
   signal,
   viewChild,
+  viewChildren,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -233,6 +234,7 @@ export class BotToolbarComponent {
   private readonly moreToggle = viewChild.required<ElementRef<HTMLButtonElement>>('moreToggle');
   private readonly moreMenu = viewChild<ElementRef<HTMLElement>>('moreMenu');
   private readonly allActionsPanel = viewChild<ElementRef<HTMLElement>>('allActionsPanel');
+  private readonly actionButtons = viewChildren(PanelActionButtonComponent);
 
   constructor() {
     // On a phone More and All actions open near the window's edge.
@@ -246,6 +248,14 @@ export class BotToolbarComponent {
   private readonly actionsById = computed(
     () => new Map(this.panel().actions.map((action) => [action.action_id as string, action])),
   );
+
+  /** Moves the keyboard to the named action's button, e.g. when the host's ticket for it closed
+   * by itself (#2854); to More when the toolbar does not draw that action now. */
+  focusAction(actionId: PanelAction['action_id']): void {
+    const button = this.actionButtons().find((candidate) => candidate.action().action_id === actionId);
+    if (button === undefined) this.moreToggle().nativeElement.focus();
+    else button.focus();
+  }
 
   protected panelAction(entry: ToolbarActionView): PanelAction | null {
     return this.actionsById().get(entry.action_id) ?? null;

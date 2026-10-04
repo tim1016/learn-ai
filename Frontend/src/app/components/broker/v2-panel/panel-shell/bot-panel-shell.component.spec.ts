@@ -2799,10 +2799,31 @@ describe('BotPanelShellComponent', () => {
       expect(runBotAction).toHaveBeenCalledTimes(1);
     });
 
-    it('closes the ticket when the page stops offering the order', async () => {
+    it('keeps saying the result is not known when a later panel withdraws the order the ticket said it of', async () => {
+      const runBotAction = vi.fn().mockRejectedValueOnce(NO_ANSWER);
+      const { fixture, user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      await confirmSettle(user, ticket);
+      // The re-read panel still offers the order, so the ticket is where it is said.
+      expect((await within(ticket).findByRole('alert')).textContent).toContain(NO_ANSWER_MESSAGE);
+      expect(screen.queryByRole('alert', { name: 'Action outcome' })).toBeNull();
+
+      // A later panel has nothing to settle -- that command may be why -- and the ticket goes with its order.
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, null)));
+      await fixture.whenStable();
+
+      expect(openedTicket()).toBeNull();
+      const receipt = screen.getByRole('alert', { name: 'Action outcome' });
+      expect(receipt.textContent).toContain(NO_ANSWER_MESSAGE);
+      await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
+    });
+
+    it('closes the ticket when the page stops offering the order, and hands its keyboard to the toolbar', async () => {
       const { fixture, runBotAction, user } = await renderSettle();
       const ticket = await openTicket(user);
       await sayNoSuchOrder(user, ticket);
+      expect(ticket.contains(document.activeElement)).toBe(true);
 
       // The Clerk found the order by itself: the next panel has nothing to settle.
       emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, null)));
@@ -2810,12 +2831,29 @@ describe('BotPanelShellComponent', () => {
 
       expect(openedTicket()).toBeNull();
       expect(runBotAction).not.toHaveBeenCalled();
+      // The order's own entry left the toolbar with it; the keyboard is on the toolbar, not the page's body.
+      const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+      await vi.waitFor(() => expect(toolbar.contains(document.activeElement)).toBe(true));
+    });
+
+    it('leaves the keyboard alone when the page closes a ticket that did not have it', async () => {
+      const { fixture, user } = await renderSettle();
+      await openTicket(user);
+      const elsewhere = screen.getByRole('button', { name: 'Flatten…' });
+      elsewhere.focus();
+
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, null)));
+      await fixture.whenStable();
+
+      expect(openedTicket()).toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
     });
 
     it('starts the ticket over on the order’s newer send, and checks that one', async () => {
       const { fixture, checkSettlement, runBotAction, user } = await renderSettle();
       const ticket = await openTicket(user);
       await sayNoSuchOrder(user, ticket);
+      expect(ticket.contains(document.activeElement)).toBe(true);
 
       // The Clerk sent the order again: the page presents the action under a new token.
       const sentAgain = fakeSqliteSettleAction({ revision: 18, concurrency_token: 'settle-token-18' });
@@ -2827,6 +2865,10 @@ describe('BotPanelShellComponent', () => {
       expect(within(ticket).queryByRole('status', { name: 'What the Clerk found' })).toBeNull();
       expect(within(ticket).queryByRole('button', { name: 'Settle the order…' })).toBeNull();
       expect(within(ticket).getAllByRole<HTMLInputElement>('radio').some((radio) => radio.checked)).toBe(false);
+      // What had the keyboard is gone from the ticket: it goes to the toolbar's entry for the order.
+      const entry = within(screen.getByRole('toolbar', { name: 'Actions for this bot' }))
+        .getByRole('button', { name: 'Settle the uncertain order' });
+      await vi.waitFor(() => expect(document.activeElement).toBe(entry));
 
       await sayNoSuchOrder(user, ticket);
       expect(checkSettlement).toHaveBeenLastCalledWith(
@@ -2839,8 +2881,9 @@ describe('BotPanelShellComponent', () => {
       expect(runBotAction.mock.calls[0][2]).toEqual(sentAgain);
     });
 
-    it('re-reads the panel after a refused check, and the ticket follows what it shows', async () => {
+    it('re-reads the panel after a refused check, and says the refusal on the page when the ticket moved to a newer send', async () => {
       // The Clerk sent the order again and the page has not heard yet: the check is refused as stale.
+      const stale = 'The recovery evidence changed. Refresh before confirming the action.';
       const sentAgain = fakeSqliteSettleAction({ revision: 18, concurrency_token: 'settle-token-18' });
       const getLiveSnapshot = vi.fn()
         .mockResolvedValueOnce(pageSnapshot(1))
@@ -2848,17 +2891,25 @@ describe('BotPanelShellComponent', () => {
       const { checkSettlement, user } = await renderSettle(undefined, getLiveSnapshot);
       checkSettlement.mockRejectedValueOnce(new HttpErrorResponse({
         status: 409,
-        error: { detail: { reason: 'stale_action_token', message: 'The recovery evidence changed. Refresh before confirming the action.' } },
+        error: { detail: { reason: 'stale_action_token', message: stale } },
       }));
       const ticket = await openTicket(user);
       await user.click(within(ticket).getByRole('radio', { name: /^Alpaca has no such order/ }));
 
       await user.click(within(ticket).getByRole('button', { name: 'Ask the Clerk to check' }));
 
-      // The refusal was of the older send; the ticket is on the newer one now, and asks about that.
-      await vi.waitFor(() => expect(getLiveSnapshot).toHaveBeenCalledTimes(2));
-      await sayNoSuchOrder(user, ticket);
+      // The refusal was of the older send. The ticket is on the newer one now, with nothing said,
+      // so the page says why: its receipt carries the refusal and has the keyboard.
+      const receipt = await screen.findByRole('alert', { name: 'Action outcome' });
+      expect(receipt.textContent).toContain(stale);
+      expect(getLiveSnapshot).toHaveBeenCalledTimes(2);
+      expect(openedTicket()).toBe(ticket);
       expect(within(ticket).queryByRole('alert')).toBeNull();
+      expect(within(ticket).getAllByRole<HTMLInputElement>('radio').some((radio) => radio.checked)).toBe(false);
+      await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
+
+      // The ticket asks about the newer send.
+      await sayNoSuchOrder(user, ticket);
       expect(checkSettlement).toHaveBeenLastCalledWith(
         'clrk_spec', 'DUM284968',
         { action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token-18', attestation: { kind: 'absent' } },

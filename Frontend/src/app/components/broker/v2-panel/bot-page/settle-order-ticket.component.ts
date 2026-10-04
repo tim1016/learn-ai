@@ -65,9 +65,19 @@ function sameAttestation(left: SqliteUnknownOrderAttestation, right: SqliteUnkno
   return left.kind === right.kind && (left.broker_order_id ?? null) === (right.broker_order_id ?? null);
 }
 
+/** A check that did not finish, in the backend's words; with none of its own, that it did not finish. */
+export function checkRefusal(error: unknown): ActionRejection {
+  return deriveActionRejection(error, CHECK_UNANSWERED);
+}
+
 /** A settlement that did not go through, in the backend's words; when no answer came back, that is what is said. */
 export function settleRefusal(error: unknown): ActionRejection {
   return deriveActionRejection(error, SETTLE_UNANSWERED);
+}
+
+/** Whether a settlement's refusal is that no answer came back: the one refusal that leaves its result unknown. */
+export function leftUnanswered(refusal: ActionRejection): boolean {
+  return refusal.message === SETTLE_UNANSWERED;
 }
 
 /**
@@ -95,8 +105,9 @@ export function settleRefusal(error: unknown): ActionRejection {
  * resolves once the page has shown the answer itself -- the order settled
  * and the ticket closed, or a refusal that came back after the ticket left
  * this send of the order -- and rejects with a refusal for the ticket to
- * show. The Alpaca order id is trimmed and sent as typed: the backend says
- * whether it is one.
+ * show. `check` resolves with what the Clerk found, or with `null` once the
+ * page has shown such a refusal itself, and rejects alike. The Alpaca order
+ * id is trimmed and sent as typed: the backend says whether it is one.
  */
 @Component({
   selector: 'app-settle-order-ticket',
@@ -110,8 +121,9 @@ export class SettleOrderTicketComponent {
   readonly action = input.required<SettleAction>();
   /** The account the order is on, shown by its number in the confirmation. */
   readonly accountId = input<string | null>(null);
-  /** Asks the Clerk what it reads at Alpaca for what the operator said. Settles nothing; rejects with a refusal. */
-  readonly check = input.required<(attestation: SqliteUnknownOrderAttestation) => Promise<SettlementCheck>>();
+  /** Asks the Clerk what it reads at Alpaca for what the operator said. Settles nothing; rejects with a
+   * refusal for this ticket to show, and answers `null` once the page has shown the refusal itself. */
+  readonly check = input.required<(attestation: SqliteUnknownOrderAttestation) => Promise<SettlementCheck | null>>();
   /** Settles the order on what the operator said; rejects with the refusal this ticket is to show. */
   readonly settle = input.required<(attestation: SqliteUnknownOrderAttestation) => Promise<void>>();
   /** Another command on this bot is on its way. */
@@ -182,6 +194,11 @@ export class SettleOrderTicketComponent {
     this.host.nativeElement.querySelector<HTMLElement>('section')?.focus();
   }
 
+  /** Whether the keyboard is in the ticket or its confirmation. */
+  hasKeyboard(): boolean {
+    return this.host.nativeElement.contains(document.activeElement);
+  }
+
   protected async runCheck(): Promise<void> {
     const attestation = this.attestation();
     if (attestation === null || this.busy()) return;
@@ -190,17 +207,21 @@ export class SettleOrderTicketComponent {
     this.lastFound.set(null);
     this.lastRefusal.set(null);
     try {
-      const findings = (await this.check()(attestation)).attestation_findings ?? null;
+      const checked = await this.check()(attestation);
+      // The page has shown the answer itself, and has put the keyboard on it.
+      if (checked === null) return;
+      const findings = checked.attestation_findings ?? null;
       if (findings === null) {
-        this.lastRefusal.set({ ...asked, value: deriveActionRejection(null, CHECK_UNANSWERED) });
+        this.lastRefusal.set({ ...asked, value: checkRefusal(null) });
       } else {
         this.lastFound.set({ ...asked, value: findings });
       }
+      this.focusAnswer();
     } catch (error) {
-      this.lastRefusal.set({ ...asked, value: deriveActionRejection(error, CHECK_UNANSWERED) });
+      this.lastRefusal.set({ ...asked, value: checkRefusal(error) });
+      this.focusAnswer();
     } finally {
       this.checking.set(false);
-      this.focusAnswer();
     }
   }
 
