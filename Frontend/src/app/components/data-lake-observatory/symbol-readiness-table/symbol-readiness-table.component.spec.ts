@@ -19,6 +19,10 @@ function row(overrides: Partial<SymbolReadinessRow> & { symbol: string }): Symbo
     firstTradingDateMs: sessionOpenMs(2024, 8, 6),
     lastTradingDateMs: sessionOpenMs(2026, 9, 18),
     rebuild: null,
+    gapSessionCount: 0,
+    gapCount: 0,
+    unfillableGapCount: 0,
+    fill: null,
     ...overrides,
   };
 }
@@ -35,6 +39,18 @@ const ROWS: readonly SymbolReadinessRow[] = [
   row({ symbol: 'META', state: 'partial', sessionCount: 71, runReadyCount: 63, unrebuildableCount: 8 }),
   row({ symbol: 'SPY', sessionCount: 1252, runReadyCount: 1252 }),
 ];
+
+const QQQ_FILL: RebuildRequest = { symbol: 'QQQ', from: '2021-11-01', to: '2024-09-03', includeQuotes: false };
+/** Held in two stretches: every held session is readable, and 724 between them were never fetched. */
+const QQQ = row({
+  symbol: 'QQQ',
+  sessionCount: 531,
+  runReadyCount: 531,
+  gapSessionCount: 724,
+  gapCount: 1,
+  unfillableGapCount: 10,
+  fill: QQQ_FILL,
+});
 
 function tableRow(symbol: string): HTMLElement {
   return screen.getByRole('button', { name: `Show ${symbol} sessions` }).closest('tr') as HTMLElement;
@@ -66,6 +82,29 @@ describe('SymbolReadinessTableComponent', () => {
     view.fixture.componentRef.setInput('busy', true);
     view.detectChanges();
     expect((screen.getByRole('button', { name: 'Rebuild GLD' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('flags a symbol with sessions missing between its first and last, and offers to fill the gap', async () => {
+    const view = await render(SymbolReadinessTableComponent, { componentInputs: { rows: [QQQ, ...ROWS] } });
+    const requests: RebuildRequest[] = [];
+    view.fixture.componentInstance.rebuild.subscribe((request) => requests.push(request));
+
+    // Every held session is readable, so "Yes" would hide the hole a run falls into.
+    const qqq = tableRow('QQQ');
+    expect(within(qqq).getByText('Has a gap')).toBeTruthy();
+    expect(within(qqq).queryByText('Yes')).toBeNull();
+    expect(qqq.textContent.replace(/\s+/g, ' ')).toContain(
+      '724 sessions missing between its first and last · 10 too old to fetch',
+    );
+
+    fireEvent.click(within(qqq).getByRole('button', { name: 'Fill the gap in QQQ' }));
+    expect(requests).toEqual([QQQ_FILL]);
+
+    // A symbol with a gap is not "Ready"; the gaps filter shows it alone.
+    expect(screen.getByRole('button', { name: 'Ready 1' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Has gaps 1' }));
+    expect(screen.getByRole('button', { name: 'Show QQQ sessions' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show SPY sessions' })).toBeNull();
   });
 
   it('filters to the symbols that need a rebuild', async () => {

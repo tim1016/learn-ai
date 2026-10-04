@@ -17,6 +17,7 @@ import hashlib
 import threading
 from datetime import date, datetime, timedelta
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 from urllib.parse import quote
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -589,6 +590,47 @@ async def test_run_readiness_counts_the_sessions_a_run_can_read_per_symbol(
     assert status_code == 200
     assert seen["data_type"] == "quote"
     assert [row["run_ready_count"] for row in body["symbols"]] == [532, 1252]
+
+
+async def test_run_readiness_flags_the_sessions_missing_between_a_symbols_first_and_last(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    # QQQ was backfilled twice and holds nothing between the two runs; SPY holds every session of the same span.
+    whole = expected_sessions(date(2025, 1, 2), date(2025, 6, 30))
+    hole = expected_sessions(date(2025, 1, 13), date(2025, 5, 30))
+    held = [day for day in whole if day not in hole]
+    asked: list[str] = []
+
+    async def _counts(
+        market: str,
+        price_adjustment_mode: str,
+        data_type: str,
+        rebuild_floor: date,
+        data_root_id: UUID | None = None,
+    ) -> list[SymbolRevisionCount]:
+        return [
+            SymbolRevisionCount("QQQ", None, False, len(held), held[0], held[-1]),
+            SymbolRevisionCount("SPY", None, False, len(whole), whole[0], whole[-1]),
+        ]
+
+    async def _sessions(market: str, symbol: str, data_type: str, start: date | None, end: date | None, **scope: object):
+        asked.append(symbol)
+        return [SimpleNamespace(trading_date=day) for day in held]
+
+    monkeypatch.setattr(catalog_client, "select_symbol_revision_counts", _counts)
+    monkeypatch.setattr(catalog_client, "select_coverage_minute_bars", _sessions)
+    app = make_data_lake_app(include_data_lake=True)
+
+    status_code, body = await _get(app, "/api/data-lake/run-readiness?price_adjustment_mode=raw")
+
+    assert status_code == 200
+    # Only the symbol whose count falls short of its span is read session by session.
+    assert asked == ["QQQ"]
+    qqq, spy = body["symbols"]
+    assert (qqq["gap_session_count"], qqq["gap_count"], qqq["unfillable_gap_session_count"]) == (len(hole), 1, 0)
+    assert qqq["gap_first_trading_date_ms"] == session_open_ms_utc(hole[0])
+    assert qqq["gap_last_trading_date_ms"] == session_open_ms_utc(hole[-1])
+    assert (spy["gap_session_count"], spy["gap_first_trading_date_ms"]) == (0, None)
 
 
 async def test_run_readiness_422_when_price_adjustment_mode_omitted(make_data_lake_app):

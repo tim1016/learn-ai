@@ -47,6 +47,14 @@ export interface SymbolReadinessRow {
   readonly lastTradingDateMs: number;
   /** The window a rebuild asks for, or null when no session can be rebuilt. */
   readonly rebuild: RebuildRequest | null;
+  /** Sessions the calendar schedules between the first and last held one that the lake does not hold. */
+  readonly gapSessionCount: number;
+  /** Unbroken stretches of missing sessions: one long hole, or several. */
+  readonly gapCount: number;
+  /** Missing sessions older than the provider's history: no backfill can fetch them. */
+  readonly unfillableGapCount: number;
+  /** The window a backfill asks for to fill the gaps, or null when no missing session can be fetched. */
+  readonly fill: RebuildRequest | null;
 }
 
 export interface LakeReadinessTotals {
@@ -58,10 +66,19 @@ export interface LakeReadinessTotals {
   readonly unrebuildableSessionCount: number;
 }
 
+/** One symbol's backfill over `[from, to]`, both session opens; null when either is. */
+function backfillWindow(
+  symbol: string,
+  from: number | null,
+  to: number | null,
+  bars: DataLakeDataType,
+): RebuildRequest | null {
+  if (from === null || to === null) return null;
+  return { symbol, from: etIsoDate(from), to: etIsoDate(to), includeQuotes: bars === 'quote' };
+}
+
 function toRow(entry: SymbolRunReadiness, bars: DataLakeDataType): SymbolReadinessRow {
   const unreadable = entry.session_count - entry.run_ready_count;
-  const from = entry.rebuild_first_trading_date_ms;
-  const to = entry.rebuild_last_trading_date_ms;
   return {
     symbol: entry.symbol,
     state: unreadable === 0 ? 'ready' : entry.run_ready_count === 0 ? 'unreadable' : 'partial',
@@ -71,22 +88,29 @@ function toRow(entry: SymbolRunReadiness, bars: DataLakeDataType): SymbolReadine
     unrebuildableCount: entry.unrebuildable_count,
     firstTradingDateMs: entry.first_trading_date_ms,
     lastTradingDateMs: entry.last_trading_date_ms,
-    rebuild:
-      from === null || to === null
-        ? null
-        : {
-            symbol: entry.symbol,
-            from: etIsoDate(from),
-            to: etIsoDate(to),
-            includeQuotes: bars === 'quote',
-          },
+    rebuild: backfillWindow(
+      entry.symbol,
+      entry.rebuild_first_trading_date_ms,
+      entry.rebuild_last_trading_date_ms,
+      bars,
+    ),
+    gapSessionCount: entry.gap_session_count ?? 0,
+    gapCount: entry.gap_count ?? 0,
+    unfillableGapCount: entry.unfillable_gap_session_count ?? 0,
+    fill: backfillWindow(
+      entry.symbol,
+      entry.gap_first_trading_date_ms ?? null,
+      entry.gap_last_trading_date_ms ?? null,
+      bars,
+    ),
   };
 }
 
-/** What needs the operator comes first: rebuildable, then otherwise unreadable, then ready. */
+/** What needs the operator comes first: a rebuild, then a gap to fill, then the rest that is not whole, then ready. */
 function attention(row: SymbolReadinessRow): number {
   if (row.rebuildableCount > 0) return 0;
-  return row.state === 'ready' ? 2 : 1;
+  if (row.fill !== null) return 1;
+  return row.state === 'ready' && row.gapSessionCount === 0 ? 3 : 2;
 }
 
 /** `bars` is the bar type the readiness was read for; a rebuild has to write the same one. */
@@ -112,6 +136,13 @@ export function readinessTotals(rows: readonly SymbolReadinessRow[]): LakeReadin
 
 export function rebuildRequests(rows: readonly SymbolReadinessRow[]): RebuildRequest[] {
   return rows.flatMap((row) => (row.rebuild === null ? [] : [row.rebuild]));
+}
+
+/** The symbols with a gap a backfill can fill. */
+export function fillRows(
+  rows: readonly SymbolReadinessRow[],
+): (SymbolReadinessRow & { readonly fill: RebuildRequest })[] {
+  return rows.filter((row): row is SymbolReadinessRow & { readonly fill: RebuildRequest } => row.fill !== null);
 }
 
 const DAY_MS = 86_400_000;

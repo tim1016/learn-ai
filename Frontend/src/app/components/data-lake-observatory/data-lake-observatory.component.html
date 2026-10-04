@@ -27,6 +27,16 @@
     />
   }
 
+  @if (gapRows().length > 0) {
+    <app-gap-banner
+      class="span-12"
+      [rows]="gapRows()"
+      [busy]="backfillBusy()"
+      [progress]="fillProgress()"
+      (fill)="fillGaps($event)"
+    />
+  }
+
   <app-session-needs class="span-12" [mode]="mode()" [missingSymbolCount]="totals().rebuildSymbolCount" />
 
   <app-lake-panel

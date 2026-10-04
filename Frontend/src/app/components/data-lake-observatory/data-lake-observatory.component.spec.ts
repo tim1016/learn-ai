@@ -251,6 +251,51 @@ describe('DataLakeObservatoryComponent', () => {
     });
   });
 
+  it('flags symbols with sessions missing between their first and last, and fills each over its own gap', async () => {
+    // Every held session of both is readable: no rebuild banner, and still not whole.
+    const qqq = readinessEntry({
+      symbol: 'QQQ',
+      gap_session_count: 724,
+      gap_count: 1,
+      unfillable_gap_session_count: 10,
+      gap_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      gap_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+    });
+    const iwm = readinessEntry({
+      symbol: 'IWM',
+      gap_session_count: 2,
+      gap_count: 2,
+      gap_first_trading_date_ms: sessionOpenMs(2025, 6, 2),
+      gap_last_trading_date_ms: sessionOpenMs(2025, 7, 1),
+    });
+    const { startJob, endJob } = await renderObservatory([GLD, qqq, iwm]);
+
+    const banner = screen
+      .getByRole('heading', { name: '2 symbols have sessions missing between their first and last' })
+      .closest('section') as HTMLElement;
+    expect(banner.textContent.replace(/\s+/g, ' ')).toContain('714 sessions, 2021-11-01 to 2024-09-03');
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Fill the gaps in all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+
+    expect(specOf(startJob, 0)).toMatchObject({
+      symbols: ['IWM'],
+      start_trading_date_ms: Date.UTC(2025, 5, 2, 12),
+      end_trading_date_ms: Date.UTC(2025, 6, 1, 12),
+    });
+    // The list is narrated by the banner that started it, not by the rebuild banner beside it.
+    expect(within(banner).getByText(/Filling IWM \(1 of 2\)/)).toBeTruthy();
+    expect(screen.queryByText(/Rebuilding IWM/)).toBeNull();
+
+    endJob('job-1', 'job.completed');
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(2));
+    expect(specOf(startJob, 1)).toMatchObject({
+      symbols: ['QQQ'],
+      start_trading_date_ms: Date.UTC(2021, 10, 1, 12),
+      end_trading_date_ms: Date.UTC(2024, 8, 3, 12),
+    });
+  });
+
   it('stops a rebuild of every symbol when one run fails, and re-reads the lake', async () => {
     const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
 

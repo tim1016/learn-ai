@@ -539,6 +539,13 @@ class SymbolRunReadiness(BaseModel):
     not older than the provider's history. Both are ``None`` when there are
     none. ``unrebuildable_count`` is the unreadable sessions older than that
     history, which no backfill can fetch again.
+
+    ``gap_*`` describe the sessions the calendar schedules between the first
+    and the last held one that the lake does not hold: ``gap_session_count``
+    of them, in ``gap_count`` unbroken stretches. ``gap_first_trading_date_ms``
+    and ``gap_last_trading_date_ms`` bound the ones a backfill can fetch, and
+    are ``None`` when there are none; ``unfillable_gap_session_count`` is the
+    ones older than the provider's history.
     """
 
     symbol: str
@@ -549,6 +556,11 @@ class SymbolRunReadiness(BaseModel):
     unrebuildable_count: int
     rebuild_first_trading_date_ms: int | None = None
     rebuild_last_trading_date_ms: int | None = None
+    gap_session_count: int = 0
+    gap_count: int = 0
+    unfillable_gap_session_count: int = 0
+    gap_first_trading_date_ms: int | None = None
+    gap_last_trading_date_ms: int | None = None
 
 
 class RunReadinessResponse(BaseModel):

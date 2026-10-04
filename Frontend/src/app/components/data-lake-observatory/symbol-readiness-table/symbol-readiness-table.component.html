@@ -26,7 +26,7 @@
           <th scope="col" class="numeric">Sessions on disk</th>
           <th scope="col" class="numeric">A run can read</th>
           <th scope="col">First session</th>
-          <th scope="col"><span class="sr-only">Rebuild</span></th>
+          <th scope="col"><span class="sr-only">Backfill</span></th>
         </tr>
       </thead>
       <tbody>
@@ -44,10 +44,20 @@
               </button>
             </th>
             <td>
-              <span class="pill" [attr.data-state]="row.state">{{ verdict(row) }}</span>
+              <span class="pill" [attr.data-state]="pillState(row)">{{ verdict(row) }}</span>
               @if (row.unrebuildableCount > 0) {
                 <span class="symbols__note">
                   {{ row.unrebuildableCount | number }} older than the provider's history
+                </span>
+              }
+              @if (row.gapSessionCount > 0) {
+                <span class="symbols__note symbols__note--gap">
+                  {{ row.gapSessionCount | number }}
+                  {{ row.gapSessionCount === 1 ? 'session' : 'sessions' }} missing between its first
+                  and last
+                  @if (row.unfillableGapCount > 0) {
+                    · {{ row.unfillableGapCount | number }} too old to fetch
+                  }
                 </span>
               }
             </td>
@@ -66,6 +76,17 @@
                   (click)="rebuild.emit(request)"
                 >
                   Rebuild
+                </button>
+              }
+              @if (row.fill; as request) {
+                <button
+                  type="button"
+                  class="symbols__rebuild"
+                  [disabled]="busy()"
+                  [attr.aria-label]="'Fill the gap in ' + row.symbol"
+                  (click)="rebuild.emit(request)"
+                >
+                  Fill gap
                 </button>
               }
             </td>

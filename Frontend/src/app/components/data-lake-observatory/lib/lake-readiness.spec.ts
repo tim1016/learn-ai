@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SymbolRunReadiness } from '../../../shared/data-lake';
 import {
   coverageWindow,
+  fillRows,
   readinessRows,
   readinessTotals,
   rebuildRequests,
@@ -82,6 +83,42 @@ describe('readinessRows', () => {
 
     expect(meta.rebuildableCount).toBe(0);
     expect(meta.rebuild).toBeNull();
+  });
+});
+
+/** Backfilled twice: nine sessions in October 2021, then a run from 2024-09-04, and nothing between. */
+const QQQ = entry({
+  symbol: 'QQQ',
+  first_trading_date_ms: sessionOpenMs(2021, 10, 5),
+  session_count: 531,
+  run_ready_count: 531,
+  gap_session_count: 724,
+  gap_count: 1,
+  unfillable_gap_session_count: 10,
+  gap_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+  gap_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+});
+
+describe("gaps between a symbol's first and last session", () => {
+  it('asks a backfill for the missing sessions the provider still serves', () => {
+    const [qqq] = readinessRows([QQQ], 'trade');
+
+    expect([qqq.state, qqq.gapSessionCount, qqq.gapCount, qqq.unfillableGapCount]).toEqual(['ready', 724, 1, 10]);
+    expect(qqq.fill).toEqual({ symbol: 'QQQ', from: '2021-11-01', to: '2024-09-03', includeQuotes: false });
+    expect(qqq.rebuild).toBeNull();
+  });
+
+  it('puts a gap to fill after the rebuilds and ahead of everything a backfill cannot help', () => {
+    const rows = readinessRows([SPY, META, QQQ, GLD], 'trade');
+
+    expect(rows.map((row) => row.symbol)).toEqual(['GLD', 'QQQ', 'META', 'SPY']);
+    expect(fillRows(rows).map((row) => row.fill.symbol)).toEqual(['QQQ']);
+  });
+
+  it('reads no gap from a data plane that does not report them', () => {
+    const [spy] = readinessRows([SPY], 'trade');
+
+    expect([spy.gapSessionCount, spy.gapCount, spy.unfillableGapCount, spy.fill]).toEqual([0, 0, 0, null]);
   });
 });
 

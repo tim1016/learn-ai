@@ -1,0 +1,46 @@
+<section class="banner" aria-labelledby="lake-gap-banner-title">
+  <div class="banner__body">
+    <i class="pi pi-exclamation-triangle banner__icon" aria-hidden="true"></i>
+    <div class="banner__copy">
+      <h2 class="banner__title" id="lake-gap-banner-title">{{ title() }}</h2>
+      <p>
+        The first and last session look like one unbroken history, but the lake never fetched the
+        sessions between. A run laid over a gap is refused.
+      </p>
+      <ul class="gaps">
+        @for (row of named(); track row.symbol) {
+          <li class="gaps__row">
+            <app-asset-identity [symbol]="row.symbol" size="sm" />
+            <span>
+              {{ row.gapSessionCount - row.unfillableGapCount | number }}
+              {{ row.gapSessionCount - row.unfillableGapCount === 1 ? 'session' : 'sessions' }},
+              <span class="mono">{{ row.fill.from }}</span> to <span class="mono">{{ row.fill.to }}</span>
+            </span>
+          </li>
+        }
+        @if (unnamed() > 0) {
+          <li class="gaps__row">and {{ unnamed() }} more, listed under "Has gaps" below</li>
+        }
+      </ul>
+      <p>
+        <strong class="banner__fix">A backfill fills them.</strong>
+        It fetches only the sessions the lake does not hold.
+      </p>
+      @if (progress(); as running) {
+        <p class="banner__note" role="status">
+          Filling {{ running.symbol }} ({{ running.position }} of {{ running.total }}). Keep this
+          page open: the symbols run one after another.
+        </p>
+      }
+    </div>
+  </div>
+  <div class="banner__actions">
+    <button type="button" class="banner__primary" [disabled]="busy()" (click)="fillAll()">
+      @if (rows().length === 1) {
+        Fill the gap in {{ rows()[0].symbol }}
+      } @else {
+        Fill the gaps in all {{ rows().length }} symbols
+      }
+    </button>
+  </div>
+</section>

@@ -18,6 +18,7 @@ import {
   CoverageHeatmapComponent,
   type CoverageCellSelection,
 } from './coverage-heatmap/coverage-heatmap.component';
+import { GapBannerComponent } from './gap-banner/gap-banner.component';
 import { LakePanelComponent } from './lake-panel/lake-panel.component';
 import { LakeToggleComponent } from './lake-toggle/lake-toggle.component';
 import {
@@ -32,6 +33,7 @@ import { buildCoverageBoard, type CoverageBoard } from './lib/coverage-board';
 import {
   PRICE_ADJUSTMENT_OPTIONS,
   coverageWindow,
+  fillRows,
   readinessRows,
   readinessTotals,
   rebuildRequests,
@@ -112,6 +114,7 @@ function tradingDateAt(ms: number): string {
     AssetIdentityComponent,
     ArtifactInspectorDrawerComponent,
     CoverageHeatmapComponent,
+    GapBannerComponent,
     LakeBackfillPanelComponent,
     LakePanelComponent,
     LakeStorageFoldComponent,
@@ -160,6 +163,8 @@ export class DataLakeObservatoryComponent {
   });
 
   protected readonly totals = computed(() => readinessTotals(this.rows()));
+  /** The symbols with sessions missing between their first and last that a backfill can fetch. */
+  protected readonly gapRows = computed(() => fillRows(this.rows()));
 
   /** Follows the rows: the pick survives a re-read, and the first row stands in when it is gone. */
   protected readonly selectedSymbol = linkedSignal<readonly SymbolReadinessRow[], string | null>({
@@ -252,11 +257,16 @@ export class DataLakeObservatoryComponent {
   /** The symbol a rebuild is on and its place in the list; null when none is running. */
   private readonly rebuildProgress = signal<RebuildProgress | null>(null);
 
-  /** What the banner narrates: a list of symbols. A single symbol's run is the backfill panel's to show. */
-  protected readonly queueProgress = computed(() => {
+  /** True while the running list fills gaps rather than rebuilds: each banner narrates its own list. */
+  private readonly fillingGaps = signal(false);
+
+  /** What a banner narrates: a list of symbols. A single symbol's run is the backfill panel's to show. */
+  private readonly listProgress = computed(() => {
     const progress = this.rebuildProgress();
     return progress !== null && progress.total > 1 ? progress : null;
   });
+  protected readonly queueProgress = computed(() => (this.fillingGaps() ? null : this.listProgress()));
+  protected readonly fillProgress = computed(() => (this.fillingGaps() ? this.listProgress() : null));
 
   protected selectSession(selection: CoverageCellSelection): void {
     this.selectedDateMs.set(selection.cell.tradingDateMs);
@@ -264,6 +274,17 @@ export class DataLakeObservatoryComponent {
 
   protected async rebuildAll(): Promise<void> {
     await this.rebuild(rebuildRequests(this.rows()));
+  }
+
+  /** Fills each symbol's gaps with its own backfill, run as a rebuild list is. */
+  protected async fillGaps(requests: readonly RebuildRequest[]): Promise<void> {
+    if (this.backfillBusy() || this.rebuildProgress() !== null) return;
+    this.fillingGaps.set(true);
+    try {
+      await this.rebuild(requests);
+    } finally {
+      this.fillingGaps.set(false);
+    }
   }
 
   /**
