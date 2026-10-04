@@ -258,6 +258,24 @@ proof that lands after a later run of the bot began is recorded as the stopped
 run's alone -- its receipt and the replay receipt it owes -- never projected
 over the later run's.
 
+**Amended 2026-10-03 (#2854): the end sells nothing while `EXIT_STUCK` is
+open.** That episode means the Clerk has stopped exiting the bot's position by
+itself and the position is the operator's; the watchdog sends nothing for it,
+and the end accepts no sale for it either. The end still stops the run and
+stays pending, and the bell and the bot page's End card say so until the bot
+is flat, while the operator's own flatten is working included. Once the
+operator's flatten or write-off leaves the bot flat, the end is recorded
+carried out with nothing sold. A sale of the end's own that ended failed does
+not complete an end still pending while the episode is open: its send was
+lost and an operator settled it as "no such order", which ends it as not sent
+and opens the episode in one write. That holding is the operator's like any
+other, and no second end sale is accepted for it. An end sale accepted before
+the episode opened and still in progress is sent as accepted; a store this
+code wrote holds none, since the episode never opens while an EXIT of the bot
+is in progress. With no such episode a sale that ended failed still completes
+the end as before, and the watchdog sends it again. A `sim:` authority is
+unchanged.
+
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
 order to `execution_evidence_missing`, counting neither a pass nor a divergence.
@@ -345,9 +363,9 @@ off; attributed-flat proof then resolves both episodes, as it resolves any
 stuck exit. A bot that holds nothing ends its EXIT attributed-flat and opens
 neither.
 
-The sale at a bot's scheduled end does not keep to that hold yet. A separate
-change makes it (#2854 item 8), and this action is offered on no operator
-surface before that change lands.
+The sale at a bot's scheduled end keeps to that hold: none is accepted while
+`EXIT_STUCK` is open (the amendment of 2026-10-03 to the scheduled end,
+above).
 
 Known gap: an order Alpaca answered under another client order id cannot be
 taken up yet. "No such order" rests on the Clerk's own read of that order.

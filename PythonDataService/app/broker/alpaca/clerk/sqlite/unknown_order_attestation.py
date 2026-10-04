@@ -60,9 +60,8 @@ both episodes. The attributed quantity is never changed here. A bot that
 holds nothing in the symbol has nothing left to exit: its EXIT ends
 attributed-flat, and no episode is opened.
 
-One sale of the Clerk's own does not keep to that hold yet: the sale at a
-bot's scheduled end. A separate change makes it (#2854 item 8), and this
-action is offered on no operator surface before that change lands.
+The sale at a bot's scheduled end keeps to that hold too: ``scheduled_end``
+accepts none while ``EXIT_STUCK`` is open.
 
 The order Alpaca answered this order's send with, under another client order
 id, may be this order itself, and has rules of its own. What it sold was

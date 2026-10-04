@@ -302,9 +302,9 @@ describe('BotEndCardComponent (#2607)', () => {
     const conflict = new HttpErrorResponse({
       status: 409,
       error: panelRefusalBody({
-        message: 'This bot\'s end has come; the Clerk is carrying it out.',
+        message: 'This bot\'s end has come, so it can no longer be changed.',
         why: 'An end can be changed only before its time.',
-        next_action: 'The bot page shows how it ended once the Clerk is done.',
+        next_action: 'The bot\'s page says what completes it.',
         reason_code: 'BOT_END_REFUSED',
       }),
     });
@@ -314,9 +314,9 @@ describe('BotEndCardComponent (#2607)', () => {
     fireEvent.click(within(editor()).getByRole('button', { name: 'Save end' }));
 
     const alert = await within(editor()).findByRole('alert');
-    expect(alert.textContent).toContain('This bot\'s end has come; the Clerk is carrying it out.');
+    expect(alert.textContent).toContain('This bot\'s end has come, so it can no longer be changed.');
     expect(alert.textContent).toContain('An end can be changed only before its time.');
-    expect(alert.textContent).toContain('Next: The bot page shows how it ended once the Clerk is done.');
+    expect(alert.textContent).toContain('Next: The bot\'s page says what completes it.');
     expect(alert.textContent).toContain('Bot End Refused');
   });
 

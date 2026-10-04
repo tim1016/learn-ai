@@ -34,7 +34,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.scheduled_end import ScheduledEnd
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_STUCK_REASON_CODE, ExitStuckCause
 from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg
 from app.broker.contract.registry import (
@@ -44,7 +46,7 @@ from app.broker.contract.registry import (
 from app.routers import alpaca_clerk_sqlite, broker_v2_gallery, broker_v2_panel
 from app.routers.broker_v2_panel import router
 from app.schemas.alpaca_clerk_sqlite import RecoveryActionCheckRequest, RecoveryActionExecuteRequest
-from app.schemas.bot_end import BotEndView
+from app.schemas.bot_end import BotEnd, BotEndView, RecordedEnd
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotPanelLiveSnapshot,
@@ -79,6 +81,10 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _walk_clock_to,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
+from tests.broker.alpaca.clerk.sqlite.test_scheduled_end import (
+    _Schedule,
+    schedule,  # noqa: F401 -- the runner's schedule of the bots' ends, installed for one test
+)
 from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT, SID
 
@@ -150,6 +156,8 @@ class _FakeRegistry:
         self._sids = tuple(sids)
         # How the bot's run ended, when a test says; a stopped run is otherwise a clean Stop.
         self.duty_outcome: BotDutyOutcomeView | None = None
+        # The owner-set end the bot's desired state records, when a test says (#2607).
+        self.end: RecordedEnd | None = None
         # Attributed per bot, not counted as a scalar: a fleet-wide total is
         # met by the gallery's fan-out alone, so a per-bot panel read that
         # stopped projecting custody would still clear a total-only bound.
@@ -226,9 +234,9 @@ class _FakeRegistry:
         return None
 
     def bot_end(self, broker: str, sid: str) -> BotEndView:
-        """No end: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
+        """No end unless a test says: the owner-set end (#2607) is exercised in ``test_bot_end_routes``."""
         self.status(broker, sid)
-        return bot_end_view(None, now_ms=_T0, dry_run=False, running=self._running, use_rth=True)
+        return bot_end_view(self.end, now_ms=_T0, dry_run=False, running=self._running, use_rth=True)
 
     def bindings_for_broker(self, broker: str) -> list:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
@@ -1958,6 +1966,63 @@ async def test_a_bot_that_ended_holding_says_so_and_lists_its_runs_fill(api) -> 
     deploy_again = next(entry for entry in page["toolbar"] if entry["action_id"] == "deploy_again")
     assert (deploy_again["availability"], deploy_again["primary"]) == ("available", False)
     assert [(fill["side"], fill["quantity"]) for fill in body["run_fills"]] == [("buy", 1.0)]
+
+
+async def test_a_bots_page_says_only_what_is_true_while_its_end_waits_for_the_operator(
+    api, schedule: _Schedule,  # noqa: F811
+) -> None:
+    """The bot's end has come, and the Clerk then stops exiting its position by itself (#2854).
+
+    Until then the end's sale is the next pass's, and the page says so. After, the Clerk sells
+    nothing at the end, and the page went on saying a sale is queued, that the Clerk sells the
+    shares on its next pass, and that the Clerk is carrying the end out.
+    """
+    app, repo = api
+    await _make_held_position(repo, account_id=ACCT, strategy_instance_id=SID, run_id=_run_id(SID), quantity=1.0)
+    submit_stop_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
+    registry = get_bot_task_registry()
+    registry._running = False  # type: ignore[union-attr]
+    end = BotEnd(end_at_ms=_T0)
+    registry.end = RecordedEnd.scheduled(end)  # type: ignore[union-attr]
+    schedule.ends[SID] = ScheduledEnd(strategy_instance_id=SID, end=end)
+
+    async with _client(app) as client:
+        before = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+        raise_uncertainty(
+            repo, strategy_instance_id=SID, reason_code=EXIT_STUCK_REASON_CODE,
+            headline="A stuck EXIT exhausted automatic re-drives",
+            explanation="1 SPY remains attributed after 3 automatic EXIT re-drives.",
+            operator_impact="New exposure stays on hold for this strategy and automatic re-drives stopped.",
+            next_step="Run Reconcile now, then execute the presented safe flatten.",
+            cause_facts=ExitStuckCause(
+                symbol="SPY", attributed_qty=1.0, redrive_count=3, first_observed_at_ms=_T0,
+            ).to_mapping(),
+            severity="error",
+        )
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    assert before["bot_page"]["summary"]["text"].endswith("· holds 1 SPY · a sale is queued.")
+    assert (before["end"]["waits_for_operator"], before["end"]["notice"]) == (False, None)
+    reached, sells = before["end"]["headline"].rsplit(" · ", 1)
+    assert sells == "sells"
+    summary = body["bot_page"]["summary"]
+    assert summary["facts"]["exit_queued"] is False
+    assert summary["text"].endswith("· holds 1 SPY."), "the summary says a sale is queued"
+    assert (body["end"]["status"], body["end"]["waits_for_operator"]) == ("ending", True)
+    assert body["end"]["headline"] == f"{reached} · no order sent", "the headline says the end sells"
+    assert body["end"]["explanation"] == (
+        "Its end has come and the bot is stopped. "
+        "At its end the Clerk sent no order for the position the bot holds."
+    )
+    assert body["end"]["notice"] == (
+        "The Clerk stopped exiting this bot's position by itself, so the end's sale of 1 SPY was not sent. "
+        "Sell the position or write it off from the bot's page; the end then completes with no sale."
+    )
+    change_end = next(entry for entry in body["bot_page"]["toolbar"] if entry["action_id"] == "change_end")
+    assert (change_end["availability"], change_end["reason"]) == (
+        "blocked",
+        "This bot's end has come; it completes once the bot holds no position.",
+    )
 
 
 def _crash_the_run(repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> None:
