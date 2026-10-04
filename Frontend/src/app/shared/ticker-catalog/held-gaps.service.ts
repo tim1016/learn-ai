@@ -1,4 +1,4 @@
-import { Injectable, Injector, inject, resource, untracked, type ResourceRef } from '@angular/core';
+import { Injectable, Injector, inject, linkedSignal, resource, signal, untracked, type ResourceRef, type Signal, type WritableSignal } from '@angular/core';
 
 import { DataLakeService, MAX_TRADING_RANGE_DAYS, type PriceAdjustmentMode } from '../data-lake';
 import type { DataGaps, DateBounds } from '../date-picker';
@@ -6,6 +6,12 @@ import { addDays, type IsoDate } from '../date/iso-date';
 
 /** The spans whose gaps are kept, and read again with the lake's holdings. A page shows one or two. */
 const KEPT_READS = 4;
+
+/** One span's read, and its last answer, which stays on screen while a newer one is fetched. */
+interface GapRead {
+  readonly read: ResourceRef<DataGaps | undefined>;
+  readonly answer: Signal<DataGaps | undefined>;
+}
 
 /**
  * The sessions a lake tree lacks inside a symbol's held span.
@@ -23,7 +29,9 @@ const KEPT_READS = 4;
 export class HeldGapsService {
   private readonly lake = inject(DataLakeService);
   private readonly injector = inject(Injector);
-  private readonly reads = new Map<string, ResourceRef<DataGaps | undefined>>();
+  private readonly reads = new Map<string, GapRead>();
+  /** How many times each tree's holdings have been read again; every read of that tree's gaps follows it. */
+  private readonly rereads = new Map<PriceAdjustmentMode, WritableSignal<number>>();
 
   /**
    * The gaps inside ``bounds`` for ``symbol`` in ``mode``'s tree; null while
@@ -35,23 +43,29 @@ export class HeldGapsService {
     const { min, max } = bounds;
     if (resolution !== 'minute' || min === null || max === null) return null;
     const key = `${mode}|${symbol}|${min}|${max}`;
-    let read = this.reads.get(key);
-    if (read === undefined) {
+    let held = this.reads.get(key);
+    if (held === undefined) {
+      const rereads = this.rereadsOf(mode);
       // `resource()` installs an effect, which a reactive context forbids.
-      read = untracked(() => resource({ loader: () => this.load(mode, symbol, min, max), injector: this.injector }));
-      this.reads.set(key, read);
+      held = untracked(() => {
+        // The count is the read's parameter, so a re-read asked for while one is in flight starts it over instead of being dropped.
+        const read = resource({ params: () => rereads(), loader: () => this.load(mode, symbol, min, max), injector: this.injector });
+        const answer = linkedSignal<DataGaps | undefined, DataGaps | undefined>({ source: read.value, computation: (now, before) => now ?? before?.value });
+        return { read, answer };
+      });
+      this.reads.set(key, held);
       this.letGoOfTheOldest();
     }
-    return read.value() ?? null;
+    return held.answer() ?? null;
   }
 
   /** Keeps the newest spans only, so the tab neither re-reads nor holds on to every symbol it has shown. */
   private letGoOfTheOldest(): void {
     if (this.reads.size <= KEPT_READS) return;
-    const [oldest, read] = this.reads.entries().next().value as [string, ResourceRef<DataGaps | undefined>];
+    const [oldest, held] = this.reads.entries().next().value as [string, GapRead];
     this.reads.delete(oldest);
     // Destroying a resource writes its state, which a reactive context forbids.
-    untracked(() => read.destroy());
+    untracked(() => held.read.destroy());
   }
 
   /**
@@ -61,9 +75,16 @@ export class HeldGapsService {
    * that failed is tried again.
    */
   reload(mode: PriceAdjustmentMode): void {
-    for (const [key, read] of this.reads) {
-      if (key.startsWith(`${mode}|`)) read.reload();
+    this.rereadsOf(mode).update((count) => count + 1);
+  }
+
+  private rereadsOf(mode: PriceAdjustmentMode): WritableSignal<number> {
+    let rereads = this.rereads.get(mode);
+    if (rereads === undefined) {
+      rereads = signal(0);
+      this.rereads.set(mode, rereads);
     }
+    return rereads;
   }
 
   /** Reads the span in windows the coverage endpoint accepts; a session is held when its artifact is complete. */
