@@ -117,7 +117,12 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_scheduled_end import (
     _Schedule,
-    schedule,  # noqa: F401 -- the runner's schedule of the bots' ends, installed for one test
+    schedule,  # noqa: F401 -- the runner's schedule of the bots' ends, installed for the tests of a bot's end
+)
+from tests.broker.alpaca.clerk.sqlite.test_scheduled_end_exit_stuck import (
+    _all_end_sales,
+    _end_lines,
+    _end_on_the_bots_page,
 )
 
 SETTLE = "settle_unknown_exit_order"
@@ -1378,17 +1383,6 @@ async def test_the_check_speaks_only_of_orders_the_clerk_did_not_place_when_its_
     assert findings.lines[2] == _NO_ORDER_THE_CLERK_DID_NOT_PLACE
 
 
-_THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known gap (#2854 item 8): the sale at a bot's scheduled end does not keep to the hold an "
-        'accepted "no such order" leaves. It goes out whenever Alpaca holds as much as it sells, '
-        "whoever's shares those are. A separate change makes that sale respect the hold; the settle "
-        "action is on no operator surface until it lands."
-    ),
-)
-
-
 def _the_bots_shares_were_sold_by_hand(alpaca: _AlpacaAccount, _closing: str) -> None:
     alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, status="filled", filled_quantity=10.0)]
     alpaca.holds -= 10.0
@@ -1412,17 +1406,14 @@ def _the_lost_sale_never_arrived(_alpaca: _AlpacaAccount, _closing: str) -> None
         pytest.param(
             "never_arrives", 20.0, True, _the_bots_shares_were_sold_by_hand,
             id="closed-by-hand-another-bot-holds-the-symbol",
-            marks=_THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD,
         ),
         pytest.param(
             "never_arrives", 10.0, False, _the_lost_sale_never_arrived,
             id="the-order-did-not-trade",
-            marks=_THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD,
         ),
         pytest.param(
             "arrives_unanswered", 20.0, False, _the_lost_sale_sold_unseen,
             id="the-order-traded-unseen-behind-shares-outside-the-records",
-            marks=_THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD,
         ),
     ],
 )
@@ -1470,6 +1461,87 @@ async def test_a_bots_scheduled_end_sells_nothing_once_its_closing_order_is_sett
 
     assert len(alpaca.sent) == 1, "the end's sale is not sent for a position left to the operator"
     assert repo.position(SID, "SPY") == 10.0
+    assert schedule.carried_out == [] and SID in schedule.ends, "the end was recorded carried out with the bot still holding"
+
+
+async def _the_operator_writes_the_position_off(
+    alpaca: _AlpacaAccount, facade: SqliteAlpacaClerkFacade, current_context: _Context
+) -> None:
+    """The bot's shares were sold by hand at Alpaca, and the operator writes the Clerk's record of them off."""
+    alpaca.holds = 0.0
+    written_off = await _the_operators_cure(facade, current_context, "discharge_attributed_residue")
+    assert written_off.applied is True
+
+
+async def _the_operator_sells_the_position(
+    alpaca: _AlpacaAccount, facade: SqliteAlpacaClerkFacade, current_context: _Context
+) -> None:
+    """The operator flattens the position from the bot's page, and that sale fills."""
+    assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+    await _flatten(facade, current_context)
+    alpaca.fills(alpaca.sent[-1].client_order_id)
+
+
+@pytest.mark.parametrize(
+    ("the_operator_closes_it", "orders_sent_in_all"),
+    [
+        pytest.param(_the_operator_writes_the_position_off, 1, id="written-off"),
+        pytest.param(_the_operator_sells_the_position, 2, id="sold-by-the-operator"),
+    ],
+)
+async def test_an_end_still_pending_whose_own_lost_sale_is_settled_as_not_sent_waits_for_the_operator(
+    crashed_with_exposure,  # noqa: F811
+    schedule: _Schedule,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    the_operator_closes_it: Callable[[_AlpacaAccount, SqliteAlpacaClerkFacade, _Context], Awaitable[None]],
+    orders_sent_in_all: int,
+) -> None:
+    """The lost closing order is the sale at the bot's scheduled end itself.
+
+    The end comes: the Clerk stops the run and sends the end's sale, the
+    answer is lost, and the record that the end was carried out does not
+    land. "No such order" ends that sale as not sent and leaves the position
+    to the operator, in one write. The failed sale is not the close of the
+    holding: the end stays pending, the bell and the bot's page say it waits
+    for the operator, and the Clerk sends nothing, pass after pass. Once the
+    operator's write-off or sale leaves the bot flat, the end is carried out
+    with no second sale of its own.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    await safe_flatten._held_position(repo)
+    the_end = ScheduledEnd(strategy_instance_id=SID, end=BotEnd(end_at_ms=repo.clock(), end_action="SELL"))
+    schedule.ends[SID] = the_end
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    [end_sale] = _all_end_sales(repo)
+    assert repo.active_run(SID) is None, "the Clerk stopped the run at its end"
+    assert _exit_state(repo, end_sale) == "unknown" and len(alpaca.sent) == 1
+    schedule.carried_out.clear()
+    schedule.ends[SID] = the_end  # as if the carried-out record had not landed
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+
+    await _settle(facade, current_context, ABSENT)
+    _the_position_is_left_to_the_operator(repo, end_sale)
+    await _passes(repo, _the_sweep(repo, alpaca), SIXTY_PASSES)
+
+    assert len(alpaca.sent) == 1, "the Clerk sold again for a position left to the operator"
+    assert schedule.carried_out == [] and schedule.ends[SID] == the_end, (
+        "the failed sale completed the end with the bot still holding"
+    )
+    page = _end_on_the_bots_page(repo, the_end)
+    assert (page.status, page.waits_for_operator) == ("ending", True)
+    [line] = await _end_lines(repo, monkeypatch)
+    assert (line.reason_code, line.strategy_instance_id) == ("SCHEDULED_END_WAITS_FOR_OPERATOR", SID)
+
+    await the_operator_closes_it(alpaca, facade, current_context)
+    await _passes(repo, _the_sweep(repo, alpaca), 2)
+
+    assert repo.position(SID, "SPY") == 0.0
+    assert _open_episode(repo, EXIT_STUCK_REASON_CODE) is None
+    assert [end for end, _at_ms in schedule.carried_out] == [the_end]
+    assert _all_end_sales(repo) == [end_sale] and len(alpaca.sent) == orders_sent_in_all, "the end sold again"
+    assert await _end_lines(repo, monkeypatch) == []
 
 
 async def test_a_replaced_sale_is_read_through_to_the_order_that_replaced_it(

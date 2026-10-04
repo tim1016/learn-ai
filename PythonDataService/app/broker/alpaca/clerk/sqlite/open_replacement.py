@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import automatic_exit_stopped
 
 OPEN_REPLACEMENT = "EXIT_OPEN_REPLACEMENT"
 
@@ -59,5 +60,5 @@ def has_ready_replacement(repo: ClerkSqliteRepository) -> bool:
         for row in repo.active_uncertainties()
         if row["reason_code"] == "EXIT_NOT_FLAT"
         and repo.active_exit_for_strategy(row["strategy_instance_id"]) is None
-        and repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_STUCK", strategy_instance_id=row["strategy_instance_id"]) is None
+        and not automatic_exit_stopped(repo, row["strategy_instance_id"])
     )

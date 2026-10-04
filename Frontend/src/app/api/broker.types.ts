@@ -7943,8 +7943,11 @@ export interface components {
          *
          *     ``headline`` is the one line the panel shows ("Ends Wed Sep 30, 15:59 ET
          *     · sells"); ``explanation`` says what will happen, or what happened.
-         *     ``notice`` is set only when the chosen time was moved, e.g. to one minute
-         *     before an early close. ``editable`` says whether the panel may offer to
+         *     ``notice`` is set when the chosen time was moved, e.g. to one minute
+         *     before an early close, and while the end waits for the operator, when it
+         *     says why. ``waits_for_operator`` is true while the end has come and the
+         *     Clerk sends no order at it: the bot's position is the operator's to close
+         *     or write off (#2854). ``editable`` says whether the panel may offer to
          *     change it now. ``default_end_at_ms`` is the default end (Deploy's rule)
          *     the fields open on when the owner adds an end to a bot with none. It is
          *     null whenever an end is already set -- so always on Deploy's
@@ -7976,6 +7979,11 @@ export interface components {
              * @enum {string}
              */
             status: "no_end" | "scheduled" | "ending" | "ended";
+            /**
+             * Waits For Operator
+             * @default false
+             */
+            waits_for_operator?: boolean;
         };
         /**
          * BotHealthCard

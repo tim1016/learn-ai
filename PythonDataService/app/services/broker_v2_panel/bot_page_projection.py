@@ -222,8 +222,10 @@ def run_summary_facts(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> Run
             for symbol, quantity in sorted(panel.exposure.items())
         ],
         # An exit whose order could not be confirmed is held, not queued: nothing more goes out for it.
+        # An end that waits for the operator queues no sale (#2854). The operator's
+        # own Flatten, while it works, is a sale in progress like any other.
         exit_queued=(run.exit_in_progress and not run.exit_unconfirmed)
-        or (panel.end is not None and panel.end.status == "ending"),
+        or (panel.end is not None and panel.end.status == "ending" and not panel.end.waits_for_operator),
         exit_unconfirmed=run.exit_unconfirmed,
         authored_at_ms=now_ms,
     )
@@ -417,7 +419,7 @@ def _change_end_entry(panel: BotPanelView) -> ToolbarActionView:
         return _entry("change_end", "Change end", "bot", "not_needed", "This bot has no end to change.")
     if end.editable:
         return _entry("change_end", "Change end", "bot", "available", "Change when this bot ends and what it does then.")
-    # An end that has come is being carried out: needed, and waiting on the Clerk.
+    # An end that has come is needed and cannot change: it waits on the Clerk, or on the operator (#2854).
     availability: ToolbarAvailability = "blocked" if end.status == "ending" else "not_needed"
     return _entry("change_end", "Change end", "bot", availability, end.edit_refusal or end.explanation)
 

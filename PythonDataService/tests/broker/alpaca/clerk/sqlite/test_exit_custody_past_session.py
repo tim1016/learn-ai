@@ -105,7 +105,6 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_scheduled_end import _Schedule
 from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import (
-    _THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD,
     ABSENT,
     SIXTY_PASSES,
     _AlpacaAccount,
@@ -651,7 +650,6 @@ async def test_no_such_order_settles_the_held_exit_the_next_morning(
     assert len(alpaca.sent) == 2, "the 10 SPY were sold once, by the operator"
 
 
-@_THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD
 async def test_a_sell_end_left_pending_behind_the_held_exit_sells_nothing_once_it_is_settled_as_not_sent(
     crashed_with_exposure,  # noqa: F811
     end_schedule: _Schedule,
