@@ -1392,6 +1392,22 @@ def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> 
         ("absent", False),
         ("exists", True),
     ]
+    # What "no such order" leaves the operator to do is said before they choose it and
+    # again as they confirm: the Clerk sells nothing by itself afterwards.
+    assert settlement.choices[0].explanation == (
+        "The Clerk checks once more that this order is not at Alpaca and that nothing is working on "
+        "SPY. If so, it ends this exit as not sent. The shares stay with the bot, and the Clerk "
+        "sends no order for them by itself: you then sell them or write them off from this page. "
+        "This cannot be undone."
+    )
+    confirmation = _settle(_stopped_with_an_unknown_exit()).confirmation
+    assert confirmation is not None
+    assert confirmation.explanation == (
+        "The Clerk reads Alpaca again and settles the order only if what it reads agrees with what "
+        "you said. It sends no order. If you said Alpaca has no such order, the position stays with "
+        "the bot and the Clerk sends no order for it by itself: you then close it or write it off "
+        "from this page. This cannot be undone."
+    )
     # The wire carries it to the page that asks the operator.
     assert RecoveryCapabilityResponse.model_validate(
         _settle(_stopped_with_an_unknown_exit())

@@ -200,13 +200,13 @@ async def test_a_settlement_the_process_died_after_is_answered_with_its_receipt_
         for action in build_recovery_catalog(await _context_of(repo, settling.SID)())
         if action.action_id == SETTLE
     )
-    alpaca.holds = 0.0
-    with pytest.raises(ActionNotAvailableError, match="has not recorded that difference"):
+    alpaca.open_orders = [settling._elsewhere("someone-buys", side="buy")]
+    with pytest.raises(ActionNotAvailableError, match="An order for SPY is working at Alpaca"):
         await _run_from_the_panel(
             repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
             attestation=absent, idempotency_key="refused",
         )
-    alpaca.holds = 10.0
+    alpaca.open_orders = []
     with pytest.raises(ActionNotAvailableError, match="previously failed"):
         await _run_from_the_panel(
             repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
