@@ -24,6 +24,14 @@ leaves at least one calendar month of lake history before it for the
 run-up (24 months when the lake's first session is unknown), and (c) keeps
 the default plan's conservative evaluation bound within its budget.
 
+Formula (a picked range): the final interval is the ``final_months`` months
+ending where the range ends. Development ends where it starts, and starts
+on the earliest day ``training_months + k·test_months`` whole months before
+it (``k ≥ 1``) that falls inside the range and leaves the lake's run-up
+month before it. Scheduled sessions between the range's first day and that
+start are left out and reported; a range that holds no fold is refused.
+The run cap does not shorten a picked range: the plan check judges it.
+
 Formula (default ranges): a knob's range is its declared default range
 widened to hold the seed's and the incumbent's values, each end rounded
 outward onto the quantum and clamped to the domain, so the range holds
@@ -94,7 +102,7 @@ from app.research.sweep.warmup import (
     plan_run_up,
     probe_warmup_samples,
 )
-from app.research.walk_forward_study.folds import add_months
+from app.research.walk_forward_study.folds import add_months, whole_months_between
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
@@ -580,6 +588,110 @@ def default_final_interval(now_ms: int, final_months: int, latest_session: date 
     return FinalInterval(start=start, end=latest_session + timedelta(days=1), sessions_cut=len(lagging))
 
 
+@dataclass(frozen=True)
+class StudyRange:
+    """The ET days a picked range lets a plan use: ``[start, end)``."""
+
+    start: date
+    end: date
+
+
+@dataclass(frozen=True)
+class RangeFit:
+    """A plan's intervals inside a picked range, and the sessions at the range's start the plan leaves out."""
+
+    development_start: date
+    final_start: date
+    final_end: date
+    unused_sessions: tuple[date, ...]
+    #: The lake's run-up month put the development start later than the folds alone would.
+    held_back_for_run_up: bool
+
+
+def study_range_at(range_start_ms: int | None, range_end_ms: int | None) -> StudyRange | None:
+    """A picked range from its two ET midnights, ``[start, end)``; ``None`` when neither is given."""
+    if range_start_ms is None and range_end_ms is None:
+        return None
+    for name, ms in (("range_start_ms", range_start_ms), ("range_end_ms", range_end_ms)):
+        if ms is None:
+            raise GoldenSearchRefusal("A study range needs both its first day and the day after its last.", code="INTERVALS_INVALID", field=name)
+        if et_midnight_ms(et_date_at_ms(ms)) != ms:
+            raise GoldenSearchRefusal(f"{name} must fall on an ET midnight.", code="INTERVAL_NOT_ET_MIDNIGHT", field=name)
+    assert range_start_ms is not None and range_end_ms is not None
+    if not range_start_ms < range_end_ms:
+        raise GoldenSearchRefusal("The study range must end after it starts.", code="INTERVALS_INVALID", field="range_end_ms")
+    return StudyRange(start=et_date_at_ms(range_start_ms), end=et_date_at_ms(range_end_ms))
+
+
+def _months(count: int) -> str:
+    return f"{count} month" if count == 1 else f"{count} months"
+
+
+def fit_range(
+    study_range: StudyRange, *, final_months: int, training_months: int, test_months: int, earliest_session: date | None
+) -> RangeFit:
+    """The longest whole-fold plan inside ``study_range`` whose final test ends where the range ends.
+
+    Development may start no earlier than the range's first day, nor before
+    the lake's first session leaves a calendar month for the run-up. A range
+    that holds no fold is refused with the start the plan needs.
+    """
+    if min(final_months, training_months, test_months) < 1:
+        raise GoldenSearchRefusal("Interval lengths must be at least one month.", code="INTERVALS_INVALID")
+    final_start = add_months(study_range.end, -final_months)
+    floor = study_range.start if earliest_session is None else max(study_range.start, _earliest_development_start(earliest_session))
+
+    def first_fit(first_day: date) -> date | None:
+        """The earliest day on or after ``first_day`` that is training plus whole tests before the final start."""
+        folds = (_whole_months(first_day, final_start) - training_months) // test_months
+        while folds >= 1:
+            start = add_months(final_start, -(training_months + folds * test_months))
+            # A start clamped to a shorter month's end is not a whole number of months before the final start.
+            if start >= first_day and whole_months_between(start, final_start) is not None:
+                return start
+            folds -= 1
+        return None
+
+    development_start = first_fit(floor)
+    if development_start is None:
+        needed = add_months(final_start, -(training_months + test_months))
+        why = (
+            f"the range starts on {floor.isoformat()}"
+            if floor == study_range.start
+            else f"the lake's first month is kept for the run-up, so development cannot start before {floor.isoformat()}"
+        )
+        raise GoldenSearchRefusal(
+            f"The range is too short: {_months(training_months)} of training, one test of {_months(test_months)} and a "
+            f"final test of {_months(final_months)} need development to start by {needed.isoformat()}, and {why}.",
+            code="INTERVALS_INVALID",
+            field="range_start_ms",
+        )
+    unused = expected_sessions(study_range.start, development_start - timedelta(days=1)) if development_start > study_range.start else []
+    return RangeFit(
+        development_start=development_start,
+        final_start=final_start,
+        final_end=study_range.end,
+        unused_sessions=tuple(unused),
+        held_back_for_run_up=floor > study_range.start and first_fit(study_range.start) != development_start,
+    )
+
+
+def range_fit_sentence(fit: RangeFit, *, training_months: int, test_months: int) -> str | None:
+    """Which sessions of a picked range the plan leaves out, and why; ``None`` when it uses them all."""
+    if not fit.unused_sessions:
+        return None
+    first, last = fit.unused_sessions[0].isoformat(), fit.unused_sessions[-1].isoformat()
+    count = len(fit.unused_sessions)
+    left_out = f"The session on {first} is" if count == 1 else f"The {count} sessions from {first} to {last} are"
+    split = f"split into {_months(training_months)} of training and whole tests of {_months(test_months)}"
+    why = (
+        f"the lake's first month is kept for the run-up, and the rest has to {split}"
+        if fit.held_back_for_run_up
+        else f"the months before the final test have to {split}"
+    )
+    return f"Development starts on {fit.development_start.isoformat()}. {left_out} left out: {why}."
+
+
 def _default_knob(knob: SearchKnob, seed: Decimal, benchmark: Decimal) -> KnobPlan:
     """A knob as a fresh plan starts it: searched or held by declaration, its default range widened to hold the seed
     and the benchmark (each end rounded outward onto the quantum and clamped to the domain), and held at the seed."""
@@ -605,31 +717,31 @@ def default_protocol(
     final_months: int = DEFAULT_FINAL_MONTHS,
     training_months: int = DEFAULT_TRAINING_MONTHS,
     test_months: int = DEFAULT_TEST_MONTHS,
+    fit: RangeFit | None = None,
 ) -> GoldenSearchProtocol:
-    """A complete starting plan: declared default ranges, the default seed, and server-computed intervals."""
+    """A complete starting plan: declared default ranges, the default seed, and server-computed intervals.
+
+    With ``fit`` the intervals are the ones laid out inside a picked range, for the same month counts.
+    """
     declaration = declaration_for(strategy_key)
     if declaration is None:
         reason = unavailable_reason(strategy_key) or "No Golden Search declaration exists for this strategy."
         raise GoldenSearchRefusal(reason, code="STRATEGY_UNAVAILABLE")
     if min(final_months, training_months, test_months) < 1:
         raise GoldenSearchRefusal("Interval lengths must be at least one month.", code="INTERVALS_INVALID")
-    final = default_final_interval(now_ms, final_months, latest_session)
-    final_start_day, final_end_day = final.start, final.end
+    if fit is None:
+        final = default_final_interval(now_ms, final_months, latest_session)
+        final_start_day, final_end_day = final.start, final.end
+    else:
+        final_start_day, final_end_day = fit.final_start, fit.final_end
     # Fixed knobs hold the seed's values, so the plan never contradicts where it starts.
     start = default_seed(strategy_key, symbol, source=incumbent.source, params=incumbent.params)
     seed = knob_values(declaration, start)
     benchmark = knob_values(declaration, incumbent.params)
     knobs = tuple(_default_knob(knob, seed[knob.name], benchmark[knob.name]) for knob in declaration.knobs)
     searched = {plan.name for plan in knobs if plan.mode == "search"}
-    available = (
-        UNKNOWN_HISTORY_MONTHS
-        if earliest_session is None
-        else _whole_months(_earliest_development_start(earliest_session), final_start_day)
-    )
-    folds = max(1, (available - training_months) // test_months)
 
-    def plan_with(fold_count: int) -> GoldenSearchProtocol:
-        development_start = add_months(final_start_day, -(training_months + fold_count * test_months))
+    def plan_from(development_start: date) -> GoldenSearchProtocol:
         return GoldenSearchProtocol(
             strategy_key=strategy_key,
             symbol=symbol,
@@ -648,6 +760,18 @@ def default_protocol(
             exam_min_trades=None,
             expected_trades_per_year=DEFAULT_EXPECTED_TRADES_PER_YEAR,
         )
+
+    if fit is not None:
+        return plan_from(fit.development_start)
+    available = (
+        UNKNOWN_HISTORY_MONTHS
+        if earliest_session is None
+        else _whole_months(_earliest_development_start(earliest_session), final_start_day)
+    )
+    folds = max(1, (available - training_months) // test_months)
+
+    def plan_with(fold_count: int) -> GoldenSearchProtocol:
+        return plan_from(add_months(final_start_day, -(training_months + fold_count * test_months)))
 
     protocol = plan_with(folds)
     while folds > 1 and estimate(protocol, folds=folds).total_max > protocol.budget_cap:

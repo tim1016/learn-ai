@@ -46,6 +46,7 @@ from app.schemas.golden_search import (
     GoldenSearchStudySummary,
     GoldenSearchTestOverTimeCharts,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 jobs_router = APIRouter()
@@ -93,11 +94,19 @@ async def get_defaults(
     final_months: int = Query(service.DEFAULT_FINAL_MONTHS, ge=1, le=60),
     training_months: int = Query(service.DEFAULT_TRAINING_MONTHS, ge=1, le=120),
     test_months: int = Query(service.DEFAULT_TEST_MONTHS, ge=1, le=60),
+    range_start_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS, description="The first day of a picked study range, as its ET midnight."),
+    range_end_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS, description="The ET midnight after the picked range's last day."),
 ) -> GoldenSearchDefaults:
-    """A complete starting plan whose intervals the server computes from the calendar and the lake."""
+    """A complete starting plan whose intervals the server computes from the calendar and the lake, inside a picked range when one is given."""
     try:
         plan = await service.defaults(
-            strategy_key, symbol, final_months=final_months, training_months=training_months, test_months=test_months
+            strategy_key,
+            symbol,
+            final_months=final_months,
+            training_months=training_months,
+            test_months=test_months,
+            range_start_ms=range_start_ms,
+            range_end_ms=range_end_ms,
         )
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc

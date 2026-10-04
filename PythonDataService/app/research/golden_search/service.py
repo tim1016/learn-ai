@@ -61,13 +61,16 @@ from app.research.golden_search.planning import (
     DEFAULT_TRAINING_MONTHS,
     default_final_interval,
     default_protocol,
+    fit_range,
     preflight_view,
     prepare_lock,
     protocol_from_request,
+    range_fit_sentence,
     registry_incumbent,
     request_sha256,
     review_plan,
     study_id_for,
+    study_range_at,
 )
 from app.research.golden_search.protocol import (
     DEFAULT_IMPORTANCE,
@@ -268,12 +271,18 @@ async def defaults(
     final_months: int = DEFAULT_FINAL_MONTHS,
     training_months: int = DEFAULT_TRAINING_MONTHS,
     test_months: int = DEFAULT_TEST_MONTHS,
+    range_start_ms: int | None = None,
+    range_end_ms: int | None = None,
     now_ms: int | None = None,
     lake_coverage: Callable[[str], Awaitable[LakeSessions | None]] = lake_sessions,
     running_digest: Callable[[SignalProgramContract], str] = _running_artifact_digest,
 ) -> dict[str, Any]:
-    """A complete starting plan with the intervals computed here, the incumbent's name and settings, and the final interval's exposure."""
+    """A complete starting plan with the intervals computed here, the incumbent's name and settings, and the final interval's exposure.
+
+    With a range (``[range_start_ms, range_end_ms)``, ET midnights) the intervals are laid out inside it.
+    """
     symbol = _symbol(symbol)
+    study_range = study_range_at(range_start_ms, range_end_ms)
     declaration = declaration_for(strategy_key)
     if declaration is None:
         reason = unavailable_reason(strategy_key) or "No Golden Search declaration exists for this strategy."
@@ -282,22 +291,30 @@ async def defaults(
     coverage = await lake_coverage(symbol)
     now = now_ms_utc() if now_ms is None else now_ms
     latest = None if coverage is None else coverage.last
+    earliest = None if coverage is None else coverage.first
+    fit = (
+        None
+        if study_range is None
+        else fit_range(study_range, final_months=final_months, training_months=training_months, test_months=test_months, earliest_session=earliest)
+    )
     protocol = default_protocol(
         strategy_key,
         symbol,
         incumbent.ref,
         now_ms=now,
-        earliest_session=None if coverage is None else coverage.first,
+        earliest_session=earliest,
         latest_session=latest,
         final_months=final_months,
         training_months=training_months,
         test_months=test_months,
+        fit=fit,
     )
     # The plan itself, plus its annotations: a client edits it and sends it back as a ProtocolRequest.
     return {
         **protocol.as_dict(),
         "final_months": final_months,
-        "final_sessions_cut": default_final_interval(now, final_months, latest).sessions_cut,
+        "final_sessions_cut": default_final_interval(now, final_months, latest).sessions_cut if fit is None else 0,
+        "range_note": None if fit is None else range_fit_sentence(fit, training_months=training_months, test_months=test_months),
         "incumbent_label": incumbent.label,
         "incumbent_sentence": params_sentence(declaration, incumbent.ref.params),
         "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),
