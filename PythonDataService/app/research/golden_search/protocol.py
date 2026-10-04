@@ -660,7 +660,8 @@ def _validate_intervals(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
         try:
             development_folds(p)
         except FoldPlanError as exc:
-            valid_ends = tuple(et_midnight_ms(day) for day in exc.nearest_valid_ends)
+            # A start at or after the final test's end would be refused next: the message names it, the refusal does not offer it.
+            valid_ends = tuple(ms for ms in map(et_midnight_ms, exc.nearest_valid_ends) if ms < p.final_end_ms)
             refusals.add("FOLDS_INVALID", "development_end_ms", _final_start_message(exc), valid_ends)
         except ValueError:
             # The planner's month arithmetic left the calendar (a date past year 9999).

@@ -57,11 +57,23 @@ export class GoldenSearchTimeWindowsComponent {
     const p = this.protocol();
     return { development_start: shownDate('development_start', p.development_start_ms), final_start: shownDate('final_start', p.final_start_ms), final_end: shownDate('final_end', p.final_end_ms) };
   });
-  /** The dates the server would take instead of each one it refused; a click on one sets the date. */
-  protected readonly offers = computed(() => {
+  /**
+   * What each date's field cannot see for itself: the problem (the plan cannot
+   * read the date, or the server refused it, in its own words) and the dates
+   * the server would take instead, one click each.
+   */
+  protected readonly notes = computed(() => {
+    const unreadable = this.problems();
     const refusals = this.refusals();
-    const offered = (field: ProtocolDateField): readonly string[] => refusals.filter((refusal) => refusal.target === dateInputId(field)).flatMap((refusal) => refusal.offers);
-    return { development_start: offered('development_start'), final_start: offered('final_start'), final_end: offered('final_end') };
+    const note = (field: ProtocolDateField): { readonly problem: string | null; readonly offers: readonly string[] } => {
+      const refused = refusals.filter((refusal) => refusal.target === dateInputId(field));
+      const texts = refused.map((refusal) => refusal.text);
+      return {
+        problem: unreadable.get(dateProblemKey(field)) ?? (texts.length === 0 ? null : texts.join(' ')),
+        offers: [...new Set(refused.flatMap((refusal) => refusal.offers))],
+      };
+    };
+    return { development_start: note('development_start'), final_start: note('final_start'), final_end: note('final_end') };
   });
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */
@@ -78,19 +90,6 @@ export class GoldenSearchTimeWindowsComponent {
 
   protected numberInvalid(field: ProtocolNumberField): boolean {
     return this.problems().has(numberProblemKey(field));
-  }
-
-  /**
-   * What is wrong with this date that the field cannot see for itself: the
-   * plan cannot read it (a date left empty), or the server refused it, in its
-   * own words. Null when nothing is.
-   */
-  protected problemFor(field: ProtocolDateField): string | null {
-    const unreadable = this.problems().get(dateProblemKey(field));
-    if (unreadable !== undefined) return unreadable;
-    const target = dateInputId(field);
-    const texts = this.refusals().filter((refusal) => refusal.target === target).map((refusal) => refusal.text);
-    return texts.length === 0 ? null : texts.join(' ');
   }
 
   protected onNumber(field: ProtocolNumberField, raw: string): void {

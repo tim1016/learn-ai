@@ -167,10 +167,23 @@ def test_a_development_too_short_for_one_fold_is_refused_naming_the_earliest_fin
     assert refusal.message.endswith("; the earliest the final test can start is 2024-09-01")
 
 
-def test_a_refusal_with_no_dates_to_name_carries_none() -> None:
-    [refusal] = validate_protocol(dataclasses.replace(_valid(), budget_cap=0), DECL)
+def test_a_final_test_start_at_or_after_its_end_is_named_but_not_offered() -> None:
+    # Six months of development need eight, so the final test could start on 2024-09-01 at the earliest: the day this plan's final test ends.
+    boundary = _day(2024, 7, 1)
+    plan = dataclasses.replace(_valid(), development_end_ms=boundary, final_start_ms=boundary, final_end_ms=_day(2024, 9, 1))
 
-    assert refusal.as_dict() == {"code": "BUDGET_CAP_INVALID", "field": "budget_cap", "message": refusal.message, "nearest_valid_ms": []}
+    [refusal] = validate_protocol(plan, DECL)
+
+    assert refusal.message.endswith("; the earliest the final test can start is 2024-09-01")
+    assert refusal.nearest_valid_ms == ()
+
+
+def test_a_fold_refusal_with_no_dates_to_name_says_only_its_reason() -> None:
+    refusals = validate_protocol(dataclasses.replace(_valid(), training_months=0), DECL)
+
+    [folds] = [refusal for refusal in refusals if refusal.code == "FOLDS_INVALID"]
+    assert folds.message == "training and test lengths must be at least one month"
+    assert folds.nearest_valid_ms == ()
 
 
 def test_validate_protocol_returns_every_refusal_not_only_the_first() -> None:
