@@ -37,13 +37,19 @@ from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunScope
 from app.broker.alpaca.clerk.sqlite.projections import read_pass_for_page
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
     ExecutionLeaseLost,
     RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.scheduled_end import (
+    end_sale_waits_for_operator_words,
+    end_sales_waiting_for_operator,
+)
 from app.broker.ibkr.config import live_artifacts_root
 from app.broker.v2panel.action_policy import sealed_account_archive_action
 from app.engine.live.identity import INSTANCE_ID_PATTERN
+from app.schemas.bot_end import BotEndView
 from app.schemas.broker_bots import (
     BotRunView,
     BotStatusView,
@@ -543,7 +549,7 @@ async def _get_panel_with_entries_from_authority(
         program_build=program_build,
         dry_run_activity=registry.dry_run_activity(broker, sid),
         # The owner's end lives in the runner's desired state, not in custody (#2607).
-        end=registry.bot_end(broker, sid),
+        end=end_with_waiting_sale(registry.bot_end(broker, sid), facade.repository, sid),
         market_pulse=build_market_pulse(
             market_data_feed,
             # Captured after every await above, not at request start: the
@@ -585,6 +591,16 @@ async def _get_panel_with_entries_from_authority(
     )
     panel = _with_bot_page(panel, evidence, run=run, facade=facade, now_ms=captured_now_ms)
     return panel, entries, session_fills
+
+
+def end_with_waiting_sale(end: BotEndView | None, repository: ClerkSqliteRepository, sid: str) -> BotEndView | None:
+    """The runner's words for the bot's end, with the Clerk's as its notice while its sale waits for the operator (#2854)."""
+    if end is None or end.status != "ending":
+        return end
+    waiting = end_sales_waiting_for_operator(repository, [sid])
+    if not waiting:
+        return end
+    return end.model_copy(update={"notice": " ".join(end_sale_waits_for_operator_words(sale) for sale in waiting)})
 
 
 @dataclass(frozen=True)

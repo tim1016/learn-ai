@@ -101,11 +101,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
     Capability,
     ReductionIntent,
+    automatic_exit_stopped,
     decide_capability,
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXIT_STUCK_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
 )
@@ -253,7 +253,7 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
             continue
         token = redrive_episode_token(episode["uncertainty_id"])
         redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
-        stopped = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=sid) is not None
+        stopped = automatic_exit_stopped(repo, sid)
         opposite = opposite_side_after_refusal(
             repo, facts.evidence_refs, symbol=cause.symbol, side=reducing_side(remaining),
         )

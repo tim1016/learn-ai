@@ -416,6 +416,16 @@ def resolve_exit_stuck_uncertainty(
     )
 
 
+def automatic_exit_stopped(repo: ClerkSqliteRepository, strategy_instance_id: str) -> bool:
+    """Whether the Clerk has stopped exiting this bot's position by itself: its ``EXIT_STUCK`` episode is open.
+
+    The Clerk then sends no sale of its own for it: no re-drive, and no sale at the bot's scheduled end (#2854).
+    """
+    return repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=strategy_instance_id,
+    ) is not None
+
+
 def resolve_flat_exit_fences(
     repo: ClerkSqliteRepository,
     *,
@@ -1263,6 +1273,7 @@ __all__ = [
     "ReductionIntent",
     "RefusalClass",
     "admit_new_exposure",
+    "automatic_exit_stopped",
     "classify_admission_refusal",
     "decide_capability",
     "failed_enter_fill_is_answered",

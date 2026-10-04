@@ -43,6 +43,11 @@ end found late (the Clerk was down) is carried out when the Clerk is back.
 
 A sale waiting for the open is also the owner's to know about: the lane's
 attention bell lists it (:func:`end_sales_waiting_for_open`) until it is sent.
+
+No sale is accepted while the Clerk has stopped exiting the bot's position by
+itself (``EXIT_STUCK``, #2854): the end stays pending, the bell and the bot's
+page say why (:func:`end_sales_waiting_for_operator`), and once the bot is
+flat the end is recorded carried out with nothing sold.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ from functools import partial
 from typing import Protocol
 
 from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.ended_run_close import (
@@ -72,6 +78,7 @@ from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import unresolved_order_refs, working_order_refs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.uncertainty import automatic_exit_stopped
 from app.broker.contract.ports import BrokerTradePort
 from app.schemas.bot_end import BotEnd
 
@@ -267,9 +274,10 @@ def _sales_owed(repo: ClerkSqliteRepository, schedule: BotEndSchedule, end: Sche
 
     The end is read again right before the sale: the owner's Stop in the
     same minute cancels it (Stop keeps the shares), and an edit replaces it.
+    Nothing either while the Clerk has stopped exiting the bot by itself (#2854).
     """
     sid = end.strategy_instance_id
-    if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]):
+    if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]) or automatic_exit_stopped(repo, sid):
         return []
     return closes_owed_under(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
 
@@ -341,7 +349,7 @@ def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:
 
 @dataclass(frozen=True)
 class EndSaleWaiting:
-    """A bot's end sale held for the next regular open, not yet sent."""
+    """A bot's end sale not yet sent: held for the next regular open, or waiting for the operator."""
 
     strategy_instance_id: str
     symbol: str
@@ -378,12 +386,47 @@ def end_sales_waiting_for_open(repo: ClerkSqliteRepository) -> list[EndSaleWaiti
     return waiting
 
 
+def end_sales_waiting_for_operator(
+    repo: ClerkSqliteRepository, strategy_instance_ids: Sequence[str] | None = None
+) -> list[EndSaleWaiting]:
+    """Each due end sale not accepted because the Clerk stopped exiting its bot's position by itself (#2854).
+
+    What :func:`_sales_owed` withholds, read from the end schedule and the
+    ledger with nothing recorded for it: the wait ends once the bot is flat or
+    its end is cancelled. Every live bot's, unless ``strategy_instance_ids`` names them.
+    """
+    schedule = installed_bot_end_schedule()
+    if schedule is None or is_synthetic_account_id(repo.account_id):
+        return []
+    sids = _live_registrations(repo) if strategy_instance_ids is None else strategy_instance_ids
+    stopped = [sid for sid in sids if automatic_exit_stopped(repo, sid) and repo.active_run(sid) is None]
+    now_ms = repo.clock()
+    return [
+        EndSaleWaiting(end.strategy_instance_id, close.symbol, repo.position(end.strategy_instance_id, close.symbol))
+        for end in schedule.pending_ends(stopped)
+        if end.end.end_action == "SELL" and end.end.end_at_ms <= now_ms
+        for close in closes_owed_under(repo, end.strategy_instance_id, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+    ]
+
+
+def end_sale_waits_for_operator_words(waiting: EndSaleWaiting) -> str:
+    """Why a sale :func:`end_sales_waiting_for_operator` lists was not sent, and what ends its wait."""
+    long = waiting.quantity > 0
+    order = f"{'sale' if long else 'buy-back'} of {quantity_text(abs(waiting.quantity))} {waiting.symbol}"
+    return (
+        f"The Clerk stopped exiting this bot's position by itself, so the end's {order} was not sent. "
+        f"It waits until the position is {'sold' if long else 'bought back'} or written off from the bot's page."
+    )
+
+
 __all__ = [
     "SCHEDULED_END_REASON",
     "BotEndSchedule",
     "EndSaleWaiting",
     "ScheduledEnd",
+    "end_sale_waits_for_operator_words",
     "end_sales_waiting_for_open",
+    "end_sales_waiting_for_operator",
     "fence_bots_at_their_end",
     "finish_bots_at_their_end",
     "install_bot_end_schedule",

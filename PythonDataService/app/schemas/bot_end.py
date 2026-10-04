@@ -106,8 +106,9 @@ class BotEndView(BaseModel):
 
     ``headline`` is the one line the panel shows ("Ends Wed Sep 30, 15:59 ET
     · sells"); ``explanation`` says what will happen, or what happened.
-    ``notice`` is set only when the chosen time was moved, e.g. to one minute
-    before an early close. ``editable`` says whether the panel may offer to
+    ``notice`` is set when the chosen time was moved, e.g. to one minute
+    before an early close, and while the end's sale waits for the operator,
+    when it says why. ``editable`` says whether the panel may offer to
     change it now. ``default_end_at_ms`` is the default end (Deploy's rule)
     the fields open on when the owner adds an end to a bot with none. It is
     null whenever an end is already set -- so always on Deploy's
