@@ -11,7 +11,7 @@ import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { within } from "@testing-library/angular";
-import { BehaviorSubject, of, throwError } from "rxjs";
+import { BehaviorSubject, Subject, of, throwError, type Observable } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail } from "../../services/backtest-runs.types";
@@ -164,6 +164,9 @@ async function createLab(
     /** Strategy Lab launch parameters (`strategy`, `symbol`, `from`, `to`, …) carried by the URL. */
     launch?: Record<string, string>;
     backtestRun?: BacktestRunDetail | null;
+    /** Answers the run-detail read when the test emits on it, so a test can
+     *  order that answer after the strategy list's. */
+    runDetail?: Observable<BacktestRunDetail | null>;
     /** Makes the run-detail read surface a transport error, which is a
      *  different failure from the fetched run being unrestorable. */
     backtestRunQueryError?: Error;
@@ -186,7 +189,7 @@ async function createLab(
     get: vi.fn(() =>
       options.backtestRunQueryError
         ? throwError(() => options.backtestRunQueryError)
-        : of(options.backtestRun ?? null),
+        : options.runDetail ?? of(options.backtestRun ?? null),
     ),
     list: vi.fn(() => of([])),
     updateNotes: vi.fn(),
@@ -428,6 +431,110 @@ describe("Strategy Lab Workbench", () => {
     expect(field("End date").value).toBe("2026-04-02");
     expect(field(/^lookback/).value).toBe("8");
     http.verify();
+  });
+
+  describe("launch parameters and a saved run in one link (#2872)", () => {
+    const strategyList = (request: { url: string }): boolean => request.url.endsWith("/api/engine/strategies");
+
+    /** What the collapsed rail says the configuration on the page is, fact by fact. */
+    function railFacts(root: HTMLElement): Record<string, string> {
+      return Object.fromEntries(
+        Array.from(root.querySelectorAll(".config-strip__facts > div")).map((fact) => [
+          fact.querySelector("dt")?.textContent?.trim() ?? "",
+          fact.querySelector("dd")?.textContent?.trim() ?? "",
+        ]),
+      );
+    }
+
+    const reportSummary = (root: HTMLElement): string =>
+      root.querySelector("[aria-label='Run result summary']")?.textContent ?? "";
+
+    /** Run 91 as it was made: QQQ on both engines, over March to April. */
+    const savedRunFacts = {
+      Engine: "Both",
+      Instrument: "QQQ",
+      Strategy: "EMA crossover",
+      Window: "2026-03-02 → 2026-04-02",
+    };
+    /** Run 91's net P&L, which only its own report shows. */
+    const savedRunNetPnl = "+$120.00";
+
+    it.each([
+      ["one date", { from: "2026-07-01" }],
+      ["two dates", { from: "2026-07-01", to: "2026-07-31" }],
+      ["a symbol", { symbol: "IWM" }],
+    ])("shows the saved run's own configuration beside its report when the run answers before the strategy list (the link names %s)", async (_shape, launch) => {
+      const { fixture, http } = await createLab({ launch, activeRun: 91, backtestRun: run() });
+      const root = fixture.nativeElement as HTMLElement;
+      // The report is on the page while the strategy list is still being read.
+      await vi.waitFor(() => {
+        expect(reportSummary(root)).toContain(savedRunNetPnl);
+      });
+
+      http.expectOne(strategyList).flush(strategyCatalog());
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(railFacts(root)).toEqual(savedRunFacts);
+      expect(reportSummary(root)).toContain(savedRunNetPnl);
+      http.verify();
+    });
+
+    it("shows the saved run's own configuration beside its report when the strategy list answers before the run", async () => {
+      const runDetail = new Subject<BacktestRunDetail | null>();
+      const { fixture, http } = await createLab({ launch: { from: "2026-07-01" }, activeRun: 91, runDetail });
+      const root = fixture.nativeElement as HTMLElement;
+      http.expectOne(strategyList).flush(strategyCatalog());
+      // The link's window is on the rail before the run answers.
+      await vi.waitFor(() => {
+        expect((within(root).getAllByLabelText("Start date")[0] as HTMLInputElement).value).toBe("2026-07-01");
+      });
+
+      runDetail.next(run());
+      runDetail.complete();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(railFacts(root)).toEqual(savedRunFacts);
+      expect(reportSummary(root)).toContain(savedRunNetPnl);
+      http.verify();
+    });
+
+    it("still applies the launch parameters of a link that names no run", async () => {
+      const { fixture, http } = await createLab({ launch: { symbol: "QQQ", from: "2026-07-01" } });
+      http.expectOne(strategyList).flush(strategyCatalog());
+      await fixture.whenStable();
+      fixture.detectChanges();
+      const root = fixture.nativeElement as HTMLElement;
+      const field = (label: string): HTMLInputElement => within(root).getAllByLabelText(label)[0] as HTMLInputElement;
+
+      expect(field("Start date").value).toBe("2026-07-01");
+      // The link names one date, so the other is the last day the run can read.
+      expect(field("End date").value).toBe("2026-09-18");
+      expect(root.querySelector(".ticker-box__identity .asset-identity__symbol")?.textContent).toContain("QQQ");
+      http.verify();
+    });
+
+    it("still restores the saved run when the strategy list cannot be read, and blocks its rerun", async () => {
+      const { fixture, http } = await createLab({ launch: { from: "2026-07-01" }, activeRun: 91, backtestRun: run() });
+      const root = fixture.nativeElement as HTMLElement;
+      await vi.waitFor(() => {
+        expect(reportSummary(root)).toContain(savedRunNetPnl);
+      });
+
+      http.expectOne(strategyList).flush("down", { status: 503, statusText: "Service Unavailable" });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      // No strategy list means no rail: the read failure stands in its place,
+      // and the link's parameters are never applied. The run is still restored.
+      const config = fixture.componentInstance.config;
+      expect(root.textContent).toContain("Failed to load strategies");
+      expect(config.startDate()).toBe("2026-03-02");
+      expect(config.endDate()).toBe("2026-04-02");
+      expect(config.rerunBlocked()).toBe(true);
+      http.verify();
+    });
   });
 
   it("populates statistics under the configuration and the chart on the stage", async () => {

@@ -60,10 +60,13 @@ export class StrategyLabConfigStore {
    * every run load re-apply the launch params.
    */
   /** True once any launch parameters in the URL have been applied (or there are none),
-   *  so a later application cannot reset inputs restored from a run or a job. */
+   *  so a later application cannot reset inputs restored from a run or a job. Also true
+   *  once the strategy list was read and holds no strategy: the parameters wait for one,
+   *  so they are never applied, and a restore must not wait for them forever (#2872). */
   readonly launchParamsSettled = computed(() => {
     const key = launchParamsKey(this.launchParams());
-    return key === "||||||" || key === this.appliedLaunchParamsKey();
+    if (key === "||||||" || key === this.appliedLaunchParamsKey()) return true;
+    return this.strategiesRead() && this.strategies().length === 0;
   });
 
   readonly activeRunParam = toSignal(
@@ -76,6 +79,8 @@ export class StrategyLabConfigStore {
   readonly engine = signal<EngineChoice>("python");
   readonly strategies = signal<StrategyInfo[]>([]);
   readonly strategiesLoading = signal(false);
+  /** Whether the strategy list has been read, whatever came back: a list, an empty one, or a failure. */
+  private readonly strategiesRead = signal(false);
   readonly strategiesError = signal<string | null>(null);
   readonly selectedStrategyName = signal<string | null>(null);
   readonly paramValues = signal<Record<string, unknown>>({});
@@ -326,6 +331,7 @@ export class StrategyLabConfigStore {
       this.strategiesError.set(error instanceof Error ? error.message : "Failed to load strategies");
     } finally {
       this.strategiesLoading.set(false);
+      this.strategiesRead.set(true);
     }
   }
 
