@@ -833,23 +833,25 @@ def _notice(page: ClerkProjection, reason_code: str) -> ProjectedUncertainty:
             False,
             f"Another bot, {SID}, has a closing order for SPY that the Clerk sent and could not confirm. "
             "While that order's outcome is unknown, the Clerk does not send this bot's exit again by "
-            f"itself. That order is settled from the page of {SID} ({SETTLE_ACTION}).",
-            f"Open {SID} and settle its closing order ({SETTLE_ACTION}). Then run Reconcile now and "
-            "execute the presented safe flatten for this bot.",
+            f"itself. See {SID}'s page.",
+            "Run Reconcile now and execute the presented safe flatten for this bot. The Clerk does not "
+            f"send this bot's exit by itself again, even after {SID}'s closing order is settled; see "
+            f"{SID}'s page.",
             id="one-bots-order-is-held",
         ),
         pytest.param(
             True,
             f"Other bots ({SID}, {THIRD_SID}) have closing orders for SPY that the Clerk sent and could "
             "not confirm. While their outcomes are unknown, the Clerk does not send this bot's exit "
-            f"again by itself. Each order is settled from its own bot's page ({SETTLE_ACTION}).",
-            f"Open each of {SID}, {THIRD_SID} and settle its closing order ({SETTLE_ACTION}). Then run "
-            "Reconcile now and execute the presented safe flatten for this bot.",
+            "again by itself. See those bots' pages.",
+            "Run Reconcile now and execute the presented safe flatten for this bot. The Clerk does not "
+            f"send this bot's exit by itself again, even after the closing orders of {SID}, {THIRD_SID} "
+            "are settled; see their pages.",
             id="two-bots-orders-are-held",
         ),
     ],
 )
-async def test_another_bots_exit_held_up_by_the_unconfirmed_order_names_its_bot_and_says_to_settle_it(
+async def test_another_bots_exit_held_up_by_the_unconfirmed_order_names_its_bot_and_is_flattened_by_itself(
     crashed_with_exposure,  # noqa: F811
     also_held: bool,
     why: str,
@@ -860,11 +862,13 @@ async def test_another_bots_exit_held_up_by_the_unconfirmed_order_names_its_bot_
     The held order is work in flight on SPY, so the watchdog never sends the
     other bot's exit again while its outcome is unknown, and after eight
     regular-session minutes of that the exit is told as stuck. It was told
-    only that "the Clerk still has work in flight", with "Run Reconcile now"
-    as its next step, which cannot settle an order no read shows. The other
-    bot's page now names the bot whose order is held and says to settle that
-    order from that bot's page, while it waits and once it is stuck. Nothing
-    is sent that was not sent before.
+    only that "the Clerk still has work in flight", which names no bot. The
+    other bot's page now names the bot whose order is held and points at
+    that bot's page, while it waits and once it is stuck. Its next step is
+    its own flatten and never the settling of that order: the flatten needs
+    nothing of it, the order may be one no action settles, and the step stays
+    on the page after the order is settled. Nothing is sent that was not sent
+    before.
     """
     repo, clock = crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("never_arrives", *(["never_arrives"] if also_held else []), REFUSED))
@@ -916,6 +920,8 @@ async def test_another_bots_exit_held_up_by_the_unconfirmed_order_names_its_bot_
     assert _notice(page, EXIT_NOT_FLAT_REASON_CODE).next_step == (
         f"Automatic attempts to reduce this position have stopped. {next_step}"
     )
+    # The flatten comes first and nothing sends the operator to settle the other bot's order before it.
+    assert next_step.startswith("Run Reconcile now") and SETTLE_ACTION not in told.explanation + next_step
     _is_held(repo, held)
 
 

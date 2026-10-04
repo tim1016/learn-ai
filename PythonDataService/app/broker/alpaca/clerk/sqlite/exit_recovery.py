@@ -55,8 +55,8 @@ class RecoveryResult:
     reason_code: str
     explanation: str
     allowed_from_ms: int | None = None
-    # What the operator does about a failure a reconciliation cannot cure (#2854):
-    # the next step of the ``EXIT_STUCK`` episode the failure escalates to.
+    # The next step of the ``EXIT_STUCK`` episode the failure escalates to, where
+    # it says more than the default (#2854).
     next_step: str | None = None
 
 

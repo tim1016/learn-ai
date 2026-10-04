@@ -57,8 +57,9 @@ the hold says which of the two it is.
 ``unknown`` with custody, possibly for days, and is work in flight on its
 symbol for as long. Another bot's re-drive on that symbol is refused while it
 stands, as behind any other work in flight, and escalates on the same clock.
-What that bot is told names the bot whose order it is and says to settle it
-from that bot's page: no reconciliation cures an order no read shows.
+What that bot is told names the bot whose order it is and points at that
+bot's page. Its next step is its own safe flatten, which needs nothing of
+that order.
 """
 
 from __future__ import annotations
@@ -155,7 +156,8 @@ class _RedriveRefused(NamedTuple):
     facts: dict[str, object]
     outcome: Literal["failure", "hold"] = "failure"
     # What the operator is told, where it is more than the log line says, and
-    # what they do about it where a reconciliation is no cure (#2854).
+    # the next step of the ``EXIT_STUCK`` episode a failure escalates to, where
+    # it says more than the default (#2854).
     explanation: str | None = None
     next_step: str | None = None
 
@@ -627,9 +629,11 @@ def bots_with_an_unconfirmed_closing_order(
 
     Work in flight (:func:`clerk_work_in_flight`) that only an operator may
     end: such an EXIT stays ``unknown`` with custody until Alpaca shows its
-    order or the order is settled. Read as the settle action itself is offered
-    (``unknown_exit_orders``), so a bot is named exactly when its page has
-    that order to settle.
+    order or the order is settled. Read from what the settle action itself is
+    presented from (``unknown_exit_orders``), so a bot is named exactly when
+    its page shows that order. The page cannot always settle it: settling is
+    refused for a running bot, inside the wait after a send, and for an order
+    Alpaca answered with one that names no client order id.
     """
     candidates = sorted({
         effect.strategy_instance_id
@@ -648,25 +652,31 @@ def _behind_unconfirmed_closing_orders(bots: tuple[str, ...], symbol: str) -> tu
 
     The why is the hold's own reason and, if the hold outlasts the failure
     budget, the reason ``EXIT_STUCK`` gives. The next step is ``EXIT_STUCK``'s:
-    by then the Clerk sends nothing more for this bot by itself, so it ends
-    with the operator's own flatten.
+    by then the Clerk sends nothing more for this bot by itself, whatever
+    becomes of those orders, so it is the operator's own flatten of this bot.
+
+    That flatten needs nothing of those orders, and some of them no action
+    settles. Both texts are written once and stay on this bot's rows after
+    the orders are settled. So neither says to settle them first: each names
+    the bots whose pages show them.
     """
+    flatten = "Run Reconcile now and execute the presented safe flatten for this bot."
     if len(bots) == 1:
         (bot,) = bots
         return (
             f"Another bot, {bot}, has a closing order for {symbol} that the Clerk sent and could not "
             "confirm. While that order's outcome is unknown, the Clerk does not send this bot's exit "
-            f'again by itself. That order is settled from the page of {bot} ("Settle the uncertain order").',
-            f'Open {bot} and settle its closing order ("Settle the uncertain order"). Then run '
-            "Reconcile now and execute the presented safe flatten for this bot.",
+            f"again by itself. See {bot}'s page.",
+            f"{flatten} The Clerk does not send this bot's exit by itself again, even after {bot}'s "
+            f"closing order is settled; see {bot}'s page.",
         )
     names = ", ".join(bots)
     return (
         f"Other bots ({names}) have closing orders for {symbol} that the Clerk sent and could not "
         "confirm. While their outcomes are unknown, the Clerk does not send this bot's exit again by "
-        'itself. Each order is settled from its own bot\'s page ("Settle the uncertain order").',
-        f'Open each of {names} and settle its closing order ("Settle the uncertain order"). Then '
-        "run Reconcile now and execute the presented safe flatten for this bot.",
+        "itself. See those bots' pages.",
+        f"{flatten} The Clerk does not send this bot's exit by itself again, even after the closing "
+        f"orders of {names} are settled; see their pages.",
     )
 
 
@@ -684,8 +694,11 @@ def _escalate_to_exit_stuck(
 
     ``deferred_since_ms`` is ``None`` for exhausted re-drives and the first
     deferral's clock otherwise; it only changes the operator-facing wording.
-    ``next_step`` is the failing result's own, where a reconciliation and a
-    flatten are not the whole way on (#2854).
+    ``next_step`` is the failing result's own, where it has more to say than
+    a reconciliation and a flatten: behind another bot's unconfirmed closing
+    order the way on is still this bot's own flatten, and the step also says
+    that the Clerk sends nothing more for this bot by itself and names the
+    bot whose page shows that order (#2854).
     """
     sid = stale_exit.strategy_instance_id
     cause = stale_exit.cause

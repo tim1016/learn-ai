@@ -154,10 +154,10 @@ _REDRIVES_STOPPED = "Automatic attempts to reduce this position have stopped."
 The episode's own next step was written when the watchdog was still going to
 try, and may point at the time it no longer shows. What the operator does now
 is the next step of the ``EXIT_STUCK`` episode beside it, which follows this
-sentence: a reconciliation and a flatten, or first the settling of another
-bot's closing order (#2854). Not so the notice of an exit an operator settled
-as not sent (#2854): the watchdog never tried for it, and its own next step
-already says what the operator does."""
+sentence: a reconciliation and a flatten, naming as well any other bot whose
+unconfirmed closing order held the exit up (#2854). Not so the notice of an
+exit an operator settled as not sent (#2854): the watchdog never tried for
+it, and its own next step already says what the operator does."""
 
 
 _UNREADABLE_LOGGED: set[tuple[str, int]] = set()
