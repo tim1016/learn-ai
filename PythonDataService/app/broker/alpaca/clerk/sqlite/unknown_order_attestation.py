@@ -16,28 +16,34 @@ agree. It never sends an order.
 Attestation ``absent`` -- "Alpaca has no such order". The Clerk reads the
 account twice, the second time after the first returned (the re-read rule of
 ``residue_discharge``, for the same reason: one round reads its lists with no
-consistency fence between them). Each round is the order's exact lookup,
-every order of any state in the order's symbol since the closing order was
-created, a page at a time, then the open orders, then the positions: last,
-so that every order a round lists as ended was over before the position it
-is set against was read. The order is ended as not sent only when every read
-answered and was read to its end, no order carries its client order id, and
-no order is working on its symbol.
+consistency fence between them). Each round is the order's exact lookup, the
+open orders, the positions, and then every order of any state in the order's
+symbol since the closing order was created, a page at a time: last, so that
+every order that had filled anything when the positions were read is among
+them. The order is ended as not sent only when every read answered and was
+read to its end, no order carries its client order id, and no order is
+working on its symbol.
 
-An order on its side of its symbol that the Clerk did not place may be this
-one under another identity. While it works it refuses. Once it has ended it
-can sell nothing more, so it is recorded on the attestation and does not
-refuse by itself; what it sold is in Alpaca's position, and the position is
-what answers for it. The broker's position must equal the account-wide
-attribution, unless an open ``POSITION_DRIFT`` already names the symbol;
-that episode is what then keeps the Clerk from selling shares Alpaca does
-not hold. Two ended orders still refuse: one the Clerk could not read in
+An order that traded where no read of orders shows it is what the position
+answers for. The broker's position must equal the account-wide attribution,
+unless an open ``POSITION_DRIFT`` already names the symbol; that episode is
+what then keeps the Clerk from selling shares Alpaca does not hold.
+
+The position can show that this order did not trade only when nothing else
+outside the Clerk's records has traded the symbol since the order was
+created. A trade the Clerk has no record of moves Alpaca's position and not
+the Clerk's: one that offsets this order's leaves the two agreeing after
+this order traded. So one rule covers every order in the symbol that the
+Clerk did not place, whichever side it is on: once it has filled anything,
+"no such order" is refused. One that ended with nothing filled traded
+nothing; it is recorded on the attestation and does not refuse. Two more
+refuse because the Clerk cannot tell what they did: one it could not read in
 full, and one Alpaca replaced whose replacement is not among the orders
-read. The EXIT fails releasably, under an ``EXIT_NOT_FLAT`` notice, and the
-attributed quantity is never changed.
+read. Accepted, the EXIT fails releasably, under an ``EXIT_NOT_FLAT``
+notice, and the attributed quantity is never changed.
 
 The order Alpaca answered this order's send with, under another client order
-id, is not one more ended order the position answers for. What it sold was
+id, may be this order itself, and has rules of its own. What it sold was
 sold for this EXIT, and shares the account holds outside the Clerk's records
 can make the position agree all the same: ended as not sent, the EXIT would
 release a position already sold, and the Clerk would sell it again. So for
@@ -272,8 +278,8 @@ class _AbsenceProof:
     orders_since_read: int
     broker_qty: float
     account_attributed_qty: float
-    # Orders on this order's side of its symbol that the Clerk did not place
-    # and that had ended, as the later round read them.
+    # Orders in this order's symbol that the Clerk did not place, as the later
+    # round read them: each ended, with nothing filled.
     ended_foreign_orders: tuple[EndedForeignOrder, ...]
     # The order Alpaca answered this order's send with, under another client
     # order id, as the later round read it: ended, with nothing filled.
@@ -643,17 +649,15 @@ def _require_settleable(
 async def _read_account(
     alpaca: _AlpacaReads, presented: ProjectedUnknownExitOrder, *, since_ms: int
 ) -> _AccountRead:
-    """One round: the exact lookup, the symbol's orders since ``since_ms``, then the open orders, then the positions.
+    """One round: the exact lookup, the open orders, then the positions, then the symbol's orders since ``since_ms``.
 
-    The positions are read last, because they are what answers for every
-    ended order the round lists: an order the symbol's orders show ended was
-    over before the open orders and the positions were read, so whatever it
-    sold is in those positions. Read the other way round, an order that
-    filled after the positions were read was listed ended beside a position
-    from before its fill. An order that arrives after the symbol's orders
-    were read is among the open orders if it still works, and in the
-    positions if it has filled, where the other round's positions show the
-    change.
+    The symbol's orders are read last, after the positions. The position
+    shows nothing beside a trade the Clerk has no record of
+    (:func:`_unfilled_foreign_orders`), so no such trade may be in the
+    position and missing from the orders: every order that had filled
+    anything when the positions were read is among the orders read after
+    them. Read the other way round, an order that filled between the two
+    reads was in the position and in no order the round read.
 
     Any read that fails refuses; so does the order's own exact lookup
     answering. The open orders are the whole account's; the orders since are
@@ -669,8 +673,8 @@ async def _read_account(
         raise _order_is_at_alpaca(exact)
     answered_as = presented.answered_as_client_order_id
     answered_order = await alpaca.order_sent_as(answered_as) if answered_as else None
-    orders_since = await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms)
     open_orders, positions = await alpaca.open_orders_then_positions()
+    orders_since = await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms)
     return _AccountRead(
         open_orders=open_orders,
         positions=positions,
@@ -732,33 +736,41 @@ def _open_drift_names(repo: ClerkSqliteRepository, symbol: str) -> bool:
     return any(position.symbol == symbol.upper() for position in cause.positions)
 
 
-def _ended_foreign_orders(
+def _unfilled_foreign_orders(
     repo: ClerkSqliteRepository,
     presented: ProjectedUnknownExitOrder,
     round_: _AccountRead,
     known_refs: frozenset[str],
 ) -> tuple[EndedForeignOrder, ...]:
-    """The ended orders on this order's side of its symbol that the Clerk did not place.
+    """The orders in this order's symbol, since it was created, that the Clerk did not place: each ended, with nothing filled.
 
-    An order that has ended can sell nothing more, so it does not stand in
-    the way by itself: what it did sell is in Alpaca's position, which the
-    caller sets against the Clerk's records. Two kinds still refuse, because
-    for them "ended" does not say that:
+    One rule decides every one of them, and it does not ask which side the
+    order was on: an order that filled anything refuses. The caller sets
+    Alpaca's position against the Clerk's records to show that this order
+    did not trade, and the position shows that only while nothing else
+    outside those records has traded the symbol. A trade the Clerk has no
+    record of moves Alpaca's position and not the Clerk's, so with one in
+    the account the two can agree after this order traded -- this order sold
+    10 and that one bought 10 -- and no reading of the position tells that
+    from an order that never arrived.
+
+    An order that ended with nothing filled traded nothing, and is returned.
+    Two more refuse, because the Clerk cannot tell that of them:
 
     - an order the Clerk could not read in full: it cannot tell what that
       order was or did;
     - an order Alpaca replaced, when the order that replaced it is not among
-      those read: that one may be working where no read shows it.
+      those read: that one may be working, or may have filled, where no read
+      shows it.
 
-    The order Alpaca answered this order's send with is not among them: the
-    position does not answer for it, its own read does
-    (:func:`_answered_order_sold_nothing`).
+    The order Alpaca answered this order's send with is not among them: its
+    own read answers for it (:func:`_answered_order_sold_nothing`).
 
     Called once every order in the round is known to have ended.
     """
-    symbol, side = presented.symbol.upper(), presented.side.lower()
+    symbol = presented.symbol.upper()
     read_ids = {order.order_id for order in (*round_.open_orders, *round_.orders_since)}
-    ended: list[EndedForeignOrder] = []
+    unfilled: list[EndedForeignOrder] = []
     for order in round_.orders_since:
         if _is_the_answered_order(presented, order):
             continue
@@ -775,24 +787,31 @@ def _ended_foreign_orders(
                 "cannot tell what that order did, so it cannot end this order as not sent. Nothing "
                 "was changed.",
             )
-        if order.side.lower() != side:
-            continue
+        if order.status.lower() == "filled" or position_quantity_is_nonzero(order.filled_quantity):
+            raise UnknownOrderSettlementRefused(
+                "FOREIGN_ORDER_FILLED",
+                f"Since this order was sent, an order the Clerk did not place {_traded(order.side)} "
+                f"{order.filled_quantity:g} {symbol} at Alpaca (Alpaca order id {order.order_id!r}, "
+                f"{order.status}). With that trade in the account, Alpaca's position cannot show "
+                "whether this order traded. This order cannot be settled as absent. Nothing was "
+                "changed.",
+            )
         if order.status.lower() == "replaced" and order.replaced_by not in read_ids:
             raise UnknownOrderSettlementRefused(
                 "UNKNOWN_ORDER_ON_SYMBOL",
-                f"Alpaca replaced an order to {side} {symbol} that the Clerk did not place (Alpaca "
-                f"order id {order.order_id!r}), and the order that replaced it is not among those "
-                "the Clerk read. That order may still be working, so the Clerk cannot end this "
-                "order as not sent. Nothing was changed.",
+                f"Alpaca replaced an order to {order.side.lower()} {symbol} that the Clerk did not "
+                f"place (Alpaca order id {order.order_id!r}), and the order that replaced it is not "
+                "among those the Clerk read. That order may still be working, so the Clerk cannot "
+                "end this order as not sent. Nothing was changed.",
             )
-        ended.append(
+        unfilled.append(
             EndedForeignOrder(
                 broker_order_id=order.order_id,
                 broker_state=order.status,
                 filled_quantity=order.filled_quantity,
             )
         )
-    return tuple(ended)
+    return tuple(unfilled)
 
 
 def _is_the_answered_order(presented: ProjectedUnknownExitOrder, order: BrokerOrder) -> bool:
@@ -850,15 +869,15 @@ def _answered_order_sold_nothing(
 
     ``None`` for a send Alpaca did not answer under another client order id.
 
-    That order is not one more ended order whose sale the position answers
-    for. What it sold was sold for this EXIT, and shares the account holds
-    outside the Clerk's records can make the position agree all the same:
-    Alpaca held 20 against the Clerk's 10 before it sold 10, and holds 10
-    against 10 after. Ended as not sent, the EXIT would release a position
-    already sold and the Clerk would sell it a second time. So the position
-    is never asked about it. Every read of the round that shows the order --
-    its own exact lookup, and its row among the orders listed -- must show it
-    ended with nothing filled, and at least one read must show it.
+    That order may be this order itself, so the position is never asked
+    about it. What it sold was sold for this EXIT, and shares the account
+    holds outside the Clerk's records can make the position agree all the
+    same: Alpaca held 20 against the Clerk's 10 before it sold 10, and holds
+    10 against 10 after. Ended as not sent, the EXIT would release a position
+    already sold and the Clerk would sell it a second time. Every read of the
+    round that shows the order -- its own exact lookup, and its row among the
+    orders listed -- must show it ended with nothing filled, and at least one
+    read must show it.
 
     An order Alpaca replaced refuses too: the order that replaced it is under
     yet another id, and may be working or may have sold.
@@ -928,11 +947,15 @@ def _prove_absent(
     """Refuse unless both rounds bear out that Alpaca has no such order.
 
     No order may carry this order's client order id, and none may be working
-    on its symbol, on either side. An order that has ended is recorded, not
-    refused (:func:`_ended_foreign_orders`): whatever it sold is in the
-    position, and the position rule below is what answers for it. The order
-    Alpaca answered this order's send with is the exception, and must have
-    ended with nothing filled (:func:`_answered_order_sold_nothing`).
+    on its symbol, on either side. No order in its symbol that the Clerk did
+    not place may have filled anything since it was created
+    (:func:`_unfilled_foreign_orders`), and the order Alpaca answered this
+    order's send with must have ended with nothing filled, by its own read
+    (:func:`_answered_order_sold_nothing`). Only then is the position set
+    against the Clerk's records: with no trade in the symbol that those
+    records lack, a position that agrees with them shows this order did not
+    trade. One that differs is taken only under an open ``POSITION_DRIFT``
+    that names the symbol.
     """
     symbol = presented.symbol.upper()
     known_refs = repo.all_order_refs()
@@ -958,7 +981,7 @@ def _prove_absent(
                     f"{order.status or 'no status'}). This order cannot be settled as absent while an "
                     "order is working on its symbol. Nothing was changed.",
                 )
-        ended_foreign = _ended_foreign_orders(repo, presented, round_, known_refs)
+        ended_foreign = _unfilled_foreign_orders(repo, presented, round_, known_refs)
     earlier, later = (
         broker_symbol_reader(
             repo, broker_orders=round_.open_orders, broker_positions=round_.positions
@@ -1180,24 +1203,25 @@ def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -
         )
     )
     # The order Alpaca answered the send with has a line of its own; the
-    # sentence about orders the Clerk did not place is about every other one.
-    # Orders the Clerk placed itself, for another bot or by hand, are none of
-    # them, so that sentence says "that the Clerk did not place" either way.
+    # sentence about orders the Clerk did not place is about every other one,
+    # on either side. Orders the Clerk placed itself, for another bot or by
+    # hand, are none of them, so that sentence says "that the Clerk did not
+    # place" either way. One that had filled anything refused, so every order
+    # it names ended with nothing filled.
     answered = proof.answered_as_order
     other = "" if answered is None else "other "
     if not proof.ended_foreign_orders:
         others = (
-            f"Since this one was sent, Alpaca shows no {other}order to {side} {symbol} that the "
-            "Clerk did not place."
+            f"Since this one was sent, Alpaca shows no {other}order for {symbol} that the Clerk "
+            "did not place."
         )
     else:
         count = len(proof.ended_foreign_orders)
         others = (
             f"Since this one was sent, Alpaca shows {count} {other}{'order' if count == 1 else 'orders'} "
-            f"to {side} {symbol} that the Clerk did not place, all ended: "
+            f"for {symbol} that the Clerk did not place, all ended with nothing filled: "
             + "; ".join(
-                f"Alpaca order {order.broker_order_id}, {order.broker_state}, "
-                f"{order.filled_quantity:g} filled"
+                f"Alpaca order {order.broker_order_id}, {order.broker_state}"
                 for order in proof.ended_foreign_orders
             )
             + "."

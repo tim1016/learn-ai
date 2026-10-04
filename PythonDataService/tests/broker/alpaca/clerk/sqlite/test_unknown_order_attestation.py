@@ -345,8 +345,8 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
 ) -> None:
     """The lost closing order never reached Alpaca, and the operator says so.
 
-    The Clerk reads the account twice -- the order's exact lookup, every order
-    since, the open orders, the positions -- finds nothing, and ends the EXIT
+    The Clerk reads the account twice -- the order's exact lookup, the open
+    orders, the positions, every order since -- finds nothing, and ends the EXIT
     as not sent. The unknown outcome closes, ``EXIT_NOT_FLAT`` says the
     position is still open, the entry is free to be exited again, and the
     bot still holds its 10 SPY. Who settled it, and what the Clerk read, is
@@ -369,7 +369,7 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
 
     assert result.applied is True
     assert len(alpaca.sent) == 1, "settling never sends an order"
-    assert alpaca.reads == ["lookup", "orders:all", "orders:open", "positions"] * 2
+    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all"] * 2
     assert alpaca.asked_since_ms == [closing.updated_at_ms - ORDERS_SINCE_MARGIN_MS] * 2
 
     assert _exit_state(repo, exit_id) == "failed"
@@ -452,9 +452,14 @@ def _a_sell_is_working_that_the_open_orders_do_not_list(alpaca: _AlpacaAccount, 
     alpaca.ended_orders = [_elsewhere("another-sell", status="partially_filled", filled_quantity=4.0)]
 
 
-def _someone_elses_sell_filled_and_the_difference_is_not_recorded(alpaca: _AlpacaAccount, _closing: str) -> None:
+def _someone_elses_sell_filled(alpaca: _AlpacaAccount, _closing: str) -> None:
     alpaca.ended_orders = [_elsewhere("another-sell", status="filled", filled_quantity=10.0)]
     alpaca.holds = 0.0
+
+
+def _someone_elses_buy_was_canceled_after_filling_some(alpaca: _AlpacaAccount, _closing: str) -> None:
+    alpaca.ended_orders = [_elsewhere("another-buy", side="buy", status="canceled", filled_quantity=4.0)]
+    alpaca.holds = 14.0
 
 
 def _an_ended_order_could_not_be_read(alpaca: _AlpacaAccount, _closing: str) -> None:
@@ -466,6 +471,14 @@ def _an_ended_order_could_not_be_read(alpaca: _AlpacaAccount, _closing: str) -> 
 def _a_replaced_sell_whose_replacement_was_not_read(alpaca: _AlpacaAccount, _closing: str) -> None:
     alpaca.ended_orders = [
         _elsewhere("replaced-sell", status="replaced").model_copy(update={"replaced_by": "its-replacement"})
+    ]
+
+
+def _a_replaced_buy_whose_replacement_was_not_read(alpaca: _AlpacaAccount, _closing: str) -> None:
+    alpaca.ended_orders = [
+        _elsewhere("replaced-buy", side="buy", status="replaced").model_copy(
+            update={"replaced_by": "its-replacement"}
+        )
     ]
 
 
@@ -498,14 +511,19 @@ def _the_position_moves_between_the_two_reads(alpaca: _AlpacaAccount, _closing: 
             _a_sell_is_working_that_the_open_orders_do_not_list, "BROKER_ORDER_WORKING",
             id="a-working-sell-only-the-orders-since-list",
         ),
+        pytest.param(_someone_elses_sell_filled, "FOREIGN_ORDER_FILLED", id="a-foreign-sell-filled"),
         pytest.param(
-            _someone_elses_sell_filled_and_the_difference_is_not_recorded, "POSITION_DIFFERENCE_NOT_RECORDED",
-            id="a-foreign-sell-filled-and-no-drift-is-recorded",
+            _someone_elses_buy_was_canceled_after_filling_some, "FOREIGN_ORDER_FILLED",
+            id="a-foreign-buy-canceled-after-filling-some",
         ),
         pytest.param(_an_ended_order_could_not_be_read, "UNKNOWN_ORDER_ON_SYMBOL", id="an-unreadable-order-since"),
         pytest.param(
             _a_replaced_sell_whose_replacement_was_not_read, "UNKNOWN_ORDER_ON_SYMBOL",
             id="a-replaced-sell-whose-replacement-was-not-read",
+        ),
+        pytest.param(
+            _a_replaced_buy_whose_replacement_was_not_read, "UNKNOWN_ORDER_ON_SYMBOL",
+            id="a-replaced-buy-whose-replacement-was-not-read",
         ),
         pytest.param(_alpaca_holds_no_shares, "POSITION_DIFFERENCE_NOT_RECORDED", id="position-differs-unrecorded"),
         pytest.param(_the_position_moves_between_the_two_reads, "BROKER_SNAPSHOT_UNSETTLED", id="position-moves"),
@@ -519,10 +537,11 @@ async def test_an_absent_attestation_alpaca_does_not_bear_out_is_refused_and_not
     """Whatever the operator says, the Clerk ends the order as not sent only on its own reads.
 
     A read that fails, a list that may be incomplete, the order itself in any
-    read, any order working on the symbol, an ended order the Clerk could not
-    read or whose replacement it did not see, a position that differs from
-    the Clerk's records or moves between the reads: each refuses. The ledger
-    is exactly as it was, the EXIT still holds custody, and nothing is sent.
+    read, any order working on the symbol, an order the Clerk did not place
+    that filled anything, an ended order the Clerk could not read or whose
+    replacement it did not see, a position that differs from the Clerk's
+    records or moves between the reads: each refuses. The ledger is exactly
+    as it was, the EXIT still holds custody, and nothing is sent.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
@@ -702,10 +721,10 @@ async def test_an_order_alpaca_answered_under_another_id_is_settled_as_absent_on
         "ended, canceled, without selling anything."
     )
     assert findings.lines[3] == (
-        "Since this one was sent, Alpaca shows no other order to sell SPY that the Clerk did not place."
+        "Since this one was sent, Alpaca shows no other order for SPY that the Clerk did not place."
     )
     # Each round reads the order Alpaca answered with by its own id: twice for the check, twice to settle.
-    assert alpaca.reads == ["lookup", "lookup:other-id", "orders:all", "orders:open", "positions"] * 4
+    assert alpaca.reads == ["lookup", "lookup:other-id", "orders:open", "positions", "orders:all"] * 4
     assert _exit_state(repo, exit_id) == "failed"
     (recorded,) = _attested(repo)
     assert recorded.answered_as_order == EndedForeignOrder(ANSWERED_ORDER_ID, "canceled", 0.0)
@@ -896,17 +915,18 @@ async def test_a_sale_tried_by_hand_and_canceled_does_not_stand_in_the_way_of_no
 ) -> None:
     """An operator tried the sale by hand at Alpaca, and canceled it with nothing filled.
 
-    That order has ended and can sell nothing more. The check says what the
-    Clerk saw of it, the settlement goes through, and the attestation
-    records it. Before, it refused this order for good.
+    That order ended with nothing filled: it traded nothing, and neither did
+    a buy of the symbol that expired unfilled. The check says what the Clerk
+    saw of them, the settlement goes through, and the attestation records
+    both. Before, the canceled sale refused this order for good.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
     alpaca.ended_orders = [
         _elsewhere("by-hand", status="canceled"),
-        # Not this order's side, not its symbol, and from before it was sent: none is asked about.
-        _elsewhere("a-buy", side="buy", status="filled", filled_quantity=10.0),
+        _elsewhere("a-buy", side="buy", status="expired"),
+        # Not this order's symbol, and from before it was sent: neither is asked about, filled as they are.
         _elsewhere("qqq", symbol="QQQ", status="filled", filled_quantity=10.0),
         _elsewhere("long-ago", status="filled", filled_quantity=10.0, submitted_at_ms=FIXTURE_RTH_MS - 86_400_000),
     ]
@@ -918,14 +938,17 @@ async def test_a_sale_tried_by_hand_and_canceled_does_not_stand_in_the_way_of_no
 
     assert findings.would_settle is True
     assert findings.lines[2] == (
-        "Since this one was sent, Alpaca shows 1 order to sell SPY that the Clerk did not place, "
-        "all ended: Alpaca order by-hand, canceled, 0 filled."
+        "Since this one was sent, Alpaca shows 2 orders for SPY that the Clerk did not place, all "
+        "ended with nothing filled: Alpaca order by-hand, canceled; Alpaca order a-buy, expired."
     )
     assert {symbols for symbols, _until in alpaca.pages_asked} == {("SPY",)}
     assert _exit_state(repo, exit_id) == "failed"
     (recorded,) = _attested(repo)
-    assert recorded.ended_foreign_orders == (EndedForeignOrder("by-hand", "canceled", 0.0),)
-    assert recorded.orders_since_read == 2, "the canceled sell and the buy: the symbol's orders since"
+    assert recorded.ended_foreign_orders == (
+        EndedForeignOrder("by-hand", "canceled", 0.0),
+        EndedForeignOrder("a-buy", "expired", 0.0),
+    )
+    assert recorded.orders_since_read == 2, "the canceled sell and the expired buy: the symbol's orders since"
     assert len(alpaca.sent) == 1
 
 
@@ -954,39 +977,105 @@ async def test_the_check_speaks_only_of_orders_the_clerk_did_not_place_when_its_
 
     assert findings.would_settle is True
     assert findings.lines[2] == (
-        "Since this one was sent, Alpaca shows no order to sell SPY that the Clerk did not place."
+        "Since this one was sent, Alpaca shows no order for SPY that the Clerk did not place."
     )
 
 
-async def test_a_foreign_sale_that_filled_is_settled_only_under_a_recorded_drift_and_is_on_the_record(
+async def test_a_trade_the_clerk_did_not_place_that_offsets_the_lost_sale_never_passes_it_off_as_not_sent(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The regression (#2854 review): the lost sale did trade, and a buy the Clerk did not place hid it.
+
+    The closing order sold the bot's 10 SPY where no read of orders shows
+    it, and a buy of 10 SPY made by hand filled after it. Alpaca holds 10
+    SPY against the Clerk's 10 in both rounds, and the buy was not on the
+    order's side, so it was passed over: "no such order" was taken, the EXIT
+    ended as not sent, and the next sale would have sold the shares the
+    other order bought.
+
+    An order the Clerk did not place that filled anything refuses now,
+    whichever side it was on: with that trade in the account the position
+    cannot show whether this order traded. The check and the settlement
+    refuse in the same words, which name the order and what it did; nothing
+    is written, the EXIT keeps custody, and nothing is sent.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    alpaca.fills(_closing_order(repo).client_order_id)
+    alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, side="buy", status="filled", filled_quantity=10.0)]
+    alpaca.holds = 10.0
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+
+    checked = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await facade.settle_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT, operator=OPERATOR, reason=None,
+        )
+    with pytest.raises(RecoveryExecutionError) as dispatched:
+        await _settle(facade, current_context, ABSENT)
+
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "FOREIGN_ORDER_FILLED")
+    assert refused.value.reason_code == "FOREIGN_ORDER_FILLED"
+    assert checked.lines == (str(refused.value),) == (str(dispatched.value),)
+    assert str(refused.value) == (
+        "Since this order was sent, an order the Clerk did not place bought 10 SPY at Alpaca "
+        f"(Alpaca order id {BY_HAND_ORDER_ID!r}, filled). With that trade in the account, Alpaca's "
+        "position cannot show whether this order traded. This order cannot be settled as absent. "
+        "Nothing was changed."
+    )
+    assert repo.custody_transitions() == ledger
+    assert _attested(repo) == []
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None, "the EXIT keeps custody of the position"
+    assert len(alpaca.sent) == 1
+
+
+async def test_a_foreign_sale_that_filled_refuses_no_such_order_even_under_a_recorded_drift(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
     """A sell the Clerk did not place filled for the bot's 10 SPY: Alpaca holds none of them now.
 
-    The order has ended, so it does not refuse by itself; what it sold is in
-    Alpaca's position, and the position is what answers for it. Until a pass
-    has recorded that difference the attestation is refused. Under the
-    recorded drift it is taken, the filled order is on the record, and the
-    notice tells the operator to write the shares off.
+    A pass has recorded that difference, and under a recorded drift a
+    position Alpaca no longer holds is taken. It is not taken here: the
+    position cannot show whether the lost order traded beside a trade the
+    Clerk has no record of, on the order's own side as on the other. The
+    check and the settlement refuse in the same words and nothing is
+    written. Before, the filled sale was put on the record and the order
+    ended as not sent.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca, wait_passed=False)
-    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
-    alpaca.ended_orders = [_elsewhere("another-sell", status="filled", filled_quantity=10.0)]
+    facade = _facade(repo, alpaca)
+    alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, status="filled", filled_quantity=10.0)]
     alpaca.holds = 0.0
     await _passes(repo, _the_sweep(repo, alpaca), 1)
     _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    assert _open_position_drift(repo) is not None
     assert _exit_state(repo, exit_id) == "unknown" and len(alpaca.sent) == 1
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
 
-    await _settle(facade, current_context, ABSENT)
+    checked = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await facade.settle_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT, operator=OPERATOR, reason=None,
+        )
 
-    assert _exit_state(repo, exit_id) == "failed"
-    (recorded,) = _attested(repo)
-    assert recorded.ended_foreign_orders == (EndedForeignOrder("another-sell", "filled", 10.0),)
-    assert (recorded.broker_qty, recorded.account_attributed_qty) == (0.0, 10.0)
-    notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
-    assert notice is not None and "write off the missing shares" in notice["next_step"]
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "FOREIGN_ORDER_FILLED")
+    assert checked.lines == (str(refused.value),)
+    assert str(refused.value) == (
+        "Since this order was sent, an order the Clerk did not place sold 10 SPY at Alpaca "
+        f"(Alpaca order id {BY_HAND_ORDER_ID!r}, filled). With that trade in the account, Alpaca's "
+        "position cannot show whether this order traded. This order cannot be settled as absent. "
+        "Nothing was changed."
+    )
+    assert repo.custody_transitions() == ledger
+    assert _attested(repo) == []
+    assert _exit_state(repo, exit_id) == "unknown"
     assert repo.position(SID, "SPY") == 10.0
     assert len(alpaca.sent) == 1
 
@@ -1045,28 +1134,26 @@ async def test_the_symbols_orders_since_are_read_a_page_at_a_time_to_their_end(
 
     oldest_of_the_first_page_ms = newest_ms - (page - 1)
     assert alpaca.pages_asked == [(("SPY",), None), (("SPY",), oldest_of_the_first_page_ms + 1)] * 2
-    assert alpaca.reads == ["lookup", "orders:all", "orders:all", "orders:open", "positions"] * 2
+    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all", "orders:all"] * 2
     assert _exit_state(repo, exit_id) == "failed"
     (recorded,) = _attested(repo)
     assert recorded.orders_since_read == page + 200
     assert len(alpaca.sent) == 1
 
 
-async def test_a_sale_that_fills_while_the_last_round_is_read_is_never_set_against_a_position_from_before_it(
+async def test_a_sale_that_fills_while_the_last_round_is_read_refuses_whatever_position_was_read_before_it(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
     """The regression (#2854 review): a sale made by hand filled while the Clerk read its last round.
 
-    A round read the positions before the symbol's orders. The sale reached
-    Alpaca after the last round's open orders were read and filled after its
-    positions were, so the round listed it ended beside a position read
-    before it sold: 10 SPY at Alpaca against the Clerk's 10, with none of
-    them left there. "No such order" was taken on that position.
+    The sale reached Alpaca after the last round's open orders were read and
+    filled after its positions were, so the round listed it ended beside a
+    position read before it sold: 10 SPY at Alpaca against the Clerk's 10,
+    with none of them left there. "No such order" was taken on that position.
 
-    A round reads the symbol's orders first now, so an order it lists ended
-    was over before its positions were read. Here the last round's positions
-    show what the sale sold, the two rounds disagree, and the check and the
-    settlement both refuse with nothing written.
+    An order the Clerk did not place that filled anything refuses now,
+    whatever position was read beside it: the check and the settlement both
+    refuse with nothing written.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
@@ -1096,8 +1183,55 @@ async def test_a_sale_that_fills_while_the_last_round_is_read_is_never_set_again
     alpaca.ended_orders, alpaca.holds = [], 10.0
     checked = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
 
-    assert refused.value.reason_code == "BROKER_SNAPSHOT_UNSETTLED"
-    assert (checked.would_settle, checked.refusal_reason_code) == (False, "BROKER_SNAPSHOT_UNSETTLED")
+    assert refused.value.reason_code == "FOREIGN_ORDER_FILLED"
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "FOREIGN_ORDER_FILLED")
+    assert repo.custody_transitions() == ledger
+    assert _attested(repo) == []
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert len(alpaca.sent) == 1
+
+
+async def test_trades_made_just_before_the_last_positions_are_read_are_among_the_orders_read_after_them(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The lost sale trades, and a buy made by hand fills, just before the last round's positions answer.
+
+    The two offset: Alpaca holds 10 SPY in both rounds, against the Clerk's
+    10. A round that read the symbol's orders before its positions listed
+    neither trade, and nothing told that position from one no order had
+    touched. A round reads the symbol's orders last, so the buy that had
+    filled when the positions were read is among them, and it refuses: the
+    check and the settlement alike, with nothing written.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    facade = _facade(repo, alpaca)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+    original = alpaca.list_positions
+    positions_read = 0
+
+    async def list_positions() -> list[BrokerPosition]:
+        nonlocal positions_read
+        positions_read += 1
+        if positions_read % 2 == 0:
+            # Since the read before this one the lost sale sold 10 where no read shows it, and the
+            # buy made by hand bought 10: the account holds what it held.
+            alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, side="buy", status="filled", filled_quantity=10.0)]
+        return await original()
+
+    alpaca.list_positions = list_positions  # type: ignore[method-assign]
+
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await facade.settle_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT, operator=OPERATOR, reason=None,
+        )
+    alpaca.ended_orders = []
+    checked = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+
+    assert refused.value.reason_code == "FOREIGN_ORDER_FILLED"
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "FOREIGN_ORDER_FILLED")
     assert repo.custody_transitions() == ledger
     assert _attested(repo) == []
     assert _exit_state(repo, exit_id) == "unknown"
@@ -1168,7 +1302,7 @@ async def test_a_lost_buy_that_covers_a_short_is_offered_checked_and_settled_in_
     assert findings.lines == (
         "Alpaca shows no order under this order's id.",
         "No order is working on SPY.",
-        "Since this one was sent, Alpaca shows no order to buy SPY that the Clerk did not place.",
+        "Since this one was sent, Alpaca shows no order for SPY that the Clerk did not place.",
         "Alpaca holds a short of 10 SPY, as the Clerk's records say.",
     )
     assert _exit_state(repo, exit_id) == "failed"
@@ -1181,6 +1315,43 @@ async def test_a_lost_buy_that_covers_a_short_is_offered_checked_and_settled_in_
     )
     assert repo.position(SID, "SPY") == -10.0
     assert len(alpaca.sent) == 1
+
+
+async def test_a_sale_the_clerk_did_not_place_refuses_a_lost_cover_and_is_said_to_have_sold(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The lost order is a buy that covers a short of 10 SPY, and a sale the Clerk did not place filled since.
+
+    Alpaca is short 10 SPY, as the Clerk's records say -- and as it would be
+    had the cover bought the 10 back where no read shows it and that sale
+    sold 10 again. The refusal says what the other order did by its own
+    side: it sold.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca)
+    alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, side="sell", status="filled", filled_quantity=10.0)]
+    facade = _facade(repo, alpaca)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+
+    checked = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await facade.settle_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT, operator=OPERATOR, reason=None,
+        )
+
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "FOREIGN_ORDER_FILLED")
+    assert checked.lines == (str(refused.value),)
+    assert str(refused.value) == (
+        "Since this order was sent, an order the Clerk did not place sold 10 SPY at Alpaca "
+        f"(Alpaca order id {BY_HAND_ORDER_ID!r}, filled). With that trade in the account, Alpaca's "
+        "position cannot show whether this order traded. This order cannot be settled as absent. "
+        "Nothing was changed."
+    )
+    assert repo.custody_transitions() == ledger
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.position(SID, "SPY") == -10.0
 
 
 async def test_a_short_alpaca_does_not_show_is_refused_in_words_about_a_short_until_the_difference_is_recorded(
@@ -1720,7 +1891,7 @@ async def test_a_check_takes_no_claim_so_it_answers_while_a_pass_holds_the_exit(
     )
 
     assert (findings.would_settle, findings.refusal_reason_code) == (True, None)
-    assert alpaca.reads == ["lookup", "orders:all", "orders:open", "positions"] * 2
+    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all"] * 2
     assert repo.custody_transitions() == ledger
     assert repo.release_operation_claim(effect_operation_id=exit_id, token=held_by_a_pass.token), (
         "the pass still holds its claim"
