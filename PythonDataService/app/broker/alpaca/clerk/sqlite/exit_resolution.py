@@ -53,8 +53,12 @@ resumed send that finds its own order among those open orders is neither sent
 again nor refused: custody is retained until the order's exact lookup answers.
 A scheduled-end sale whose bot's ``EXIT_STUCK`` episode is open is not sent
 either (#2854): the position is the operator's, and its EXIT folds as an
-uncovered Flatten's does, on the first pass that drives it: ahead of any hold
-for the open and of the reduction's own admission.
+uncovered Flatten's does. A sale with no order created yet, so nothing sent,
+folds on the first pass that drives it, ahead of any hold for the open and of
+the reduction's own admission. One whose order was already sent and is not
+confirmed is held as any unconfirmed order is -- through its absence wait
+and, outside the regular session, for the open -- and folds, with nothing sent
+again, on the pass that would send it again.
 
 A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
@@ -2164,15 +2168,25 @@ def _end_sale_left_to_the_operator(
     if not is_end_sale or not automatic_exit_stopped(repo, effect.strategy_instance_id):
         return False
     held = repo.position(effect.strategy_instance_id, symbol)
-    reason = "The Clerk had stopped exiting this bot's position by itself, so the sale at its scheduled end was not sent."
+    # The sale's own order, sent once and read absent since, is told as that. An entry's send is not the sale's.
+    order = repo.order(order_ref)
+    sent_before = order is not None and order.role == "REDUCING" and repo.has_order_transition(
+        order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
+    )
+    not_sent = "was not sent again" if sent_before else "was not sent"
+    reason = (
+        "The Clerk had stopped exiting this bot's position by itself, so the sale at its scheduled end "
+        f"{not_sent}{'; Alpaca shows no such order' if sent_before else ''}."
+    )
     logger.warning("a scheduled-end sale was not sent: the Clerk had stopped exiting its bot by itself", extra={
         "action": "scheduled_end_sale_not_sent_exit_stuck", "account_id": repo.account_id,
         "effect_operation_id": effect_operation_id, "order_ref": order_ref, "attributed_qty": held,
+        "sent_before": sent_before,
     })
     _fold_exit_not_flat(
         repo, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=symbol,
         attributed_qty=held, summary_code=SCHEDULED_END_EXIT_STUCK, reason=reason,
-        headline="A bot's scheduled-end sale was not sent; the position is still open",
+        headline=f"A bot's scheduled-end sale {not_sent}; the position is still open",
         explanation=f"{reason} The Clerk still attributes {held:g} {symbol} to this bot.",
         next_step="Flatten the position or write it off from the bot's page.",
     )

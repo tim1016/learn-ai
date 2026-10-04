@@ -262,14 +262,18 @@ over the later run's.
 open.** That episode means the Clerk has stopped exiting the bot's position by
 itself and the position is the operator's; the watchdog sends nothing for it,
 and the end accepts no sale for it either. The end still stops the run and
-stays pending, and the bell and the bot page's End card say so. Once the
+stays pending, and the bell and the bot page's End card say so until the bot
+is flat, while the operator's own flatten is working included. Once the
 operator's flatten or write-off leaves the bot flat, the end is recorded
-carried out with nothing sold. A sale accepted before this rule is not sent:
-on the first pass that drives it -- held for the open or about to be sent
-again, and whatever the account then holds -- its EXIT fails through
-`EXIT_NOT_FLAT`, as a Flatten the account does not cover does, so no EXIT
-holds the symbol and the operator's flatten and write-off stay admissible. A
-`sim:` authority is unchanged.
+carried out with nothing sold. A sale accepted before this rule is not sent.
+One that has sent nothing ends on the first pass that drives it, held for the
+open or not, and whatever the account then holds. One already sent, its answer
+lost, is held as any unconfirmed order is -- through its absence wait and,
+outside the regular session, for the open -- and ends, with nothing sent
+again, on the pass that would send it again. Either way its EXIT then fails
+through `EXIT_NOT_FLAT`, as a Flatten the account does not cover does: from
+then no EXIT holds the symbol, and the operator's flatten and write-off are
+admissible. A `sim:` authority is unchanged.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
