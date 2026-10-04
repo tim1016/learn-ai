@@ -940,9 +940,8 @@ export class BotPanelShellComponent {
     this.actionReceipt.set(null);
     const ownership = this.beginActionOwnership();
     try {
-      // runBotAction retries a 409 once with a fresh token only for an action
-      // without a confirmation; a confirmed action (the Clerk's stop, a safe
-      // flatten) is never resubmitted, so its 409 surfaces as a receipt.
+      // runBotAction submits once: a 409 surfaces as a receipt in the lane's
+      // own words, and the next click is a new command (#2874).
       const result = await this.panelSvc.runBotAction(
         this.commandTarget(target),
         sid,

@@ -69,3 +69,8 @@ export function provideFakeDateWorld(calendar: FakeTradingCalendar = fakeTrading
     },
   ];
 }
+
+/** The instant the coverage route names a session by: its open, 09:30 ET. */
+export function sessionOpenMs(day: string): number {
+  return etMidnightMs(day) + 9.5 * HOUR_MS;
+}

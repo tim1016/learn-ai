@@ -340,7 +340,9 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
         confirmation=_confirmation(
             "Settle the uncertain order?",
             "The Clerk reads Alpaca again and settles the order only if what it reads "
-            "agrees with what you said. It sends no order. This cannot be undone.",
+            "agrees with what you said. It sends no order. If you said Alpaca has no such "
+            "order, the position stays with the bot and the Clerk sends no order for it by "
+            "itself: you then close it or write it off from this page. This cannot be undone.",
             "Settle the order",
             required_token="SETTLE",
         ),
@@ -1103,26 +1105,29 @@ def unknown_order_lookup_settles_at_ms(order: ProjectedUnknownExitOrder) -> int:
     return order.lookup_wait_from_ms + grace_ms
 
 
-def _settlement_choices(side: Literal["buy", "sell"]) -> tuple[SettlementChoice, ...]:
+def _settlement_choices(side: Literal["buy", "sell"], symbol: str) -> tuple[SettlementChoice, ...]:
     """The two attestations an operator chooses between (#2854).
 
-    "No such order" says what stays with the bot by the order's side: the
-    shares a closing sale would have sold, or the short a cover would have
-    bought back.
+    "No such order" says what the Clerk checks, and what stays with the bot
+    by the order's side: the shares a closing sale would have sold, or the
+    short a cover would have bought back. It says too that the Clerk sends
+    nothing for them afterwards, and what the operator then does.
     """
     stays = (
-        "The shares stay with the bot; the Clerk may sell again after checking the account."
+        "The shares stay with the bot, and the Clerk sends no order for them by itself: you "
+        "then sell them or write them off from this page."
         if side == "sell"
-        else "The short position stays with the bot; the Clerk may try again to buy it back "
-        "after checking the account."
+        else "The short position stays with the bot, and the Clerk sends no order for it by "
+        "itself: you then buy it back or write it off from this page."
     )
     return (
         SettlementChoice(
             attestation="absent",
             label="Alpaca has no such order",
             explanation=(
-                "The Clerk checks once more. If it finds nothing, it ends this exit as not sent. "
-                f"{stays} This cannot be undone."
+                "The Clerk checks once more that this order is not at Alpaca and that nothing is "
+                f"working on {symbol}. If so, it ends this exit as not sent. {stays} This cannot "
+                "be undone."
             ),
             asks_broker_order_id=False,
         ),
@@ -1173,7 +1178,7 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
         quantity=order.quantity,
         first_sent_at_ms=order.first_sent_at_ms,
         ticket=ticket,
-        choices=_settlement_choices(side),
+        choices=_settlement_choices(side, order.symbol),
     )
 
 

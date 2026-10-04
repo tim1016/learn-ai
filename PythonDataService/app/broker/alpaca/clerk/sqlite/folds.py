@@ -1613,10 +1613,13 @@ def _fold_order_outcome_attested(conn: sqlite3.Connection, payload: dict[str, An
 
     ``absent`` ends the order's EXIT, citing the order, so the
     unknown-outcome episode's identity for it closes with it. An EXIT whose
-    bot still holds the position fails and its ``EXIT_NOT_FLAT`` notice --
-    the envelope the row records -- is opened here, or refreshes the one
-    already open; an EXIT whose bot holds nothing succeeds, as attributed
-    flat.
+    bot still holds the position fails, and two episodes are opened here, or
+    refresh the ones already open, from the envelopes the row records: the
+    ``EXIT_NOT_FLAT`` notice it ends under, and the ``EXIT_STUCK`` episode
+    under which the Clerk sends no order for the position by itself. Both
+    are in this one write, so no pass of the Clerk ever finds the first
+    without the second. An EXIT whose bot holds nothing succeeds, as
+    attributed flat.
 
     ``exists`` records the order's broker order id on the order. The EXIT
     stays as it is: the order's own evidence, read by that id, is folded by
@@ -1630,11 +1633,14 @@ def _fold_order_outcome_attested(conn: sqlite3.Connection, payload: dict[str, An
             (facts.broker_order_id, payload["recorded_at_ms"], payload["order_ref"]),
         )
         return
-    if facts.exit_not_flat is None:
+    if facts.exit_not_flat is None or facts.exit_stuck is None:
         _fold_effect_terminal(conn, payload, terminal_state="succeeded")
         return
     _fold_effect_terminal(conn, payload, terminal_state="failed")
     _open_or_refresh_episode(conn, payload, UncertaintyRaisedFacts(**facts.exit_not_flat))
+    _open_or_refresh_episode(
+        conn, payload, UncertaintyRaisedFacts(**facts.exit_stuck), beside_another=True
+    )
 
 
 DEFAULT_FOLD_REGISTRY.register("ORDER_OUTCOME_ATTESTED", _fold_order_outcome_attested)

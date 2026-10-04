@@ -7,6 +7,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerV2PanelService } from './broker-v2-panel.service';
+import { deriveActionRejection } from './panel-action-outcome';
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { POLL_REQUEST_TIMEOUT_MS } from '../../../../services/poll-timeout';
 import type { PanelAction, PanelActionRequest } from './broker-v2-panel.types';
@@ -359,7 +360,7 @@ describe('BrokerV2PanelService run evidence', () => {
 
 });
 
-describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
+describe('BrokerV2PanelService action submission', () => {
   let service: BrokerV2PanelService;
   let http: HttpTestingController;
 
@@ -375,10 +376,8 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
 
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  // Reconcile now asks for no confirmation and travels on the quiesce
-  // operation, so after a 409 it is re-offered only when it is still enabled
-  // with a new token; the two tests below cover the post-409 outcomes where
-  // it must bail instead (disabled, or unchanged token).
+  // Reconcile now: the one mutation that asks for no confirmation. It
+  // travels on the quiesce operation.
   const staleReconcile: PanelAction = {
     action_id: 'reconcile_now',
     revision: 1,
@@ -390,7 +389,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     confirmation: null,
   };
 
-  // A recovery action can remain available with a new evidence token.
+  // A recovery action, which travels on /actions.
   const staleRecovery: PanelAction = {
     action_id: 'resolve_execution_coverage', revision: 1,
     concurrency_token: 'tok-stale', enabled: true,
@@ -420,95 +419,36 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   const QUIESCE_URL = `${ACTIONS_URL}/quiesce`;
   const PANEL_URL = '/api/brokers/alpaca/clerks/clrk_spec/accounts/acct-1/bots/sid-1/panel';
 
-  const conflict = () =>
-    ({ detail: { message: 'stale' } });
+  // The lane's own answer, as the action route words a rejection.
+  const LANE_REASON = 'Custody changed after this action was presented.';
+  const rejection = () => ({ detail: { message: LANE_REASON, why: 'Refresh, then try again.' } });
 
-  it('refetches a fresh token and retries once when a transient 409 clears (unconfirmed action)', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleRecovery);
+  // A command is submitted once. The fleet coordinator never re-delivers a key
+  // it has dispatched, so a second request under that key is answered by the
+  // coordinator, not the lane, and hides the lane's reason (#2874). Under a
+  // new key it would be a second lifecycle command: for a safe flatten, one on
+  // a position other than the one confirmed; after a 500, one beside a first
+  // that may have run.
+  it.each([
+    ['Reconcile now, which asks for no confirmation, is refused (409)', staleReconcile, 409],
+    ['a confirmed safe flatten is refused (409)', staleSafeFlatten, 409],
+    ['the outcome is unknown (500)', staleReconcile, 500],
+  ] as const)('sends one request and hands back the lane’s answer when %s', async (_case, action, status) => {
+    const settled = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', action)
+      .then(() => null, (error: unknown) => error);
 
-    const first = http.expectOne(ACTIONS_URL);
-    const firstIdempotencyKey = (first.request.body as {
-      idempotency_key: string;
-    }).idempotency_key;
-    first.flush(conflict(), { status: 409, statusText: 'Conflict' });
+    const sent = http.expectOne(QUIESCE_URL);
+    expect(sent.request.body).toMatchObject({ concurrency_token: 'tok-stale', idempotency_key: 'command-key-1' });
+    sent.flush(rejection(), { status, statusText: status === 409 ? 'Conflict' : 'Server Error' });
     await tick();
 
-    http.expectOne(PANEL_URL).flush({
-      actions: [{ ...staleRecovery, concurrency_token: 'tok-fresh' }],
-    });
-    await tick();
-
-    const retry = http.expectOne(ACTIONS_URL);
-    // The retry carries the CURRENT token, not the stale one.
-    expect(retry.request.body.concurrency_token).toBe('tok-fresh');
-    // It remains the same durable command despite its refreshed concurrency
-    // token, so a transport retry cannot execute a second lifecycle action.
-    expect(retry.request.body.idempotency_key).toBe(firstIdempotencyKey);
-    retry.flush({
-      action_id: 'resolve_execution_coverage',
-      receipt_id: 'r-1',
-      recorded_at_ms: 1,
-      applied: true,
-      revision: 2,
-      concurrency_token: 'tok-fresh',
-      message: 'Recovered',
-    });
-
-    await expect(promise).resolves.toMatchObject({ receipt_id: 'r-1' });
-  });
-
-  it('does NOT retry when the action is disabled after the 409 (state truly changed)', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleReconcile);
-
-    http
-      .expectOne(QUIESCE_URL)
-      .flush(conflict(), { status: 409, statusText: 'Conflict' });
-    await tick();
-
-    http.expectOne(PANEL_URL).flush({
-      actions: [{ ...staleReconcile, concurrency_token: 'tok-fresh', enabled: false }],
-    });
-
-    await expect(promise).rejects.toMatchObject({ status: 409 });
-  });
-
-  it('does NOT retry when the fresh token is unchanged (an availability 409)', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleReconcile);
-
-    http
-      .expectOne(QUIESCE_URL)
-      .flush(conflict(), { status: 409, statusText: 'Conflict' });
-    await tick();
-
-    http.expectOne(PANEL_URL).flush({ actions: [staleReconcile] });
-
-    await expect(promise).rejects.toMatchObject({ status: 409 });
-  });
-
-  it('does NOT retry an action that requires operator confirmation, even if its token changed and it is still enabled', async () => {
-    // A safe flatten's token is bound to the reduction plan its confirmation
-    // was shown for. A silent retry after a 409 could flatten a materially
-    // different position than the one the operator confirmed — so confirmed
-    // actions always re-throw and let the operator re-confirm explicitly.
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleSafeFlatten);
-
-    http
-      .expectOne(QUIESCE_URL)
-      .flush(conflict(), { status: 409, statusText: 'Conflict' });
-
-    await expect(promise).rejects.toMatchObject({ status: 409 });
+    // No re-read for a new token here, and no second submission: the caller
+    // re-reads the panel, and the next click is a new command.
     http.expectNone(PANEL_URL);
-  });
-
-  it('re-throws a non-409 error without refetching the panel', async () => {
-    const promise = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', staleReconcile);
-
-    http
-      .expectOne(QUIESCE_URL)
-      .flush({ detail: { message: 'boom' } }, { status: 500, statusText: 'Server Error' });
-
-    await expect(promise).rejects.toMatchObject({ status: 500 });
-    http.expectNone(PANEL_URL);
+    http.expectNone(QUIESCE_URL);
+    const error = await settled;
+    expect(error).toMatchObject({ status });
+    expect(deriveActionRejection(error, 'fallback').message).toBe(LANE_REASON);
   });
 
   it('sends a stop on the quiesce operation a draining lane routes, and recovery on /actions', async () => {

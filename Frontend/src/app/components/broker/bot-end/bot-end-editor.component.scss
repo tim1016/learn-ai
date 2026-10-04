@@ -26,9 +26,23 @@
   input { @include filled-field; }
 }
 
-// Under the time field, in its column: the minute it names in market time.
+// The date: its label above the shared date field, which draws its own input.
+// It takes the editor's whole width: the calendar opens in place under it and
+// is wider than one column.
+.bot-end-editor__field {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-1);
+  min-width: 0;
+  align-content: start;
+
+  > label { @include field-label; }
+}
+
+// Beside the time field, on its line: the minute it names in market time.
 .bot-end-editor__market {
   grid-column: 2;
+  align-self: end;
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--fs-xs);

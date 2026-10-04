@@ -44,8 +44,8 @@ from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
     OrderOutcomeAttestation,
     UnknownOrderSettlementReceipt,
     UnknownOrderSettlementRefused,
-    last_settled_order,
     recorded_settlement,
+    settled_orders,
 )
 from app.broker.contract.errors import BrokerError
 
@@ -368,10 +368,11 @@ def recorded_settlement_result(
     ``None`` for any other request, and for a settlement that is not on the
     ledger. The Clerk's own route names the order it settles
     (``execution_ref``). A bot's page names none and sends only the token it
-    was presented: its order is the bot's latest settled one, and only when
-    that token is the one the settle action carried for that order. So a
-    request about another order, or one that was refused, is never answered
-    with an earlier settlement's receipt.
+    was presented: its order is the one, among the orders the bot's
+    settlements settled, that the settle action carried that token for. Not
+    the latest one alone: the bot may have settled another order before
+    this request was asked again. So a request about another order, or one
+    that was refused, is never answered with another settlement's receipt.
     """
     strategy_instance_id = context.strategy_instance_id
     if (
@@ -382,12 +383,20 @@ def recorded_settlement_result(
         return None
     order_ref = request.execution_ref
     if order_ref is None:
-        last = last_settled_order(facade.repository, strategy_instance_id=strategy_instance_id)
-        if last is None or not hmac.compare_digest(
-            settle_unknown_exit_order_token(context, last), request.concurrency_token
-        ):
+        order_ref = next(
+            (
+                settled_order.order_ref
+                for settled_order in settled_orders(
+                    facade.repository, strategy_instance_id=strategy_instance_id
+                )
+                if hmac.compare_digest(
+                    settle_unknown_exit_order_token(context, settled_order), request.concurrency_token
+                )
+            ),
+            None,
+        )
+        if order_ref is None:
             return None
-        order_ref = last.order_ref
     settled = recorded_settlement(
         facade.repository,
         strategy_instance_id=strategy_instance_id,

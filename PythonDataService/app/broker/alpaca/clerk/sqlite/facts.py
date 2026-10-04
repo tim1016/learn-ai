@@ -768,10 +768,15 @@ class AttributedResidueDischargedFacts:
 
 @dataclass(frozen=True)
 class EndedForeignOrder:
-    """An order the Clerk did not place, on the attested order's symbol and side, that had ended when it was read (#2854)."""
+    """An order the Clerk did not place, in the attested order's symbol, that had ended when it was read (#2854).
+
+    ``side`` is the side it was on and ``filled_quantity`` what it had
+    filled on that side, which may be nothing.
+    """
 
     broker_order_id: str
     broker_state: str
+    side: str
     filled_quantity: float
 
 
@@ -807,15 +812,19 @@ class OrderOutcomeAttestedFacts:
 
     - ``absent``: how many open orders, and how many orders of any state in
       the order's symbol since ``orders_read_since_ms``, it read, none of
-      them this order, with the broker's position in the symbol and the
-      account-wide attribution it was set against. ``ended_foreign_orders``
-      are the orders among them, on this order's side, that the Clerk did
-      not place and that had ended: what the operator and the Clerk were
-      looking at when the order was ended as not sent. Recorded only when
-      there were any. ``answered_as_order`` is the order Alpaca answered
-      this order's send with, under another client order id, as the Clerk
-      read it: ended, with nothing filled. Recorded only for an order whose
-      send was answered so, and never among ``ended_foreign_orders``.
+      them this order and none of them working. ``broker_qty`` and
+      ``account_attributed_qty`` are the broker's position in the symbol and
+      the account-wide attribution as the Clerk read them then. They are a
+      record of what was seen, and no condition of the attestation: a
+      position cannot show whether the order traded.
+      ``ended_foreign_orders`` are the orders among those read, on either
+      side, that the Clerk did not place, each with its side and what it had
+      filled: what the operator and the Clerk were looking at when the order
+      was ended as not sent. Each had ended. Recorded only when there were
+      any. ``answered_as_order`` is the order Alpaca answered this order's
+      send with, under another client order id, as the Clerk read it: ended,
+      with nothing filled. Recorded only for an order whose send was
+      answered so, and never among ``ended_foreign_orders``.
     - ``exists``: the broker order id that was read, its state and its
       cumulative filled quantity as read. ``broker_filled_avg_price`` is the
       average price of what had filled, recorded when anything had, and
@@ -829,9 +838,11 @@ class OrderOutcomeAttestedFacts:
     The row is the settlement, not a note beside it: its own fold settles
     the order (``folds._fold_order_outcome_attested``), so no ledger holds an
     attestation that did not take effect. An ``absent`` row ends the order's
-    EXIT. ``exit_not_flat`` is the ``EXIT_NOT_FLAT`` notice it ends under --
-    the whole envelope, opened by the same fold -- recorded when the bot
-    still holds the position; without one the bot held nothing and the EXIT
+    EXIT. ``exit_not_flat`` is the ``EXIT_NOT_FLAT`` notice it ends under and
+    ``exit_stuck`` the ``EXIT_STUCK`` episode that keeps the Clerk from
+    sending any order for the position by itself -- each the whole envelope,
+    opened by the same fold. The two are recorded together, when the bot
+    still holds the position; without them the bot held nothing and the EXIT
     ended attributed-flat. An ``exists`` row records the order's broker order
     id on the order, which the Clerk reads it by from then on.
     """
@@ -854,6 +865,7 @@ class OrderOutcomeAttestedFacts:
     ended_foreign_orders: tuple[EndedForeignOrder, ...] | None = None
     answered_as_order: EndedForeignOrder | None = None
     exit_not_flat: dict[str, Any] | None = None
+    exit_stuck: dict[str, Any] | None = None
     broker_order_id: str | None = None
     broker_state: str | None = None
     broker_filled_quantity: float | None = None
@@ -878,6 +890,7 @@ class OrderOutcomeAttestedFacts:
                     "ended_foreign_orders",
                     "answered_as_order",
                     "exit_not_flat",
+                    "exit_stuck",
                 ),
             )
         )
@@ -887,6 +900,11 @@ class OrderOutcomeAttestedFacts:
             raise ValueError(
                 f"An {self.attestation!r} attestation records {', '.join(recorded)} and none of "
                 f"{', '.join(left_out)}"
+            )
+        if (self.exit_not_flat is None) != (self.exit_stuck is None):
+            raise ValueError(
+                "An attestation that leaves a position open records the notice its EXIT ends "
+                "under and the episode that holds the position, both or neither"
             )
 
     def to_facts_json(self) -> str:

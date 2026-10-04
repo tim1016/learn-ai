@@ -1,6 +1,6 @@
 import { Component, signal } from '@angular/core';
 import { Router, RouterOutlet, Routes, provideRouter } from '@angular/router';
-import { render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -120,7 +120,9 @@ const preset6M: ChartRangePreset = {
   estimated_bars_per_timeframe: { '1m': 49_140, '5m': 9_828, '1D': 126 },
 };
 
-const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset6M];
+/** Five sessions ending on the 1D preset's day; shown under the shared label 1W. */
+const preset5D: ChartRangePreset = { ...preset1D, key: '5D', label: '5 days', start_ms_utc: preset1D.start_ms_utc - 6 * 86_400_000, session_count: 5 };
+const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset5D, preset6M];
 
 /** Render the shell through a real router outlet (tabs, routing, dock). */
 async function renderRoutedShell(runSession = idleRunSession()) {
@@ -268,6 +270,88 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByRole('button', { name: '6M' })).toBeTruthy();
   });
 
+  it("shows Python's five-session preset under the shared label 1W, with its intraday timeframe (#2858)", async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: '1W' }));
+    fixture.detectChanges();
+
+    expect(store.committedWindow()).toEqual({ startMsUtc: preset5D.start_ms_utc, endMsUtc: preset5D.end_ms_utc });
+    expect([store.draft().timespan, store.draft().multiplier]).toEqual(['minute', 30]);
+  });
+
+  it('shows a saved window over dates the field had refused, and lets Apply scope through again (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    fireEvent.change(end, { target: { value: '2026-05' } });
+    await fixture.whenStable();
+    expect(apply.disabled).toBe(true);
+
+    // The saved window ends on the day the draft already ended on.
+    store.patchDraft({ window: { startMsUtc: preset1D.start_ms_utc, endMsUtc: preset1D.end_ms_utc } });
+    await fixture.whenStable();
+
+    expect(apply.disabled).toBe(false);
+    expect([end.value, end.getAttribute('aria-invalid')]).toEqual(['2026-09-11', 'false']);
+  });
+
+  it('keeps a typed date, and its refusal, when another scope control changes (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+    const start = screen.getByRole<HTMLInputElement>('textbox', { name: 'Start date' });
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    // An end before the start: the start is refused, and the draft window stays as it was.
+    fireEvent.change(end, { target: { value: '2026-02-02' } });
+    await fixture.whenStable();
+    expect(apply.disabled).toBe(true);
+
+    // The session is another field of the same draft; the window is not replaced.
+    store.patchDraft({ session: 'extended' });
+    await fixture.whenStable();
+
+    expect([end.value, start.getAttribute('aria-invalid'), apply.disabled]).toEqual(['2026-02-02', 'true', true]);
+  });
+
+  it('commits nothing when Apply scope arrives in the task that refused a date (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+
+    // One task, as a touch tap delivers them: the field's change, then the click, with no render between.
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    end.value = '2026-05';
+    end.dispatchEvent(new Event('change'));
+    apply.click();
+    await fixture.whenStable();
+
+    expect(store.committedWindow()).toBeNull();
+    expect(store.chartRefreshRequests()).toBe(0);
+  });
+
+  it('shows a clicked quick range over an end date the field had refused (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset1D.start_ms_utc, endMsUtc: preset1D.end_ms_utc } });
+    fixture.detectChanges();
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    fireEvent.change(end, { target: { value: 'junk' } });
+    await fixture.whenStable();
+
+    // Every preset ends on the same day, so the end date itself does not change.
+    await userEvent.click(screen.getByRole('button', { name: '6M' }));
+    await fixture.whenStable();
+
+    expect([end.value, end.getAttribute('aria-invalid')]).toEqual(['2026-09-11', 'false']);
+    expect(store.committedWindow()).toEqual({ startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc });
+  });
+
   it('applies a preset verbatim: server window committed, chart refresh requested', async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({ ticker: 'SPY' });
@@ -285,8 +369,6 @@ describe('DataLabComponent (shell)', () => {
     // technology; the other is not.
     expect(screen.getByRole('button', { name: '6M' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: '1D' }).getAttribute('aria-pressed')).toBe('false');
-    const active = document.querySelector('.dl-shell__preset--active');
-    expect(active?.textContent?.trim()).toBe('6M');
   });
 
   it('re-resolves the preset list on apply so a long-lived tab tracks the trading date', async () => {
@@ -369,6 +451,27 @@ describe('DataLabComponent (shell)', () => {
     });
     expect(store.chartRefreshRequests()).toBe(0);
     expect(screen.getByText('Ticker is required')).toBeTruthy();
+  });
+
+  it('takes typed dates into the draft window as UTC days, and holds Apply scope while a date is unusable (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2026-05-01' } });
+    // A Saturday: Data Lab takes any calendar day.
+    fireEvent.change(screen.getByRole('textbox', { name: 'End date' }), { target: { value: '2026-05-16' } });
+    await fixture.whenStable();
+
+    expect(store.draft().window).toEqual({ startMsUtc: Date.UTC(2026, 4, 1), endMsUtc: Date.UTC(2026, 4, 16) + 86_400_000 - 1 });
+    expect(apply.disabled).toBe(false);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'End date' }), { target: { value: '2026-05' } });
+    await fixture.whenStable();
+
+    expect(apply.disabled).toBe(true);
+    expect(store.draft().window.endMsUtc).toBe(Date.UTC(2026, 4, 16) + 86_400_000 - 1);
   });
 
   it('requests a chart refresh when Apply scope commits successfully', async () => {

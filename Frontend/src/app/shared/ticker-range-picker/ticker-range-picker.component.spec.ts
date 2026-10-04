@@ -125,4 +125,17 @@ describe('TickerRangePickerComponent (flags)', () => {
     // A Saturday.
     expect(fixture.componentInstance.value().from).toBe('2025-04-05');
   });
+
+  it('keeps a typed date when a sampling control is tapped before the page re-renders', async () => {
+    await fixture.whenStable();
+    const start: HTMLInputElement = fixture.nativeElement.querySelector("input[aria-label='Start date']");
+    const daily = [...fixture.nativeElement.querySelectorAll('.res-btn')].find((el: HTMLElement) => el.textContent?.trim() === '1d');
+
+    // One task, as a touch tap delivers them: the field's change, then the click.
+    start.value = '2025-04-07';
+    start.dispatchEvent(new Event('change'));
+    daily.click();
+
+    expect(fixture.componentInstance.value()).toMatchObject({ from: '2025-04-07', resolution: 'daily' });
+  });
 });

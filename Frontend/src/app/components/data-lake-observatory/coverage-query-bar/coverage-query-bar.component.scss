@@ -43,6 +43,9 @@
   font-size: var(--fs-xs);
   color: var(--text-subtle);
 
+  // The dates: two fields, their calendar and the quick ranges need room.
+  &--dates { flex: 1 1 22rem; min-width: 0; }
+
   &__input {
     min-width: 9rem;
     padding: var(--space-2);

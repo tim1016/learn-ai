@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
+from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
@@ -66,13 +67,6 @@ class SafeFlattenExecutionError(Exception):
     def __init__(self, message: str, *, refusal: LegRefusal | None = None) -> None:
         super().__init__(message)
         self.refusal = refusal
-
-
-# An EXIT effect the reducing broker order failed to reach (broker rejection,
-# folded via ``fold_failed``). The order row still exists, so reference
-# presence alone must never be read as a successful reduction — the terminal
-# state is the truth (Codex review 2026-08-25 P1).
-_FAILED_EFFECT_STATES = frozenset({"failed", "rejected"})
 
 
 @dataclass(frozen=True)
@@ -177,7 +171,7 @@ async def execute_safe_flatten_plan(
         )
         assert accepted.effect_operation_id is not None
         effect = repo.effect_operation(accepted.effect_operation_id)
-        if effect is not None and effect.state in _FAILED_EFFECT_STATES:
+        if effect is not None and effect.state in FAILED_EFFECT_STATES:
             unsent = flatten_send_refusal(repo, accepted.effect_operation_id)
             if unsent is not None:
                 # The Clerk's own check of the account refused the send

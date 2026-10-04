@@ -35,32 +35,26 @@
     }
   </div>
   <div class="dl-shell__scope-controls">
-    <div class="dl-shell__field">
-      <span>Ticker</span>
+    <div class="dl-shell__field dl-shell__field--instrument">
       <app-symbol-picker
         [symbol]="draftTicker()"
         [adjustmentMode]="pickerAdjustmentMode()"
         (symbolChange)="onTickerPicked($event)"
       />
     </div>
-    <label class="dl-shell__field">
-      <span>From</span>
-      <input
-        type="date"
-        name="dl-from"
-        [value]="draftFromIso()"
-        (change)="onFromInput($event)"
+    <div class="dl-shell__field dl-shell__field--dates">
+      <span>Dates</span>
+      <app-date-range-picker
+        label="Dates"
+        [(from)]="draftFromIso"
+        [(to)]="draftToIso"
+        [bounds]="dateBounds()"
+        [sessionsOnly]="false"
+        [hostOffers]="presetOffers()"
+        (changed)="onDatesChanged($event)"
+        (picked)="onPresetPicked($event)"
       />
-    </label>
-    <label class="dl-shell__field">
-      <span>To</span>
-      <input
-        type="date"
-        name="dl-to"
-        [value]="draftToIso()"
-        (change)="onToInput($event)"
-      />
-    </label>
+    </div>
     <label class="dl-shell__field">
       <span>Timeframe</span>
       <select [value]="draftTimeframeValue()" (change)="onTimeframeChange($event)">
@@ -78,26 +72,8 @@
         <option value="extended" [selected]="store.draft().session === 'extended'">Extended</option>
       </select>
     </label>
-    <button type="button" class="dl-shell__apply" (click)="applyScope()">Apply scope</button>
+    <button type="button" class="dl-shell__apply" [disabled]="datesUnusable()" (click)="applyScope()">Apply scope</button>
   </div>
-  @if (rangePresets().length > 0) {
-    <div class="dl-shell__presets" role="group" aria-label="Quick ranges">
-      @for (preset of rangePresets(); track preset.key) {
-        <button
-          type="button"
-          class="dl-shell__preset"
-          [class.dl-shell__preset--active]="activePresetKey() === preset.key"
-          [attr.aria-pressed]="activePresetKey() === preset.key"
-          (click)="applyRangePreset(preset)"
-          [title]="
-            presetTooltip(preset)
-          "
-        >
-          {{ preset.key }}
-        </button>
-      }
-    </div>
-  }
   @if (scopeCommitError(); as err) {
     <p class="dl-shell__scope-error" role="alert">{{ err }}</p>
   }

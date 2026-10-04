@@ -1,15 +1,9 @@
 <div class="bot-end-editor">
   <div class="bot-end-editor__when">
-    <label>
-      <span>End date</span>
-      <input
-        #date
-        type="date"
-        [formField]="endForm.date"
-        [attr.aria-invalid]="dateError() !== null"
-        [attr.aria-describedby]="dateError() === null ? null : errorId"
-      />
-    </label>
+    <div class="bot-end-editor__field">
+      <label [for]="dateId">End date</label>
+      <app-date-field [inputId]="dateId" appearance="filled" calendar="inline" [formField]="endForm.date" [pickFrom]="today" [hostProblem]="dateError()" />
+    </div>
     <label>
       <span>End time <small>· your time</small></span>
       <input
@@ -19,10 +13,10 @@
         [attr.aria-describedby]="clockError() === null ? marketId : marketId + ' ' + errorId"
       />
     </label>
-    <!-- Under the time it restates: the same minute in market time, or "—" while the fields name none. -->
+    <!-- Beside the time it restates: the same minute in market time, or "—" while the fields name none. -->
     <p class="bot-end-editor__market" [id]="marketId">Market time <app-timestamp-display [value]="typedAtMs()" mode="et" granularity="time" /></p>
   </div>
-  @if (error(); as message) {
+  @if (clockError(); as message) {
     <p class="bot-end-editor__error" [id]="errorId" role="alert">{{ message }}</p>
   }
 

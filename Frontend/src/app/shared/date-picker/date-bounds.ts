@@ -38,3 +38,22 @@ export function heldBounds(symbol: string, firstHeld: IsoDate | null, lastHeld: 
     unknown: null,
   };
 }
+
+/**
+ * What a host knows about the sessions its data lacks inside the bounds.
+ *
+ * A held span is only a first and a last day: sessions between them can be
+ * missing. A host whose run reads the lake as it stands hands the picker
+ * these, and the picker marks them in the calendar and counts them under the
+ * dates. The range stays selectable; the host's run decides what a gap means.
+ */
+export interface DataGaps {
+  /**
+   * The sessions inside the bounds that the host's data does not hold, each as
+   * the `int64 ms UTC` instant its source names it by (the session's open).
+   * The picker resolves them to ET dates where it counts and draws them.
+   */
+  readonly unheldMs: ReadonlySet<number>;
+  /** Why the gaps could not be read; null when they were. */
+  readonly problem: string | null;
+}

@@ -29,13 +29,13 @@
 
     <app-time-window-card
       [value]="singleProjection()"
-      (valueChange)="onSinglePatch($event)"
+      (valueChange)="setDates($event)"
       [bounds]="bounds()" />
 
     @if (!hideSampling()) {
       <app-sampling-card
         [value]="singleProjection()"
-        (valueChange)="onSinglePatch($event)"
+        (changed)="patch($event)"
         [availableResolutions]="availableResolutions()"
         [availableMultipliers]="availableMultipliers()"
         [sessionMode]="sessionMode()"

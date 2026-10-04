@@ -5,9 +5,10 @@ import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ProviderBoundsService, TradingCalendarService, heldBounds, type TradingSessions } from "../../shared/date-picker";
+import { ProviderBoundsService, TradingCalendarService, heldBounds, type DataGaps, type TradingSessions } from "../../shared/date-picker";
 import { providerBounds } from "../../shared/date-picker/provider-bounds.service";
-import { STANDARD_DATE_WORLD, provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { STANDARD_DATE_WORLD, provideFakeDateWorld, sessionOpenMs } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { HeldGapsService } from "../../shared/ticker-catalog";
 import { fakeTickerCatalog, provideFakeTickerCatalog } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
@@ -75,12 +76,16 @@ describe("StrategyLab configuration and runner", () => {
     });
   }
 
+  const GAPS: DataGaps = { unheldMs: new Set([sessionOpenMs("2025-03-03")]), problem: null };
+  const gapsFor = vi.fn(() => GAPS);
+
   function configureLab(): void {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideFakeTickerCatalog(fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", firstHeld: "2024-01-02", lastHeld: "2026-09-18" }])),
         ...provideFakeDateWorld(),
+        { provide: HeldGapsService, useValue: { gapsFor } },
         StrategyLabConfigStore,
         StrategyLabRunner,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
@@ -116,6 +121,7 @@ describe("StrategyLab configuration and runner", () => {
 
   beforeEach(() => {
     sessionStorage.clear();
+    gapsFor.mockClear();
     startJob = vi.fn(async () => "job-1");
     fetchResult = vi.fn();
     listRuns = vi.fn(() => of([]));
@@ -365,12 +371,18 @@ describe("StrategyLab configuration and runner", () => {
     expect(startJob).not.toHaveBeenCalled();
   });
 
-  it("bounds the dates by what the run reads: the provider with auto-fetch, the tree's held days without", () => {
+  it("bounds the dates by what the run reads: the provider with auto-fetch, the tree's held days and their gaps without", () => {
     expect(config.dateBounds().minReason).toBe(`The provider serves bars from ${STANDARD_DATE_WORLD.providerFloor}.`);
+    // A run that fetches what it is missing has no gaps to show.
+    expect(config.dateGaps()).toBeNull();
+    expect(gapsFor).not.toHaveBeenCalled();
 
     config.range.update((range) => ({ ...range, autoFetch: false }));
 
     expect(config.dateBounds()).toEqual(heldBounds("SPY", "2024-01-02", "2026-09-18"));
+    expect(config.dateGaps()).toEqual(GAPS);
+    // The run's resolution goes with the ask: the gaps are those of the minute bars.
+    expect(gapsFor).toHaveBeenCalledWith("polygon_split_adjusted", "SPY", heldBounds("SPY", "2024-01-02", "2026-09-18"), "minute");
   });
 
   it("keeps a launch warning when the picker refuses a date, and clears it when the operator changes the range", () => {
@@ -388,12 +400,13 @@ describe("StrategyLab configuration and runner", () => {
     const sessions = signal<TradingSessions | null>(null);
     const lastCompleted = signal<string | null>(null);
 
-    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. */
-    function labBeforeTheCalendar(): StrategyLabConfigStore {
+    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. `link` is the launch link's query, applied once the strategies arrive. */
+    function labBeforeTheCalendar(link: { from?: string; to?: string } = {}): StrategyLabConfigStore {
       sessions.set(null);
       lastCompleted.set(null);
       TestBed.resetTestingModule();
       configureLab();
+      TestBed.overrideProvider(ActivatedRoute, { useValue: { queryParamMap: of(convertToParamMap(link)) } });
       TestBed.overrideProvider(TradingCalendarService, { useValue: { sessions, lastCompleted, problem: signal(null), retry: () => undefined } });
       TestBed.overrideProvider(ProviderBoundsService, {
         useValue: { bounds: computed(() => providerBounds(STANDARD_DATE_WORLD.providerFloor, lastCompleted())) },
@@ -410,7 +423,7 @@ describe("StrategyLab configuration and runner", () => {
     it.each([
       // A launch link naming only the start keeps it and ends on the last readable day.
       { given: { from: "2026-07-01" }, expected: { from: "2026-07-01", to: "2026-09-18" } },
-      // One naming only the end keeps it and starts a month before: 2026-05-30 is a Saturday, so Monday.
+      // One naming only the end keeps it and starts a month before: the month ending 2026-06-30 starts on 2026-06-01.
       { given: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
     ])("keeps the one date a launch link names and fills the other: $given", ({ given, expected }) => {
       const store = labBeforeTheCalendar();
@@ -418,6 +431,24 @@ describe("StrategyLab configuration and runner", () => {
       TestBed.tick();
 
       calendarArrives();
+
+      expect(store.range()).toMatchObject(expected);
+    });
+
+    it.each([
+      // The end is kept and the start is a month before it, not the start of the window the lab had opened on.
+      { link: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
+      // An end past the last readable day is kept for the picker to refuse; the start is still a month the run can read.
+      { link: { to: "2026-12-31" }, expected: { from: "2026-08-19", to: "2026-12-31" } },
+    ])("fills the other date of a one-date launch link applied after the window started: $link", ({ link, expected }) => {
+      const store = labBeforeTheCalendar(link);
+      TestBed.tick();
+      calendarArrives();
+      expect(store.range()).toMatchObject({ from: "2026-08-19", to: "2026-09-18" });
+
+      // The link is applied once the strategies have loaded.
+      store.strategies.set([STRATEGY]);
+      TestBed.tick();
 
       expect(store.range()).toMatchObject(expected);
     });
@@ -430,7 +461,7 @@ describe("StrategyLab configuration and runner", () => {
 
       calendarArrives();
 
-      expect(store.range()).toMatchObject({ from: "2026-08-18", to: "2026-09-18" });
+      expect(store.range()).toMatchObject({ from: "2026-08-19", to: "2026-09-18" });
       // Nobody chose these dates, so the warning stands.
       expect(store.configurationWarning()).toBe("This strategy does not support daily data.");
 

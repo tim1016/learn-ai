@@ -317,6 +317,38 @@ ledger holds an attestation that did not take effect. For this one state the
 "never out-of-band" consequence above is narrowed: the operator first looks
 at Alpaca, then acts through the Clerk.
 
+"No such order" is taken on what the Clerk reads directly. The order's exact
+lookup, by its own client order id, finds nothing. The order Alpaca answered
+its send with, if any, was read, has ended and filled nothing. And nothing is
+working on the symbol: no open order of the account is on it, and no order
+sent in it since the closing order was created is working, could not be read
+in full, or was replaced by an order the Clerk did not read. The symbol's
+orders are read last, after the open orders, so no working order falls
+between the two reads.
+
+Alpaca's position is not part of that rule. The Clerk reads it, shows it to
+the operator beside its own records and every ended order in the symbol it
+did not place, and records all of it on the attestation. None of it refuses,
+and none of it is proof. In an account other things trade in, a position that
+agrees with the Clerk's records cannot show that the order did not trade:
+shares held outside the records before the order was sent, another bot's fill
+not yet folded, a trade made by hand, or an order on the other side resting
+since before the order was sent can each leave the two equal after it traded.
+
+So after "no such order" the position is the operator's, and the Clerk sends
+no order for it by itself. The write that ends the EXIT under `EXIT_NOT_FLAT`
+also opens `EXIT_STUCK` -- the state the watchdog reaches once its re-drives
+have failed -- with no re-drive tried in between, and the watchdog holds from
+that write on. The operator sells the position from the bot's page, by the
+Flatten with its own check that the account covers the sale, or writes it
+off; attributed-flat proof then resolves both episodes, as it resolves any
+stuck exit. A bot that holds nothing ends its EXIT attributed-flat and opens
+neither.
+
+The sale at a bot's scheduled end does not keep to that hold yet. A separate
+change makes it (#2854 item 8), and this action is offered on no operator
+surface before that change lands.
+
 Known gap: an order Alpaca answered under another client order id cannot be
 taken up yet. "No such order" rests on the Clerk's own read of that order.
 While it is working neither attestation settles the EXIT; once it has ended

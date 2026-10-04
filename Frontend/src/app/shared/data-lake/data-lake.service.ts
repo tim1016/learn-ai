@@ -18,7 +18,7 @@ import type {
 export interface CoverageQuery {
   readonly symbol: string;
   /**
-   * `YYYY-MM-DD` — what `<input type="date">` produces and what the operator
+   * `YYYY-MM-DD` — what the date picker hands over and what the operator
    * reads. The wire takes `int64 ms UTC`; `coverage()` converts at the HTTP
    * seam via `tradingDateToMs`, so the ISO form never leaves the browser.
    */
