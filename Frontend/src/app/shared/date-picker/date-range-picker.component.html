@@ -13,7 +13,8 @@
       [value]="fromText()"
       [attr.aria-invalid]="checked().from.problem !== null"
       [attr.aria-describedby]="noteId"
-      (change)="fromText.set(fromInput.value.trim())"
+      (change)="applyFrom(fromInput.value)"
+      (keydown.enter)="applyFrom(fromInput.value)"
     />
     <i class="pi pi-arrow-right date-range__arrow" aria-hidden="true"></i>
     <input
@@ -29,7 +30,8 @@
       [value]="toText()"
       [attr.aria-invalid]="checked().to.problem !== null"
       [attr.aria-describedby]="noteId"
-      (change)="toText.set(toInput.value.trim())"
+      (change)="applyTo(toInput.value)"
+      (keydown.enter)="applyTo(toInput.value)"
     />
     <button type="button" class="date-control__open" aria-label="Open the calendar" aria-haspopup="dialog" (click)="popover.toggle($event, anchor)">
       <i class="pi pi-calendar" aria-hidden="true"></i>

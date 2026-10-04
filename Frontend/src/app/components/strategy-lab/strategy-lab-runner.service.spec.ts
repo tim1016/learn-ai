@@ -388,12 +388,13 @@ describe("StrategyLab configuration and runner", () => {
     const sessions = signal<TradingSessions | null>(null);
     const lastCompleted = signal<string | null>(null);
 
-    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. */
-    function labBeforeTheCalendar(): StrategyLabConfigStore {
+    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. `link` is the launch link's query, applied once the strategies arrive. */
+    function labBeforeTheCalendar(link: { from?: string; to?: string } = {}): StrategyLabConfigStore {
       sessions.set(null);
       lastCompleted.set(null);
       TestBed.resetTestingModule();
       configureLab();
+      TestBed.overrideProvider(ActivatedRoute, { useValue: { queryParamMap: of(convertToParamMap(link)) } });
       TestBed.overrideProvider(TradingCalendarService, { useValue: { sessions, lastCompleted, problem: signal(null), retry: () => undefined } });
       TestBed.overrideProvider(ProviderBoundsService, {
         useValue: { bounds: computed(() => providerBounds(STANDARD_DATE_WORLD.providerFloor, lastCompleted())) },
@@ -410,7 +411,7 @@ describe("StrategyLab configuration and runner", () => {
     it.each([
       // A launch link naming only the start keeps it and ends on the last readable day.
       { given: { from: "2026-07-01" }, expected: { from: "2026-07-01", to: "2026-09-18" } },
-      // One naming only the end keeps it and starts a month before: 2026-05-30 is a Saturday, so Monday.
+      // One naming only the end keeps it and starts a month before: the month ending 2026-06-30 starts on 2026-06-01.
       { given: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
     ])("keeps the one date a launch link names and fills the other: $given", ({ given, expected }) => {
       const store = labBeforeTheCalendar();
@@ -418,6 +419,24 @@ describe("StrategyLab configuration and runner", () => {
       TestBed.tick();
 
       calendarArrives();
+
+      expect(store.range()).toMatchObject(expected);
+    });
+
+    it.each([
+      // The end is kept and the start is a month before it, not the start of the window the lab had opened on.
+      { link: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
+      // An end past the last readable day is kept for the picker to refuse; the start is still a month the run can read.
+      { link: { to: "2026-12-31" }, expected: { from: "2026-08-19", to: "2026-12-31" } },
+    ])("fills the other date of a one-date launch link applied after the window started: $link", ({ link, expected }) => {
+      const store = labBeforeTheCalendar(link);
+      TestBed.tick();
+      calendarArrives();
+      expect(store.range()).toMatchObject({ from: "2026-08-19", to: "2026-09-18" });
+
+      // The link is applied once the strategies have loaded.
+      store.strategies.set([STRATEGY]);
+      TestBed.tick();
 
       expect(store.range()).toMatchObject(expected);
     });
@@ -430,7 +449,7 @@ describe("StrategyLab configuration and runner", () => {
 
       calendarArrives();
 
-      expect(store.range()).toMatchObject({ from: "2026-08-18", to: "2026-09-18" });
+      expect(store.range()).toMatchObject({ from: "2026-08-19", to: "2026-09-18" });
       // Nobody chose these dates, so the warning stands.
       expect(store.configurationWarning()).toBe("This strategy does not support daily data.");
 

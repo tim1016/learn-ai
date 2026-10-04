@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { heldBounds, type DateBounds } from './date-bounds';
 import { DateRangePickerComponent } from './date-range-picker.component';
-import { QUICK_RANGES, type QuickRangeKey } from './quick-ranges';
+import { QUICK_RANGES, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
 import { fakeSessions, fakeTradingCalendar, type FakeTradingCalendar } from './testing/fake-trading-calendar';
 import { TradingCalendarService } from './trading-calendar.service';
 
@@ -15,10 +15,20 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
 
 @Component({
   imports: [DateRangePickerComponent],
-  template: `<app-date-range-picker [(from)]="from" [(to)]="to" [bounds]="bounds()" [ranges]="ranges()" [sessionsOnly]="sessionsOnly()" />`,
+  template: `<app-date-range-picker
+    [(from)]="from"
+    [(to)]="to"
+    [bounds]="bounds()"
+    [ranges]="ranges()"
+    [sessionsOnly]="sessionsOnly()"
+    [hostOffers]="hostOffers()"
+    (picked)="picked.set($event)"
+  />`,
 })
 class HostComponent {
-  readonly from = signal('2026-08-18');
+  readonly hostOffers = signal<readonly QuickRangeOffer[] | null>(null);
+  readonly picked = signal<QuickRangeKey | null>(null);
+  readonly from = signal('2026-08-19');
   readonly to = signal('2026-09-18');
   readonly bounds = signal<DateBounds>(QQQ);
   readonly ranges = signal<readonly QuickRangeKey[]>(QUICK_RANGES);
@@ -44,7 +54,7 @@ describe('DateRangePickerComponent', () => {
   it("shows the host's dates and lights only the quick range they match exactly", async () => {
     const { start, end, quick } = await renderPicker();
 
-    expect([start.value, end.value]).toEqual(['2026-08-18', '2026-09-18']);
+    expect([start.value, end.value]).toEqual(['2026-08-19', '2026-09-18']);
     expect(quick('1M').getAttribute('aria-pressed')).toBe('true');
     expect(quick('3M').getAttribute('aria-pressed')).toBe('false');
   });
@@ -57,6 +67,16 @@ describe('DateRangePickerComponent', () => {
     expect(host.from()).toBe('2026-09-14');
     expect(quick('1M').getAttribute('aria-pressed')).toBe('false');
     expect(screen.getByText(/^5 sessions/)).not.toBeNull();
+  });
+
+  it('hands the host a typed date at once, so a click in the same task already runs on it', async () => {
+    const { host, start } = await renderPicker();
+
+    // No tick between leaving the field and the next click, as on a touch tap.
+    start.value = '2026-09-14';
+    start.dispatchEvent(new Event('change'));
+
+    expect(host.from()).toBe('2026-09-14');
   });
 
   it('keeps a half-typed date in the field, says why, and hands the host an empty date until it is whole', async () => {
@@ -82,7 +102,7 @@ describe('DateRangePickerComponent', () => {
     expect(screen.getByText('QQQ is held from 2024-09-03.')).not.toBeNull();
     expect(host.from()).toBe('');
 
-    await retype(start, '2026-08-18');
+    await retype(start, '2026-08-19');
     await retype(end, '2026-09-07');
     expect(screen.getByText('2026-09-07 is a market holiday (Labor Day). The next session is 2026-09-08.')).not.toBeNull();
     expect(host.to()).toBe('');
@@ -94,8 +114,8 @@ describe('DateRangePickerComponent', () => {
 
     await userEvent.click(quick('1Y'));
 
-    expect([host.from(), host.to()]).toEqual(['2025-09-18', '2026-09-18']);
-    expect([start.value, end.value]).toEqual(['2025-09-18', '2026-09-18']);
+    expect([host.from(), host.to()]).toEqual(['2025-09-19', '2026-09-18']);
+    expect([start.value, end.value]).toEqual(['2025-09-19', '2026-09-18']);
     expect(quick('1Y').getAttribute('aria-pressed')).toBe('true');
   });
 
@@ -107,7 +127,7 @@ describe('DateRangePickerComponent', () => {
 
     await userEvent.click(quick('5Y'));
 
-    expect([host.from(), host.to()]).toEqual(['2026-08-18', '2026-09-18']);
+    expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
   });
 
   it('offers only the quick ranges the page asks for', async () => {
@@ -118,6 +138,22 @@ describe('DateRangePickerComponent', () => {
 
     const row = screen.getByRole('group', { name: 'Quick ranges' });
     expect(within(row).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['1Y', '2Y', 'Max']);
+  });
+
+  it("shows the ranges a host's server resolved in place of its own, and leaves a click on one to the host", async () => {
+    const { view, host } = await renderPicker();
+    // The server ends its week on the session still forming, 2026-10-02, which the picker's own ranges never reach.
+    host.hostOffers.set([{ key: '1W', range: { from: '2026-09-28', to: '2026-10-02' }, unavailable: null }]);
+    host.bounds.set({ ...QQQ, max: null, maxReason: null });
+    await view.fixture.whenStable();
+    const row = screen.getByRole('group', { name: 'Quick ranges' });
+    expect(within(row).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['1W']);
+
+    await userEvent.click(within(row).getByText('1W'));
+
+    // The host applies its own server's window; the picker sets nothing, so the range has one writer.
+    expect(host.picked()).toBe('1W');
+    expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
   });
 
   it('says when the held data stops short of the market', async () => {
@@ -143,7 +179,7 @@ describe('DateRangePickerComponent', () => {
     await view.fixture.whenStable();
 
     expect(host.from()).toBe('');
-    expect(start.value).toBe('2026-08-18');
+    expect(start.value).toBe('2026-08-19');
     expect(screen.getByText('AAPL is held from 2026-09-01.')).not.toBeNull();
   });
 

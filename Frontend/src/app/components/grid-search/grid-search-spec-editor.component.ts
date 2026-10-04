@@ -2,14 +2,16 @@ import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, injec
 import { InputText } from 'primeng/inputtext';
 
 import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, storedFillMode, type FillModeName } from '../../models/fill-mode';
+import { DateRangePickerComponent, type DateBounds } from '../../shared/date-picker';
 import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
 import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange, rangeProblem } from '../../shared/param-range/param-range';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
+import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService, heldBoundsFor } from '../../shared/ticker-catalog';
 import type { ParamProperty, StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { RANKING_MEASURES, type GridSearchSpecRequest, type RankingMeasure } from './grid-search.types';
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MONTHS = 24;
 
 /** What the editor reports after every edit: the wire spec, or why one cannot be built yet. */
@@ -31,32 +33,44 @@ function selectValue(event: Event): string | null {
 }
 
 /**
- * Yesterday back to exactly 24 calendar months before the day after it, so the
- * half-open range `[from, to + 1 day)` is a whole number of months — what
+ * The window a new search opens on: the last ``DEFAULT_WINDOW_MONTHS`` whole
+ * months the lake holds for the symbol, or as many whole months as it holds.
+ * The half-open range ``[from, to + 1 day)`` is a whole number of months, which
  * Walk-Forward's fold planner requires of the default it opens with.
  */
-function defaultWindow(now: number): { from: string; to: string } {
-  const to = etIsoDate(now - MS_PER_DAY);
-  return { from: shiftIsoDateByMonths(isoDateAfter(to), -DEFAULT_WINDOW_MONTHS), to };
+function defaultWindow(bounds: DateBounds): { from: string; to: string } | null {
+  const to = bounds.max;
+  if (to === null) return null;
+  const end = isoDateAfter(to);
+  for (let months = DEFAULT_WINDOW_MONTHS; months >= 1; months--) {
+    const from = shiftIsoDateByMonths(end, -months);
+    // Whole months as the planner counts them: the start plus the months is the end again.
+    // A month end can break that (six months before October 31st is April 30th).
+    const whole = shiftIsoDateByMonths(from, months) === end;
+    if (whole && (bounds.min === null || from >= bounds.min)) return { from, to };
+  }
+  return null;
 }
 
 /**
  * The grid-search spec editor (PRD #1926 "Frontend"), shared by Grid Search
  * and Walk-Forward: symbol, strategy from the sweepable catalogue with
- * ineligible entries explained, the window, costs and ranking, and
- * per-parameter vary toggles with the shared range editor. It owns no
+ * ineligible entries explained, the window (bounded by the days the lake
+ * holds for the symbol, since these runs read the lake as it stands), costs
+ * and ranking, and per-parameter vary toggles with the shared range editor. It owns no
  * preflight and no service: every (debounced) edit is emitted as
  * `specChanged` and the host decides what to ask the server.
  */
 @Component({
   selector: 'app-grid-search-spec-editor',
-  imports: [InputText, ParamRangeInputComponent, ReceiptLabelPipe],
+  imports: [InputText, ParamRangeInputComponent, ReceiptLabelPipe, SymbolPickerComponent, DateRangePickerComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './grid-search-spec-editor.component.html',
   styleUrl: './grid-search-spec-editor.component.scss',
 })
 export class GridSearchSpecEditorComponent {
   private readonly destroyRef = inject(DestroyRef);
+  private readonly catalog = inject(TickerCatalogService);
 
   readonly strategies = input.required<readonly StrategyInfo[]>();
   /** A spec to start from (a stored request); applied once its strategy is in the catalogue. */
@@ -69,8 +83,9 @@ export class GridSearchSpecEditorComponent {
 
   readonly symbol = signal('SPY');
   readonly strategyKey = signal<string | null>(null);
-  readonly fromDate = signal(defaultWindow(Date.now()).from);
-  readonly toDate = signal(defaultWindow(Date.now()).to);
+  /** Empty until the lake has said which days it holds for the symbol; then the window opens on its last whole months. */
+  readonly fromDate = signal('');
+  readonly toDate = signal('');
   readonly fillMode = signal<FillModeName>(RESEARCH_DEFAULT_FILL_MODE);
   readonly resolution = signal<'minute' | 'daily'>('minute');
   readonly commissionPerOrder = signal(0);
@@ -88,8 +103,17 @@ export class GridSearchSpecEditorComponent {
   protected readonly selectedStrategy = computed(() => this.strategies().find((s) => s.name === this.strategyKey()) ?? null);
   protected readonly variedCount = computed(() => this.params().filter((p) => p.vary).length);
 
+  /** The days a search over this symbol can read: what the default tree holds for it. */
+  protected readonly bounds = computed<DateBounds>(() => {
+    const symbol = this.symbol().trim().toUpperCase();
+    // `viewFor` may install a resource effect, which a reactive context forbids.
+    return heldBoundsFor(untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)), symbol);
+  });
+
   private debounce: ReturnType<typeof setTimeout> | null = null;
   private appliedInitial: GridSearchSpecRequest | null = null;
+  /** Whether the window has held dates yet; it is opened once, never again after anything has set it. */
+  private windowOpened = false;
 
   constructor() {
     effect(() => {
@@ -102,12 +126,19 @@ export class GridSearchSpecEditorComponent {
       }
       if (this.strategyKey() === null && strategies.length > 0) untracked(() => this.selectStrategy(strategies[0].name));
     });
+    effect(() => {
+      if (this.fromDate() !== '' || this.toDate() !== '') this.windowOpened = true;
+      if (this.windowOpened) return;
+      const window = defaultWindow(this.bounds());
+      if (window === null) return;
+      untracked(() => this.setDates(window));
+    });
     this.destroyRef.onDestroy(() => {
       if (this.debounce !== null) clearTimeout(this.debounce);
     });
   }
 
-  /** The exact wire body the server preflights and launches; throws on an unparseable date. */
+  /** The exact wire body the server preflights and launches; throws while a date is empty. */
   spec(): GridSearchSpecRequest | null {
     const strategy = this.strategyKey();
     if (strategy === null) return null;
@@ -160,8 +191,9 @@ export class GridSearchSpecEditorComponent {
     this.scheduleEmit();
   }
 
-  setDate(which: 'from' | 'to', raw: string): void {
-    (which === 'from' ? this.fromDate : this.toDate).set(raw);
+  setDates(dates: { readonly from: string; readonly to: string }): void {
+    this.fromDate.set(dates.from);
+    this.toDate.set(dates.to);
     this.scheduleEmit();
   }
 
@@ -229,11 +261,9 @@ export class GridSearchSpecEditorComponent {
     if (refused !== undefined) {
       return { spec: null, problem: `Fix the values for ${refused.property.title ?? refused.name} before launching.` };
     }
-    try {
-      return { spec: this.spec(), problem: null };
-    } catch {
-      return { spec: null, problem: 'Enter both dates as YYYY-MM-DD.' };
-    }
+    // An empty date is the picker saying its field holds no usable one; it says why beside the field.
+    if (this.fromDate() === '' || this.toDate() === '') return { spec: null, problem: 'Pick the dates to search over.' };
+    return { spec: this.spec(), problem: null };
   }
 
   /** Seed every control from a stored request, then report it once like any other edit. */

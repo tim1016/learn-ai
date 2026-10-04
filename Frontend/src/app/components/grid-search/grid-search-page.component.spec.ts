@@ -1,3 +1,4 @@
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { provideRouter } from '@angular/router';
 import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,7 @@ describe('GridSearchPageComponent', () => {
     const view = await render(GridSearchPageComponent, {
       providers: [
         provideRouter([]),
+        ...fakePickerWorld().providers,
         {
           provide: GridSearchService,
           useValue: {
