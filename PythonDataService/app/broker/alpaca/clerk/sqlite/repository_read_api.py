@@ -570,6 +570,21 @@ class ClerkSqliteRepositoryReadApi:
                 limit=limit,
             )
 
+    def fills_written_off_by_residue_discharge(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+        strategy_instance_id: str | None,
+        symbol: str,
+    ) -> bool:
+        with self._write_lock:
+            return reads.fills_written_off_by_residue_discharge(
+                self._conn,
+                order_ref=order_ref,
+                strategy_instance_id=strategy_instance_id,
+                symbol=symbol,
+            )
+
     def all_order_refs(self: ClerkSqliteRepository) -> frozenset[str]:
         with self._write_lock:
             return reads.all_order_refs(self._conn)
