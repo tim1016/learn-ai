@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { DateBounds } from '../../shared/date-picker';
+import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import { HeldGapsService } from '../../shared/ticker-catalog';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { sweepableStrategy as strategy } from './testing/fixtures';
 import { GridSearchFormComponent } from './grid-search-form.component';
@@ -120,6 +123,19 @@ describe('GridSearchFormComponent', () => {
     expect(spec?.min_trades).toBe(5);
     // The window opens on the last 24 whole months the lake holds for SPY (held 2024-01-02 to 2026-09-18).
     expect([etIsoDate(spec?.start_ms ?? 0), etIsoDate((spec?.end_ms ?? 0) - 1)]).toEqual(['2024-09-19', '2026-09-18']);
+  });
+
+  it("reads the gaps in the symbol's held span and counts them under the window (#2858)", async () => {
+    const gapsFor = vi.fn((_mode: string, symbol: string, bounds: DateBounds) =>
+      symbol === 'SPY' && bounds.max !== null ? { unheldMs: new Set(['2025-03-03', '2025-03-04'].map(sessionOpenMs)), problem: null } : null,
+    );
+    await render(GridSearchFormComponent, {
+      inputs: { strategies: [strategy()], preflightDebounceMs: 0 },
+      providers: [...fakePickerWorld().providers, { provide: HeldGapsService, useValue: { gapsFor } }, { provide: GridSearchService, useValue: { preflight: vi.fn(async () => PLAN), launch: vi.fn() } }],
+    });
+
+    await waitFor(() => expect(screen.getByText(/sessions, 2 not held/)).not.toBeNull());
+    expect(gapsFor).toHaveBeenCalledWith('polygon_split_adjusted', 'SPY', expect.objectContaining({ min: '2024-01-02', max: '2026-09-18' }), 'minute');
   });
 
   it('opens on as many whole months as a short history holds, and does not reopen a window the operator emptied (#2858)', async () => {

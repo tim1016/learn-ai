@@ -5,9 +5,10 @@ import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ProviderBoundsService, TradingCalendarService, heldBounds, type TradingSessions } from "../../shared/date-picker";
+import { ProviderBoundsService, TradingCalendarService, heldBounds, type DataGaps, type TradingSessions } from "../../shared/date-picker";
 import { providerBounds } from "../../shared/date-picker/provider-bounds.service";
-import { STANDARD_DATE_WORLD, provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { STANDARD_DATE_WORLD, provideFakeDateWorld, sessionOpenMs } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { HeldGapsService } from "../../shared/ticker-catalog";
 import { fakeTickerCatalog, provideFakeTickerCatalog } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
@@ -75,12 +76,16 @@ describe("StrategyLab configuration and runner", () => {
     });
   }
 
+  const GAPS: DataGaps = { unheldMs: new Set([sessionOpenMs("2025-03-03")]), problem: null };
+  const gapsFor = vi.fn(() => GAPS);
+
   function configureLab(): void {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideFakeTickerCatalog(fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", firstHeld: "2024-01-02", lastHeld: "2026-09-18" }])),
         ...provideFakeDateWorld(),
+        { provide: HeldGapsService, useValue: { gapsFor } },
         StrategyLabConfigStore,
         StrategyLabRunner,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
@@ -116,6 +121,7 @@ describe("StrategyLab configuration and runner", () => {
 
   beforeEach(() => {
     sessionStorage.clear();
+    gapsFor.mockClear();
     startJob = vi.fn(async () => "job-1");
     fetchResult = vi.fn();
     listRuns = vi.fn(() => of([]));
@@ -365,12 +371,18 @@ describe("StrategyLab configuration and runner", () => {
     expect(startJob).not.toHaveBeenCalled();
   });
 
-  it("bounds the dates by what the run reads: the provider with auto-fetch, the tree's held days without", () => {
+  it("bounds the dates by what the run reads: the provider with auto-fetch, the tree's held days and their gaps without", () => {
     expect(config.dateBounds().minReason).toBe(`The provider serves bars from ${STANDARD_DATE_WORLD.providerFloor}.`);
+    // A run that fetches what it is missing has no gaps to show.
+    expect(config.dateGaps()).toBeNull();
+    expect(gapsFor).not.toHaveBeenCalled();
 
     config.range.update((range) => ({ ...range, autoFetch: false }));
 
     expect(config.dateBounds()).toEqual(heldBounds("SPY", "2024-01-02", "2026-09-18"));
+    expect(config.dateGaps()).toEqual(GAPS);
+    // The run's resolution goes with the ask: the gaps are those of the minute bars.
+    expect(gapsFor).toHaveBeenCalledWith("polygon_split_adjusted", "SPY", heldBounds("SPY", "2024-01-02", "2026-09-18"), "minute");
   });
 
   it("keeps a launch warning when the picker refuses a date, and clears it when the operator changes the range", () => {

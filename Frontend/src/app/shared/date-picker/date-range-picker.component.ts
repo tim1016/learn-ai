@@ -2,7 +2,9 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, mo
 import { Popover } from 'primeng/popover';
 import { Tooltip } from 'primeng/tooltip';
 
-import { UNBOUNDED, type DateBounds } from './date-bounds';
+import { etIsoDate } from '../date/et-midnight';
+import type { IsoDate } from '../date/iso-date';
+import { UNBOUNDED, type DataGaps, type DateBounds } from './date-bounds';
 import { DateCalendarComponent } from './date-calendar.component';
 import { checkRange, fieldText } from './date-check';
 import { QUICK_RANGES, activeQuickRange, offerQuickRanges, type DateRange, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
@@ -38,6 +40,8 @@ export class DateRangePickerComponent {
   readonly to = model.required<string>();
   /** The days the host's run can read. */
   readonly bounds = input<DateBounds>(UNBOUNDED);
+  /** The sessions inside the bounds the host's data lacks: marked in the calendar and counted under the dates. */
+  readonly gaps = input<DataGaps | null>(null);
   /** The quick ranges offered, in ``QUICK_RANGES`` order. A host leaves out what makes no sense for it. */
   readonly ranges = input<readonly QuickRangeKey[]>(QUICK_RANGES);
   /**
@@ -74,15 +78,28 @@ export class DateRangePickerComponent {
   );
   protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
 
+  /** The sessions the host's data lacks, as the ET dates the fields and the calendar speak. */
+  protected readonly unheldDays = computed<ReadonlySet<IsoDate> | null>(() => {
+    const gaps = this.gaps();
+    return gaps === null ? null : new Set([...gaps.unheldMs].map(etIsoDate));
+  });
+
   /** How many sessions the range holds, and whether the page's data stops short of the market. */
   protected readonly summary = computed<string | null>(() => {
     const sessions = this.calendar.sessions();
     const { from, to } = this.checked();
     const parts: string[] = [];
+    const gaps = this.gaps();
     if (sessions !== null && from.date !== '' && to.date !== '') {
       const count = sessions.count(from.date, to.date);
-      parts.push(`${count} ${count === 1 ? 'session' : 'sessions'}`);
+      const counted = `${count} ${count === 1 ? 'session' : 'sessions'}`;
+      if (gaps === null || gaps.problem !== null) parts.push(counted);
+      else {
+        const unheld = [...(this.unheldDays() ?? [])].filter((day) => from.date <= day && day <= to.date).length;
+        parts.push(`${counted}, ${unheld === 0 ? 'all held' : `${unheld} not held`}`);
+      }
     }
+    if (gaps !== null && gaps.problem !== null) parts.push(`Gaps could not be checked: ${gaps.problem}`);
     const { max, maxReason } = this.bounds();
     const market = this.calendar.lastCompleted();
     if (max !== null && maxReason !== null && market !== null && max < market) parts.push(maxReason);
