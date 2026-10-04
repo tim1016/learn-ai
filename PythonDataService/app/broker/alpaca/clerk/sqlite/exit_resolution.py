@@ -53,7 +53,8 @@ resumed send that finds its own order among those open orders is neither sent
 again nor refused: custody is retained until the order's exact lookup answers.
 A scheduled-end sale whose bot's ``EXIT_STUCK`` episode is open is not sent
 either (#2854): the position is the operator's, and its EXIT folds as an
-uncovered Flatten's does.
+uncovered Flatten's does, on the first pass that drives it: ahead of any hold
+for the open and of the reduction's own admission.
 
 A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
@@ -253,6 +254,10 @@ DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
 #: outside it (``ExitAcceptedFacts.regular_session_only``, #2607).
 SCHEDULED_END_WAITS_FOR_OPEN = "SCHEDULED_END_WAITS_FOR_OPEN"
 
+#: How a scheduled end's sale ended, unsent, for a bot the Clerk has stopped
+#: exiting by itself (:func:`_end_sale_left_to_the_operator`, #2854).
+SCHEDULED_END_EXIT_STUCK = "SCHEDULED_END_EXIT_STUCK"
+
 
 def regular_session_sale_waits_for_open(now_ms: int) -> LegRefusal:
     """Why a regular-session-only sale is held, and when it can go out: the next regular open.
@@ -441,7 +446,8 @@ def _prepare_reduction(
 ) -> OrderResource | ExitSubmission | _TouchNeeded:
     """One atomic admission-to-append run: the created reducing order, or
     the EXIT's snapshot when a precondition folded it to an early end —
-    attributed-flat, the send-time rule, or a moved quantity — or
+    attributed-flat, a scheduled-end sale left to the operator, the
+    send-time rule, or a moved quantity — or
     :data:`_TOUCH_NEEDED`, having written nothing, when the recorded leg
     must be re-priced and ``touch`` was not read yet.
     """
@@ -449,6 +455,12 @@ def _prepare_reduction(
     order_ref = _primary_entry_ref(repo, state.entries)
     if not position_quantity_is_nonzero(remaining_qty):
         _fold_attributed_flat(repo, effect_operation_id, order_ref)
+        return _snapshot(repo, effect_operation_id)
+    # Ahead of the hold for the open and of the REDUCE gate (#2854): either
+    # would keep a sale that is never to be sent accepted, pass after pass.
+    if _end_sale_left_to_the_operator(
+        repo, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=state.symbol
+    ):
         return _snapshot(repo, effect_operation_id)
     leg = _leg_to_create(
         repo,
@@ -1962,8 +1974,11 @@ async def _submit_reducing_order(
                 repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=uncovered
             )
             return None
-        # A scheduled-end sale of a position that is the operator's (#2854).
-        if _end_sale_left_to_the_operator(repo, effect_operation_id=effect_operation_id, reducing=reducing):
+        # A scheduled-end sale of a position that is the operator's (#2854),
+        # its order already created.
+        if _end_sale_left_to_the_operator(
+            repo, effect_operation_id=effect_operation_id, order_ref=reducing.order_ref, symbol=facts.symbol
+        ):
             return None
         # An EXIT with no decision bar is priced by the port before it is sent:
         # a no-submit world binds the price it fills at, or nothing goes out.
@@ -2130,33 +2145,35 @@ def _fold_flatten_uncovered(
 
 
 def _end_sale_left_to_the_operator(
-    repo: ClerkSqliteRepository, *, effect_operation_id: str, reducing: OrderResource
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, order_ref: str, symbol: str
 ) -> bool:
     """End, unsent, a scheduled-end sale of a bot the Clerk has stopped exiting by itself (#2854).
 
-    ``scheduled_end`` accepts no such sale; one accepted before that rule and
-    held for the open is not sent either. Folded as a Flatten the account
-    does not cover is (:func:`_fold_flatten_uncovered`): nothing reached the
-    book, so the EXIT fails releasably through ``EXIT_NOT_FLAT``, no EXIT holds
-    the symbol, and the operator's flatten and write-off stay admissible.
+    ``scheduled_end`` accepts no such sale. One accepted before that rule is
+    ended wherever it is next driven: before its order is created
+    (``order_ref`` its entry, as :func:`_fold_unsendable_leg` folds), or as
+    that order would be sent again (``order_ref`` the order). Folded as a
+    Flatten the account does not cover is (:func:`_fold_flatten_uncovered`):
+    nothing reached the book, so the EXIT fails releasably through
+    ``EXIT_NOT_FLAT``, no EXIT holds the symbol, and the operator's flatten
+    and write-off stay admissible.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     is_end_sale = _accepted_facts(repo, effect_operation_id).decision_id.startswith(SCHEDULED_END_DECISION_PREFIX)
     if not is_end_sale or not automatic_exit_stopped(repo, effect.strategy_instance_id):
         return False
-    created = _reducing_order_facts(repo, reducing.order_ref)
-    held = repo.position(effect.strategy_instance_id, created.symbol)
+    held = repo.position(effect.strategy_instance_id, symbol)
     reason = "The Clerk had stopped exiting this bot's position by itself, so the sale at its scheduled end was not sent."
     logger.warning("a scheduled-end sale was not sent: the Clerk had stopped exiting its bot by itself", extra={
         "action": "scheduled_end_sale_not_sent_exit_stuck", "account_id": repo.account_id,
-        "effect_operation_id": effect_operation_id, "order_ref": reducing.order_ref, "attributed_qty": held,
+        "effect_operation_id": effect_operation_id, "order_ref": order_ref, "attributed_qty": held,
     })
     _fold_exit_not_flat(
-        repo, effect_operation_id=effect_operation_id, order_ref=reducing.order_ref, symbol=created.symbol,
-        attributed_qty=held, summary_code="SCHEDULED_END_EXIT_STUCK", reason=reason,
+        repo, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=symbol,
+        attributed_qty=held, summary_code=SCHEDULED_END_EXIT_STUCK, reason=reason,
         headline="A bot's scheduled-end sale was not sent; the position is still open",
-        explanation=f"{reason} The Clerk still attributes {held:g} {created.symbol} to this bot.",
+        explanation=f"{reason} The Clerk still attributes {held:g} {symbol} to this bot.",
         next_step="Flatten the position or write it off from the bot's page.",
     )
     return True

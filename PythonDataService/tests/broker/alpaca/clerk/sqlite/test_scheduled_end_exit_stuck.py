@@ -6,8 +6,9 @@ it. The sale at the bot's owner-set end did not: with the episode open, a due
 SELL end accepted and sent a new sale. It now waits -- the end stays pending,
 and the bell and the bot's page say why -- until the operator's sale or
 write-off leaves the bot flat, and then completes with nothing sold. A sale an
-earlier Clerk accepted all the same, still held for the open, is ended unsent.
-With no such episode the end sells exactly as before.
+earlier Clerk accepted all the same is ended unsent on the first pass that
+drives it: held for the open, whatever Alpaca then holds, or about to be sent
+again. With no such episode the end sells exactly as before.
 
 Real code on a real temp SQLite Clerk, pass after pass at the sweep's cadence.
 Only Alpaca is faked: what the account holds, and each order it is sent. Every
@@ -23,13 +24,17 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite import scheduled_end
+from app.broker.alpaca.clerk.sqlite import exit_resolution, scheduled_end
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.ended_run_close import closes_owed_under, drive_close
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
-from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX, resolve_exit
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    SCHEDULED_END_DECISION_PREFIX,
+    SCHEDULED_END_EXIT_STUCK,
+    resolve_exit,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
@@ -45,7 +50,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExitStuckCause,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
@@ -425,51 +430,77 @@ async def test_a_short_bots_end_waits_too_and_is_told_as_a_buy_back(
 # ── a sale accepted before the Clerk held it, waiting for the open ───────────
 
 
-async def _a_sale_accepted_after_the_close_meets_the_open(
-    repo: ClerkSqliteRepository, alpaca: _Alpaca, market: _AlpacaOrders,
-) -> tuple[str, list[_Sent]]:
-    """The records an earlier Clerk left: ``EXIT_STUCK`` open, and the bot's end sale accepted
-    after the close all the same, held for the open. Walks to that open; returns the sale and
-    the orders Alpaca had refused."""
-    refused = await _the_clerk_stops_exiting_the_bot(repo, alpaca, market)
+async def _the_end_sale_as_master_accepted_it(
+    repo: ClerkSqliteRepository, market: _AlpacaOrders, monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """The stopped bot's end sale, accepted and driven once by a Clerk that held no end sale back.
+
+    Master accepted a due end's sale with ``EXIT_STUCK`` open and drove it as any other. Only
+    that drive runs without the rule; every pass after it is this Clerk's. Returns the sale.
+    """
+    [owed] = closes_owed_under(repo, SID, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+    with monkeypatch.context() as master:
+        master.setattr(exit_resolution, "automatic_exit_stopped", lambda _repo, _sid: False)
+        await drive_close(
+            repo, owed, trade=market, intake=ReentrantAsyncLock(), pricing=UNPRICEABLE_RECOVERY, run=run_inline,
+            regular_session_only=True,
+        )
+    [sale] = _end_sales(repo)
+    return sale
+
+
+def _the_run_is_stopped(repo: ClerkSqliteRepository) -> None:
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID,
         operator_reason="service_restart_recovery",
     )
+
+
+async def _a_sale_accepted_after_the_close_is_held_for_the_open(
+    repo: ClerkSqliteRepository, alpaca: _Alpaca, market: _AlpacaOrders, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[str, list[_Sent]]:
+    """The records master left: ``EXIT_STUCK`` open, and the bot's end sale accepted after the
+    close all the same, held for the open. Returns the sale and the orders Alpaca had refused."""
+    refused = await _the_clerk_stops_exiting_the_bot(repo, alpaca, market)
+    _the_run_is_stopped(repo)
     _walk_clock_to(repo, _SESSION.close_ms_utc + 3_600_000)
-    [owed] = closes_owed_under(repo, SID, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
-    await drive_close(
-        repo, owed, trade=market, intake=ReentrantAsyncLock(), pricing=UNPRICEABLE_RECOVERY, run=run_inline,
-        regular_session_only=True,
-    )
-    [sale] = _end_sales(repo)
+    sale = await _the_end_sale_as_master_accepted_it(repo, market, monkeypatch)
     assert repo.effect_operation(sale).state not in ("succeeded", "failed", "rejected")
     assert scheduled_end.end_sales_waiting_for_open(repo) == [scheduled_end.EndSaleWaiting(SID, "SPY", 10.0)]
-    await _passes(repo, alpaca, market, 1)
     assert _sent(market) == refused
-    _walk_clock_to(repo, session_window_for_date(next_trading_day(_WEDNESDAY)).open_ms_utc)
     return sale, refused
 
 
-async def test_an_end_sale_already_accepted_is_not_sent_at_the_open_and_leaves_the_position_to_the_operator(
-    repo: ClerkSqliteRepository, schedule: _Schedule,
-) -> None:
-    """At the open the sweep used to send the held sale. It is now ended as a Flatten the account
-    does not cover is: not sent, its EXIT failed and custody released, ``EXIT_NOT_FLAT`` standing.
-    So nothing of the Clerk's holds the symbol, and the operator's write-off is admitted."""
-    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
-    sale, refused = await _a_sale_accepted_after_the_close_meets_the_open(repo, alpaca, market)
+_THE_NEXT_OPEN_MS = session_window_for_date(next_trading_day(_WEDNESDAY)).open_ms_utc
 
+
+def _ended_unsent_for_the_operator(repo: ClerkSqliteRepository, sale: str) -> None:
+    """The sale ended as not sent: failed, holding nothing, and off the bell's list for the open."""
+    assert repo.effect_operation(sale).state == "failed"
+    ended = repo.first_effect_transition(effect_operation_id=sale, transition_kind="EXIT_NOT_FLAT")
+    assert ended is not None and ended["summary_code"] == SCHEDULED_END_EXIT_STUCK
+    assert repo.active_exit_for_strategy(SID) is None, "the unsent sale still holds the bot's symbol"
+    assert scheduled_end.end_sales_waiting_for_open(repo) == []
+    assert repo.position(SID, "SPY") == 10
+
+
+async def test_an_end_sale_already_accepted_is_not_sent_at_the_open_and_leaves_the_position_to_the_operator(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At the open the sweep used to send the held sale. It is now ended before the open comes,
+    as a Flatten the account does not cover is: not sent, its EXIT failed and custody released,
+    ``EXIT_NOT_FLAT`` standing. So nothing of the Clerk's holds the symbol, nothing goes out at
+    the open, and the operator's write-off is admitted."""
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    sale, refused = await _a_sale_accepted_after_the_close_is_held_for_the_open(repo, alpaca, market, monkeypatch)
+
+    await _passes(repo, alpaca, market, 1)
+    _walk_clock_to(repo, _THE_NEXT_OPEN_MS)
     await _passes(repo, alpaca, market, TEN_MINUTES_OF_PASSES)
 
     assert _sent(market) == refused, "the sale held for the open was sent for a position handed to the operator"
-    assert repo.effect_operation(sale).state == "failed"
-    assert repo.active_exit_for_strategy(SID) is None, "the unsent sale still holds the bot's symbol"
+    _ended_unsent_for_the_operator(repo, sale)
     assert _open_reasons(repo) == {EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE}
-    assert scheduled_end.end_sales_waiting_for_open(repo) == []
-    assert repo.position(SID, "SPY") == 10
-    ended = repo.first_effect_transition(effect_operation_id=sale, transition_kind="EXIT_NOT_FLAT")
-    assert ended is not None and ended["summary_code"] == "SCHEDULED_END_EXIT_STUCK"
 
     alpaca.holds = 0.0
     await _passes(repo, alpaca, market, 1)
@@ -484,14 +515,64 @@ async def test_an_end_sale_already_accepted_is_not_sent_at_the_open_and_leaves_t
     assert _sent(market) == refused and _end_sales(repo) == [sale]
 
 
+async def test_a_held_end_sale_ends_unsent_on_the_first_pass_though_the_shares_were_sold_by_hand(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator sells the stuck bot's shares by hand at Alpaca before the open. Alpaca then
+    holds none of what the records say, and that blocks every reduction: from the open the held
+    sale was put off, pass after pass, ahead of the one step that ended it. It stayed accepted,
+    held the symbol, refused the write-off, and was listed as going out at the open. It is now
+    ended on the first pass, whatever Alpaca holds, and the write-off resolves the bot."""
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    sale, refused = await _a_sale_accepted_after_the_close_is_held_for_the_open(repo, alpaca, market, monkeypatch)
+    alpaca.holds = 0.0
+
+    await _passes(repo, alpaca, market, 1)
+
+    _ended_unsent_for_the_operator(repo, sale)
+    receipt = await discharge_attributed_residue(
+        repo, read=alpaca, intake=ReentrantAsyncLock(), strategy_instance_id=SID, symbol="SPY",
+        operator_reason="Sold by hand at Alpaca.",
+    )
+    [after] = await _passes(repo, alpaca, market, 1)
+
+    assert receipt.discharged_qty == 10 and repo.position(SID, "SPY") == 0
+    assert after.verdict == "clean" and _open_reasons(repo) == set()
+    assert _sent(market) == refused and _end_sales(repo) == [sale]
+
+
+async def test_an_end_sale_whose_answer_was_lost_is_not_sent_again(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Master sent the stuck bot's end sale in the session, and the answer was lost: Alpaca never
+    had the order. Read absent a whole wait, a lost sale is sent again. This one is ended as not
+    sent instead, and the position is left to the operator."""
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    refused = await _the_clerk_stops_exiting_the_bot(repo, alpaca, market)
+    _the_run_is_stopped(repo)
+    market.refuses = BrokerUnavailable("the submit timed out")
+    sale = await _the_end_sale_as_master_accepted_it(repo, market, monkeypatch)
+    market.refuses = None
+    lost = [*refused, _THE_SALE]
+    assert repo.effect_operation(sale).state == "unknown" and _sent(market) == lost
+
+    await _passes(repo, alpaca, market, TEN_MINUTES_OF_PASSES)
+
+    assert _sent(market) == lost, "the lost end sale was sent again for a position handed to the operator"
+    _ended_unsent_for_the_operator(repo, sale)
+    [closing] = [order for order in repo.orders_for_effect_operation(sale) if order.role == "REDUCING"]
+    ended = repo.first_effect_transition(effect_operation_id=sale, transition_kind="EXIT_NOT_FLAT")
+    assert ended is not None and ended["order_ref"] == closing.order_ref, "ended at the send, not before it"
+
+
 async def test_a_store_rebuilt_from_its_mirror_holds_the_same_unsent_end_sale(
-    tmp_path: Path, schedule: _Schedule,
+    tmp_path: Path, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ending the unsent sale is hash-chained rows like any EXIT's end: a store replayed from
     its mirror holds the same rows, the same failed sale and the same position."""
     original = _a_running_bot(tmp_path)
     alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
-    sale, _refused = await _a_sale_accepted_after_the_close_meets_the_open(original, alpaca, market)
+    sale, _refused = await _a_sale_accepted_after_the_close_is_held_for_the_open(original, alpaca, market, monkeypatch)
     await _passes(original, alpaca, market, 2)
     assert original.effect_operation(sale).state == "failed"
     transitions, reasons = original.custody_transitions(), _open_reasons(original)

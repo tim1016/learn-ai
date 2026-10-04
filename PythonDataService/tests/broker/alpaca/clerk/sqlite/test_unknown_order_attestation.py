@@ -1456,6 +1456,7 @@ async def test_a_bots_scheduled_end_sells_nothing_once_its_closing_order_is_sett
 
     assert len(alpaca.sent) == 1, "the end's sale is not sent for a position left to the operator"
     assert repo.position(SID, "SPY") == 10.0
+    assert schedule.carried_out == [] and SID in schedule.ends, "the end was recorded carried out with the bot still holding"
 
 
 async def test_a_replaced_sale_is_read_through_to_the_order_that_replaced_it(
