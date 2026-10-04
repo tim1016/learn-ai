@@ -542,8 +542,8 @@ class SymbolRunReadiness(BaseModel):
 
     ``gap_*`` describe the sessions the calendar schedules between the first
     and the last held one that the lake does not hold: ``gap_session_count``
-    of them, in ``gap_count`` unbroken stretches. ``gap_first_trading_date_ms``
-    and ``gap_last_trading_date_ms`` bound the ones a backfill can fetch, and
+    of them, in ``gap_count`` unbroken stretches. ``fill_first_trading_date_ms``
+    and ``fill_last_trading_date_ms`` bound the ones a backfill can fetch, and
     are ``None`` when there are none; ``unfillable_gap_session_count`` is the
     ones older than the provider's history.
     """
@@ -559,8 +559,8 @@ class SymbolRunReadiness(BaseModel):
     gap_session_count: int = 0
     gap_count: int = 0
     unfillable_gap_session_count: int = 0
-    gap_first_trading_date_ms: int | None = None
-    gap_last_trading_date_ms: int | None = None
+    fill_first_trading_date_ms: int | None = None
+    fill_last_trading_date_ms: int | None = None
 
 
 class RunReadinessResponse(BaseModel):

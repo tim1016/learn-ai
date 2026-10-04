@@ -353,3 +353,5 @@ def test_the_unbroken_run_is_none_when_the_last_session_is_not_held() -> None:
     # 2025-02-01 is a Saturday: the last session on or before it is Friday 01-31, which is not held.
     assert unbroken_run_start(set(held), date(2025, 2, 1)) is None
     assert unbroken_run_start(set(), date(2025, 2, 1)) is None
+    # An end before anything is held reaches no held session either.
+    assert unbroken_run_start(set(held), date(2024, 12, 31)) is None

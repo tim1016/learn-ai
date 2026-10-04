@@ -33,7 +33,7 @@
       [rows]="gapRows()"
       [busy]="backfillBusy()"
       [progress]="fillProgress()"
-      (fill)="fillGaps($event)"
+      (fill)="rebuild($event, 'fill')"
     />
   }
 

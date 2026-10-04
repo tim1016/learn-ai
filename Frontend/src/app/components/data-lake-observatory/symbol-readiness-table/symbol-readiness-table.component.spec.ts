@@ -97,7 +97,7 @@ describe('SymbolReadinessTableComponent', () => {
       '724 sessions missing between its first and last · 10 too old to fetch',
     );
 
-    fireEvent.click(within(qqq).getByRole('button', { name: 'Fill the gap in QQQ' }));
+    fireEvent.click(within(qqq).getByRole('button', { name: 'Fill gap in QQQ' }));
     expect(requests).toEqual([QQQ_FILL]);
 
     // A symbol with a gap is not "Ready"; the gaps filter shows it alone.

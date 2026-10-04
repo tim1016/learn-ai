@@ -83,7 +83,7 @@
                   type="button"
                   class="symbols__rebuild"
                   [disabled]="busy()"
-                  [attr.aria-label]="'Fill the gap in ' + row.symbol"
+                  [attr.aria-label]="'Fill gap in ' + row.symbol"
                   (click)="rebuild.emit(request)"
                 >
                   Fill gap

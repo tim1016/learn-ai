@@ -23728,12 +23728,16 @@ export interface components {
          *
          *     ``gap_*`` describe the sessions the calendar schedules between the first
          *     and the last held one that the lake does not hold: ``gap_session_count``
-         *     of them, in ``gap_count`` unbroken stretches. ``gap_first_trading_date_ms``
-         *     and ``gap_last_trading_date_ms`` bound the ones a backfill can fetch, and
+         *     of them, in ``gap_count`` unbroken stretches. ``fill_first_trading_date_ms``
+         *     and ``fill_last_trading_date_ms`` bound the ones a backfill can fetch, and
          *     are ``None`` when there are none; ``unfillable_gap_session_count`` is the
          *     ones older than the provider's history.
          */
         SymbolRunReadiness: {
+            /** Fill First Trading Date Ms */
+            fill_first_trading_date_ms?: number | null;
+            /** Fill Last Trading Date Ms */
+            fill_last_trading_date_ms?: number | null;
             /** First Trading Date Ms */
             first_trading_date_ms: number;
             /**
@@ -23741,10 +23745,6 @@ export interface components {
              * @default 0
              */
             gap_count?: number;
-            /** Gap First Trading Date Ms */
-            gap_first_trading_date_ms?: number | null;
-            /** Gap Last Trading Date Ms */
-            gap_last_trading_date_ms?: number | null;
             /**
              * Gap Session Count
              * @default 0

@@ -252,21 +252,21 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('flags symbols with sessions missing between their first and last, and fills each over its own gap', async () => {
-    // Every held session of both is readable: no rebuild banner, and still not whole.
+    // Every held session of both is readable, and neither is whole. GLD keeps the rebuild banner on screen beside theirs.
     const qqq = readinessEntry({
       symbol: 'QQQ',
       gap_session_count: 724,
       gap_count: 1,
       unfillable_gap_session_count: 10,
-      gap_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
-      gap_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+      fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
     });
     const iwm = readinessEntry({
       symbol: 'IWM',
       gap_session_count: 2,
       gap_count: 2,
-      gap_first_trading_date_ms: sessionOpenMs(2025, 6, 2),
-      gap_last_trading_date_ms: sessionOpenMs(2025, 7, 1),
+      fill_first_trading_date_ms: sessionOpenMs(2025, 6, 2),
+      fill_last_trading_date_ms: sessionOpenMs(2025, 7, 1),
     });
     const { startJob, endJob } = await renderObservatory([GLD, qqq, iwm]);
 
@@ -385,10 +385,18 @@ describe('DataLakeObservatoryComponent', () => {
     expect(screen.getByText("A run can't read this session")).toBeTruthy();
   });
 
-  it('passes AXE with a symbol that needs a rebuild and a picked session', async () => {
-    await renderObservatory();
+  it('passes AXE with a symbol that needs a rebuild, one with a gap, and a picked session', async () => {
+    const gapped = readinessEntry({
+      symbol: 'QQQ',
+      gap_session_count: 724,
+      gap_count: 1,
+      fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+    });
+    await renderObservatory([GLD, SPY, gapped]);
     fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
     await screen.findByText("A run can't read this session");
+    expect(screen.getByRole('button', { name: 'Fill the gap in QQQ' })).toBeTruthy();
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },

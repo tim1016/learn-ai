@@ -105,6 +105,8 @@ def gapped_symbols(counts: Sequence[SymbolRevisionCount]) -> list[str]:
 
 def span_gaps(held: Collection[date], floor: date) -> SpanGaps:
     """The holes between the first and last of ``held``; ``floor`` is the oldest session the provider still serves."""
+    if not held:
+        return _NO_GAPS
     stretches = [
         list(days)
         for is_held, days in groupby(expected_sessions(min(held), max(held)), key=set(held).__contains__)
@@ -168,8 +170,8 @@ def fold_run_readiness(
                 gap_session_count=holes.session_count,
                 gap_count=holes.gap_count,
                 unfillable_gap_session_count=holes.unfillable_count,
-                gap_first_trading_date_ms=None if holes.fill_first is None else session_open_ms_utc(holes.fill_first),
-                gap_last_trading_date_ms=None if holes.fill_last is None else session_open_ms_utc(holes.fill_last),
+                fill_first_trading_date_ms=None if holes.fill_first is None else session_open_ms_utc(holes.fill_first),
+                fill_last_trading_date_ms=None if holes.fill_last is None else session_open_ms_utc(holes.fill_last),
             )
         )
     return rows

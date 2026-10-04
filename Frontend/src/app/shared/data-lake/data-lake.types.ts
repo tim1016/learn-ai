@@ -105,7 +105,7 @@ export interface StorageSummaryResponse {
  *
  * `gap_*` describe the sessions the calendar schedules between the first and
  * the last held one that the lake does not hold: `gap_session_count` of them
- * in `gap_count` unbroken stretches. `gap_first/last_trading_date_ms` bound
+ * in `gap_count` unbroken stretches. `fill_first/last_trading_date_ms` bound
  * the ones a backfill can fetch; `unfillable_gap_session_count` is the ones
  * older than the provider's history. A data plane older than this page sends
  * none of them.
@@ -122,8 +122,8 @@ export interface SymbolRunReadiness {
   readonly gap_session_count?: number;
   readonly gap_count?: number;
   readonly unfillable_gap_session_count?: number;
-  readonly gap_first_trading_date_ms?: number | null;
-  readonly gap_last_trading_date_ms?: number | null;
+  readonly fill_first_trading_date_ms?: number | null;
+  readonly fill_last_trading_date_ms?: number | null;
 }
 
 export interface RunReadinessResponse {

@@ -99,8 +99,8 @@ function toRow(entry: SymbolRunReadiness, bars: DataLakeDataType): SymbolReadine
     unfillableGapCount: entry.unfillable_gap_session_count ?? 0,
     fill: backfillWindow(
       entry.symbol,
-      entry.gap_first_trading_date_ms ?? null,
-      entry.gap_last_trading_date_ms ?? null,
+      entry.fill_first_trading_date_ms ?? null,
+      entry.fill_last_trading_date_ms ?? null,
       bars,
     ),
   };
@@ -127,7 +127,7 @@ export function readinessTotals(rows: readonly SymbolReadinessRow[]): LakeReadin
   const rebuildable = rows.filter((row) => row.rebuildableCount > 0);
   return {
     symbolCount: rows.length,
-    readyCount: rows.filter((row) => row.state === 'ready').length,
+    readyCount: rows.filter((row) => row.state === 'ready' && row.gapSessionCount === 0).length,
     rebuildSymbolCount: rebuildable.length,
     rebuildSessionCount: rebuildable.reduce((total, row) => total + row.rebuildableCount, 0),
     unrebuildableSessionCount: rows.reduce((total, row) => total + row.unrebuildableCount, 0),

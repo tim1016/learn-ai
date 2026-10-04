@@ -214,6 +214,8 @@ def test_span_gaps_have_no_fill_window_when_every_missing_session_is_older_than_
     gaps = span_gaps(held, floor=date(2022, 1, 3))
 
     assert (gaps.session_count, gaps.unfillable_count, gaps.fill_first, gaps.fill_last) == (2, 2, None, None)
+    # A symbol whose rows went away between the count and the read has no span to measure.
+    assert span_gaps(set(), floor=date(2022, 1, 3)).session_count == 0
 
 
 def test_fold_reports_a_symbols_gaps_and_none_for_a_symbol_it_was_not_given() -> None:
@@ -226,7 +228,7 @@ def test_fold_reports_a_symbols_gaps_and_none_for_a_symbol_it_was_not_given() ->
     qqq, spy = fold_run_readiness(counts, None, {"QQQ": holes})
 
     assert (qqq.gap_session_count, qqq.gap_count, qqq.unfillable_gap_session_count) == (724, 1, 10)
-    assert qqq.gap_first_trading_date_ms == session_open_ms_utc(date(2021, 11, 1))
-    assert qqq.gap_last_trading_date_ms == session_open_ms_utc(date(2024, 9, 3))
-    assert (spy.gap_session_count, spy.gap_count, spy.gap_first_trading_date_ms, spy.gap_last_trading_date_ms) == (0, 0, None, None)
+    assert qqq.fill_first_trading_date_ms == session_open_ms_utc(date(2021, 11, 1))
+    assert qqq.fill_last_trading_date_ms == session_open_ms_utc(date(2024, 9, 3))
+    assert (spy.gap_session_count, spy.gap_count, spy.fill_first_trading_date_ms, spy.fill_last_trading_date_ms) == (0, 0, None, None)
 

@@ -44466,8 +44466,30 @@
         "type": "object"
       },
       "SymbolRunReadiness": {
-        "description": "One symbol's complete minute sessions under one adjustment mode, and how many a run can read.\n\nEvery ``*_trading_date_ms`` is the session's 09:30 ET open.\n``rebuild_*`` bound the sessions a backfill can rebuild: unreadable, and\nnot older than the provider's history. Both are ``None`` when there are\nnone. ``unrebuildable_count`` is the unreadable sessions older than that\nhistory, which no backfill can fetch again.\n\n``gap_*`` describe the sessions the calendar schedules between the first\nand the last held one that the lake does not hold: ``gap_session_count``\nof them, in ``gap_count`` unbroken stretches. ``gap_first_trading_date_ms``\nand ``gap_last_trading_date_ms`` bound the ones a backfill can fetch, and\nare ``None`` when there are none; ``unfillable_gap_session_count`` is the\nones older than the provider's history.",
+        "description": "One symbol's complete minute sessions under one adjustment mode, and how many a run can read.\n\nEvery ``*_trading_date_ms`` is the session's 09:30 ET open.\n``rebuild_*`` bound the sessions a backfill can rebuild: unreadable, and\nnot older than the provider's history. Both are ``None`` when there are\nnone. ``unrebuildable_count`` is the unreadable sessions older than that\nhistory, which no backfill can fetch again.\n\n``gap_*`` describe the sessions the calendar schedules between the first\nand the last held one that the lake does not hold: ``gap_session_count``\nof them, in ``gap_count`` unbroken stretches. ``fill_first_trading_date_ms``\nand ``fill_last_trading_date_ms`` bound the ones a backfill can fetch, and\nare ``None`` when there are none; ``unfillable_gap_session_count`` is the\nones older than the provider's history.",
         "properties": {
+          "fill_first_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill First Trading Date Ms"
+          },
+          "fill_last_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill Last Trading Date Ms"
+          },
           "first_trading_date_ms": {
             "title": "First Trading Date Ms",
             "type": "integer"
@@ -44476,28 +44498,6 @@
             "default": 0,
             "title": "Gap Count",
             "type": "integer"
-          },
-          "gap_first_trading_date_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Gap First Trading Date Ms"
-          },
-          "gap_last_trading_date_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Gap Last Trading Date Ms"
           },
           "gap_session_count": {
             "default": 0,

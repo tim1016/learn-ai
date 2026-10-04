@@ -20,8 +20,8 @@ follow it before that boundary, the interval ends after that session
 instead; a lake further behind keeps the whole months, so the availability
 check refuses the plan and names the backfill. Development is the longest whole-month range
 ending at the final start that (a) plans whole walk-forward folds, (b)
-leaves at least one calendar month of lake history before it for the
-run-up (24 months when the lake's first session is unknown), and (c) keeps
+leaves at least one calendar month of unbroken lake history before it for
+the run-up (24 months when the lake's sessions are unknown), and (c) keeps
 the default plan's conservative evaluation bound within its budget.
 
 Formula (default ranges): a knob's range is its declared default range
@@ -246,6 +246,11 @@ def _sessions_needed(window_start_ms: int, required_samples: int, bar_span_ms: i
     return len(expected_sessions(earliest, first - timedelta(days=1)))
 
 
+def _deepest_run_up_sessions(protocol: GoldenSearchProtocol, probe: WarmupProbe) -> int:
+    """The run-up sessions the plan's most demanding window needs: one behind an early close needs more."""
+    return max(_sessions_needed(start, probe.required_samples, probe.bar_span_ms) for start in window_starts(protocol))
+
+
 def window_starts(protocol: GoldenSearchProtocol) -> list[int]:
     """Every evaluation window start the protocol can produce."""
     starts = {protocol.development_start_ms, protocol.final_start_ms, recent_window_ms(protocol)[0]}
@@ -259,7 +264,9 @@ def _servable_start_ms(protocol: GoldenSearchProtocol, probe: WarmupProbe, roots
 
     Later starts keep the development end and drop whole folds from the front,
     so the plan still divides. One is servable when the lake holds its run-up
-    and every session after it, without a gap, through the final test.
+    and every session after it, without a gap, through the final test. The
+    lake is read from the refused start only, so a run-up longer than a test
+    fold lands on a later start than the lake strictly needs.
     """
     boundary = et_date_at_ms(protocol.development_end_ms)
     report = check_availability(
@@ -276,8 +283,7 @@ def _servable_start_ms(protocol: GoldenSearchProtocol, probe: WarmupProbe, roots
         if start < readable_from or add_months(start, months) != boundary:
             continue
         later = replace(protocol, development_start_ms=et_midnight_ms(start))
-        sessions = max(_sessions_needed(window, probe.required_samples, probe.bar_span_ms) for window in window_starts(later))
-        if warmup_session(later.development_start_ms, sessions) >= readable_from:
+        if warmup_session(later.development_start_ms, _deepest_run_up_sessions(later, probe)) >= readable_from:
             return later.development_start_ms
     return None
 
@@ -313,10 +319,7 @@ def plan_study_run_up(protocol: GoldenSearchProtocol, declaration: SearchDeclara
 
     if plan.carved_from_range:
         raise missing()
-    sessions = max(
-        plan.run_up_sessions,
-        *(_sessions_needed(start, probe.required_samples, probe.bar_span_ms) for start in window_starts(protocol)),
-    )
+    sessions = max(plan.run_up_sessions, _deepest_run_up_sessions(protocol, probe))
     data_start = plan.data_start
     if sessions > plan.run_up_sessions:
         data_start = warmup_session(protocol.development_start_ms, sessions)
@@ -578,7 +581,10 @@ def _month_start(day: date) -> date:
 
 
 def _earliest_development_start(earliest_session: date) -> date:
-    """The first month start leaving at least one whole calendar month of lake history for the run-up."""
+    """The first month start leaving at least one whole calendar month of lake history for the run-up.
+
+    ``earliest_session`` starts the lake's latest unbroken run, not its held span: nothing is read across a hole.
+    """
     month = _month_start(earliest_session)
     first_session = _first_session_on_or_after(month)
     return add_months(month, 1 if earliest_session <= first_session else 2)

@@ -266,7 +266,7 @@ def unbroken_run_start(held: Collection[date], end: date) -> date | None:
     be missing, and a window laid over such a hole cannot be read. ``None``
     when the last session on or before ``end`` is not held.
     """
-    if not held:
+    if not held or end < min(held):
         return None
     start: date | None = None
     for session in reversed(_expected_sessions(min(held), end)):

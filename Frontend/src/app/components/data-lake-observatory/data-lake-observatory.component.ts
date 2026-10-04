@@ -50,6 +50,9 @@ import {
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 30;
+
+/** Which banner started a list of backfills: each narrates only its own. */
+type BackfillList = 'rebuild' | 'fill';
 const BAR_TYPE_OPTIONS: readonly DataLakeDataType[] = ['trade', 'quote'];
 
 const EMPTY_BOARD: CoverageBoard = {
@@ -254,19 +257,12 @@ export class DataLakeObservatoryComponent {
 
   protected readonly backfillBusy = computed(() => this.backfillPanel()?.busy() ?? false);
 
-  /** The symbol a rebuild is on and its place in the list; null when none is running. */
-  private readonly rebuildProgress = signal<RebuildProgress | null>(null);
+  /** The symbol a list is on, its place in it, and which banner started it; null when none is running. */
+  private readonly rebuildProgress = signal<(RebuildProgress & { readonly list: BackfillList }) | null>(null);
 
-  /** True while the running list fills gaps rather than rebuilds: each banner narrates its own list. */
-  private readonly fillingGaps = signal(false);
-
-  /** What a banner narrates: a list of symbols. A single symbol's run is the backfill panel's to show. */
-  private readonly listProgress = computed(() => {
-    const progress = this.rebuildProgress();
-    return progress !== null && progress.total > 1 ? progress : null;
-  });
-  protected readonly queueProgress = computed(() => (this.fillingGaps() ? null : this.listProgress()));
-  protected readonly fillProgress = computed(() => (this.fillingGaps() ? this.listProgress() : null));
+  /** What each banner narrates: its own list of symbols. A single symbol's run is the backfill panel's to show. */
+  protected readonly queueProgress = computed(() => this.listProgress('rebuild'));
+  protected readonly fillProgress = computed(() => this.listProgress('fill'));
 
   protected selectSession(selection: CoverageCellSelection): void {
     this.selectedDateMs.set(selection.cell.tradingDateMs);
@@ -276,16 +272,6 @@ export class DataLakeObservatoryComponent {
     await this.rebuild(rebuildRequests(this.rows()));
   }
 
-  /** Fills each symbol's gaps with its own backfill, run as a rebuild list is. */
-  protected async fillGaps(requests: readonly RebuildRequest[]): Promise<void> {
-    if (this.backfillBusy() || this.rebuildProgress() !== null) return;
-    this.fillingGaps.set(true);
-    try {
-      await this.rebuild(requests);
-    } finally {
-      this.fillingGaps.set(false);
-    }
-  }
 
   /**
    * Runs the requests one after another: each symbol has its own window, so
@@ -296,7 +282,7 @@ export class DataLakeObservatoryComponent {
    * view, because the backfill panel writes the view on screen and the rest
    * of the list was composed for the one they left.
    */
-  protected async rebuild(requests: readonly RebuildRequest[]): Promise<void> {
+  protected async rebuild(requests: readonly RebuildRequest[], list: BackfillList = 'rebuild'): Promise<void> {
     const panel = this.backfillPanel();
     if (panel === undefined || this.backfillBusy() || this.rebuildProgress() !== null) return;
     const mode = this.mode();
@@ -308,6 +294,7 @@ export class DataLakeObservatoryComponent {
           symbol: request.symbol,
           position: index + 1,
           total: requests.length,
+          list,
         });
         const end = await panel.rebuild(request);
         if (end === null) return;
@@ -319,6 +306,11 @@ export class DataLakeObservatoryComponent {
     } finally {
       this.rebuildProgress.set(null);
     }
+  }
+
+  private listProgress(list: BackfillList): RebuildProgress | null {
+    const progress = this.rebuildProgress();
+    return progress !== null && progress.list === list && progress.total > 1 ? progress : null;
   }
 
   /** A finished backfill changes what is on disk, so every read of the lake is taken again. */

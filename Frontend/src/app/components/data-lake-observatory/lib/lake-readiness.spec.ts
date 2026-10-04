@@ -95,8 +95,8 @@ const QQQ = entry({
   gap_session_count: 724,
   gap_count: 1,
   unfillable_gap_session_count: 10,
-  gap_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
-  gap_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+  fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+  fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
 });
 
 describe("gaps between a symbol's first and last session", () => {
