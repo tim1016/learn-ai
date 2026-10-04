@@ -302,7 +302,8 @@ async def test_the_end_sale_waits_while_the_clerk_has_stopped_exiting_the_bot_by
     page = _end_on_the_bots_page(repo)
     assert (page.status, page.notice, page.waits_for_operator) == ("ending", told, True)
     assert page.explanation == (
-        "Its end has come and the bot is stopped. The Clerk sent no order for the position the bot holds."
+        "Its end has come and the bot is stopped. "
+        "At its end the Clerk sent no order for the position the bot holds."
     ), "the page still says the Clerk sells the shares on its next pass"
     assert page.edit_refusal == "This bot's end has come; it completes once the bot holds no position.", (
         "the page still says the Clerk is carrying the end out"

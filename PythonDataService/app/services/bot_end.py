@@ -219,7 +219,10 @@ def bot_end_view_waiting_for_operator(view: BotEndView, *, why: str) -> BotEndVi
     what it did not send and what completes the end; it is the notice.
     """
     return view.model_copy(update={
-        "explanation": "Its end has come and the bot is stopped. The Clerk sent no order for the position the bot holds.",
+        "explanation": (
+            "Its end has come and the bot is stopped. "
+            "At its end the Clerk sent no order for the position the bot holds."
+        ),
         "notice": why,
         "waits_for_operator": True,
         "edit_refusal": "This bot's end has come; it completes once the bot holds no position.",

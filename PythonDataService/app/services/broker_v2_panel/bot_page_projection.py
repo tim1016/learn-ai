@@ -393,7 +393,7 @@ def _change_end_entry(panel: BotPanelView) -> ToolbarActionView:
         return _entry("change_end", "Change end", "bot", "not_needed", "This bot has no end to change.")
     if end.editable:
         return _entry("change_end", "Change end", "bot", "available", "Change when this bot ends and what it does then.")
-    # An end that has come is being carried out: needed, and waiting on the Clerk.
+    # An end that has come is needed and cannot change: it waits on the Clerk, or on the operator (#2854).
     availability: ToolbarAvailability = "blocked" if end.status == "ending" else "not_needed"
     return _entry("change_end", "Change end", "bot", availability, end.edit_refusal or end.explanation)
 
