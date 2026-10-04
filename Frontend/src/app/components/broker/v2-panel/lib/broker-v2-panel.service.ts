@@ -392,6 +392,11 @@ export class BrokerV2PanelService {
    * `panel_action_rejected` log line naming the 409 subclass
    * (`StaleRevisionError` vs `ActionNotAvailableError`), not a retry.
    *
+   * `attestation` is what the operator says Alpaca shows for an uncertain
+   * closing order (#2854); only that action's ticket passes one. Its action
+   * carries a confirmation, so it is never resubmitted here either: a second
+   * try is the owner's own, and a command of its own under a new key.
+   *
    * This is the single public action entry point, so every caller (the bot
    * page AND Home) shares the same policy and there is no bare, dead-ending
    * variant to reach by accident.
@@ -401,6 +406,7 @@ export class BrokerV2PanelService {
     sid: string,
     action: PanelAction,
     reason: string | null = null,
+    attestation: PanelActionRequest['attestation'] = null,
   ): Promise<PanelActionResult> {
     const idempotencyKey = target.idempotencyKey;
     if (idempotencyKey === null) {
@@ -412,6 +418,7 @@ export class BrokerV2PanelService {
       concurrency_token: action.concurrency_token,
       idempotency_key: idempotencyKey,
       reason,
+      ...(attestation == null ? {} : { attestation }),
     };
     return await this.runAction(target, sid, request);
   }

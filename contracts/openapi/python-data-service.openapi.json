@@ -33672,6 +33672,16 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "settlement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownOrderSettlementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -44958,6 +44968,7 @@
               "manual_order",
               "reconcile_now",
               "cancel_verified_working_orders",
+              "settle_unknown_exit_order",
               "discharge_attributed_residue",
               "recover_exact_execution_evidence",
               "resolve_execution_coverage",

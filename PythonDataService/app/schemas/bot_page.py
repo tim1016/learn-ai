@@ -100,6 +100,7 @@ ToolbarActionId = Literal[
     "manual_order",
     "reconcile_now",
     "cancel_verified_working_orders",
+    "settle_unknown_exit_order",
     "discharge_attributed_residue",
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
@@ -111,6 +112,8 @@ ToolbarActionId = Literal[
 The custody ones are ``PanelAction`` ids; the page runs them through
 ``BotPanelView.actions``. Sell is ``prepare_safe_flatten``: one button that
 opens the two-step ticket, whose second step is ``execute_safe_flatten``.
+Settle the uncertain order opens a ticket too (#2854): it asks what Alpaca
+shows for the order its ``PanelAction.settlement`` names.
 """
 
 ToolbarGroup = Literal["bot", "fix", "inspect"]

@@ -42,6 +42,7 @@
             [pending]="actionPending()"
             [deployAgain]="deployAgain()"
             [manualOrder]="manualOrderNavigation()"
+            [ticketActionId]="settleOffer()?.action_id ?? null"
             (actionRequested)="onActionRequested($event)"
             (changeEnd)="endCard()?.openEditor()"
             (buildProof)="proofOpen.set(true)"
@@ -63,6 +64,17 @@
           [steps]="flattenSteps()"
           [pending]="actionPending() || flattenInProgress()"
           (flatten)="onFlattenConfirmed($event)"
+        />
+      }
+
+      @if (settleTicket(); as ticket) {
+        <app-settle-order-ticket
+          [action]="ticket.action"
+          [accountId]="accountId()"
+          [check]="ticket.check"
+          [settle]="ticket.settle"
+          [locked]="actionPending()"
+          (closed)="closeSettleTicket()"
         />
       }
 

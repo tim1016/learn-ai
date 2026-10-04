@@ -222,6 +222,8 @@ class RecoveryConfirmation:
     title: str
     explanation: str
     confirm_label: str
+    # The word the operator types to confirm; empty asks for a plain yes.
+    required_token: str = ""
 
 
 @dataclass(frozen=True)

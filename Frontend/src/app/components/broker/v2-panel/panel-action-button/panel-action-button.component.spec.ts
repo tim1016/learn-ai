@@ -211,6 +211,20 @@ describe('PanelActionButtonComponent', () => {
     expect(triggered).toHaveBeenCalledTimes(1);
   });
 
+  it('hands an action whose host opens its own ticket straight to the host, with no dialog here (#2854)', async () => {
+    const triggered = vi.fn();
+    const presented = fakeSqliteStopAction();
+    await render(PanelActionButtonComponent, {
+      inputs: { action: presented, opensTicket: true },
+      on: { triggered },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop bot decisions' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(triggered).toHaveBeenCalledExactlyOnceWith({ action: presented, reason: null });
+  });
+
   // ── S17: the cure the backend authored has to be reachable ────────────────
   // `_capability_blocker` authors stale evidence as `fix_here` and attaches a
   // reconcile move. Rendering the blocker prose alone left that cure invisible.

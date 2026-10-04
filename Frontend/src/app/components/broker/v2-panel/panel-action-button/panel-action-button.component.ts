@@ -1,11 +1,13 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   computed,
   inject,
   input,
   output,
   signal,
+  viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
 
@@ -74,6 +76,9 @@ export class PanelActionButtonComponent {
   readonly filled = input(false);
   /** The page's own tooltip -- what the action does, or why it waits -- in place of the backend's system copy. */
   readonly hint = input<string | null>(null);
+  /** The host opens this action's own ticket, which asks for more than a yes and
+   * confirms there (#2854): a press goes straight to the host, with no dialog here. */
+  readonly opensTicket = input(false);
 
   readonly triggered = output<PanelActionTrigger>();
   readonly moveRequested = output<OperatorMove>();
@@ -122,9 +127,16 @@ export class PanelActionButtonComponent {
     () => !this.action().enabled || this.pending(),
   );
 
+  private readonly button = viewChild.required<ElementRef<HTMLButtonElement>>('button');
+
+  /** Moves the keyboard to the action's button, e.g. when the ticket it opened closed by itself (#2854). */
+  focus(): void {
+    this.button().nativeElement.focus();
+  }
+
   protected trigger(): void {
     if (this.disabled()) return;
-    if (this.action().confirmation) {
+    if (this.action().confirmation && !this.opensTicket()) {
       this.confirmationOpen.set(true);
       return;
     }

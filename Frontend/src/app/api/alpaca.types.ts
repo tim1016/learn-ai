@@ -63,6 +63,13 @@ export type SqliteProposedLimitEvaluation =
   components['schemas']['ProposedLimitEvaluationResponse'];
 export type SqliteExtendedLimitConfirmation =
   components['schemas']['ExtendedLimitConfirmationRequest'];
+// An operator settles a closing order whose outcome is unknown (#2854): the
+// order they are asked about, what they say Alpaca shows for it, and what the
+// Clerk itself read at Alpaca for that.
+export type SqliteUnknownOrderSettlement = components['schemas']['UnknownOrderSettlementResponse'];
+export type SqliteSettlementChoice = components['schemas']['SettlementChoiceResponse'];
+export type SqliteUnknownOrderAttestation = components['schemas']['UnknownOrderAttestationRequest'];
+export type SqliteAttestationFindings = components['schemas']['AttestationFindingsResponse'];
 export type SqliteTimelineEntry = components['schemas']['TimelineEntryResponse'];
 export type SqliteTimelinePage = components['schemas']['TimelinePageResponse'];
 export type HistoricalExecutionRecoveryPlan =

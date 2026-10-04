@@ -28,6 +28,7 @@ import type {
   SqliteExtendedLimitPricing,
   SqliteSafeFlattenPlan,
   SqliteSafeFlattenPricing,
+  SqliteUnknownOrderAttestation,
 } from '../../../../api/alpaca.types';
 import {
   ExtendedFlattenTicketComponent,
@@ -90,6 +91,15 @@ import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
+import {
+  SettleOrderTicketComponent,
+  checkRefusal,
+  leftUnanswered,
+  offersSettlement,
+  settleRefusal,
+  type SettleAction,
+  type SettlementCheck,
+} from '../bot-page/settle-order-ticket.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
 import { chartLanes, type LaneSource, type StrategyRunContext } from '../strategy-view/chart-lanes';
@@ -146,6 +156,17 @@ interface PreparedSafeFlatten {
   readonly sid: string;
   /** Why the last quote refresh failed; the quote then ages until it cannot be sent. */
   readonly quoteError: string | null;
+}
+
+/** The open ticket that settles the bot's uncertain closing order (#2854).
+ *
+ * `action` is the settle action as the page presents it for the order's
+ * latest send, which its token names. `target` and `sid` are the lane,
+ * account and bot shown when the owner opened the ticket. */
+interface SettleTicketDraft {
+  readonly action: SettleAction;
+  readonly target: ResourceTarget;
+  readonly sid: string;
 }
 
 /** An extended-hours ticket re-reads the live quote this often while open (#2007). */
@@ -214,7 +235,8 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
  *   history chart (a finished run's own window), the strategy view
  *   (re-read on each new decision).
  * - Action execution, each command owned by the bot it was sent to (#2471),
- *   including the one-confirmation Flatten sequence (hurdle H30).
+ *   including the one-confirmation Flatten sequence (hurdle H30) and the
+ *   ticket that settles an uncertain closing order (#2854).
  */
 @Component({
   selector: 'app-bot-panel-shell',
@@ -228,6 +250,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotChartPanelComponent,
     BotDayChartComponent,
     BotEndCardComponent,
+    SettleOrderTicketComponent,
     BotHealthGroupsComponent,
     BotOrderRecordsComponent,
     BotPageHeaderComponent,
@@ -424,6 +447,56 @@ export class BotPanelShellComponent {
   });
 
   protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
+
+  /** The settle action while the page offers an order to settle (#2854): the
+   * one action a press of which opens a ticket. Decided here and nowhere
+   * else; the toolbar, the handler and the open ticket read this. */
+  protected readonly settleOffer = computed(() => this.panel()?.actions.find(offersSettlement) ?? null);
+
+  /** The open settle ticket. Like the drafts above it never follows the page
+   * to another bot, and it follows the page's own offer: withdrawn -- the
+   * order was settled, or found, or the bot runs again -- the ticket closes;
+   * under a new token -- the Clerk sent the order again -- the ticket is
+   * about that send, and starts over with nothing said or found. */
+  protected readonly settleDraft = linkedSignal<
+    { readonly route: string; readonly offer: SettleAction | null },
+    SettleTicketDraft | null
+  >({
+    source: () => ({ route: this.routeIdentity(), offer: this.settleOffer() }),
+    computation: ({ route, offer }, previous) => {
+      const open = previous?.value ?? null;
+      if (open === null || offer === null || previous?.source.route !== route) return null;
+      return offer.concurrency_token === open.action.concurrency_token ? open : { ...open, action: offer };
+    },
+  });
+
+  /** The ticket as the owner or a settlement last left it on this bot --
+   * opened, or closed. An open ticket that differs from it was closed or
+   * started over by the page's own offer, which `settleTicketMoved` answers. */
+  private readonly settleTicketPlaced = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): SettleTicketDraft | null => null,
+  });
+
+  /** The receipt of a settlement sent from the open ticket that no answer
+   * came back for. The ticket says so; the page does once the ticket cannot. */
+  private readonly settleUnanswered = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): ActionReceiptView | null => null,
+  });
+
+  /** The open ticket as its component takes it: the action, and its two
+   * requests on the lane, account and bot the ticket was opened on. */
+  protected readonly settleTicket = computed(() => {
+    const draft = this.settleDraft();
+    if (draft === null) return null;
+    return {
+      action: draft.action,
+      check: (attestation: SqliteUnknownOrderAttestation) => this.checkSettlement(draft, attestation),
+      settle: (attestation: SqliteUnknownOrderAttestation) => this.settleUncertainOrder(draft, attestation),
+    };
+  });
+
   protected readonly liveChart = computed(() => {
     const chart = this.liveStore.snapshot()?.live_chart ?? null;
     return chart?.resolution === this.liveResolution() ? chart : null;
@@ -479,6 +552,8 @@ export class BotPanelShellComponent {
   private readonly receiptView = viewChild(PanelActionReceiptComponent);
   private readonly strandedWarning = viewChild(StrandedPositionWarningComponent);
   private readonly flattenTicketView = viewChild<ElementRef<HTMLElement>>('flattenTicket');
+  private readonly settleTicketView = viewChild(SettleOrderTicketComponent);
+  private readonly toolbarView = viewChild(BotToolbarComponent);
   private readonly boardView = viewChild<ElementRef<HTMLElement>>('board');
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
@@ -663,6 +738,17 @@ export class BotPanelShellComponent {
     // bot's label is panel data the shell above does not read. It is cleared
     // on the way out so no other page can inherit it.
     effect(() => this.titleContext.setBotLabel(this.panel()?.strategy_label ?? null));
+    // The page's own offer may close the open settle ticket or start it over.
+    // That is answered here, before the page is drawn again, while the
+    // ticket that had the keyboard is still on it (#2854).
+    effect(() => {
+      const draft = this.settleDraft();
+      untracked(() => {
+        const placed = this.settleTicketPlaced();
+        this.settleTicketPlaced.set(draft);
+        if (placed !== null && placed !== draft) this.settleTicketMoved(placed);
+      });
+    });
     // The bot's name, figures and actions go up into the workspace header,
     // and come back down with this page.
     const slot = this.headerSlot;
@@ -752,9 +838,9 @@ export class BotPanelShellComponent {
     return {
       stillOwns: () => this.routeIdentity() === identity,
       deliverOutcome: (receipt) => {
-        if (this.routeIdentity() !== identity) {
-          // The page has moved to another bot: the receipt stays off the new
-          // bot's panel, and the notification says which bot it came from.
+        if (this.destroyRef.destroyed || this.routeIdentity() !== identity) {
+          // The page has moved to another bot, or is gone: the receipt stays
+          // off the new bot's panel, and the notification says which bot it came from.
           const toast = actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation);
           this.messageService.add({ ...toast, detail: `${botName}: ${toast.detail}` });
           return;
@@ -826,6 +912,15 @@ export class BotPanelShellComponent {
     }
     const target = fencedTarget(this.target(), fence);
     const sid = this.sid();
+    const settle = this.settleOffer();
+    if (settle !== null && action.action_id === settle.action_id) {
+      // Settling an uncertain order asks what Alpaca shows first: the ticket
+      // sends nothing until the Clerk has checked and the owner confirmed (#2854).
+      this.actionReceipt.set(null);
+      this.placeSettleTicket({ action: settle, target, sid });
+      afterNextRender(() => this.settleTicketView()?.focus(), { injector: this.injector });
+      return;
+    }
     if (action.action_id === 'open_custody_timeline') {
       // Activity's "Order records and recovery" fold opens on arrival at
       // this bot's timeline (`sqliteTimelineQueryFromParams`).
@@ -875,6 +970,125 @@ export class BotPanelShellComponent {
     }
   }
 
+  /** The owner opens the ticket or closes it, or a settlement closes it:
+   * not the page's own offer, so `settleTicketMoved` has nothing to answer. */
+  private placeSettleTicket(draft: SettleTicketDraft | null): void {
+    this.settleTicketPlaced.set(draft);
+    this.settleDraft.set(draft);
+  }
+
+  /** The owner closed the ticket, or its order is settled: nothing sent from it is owed a word. */
+  protected closeSettleTicket(): void {
+    this.settleUnanswered.set(null);
+    this.placeSettleTicket(null);
+  }
+
+  /**
+   * The page's own offer closed the open ticket or started it over (#2854):
+   * the order was settled or found, or the Clerk sent it again.
+   *
+   * A settlement sent from that ticket that no answer came back for is
+   * still not known to have gone through, and only the ticket said so: the
+   * sentence becomes the page's receipt. And a ticket that had the keyboard
+   * hands it on -- to the page's receipt, or else to the toolbar's entry for
+   * the order -- instead of leaving it on the page's body.
+   */
+  private settleTicketMoved(placed: SettleTicketDraft): void {
+    const unanswered = this.settleUnanswered();
+    if (unanswered !== null) {
+      this.settleUnanswered.set(null);
+      // The receipt takes the keyboard, as every outcome does.
+      this.beginActionOwnership().deliverOutcome(unanswered);
+      return;
+    }
+    if (this.settleTicketView()?.hasKeyboard() !== true) return;
+    afterNextRender(() => {
+      const receipt = this.receiptView();
+      if (receipt === undefined) this.toolbarView()?.focusAction(placed.action.action_id);
+      else receipt.focus();
+    }, { injector: this.injector });
+  }
+
+  /**
+   * Ask the Clerk what it reads at Alpaca for what the owner said (#2854).
+   * Settles nothing. A refused check re-reads the panel: its usual cause is
+   * an order the Clerk has since settled or sent again, which the re-read
+   * panel shows and the open ticket then follows.
+   *
+   * As with a settlement, a refusal is the ticket's to show while the ticket
+   * is still about this order's send. Once it is not, the ticket has dropped
+   * what the owner said, and the refusal is the page's receipt: it says why.
+   */
+  private async checkSettlement(
+    draft: SettleTicketDraft,
+    attestation: SqliteUnknownOrderAttestation,
+  ): Promise<SettlementCheck | null> {
+    const { action, target, sid } = draft;
+    const ownership = this.beginActionOwnership();
+    try {
+      return await this.brokers.checkSqliteRecoveryActionInFull(
+        target.clerkId,
+        this.requiredAccountId(target),
+        { action_id: 'settle_unknown_exit_order', concurrency_token: action.concurrency_token, attestation },
+        sid,
+      );
+    } catch (error) {
+      // Never rejects: the live store keeps a failed read as its error state.
+      await this.liveStore.refresh();
+      if (!this.destroyRef.destroyed && this.settleDraft() === draft) throw error;
+      ownership.deliverOutcome(this.errorReceipt(error, action, checkRefusal(error)));
+      return null;
+    }
+  }
+
+  /**
+   * Settle the order on what the owner said Alpaca shows (#2854).
+   *
+   * Every submission is a command of its own, under a new key like any
+   * other: the fleet never delivers a key twice, so a key sent again could
+   * not reach the Clerk, and the Clerk reads the order and Alpaca afresh on
+   * each one, so a second submission cannot settle twice. The panel is
+   * re-read whatever the answer -- after no answer at all, it is what shows
+   * whether the order was settled.
+   *
+   * A refusal is the ticket's to show while the ticket is still about this
+   * order's send. Once it is not -- the owner left the bot, or the re-read
+   * panel withdrew the offer or presents a newer send -- the refusal is the
+   * page's receipt, as a success is. When no answer came back, the receipt
+   * is kept while the ticket says so, for a later panel that closes the
+   * ticket or starts it over (`settleTicketMoved`).
+   */
+  private async settleUncertainOrder(
+    draft: SettleTicketDraft,
+    attestation: SqliteUnknownOrderAttestation,
+  ): Promise<void> {
+    if (this.actionPending()) throw new Error(ACTION_ALREADY_PENDING_MESSAGE);
+    const { action, target, sid } = draft;
+    const ownership = this.beginActionOwnership();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    this.settleUnanswered.set(null);
+    try {
+      const result = await this.panelSvc.runBotAction(this.commandTarget(target), sid, action, null, attestation);
+      if (ownership.stillOwns()) this.closeSettleTicket();
+      ownership.deliverOutcome(this.successReceipt(result));
+      await this.liveStore.refresh();
+    } catch (error) {
+      const rejection = settleRefusal(error);
+      const receipt = this.errorReceipt(error, action, rejection);
+      this.refreshLaneIfStale(rejection);
+      // Never rejects: the live store keeps a failed read as its error state.
+      await this.liveStore.refresh();
+      if (!this.destroyRef.destroyed && this.settleDraft() === draft) {
+        if (leftUnanswered(rejection)) this.settleUnanswered.set(receipt);
+        throw error;
+      }
+      ownership.deliverOutcome(receipt);
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
   /**
    * Flatten a stopped bot's stranded position on one confirmation (H30).
    *
@@ -907,7 +1121,7 @@ export class BotPanelShellComponent {
       const outcome = await runFlattenSequence({
         readPanel: () => this.panelSvc.getPanel(target, sid),
         runAction: (action) => this.panelSvc.runBotAction(this.commandTarget(target), sid, action),
-        checkPlan: (prepare) => this.brokers.checkSqliteSafeFlatten(
+        checkPlan: (prepare) => this.brokers.checkSqliteRecoveryActionInFull(
           target.clerkId,
           this.requiredAccountId(target),
           { action_id: 'prepare_safe_flatten', concurrency_token: prepare.concurrency_token },
@@ -1022,7 +1236,7 @@ export class BotPanelShellComponent {
     this.flattenQuoteInFlight = true;
     this.flattenQuoteRun = (async () => {
       try {
-        const check = await this.brokers.checkSqliteSafeFlatten(
+        const check = await this.brokers.checkSqliteRecoveryActionInFull(
           prepared.target.clerkId,
           this.requiredAccountId(prepared.target),
           {

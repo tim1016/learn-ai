@@ -19498,6 +19498,7 @@ export interface components {
             needed?: boolean;
             /** Revision */
             revision: number;
+            settlement?: components["schemas"]["UnknownOrderSettlementResponse"] | null;
         };
         /**
          * PanelActionErrorResponse
@@ -23840,7 +23841,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "stop_bot_decisions" | "prepare_safe_flatten" | "change_end" | "deploy_again" | "archive" | "manual_order" | "reconcile_now" | "cancel_verified_working_orders" | "discharge_attributed_residue" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "open_custody_timeline" | "build_proof";
+            action_id: "stop_bot_decisions" | "prepare_safe_flatten" | "change_end" | "deploy_again" | "archive" | "manual_order" | "reconcile_now" | "cancel_verified_working_orders" | "settle_unknown_exit_order" | "discharge_attributed_residue" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "open_custody_timeline" | "build_proof";
             /**
              * Availability
              * @enum {string}

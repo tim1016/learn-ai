@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.action_policy import archive_action
 from app.broker.v2panel.vocabulary import copy_for
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
+from app.schemas.alpaca_clerk_sqlite import UnknownOrderSettlementResponse
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -589,12 +590,18 @@ def _panel_action(
                 body=capability.explanation,
                 consequence=confirmation.explanation,
                 confirm_label=confirmation.confirm_label,
+                required_token=confirmation.required_token,
             )
         ),
         revision=revision,
         concurrency_token=capability.concurrency_token,
         evidence_refs=[evidence.reference for evidence in capability.evidence],
         needed=capability.needed,
+        settlement=(
+            None
+            if capability.settlement is None
+            else UnknownOrderSettlementResponse.model_validate(capability.settlement)
+        ),
     )
 
 

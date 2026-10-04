@@ -11,7 +11,16 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from fastapi import HTTPException
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
@@ -521,6 +530,12 @@ class HistoricalExecutionRecoveryReceiptResponse(BaseModel):
     applied: bool
 
 
+NOT_AN_ALPACA_ORDER_ID = (
+    "That is not an Alpaca order id. Copy the order id from the order's page at Alpaca; "
+    "it looks like 904837e3-3b76-47ec-b432-046db621571b."
+)
+
+
 class UnknownOrderAttestationRequest(BaseModel):
     """What the operator says Alpaca shows for a closing order whose outcome is unknown (#2854).
 
@@ -539,10 +554,25 @@ class UnknownOrderAttestationRequest(BaseModel):
     kind: SettlementAttestation
     broker_order_id: UUID | None = None
 
-    @field_validator("broker_order_id", mode="before")
+    @field_validator("broker_order_id", mode="wrap")
     @classmethod
-    def _an_id_pasted_with_spaces_around_it_is_still_that_id(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
+    def _an_alpaca_order_id_is_a_uuid_however_it_was_pasted(
+        cls, value: object, read_uuid: ValidatorFunctionWrapHandler
+    ) -> UUID | None:
+        """Read the id, or refuse it in words the operator who typed it can act on.
+
+        A 422 as any other field's, but in the ``{reason, message}`` body of a
+        route's own refusal, which the page shows as written, instead of the
+        validator's list. Raised here so the check, the execute and the
+        panel's action route all answer it alike.
+        """
+        try:
+            return read_uuid(value.strip() if isinstance(value, str) else value)
+        except ValidationError:
+            raise HTTPException(
+                status_code=422,
+                detail={"reason": "not_an_alpaca_order_id", "message": NOT_AN_ALPACA_ORDER_ID},
+            ) from None
 
     @model_validator(mode="after")
     def _an_order_shown_is_named_by_its_id(self) -> UnknownOrderAttestationRequest:

@@ -1,0 +1,89 @@
+@let order = action().settlement;
+<section class="settle-ticket" tabindex="-1" [attr.aria-labelledby]="titleId">
+  <header class="settle-ticket__head">
+    <h3 [id]="titleId">{{ action().label }}</h3>
+    <button type="button" class="settle-ticket__close" aria-label="Close" [disabled]="busy()" (click)="closed.emit()">×</button>
+  </header>
+
+  <p class="settle-ticket__order">{{ order.ticket }}</p>
+
+  <fieldset class="settle-ticket__choices">
+    <legend>What Alpaca shows</legend>
+    @for (choice of order.choices; track choice.attestation) {
+      <label class="settle-ticket__choice">
+        <input type="radio" [value]="choice.attestation" [formField]="answerForm.attestation" />
+        <span>
+          <strong>{{ choice.label }}</strong>
+          <span class="settle-ticket__explanation">{{ choice.explanation }}</span>
+        </span>
+      </label>
+    }
+    @if (asksOrderId()) {
+      <label class="settle-ticket__order-id">
+        <span>Alpaca order id</span>
+        <input type="text" autocomplete="off" spellcheck="false" [formField]="answerForm.orderId" />
+      </label>
+    }
+  </fieldset>
+
+  <div class="settle-ticket__actions">
+    <button
+      type="button"
+      class="settle-ticket__check"
+      [disabled]="attestation() === null || busy()"
+      [attr.aria-busy]="checking()"
+      (click)="runCheck()"
+    >{{ checking() ? 'Checking…' : 'Ask the Clerk to check' }}</button>
+  </div>
+
+  @if (found(); as findings) {
+    <!-- The Clerk's own sentences. An answer that would not settle the order is its refusal. -->
+    <div
+      #foundBox
+      class="settle-ticket__found"
+      tabindex="-1"
+      [class.settle-ticket__found--refused]="!findings.would_settle"
+      [attr.role]="findings.would_settle ? 'status' : 'alert'"
+      [attr.aria-labelledby]="foundId"
+    >
+      <h4 [id]="foundId">What the Clerk found</h4>
+      <ul>
+        @for (line of findings.lines; track $index) {
+          <li>{{ line }}</li>
+        }
+      </ul>
+      <p class="settle-ticket__read">Read <app-timestamp-display [value]="findings.observed_at_ms" mode="local" /></p>
+      @if (findings.would_settle) {
+        @if (confirmation(); as confirm) {
+          <button
+            type="button"
+            class="settle-ticket__settle"
+            [disabled]="busy()"
+            [attr.aria-busy]="settling()"
+            (click)="confirming.set(true)"
+          >{{ settling() ? 'Settling…' : confirm.confirm_label + '…' }}</button>
+        }
+      }
+    </div>
+  }
+
+  @if (refusal(); as refused) {
+    <app-bot-end-refusal #refusalBox class="settle-ticket__refusal" tabindex="-1" [refusal]="refused" announce />
+  }
+</section>
+
+@if (confirming()) {
+  @if (confirmation(); as confirm) {
+    <app-typed-halt-confirm
+      [heading]="confirm.title"
+      [message]="foundText()"
+      [assetSymbol]="order.symbol"
+      [accountId]="accountId()"
+      [consequence]="confirm.consequence"
+      [requiredToken]="confirm.required_token ?? ''"
+      [confirmLabel]="confirm.confirm_label"
+      (confirmed)="runSettle()"
+      (cancelled)="confirming.set(false)"
+    />
+  }
+}

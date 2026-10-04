@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, 
 import { MessageService } from 'primeng/api';
 import type {
   HistoricalExecutionRecoveryPlan,
+  SqliteAttestationFindings,
   SqliteRecoveryAction,
   SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
@@ -17,7 +18,12 @@ import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.c
 import { BrokerV2PanelService, type BotEndView, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
-import { fakeBotPage, fakeChartFeed, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
+import {
+  fakeBotPage,
+  fakeChartFeed,
+  fakeSqliteSettleAction,
+  fakeSqliteStopAction,
+} from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -634,7 +640,7 @@ const mockService = {
 };
 
 const brokersMock = {
-  checkSqliteSafeFlatten: vi.fn().mockResolvedValue({
+  checkSqliteRecoveryActionInFull: vi.fn().mockResolvedValue({
     capability: SAFE_FLATTEN_CAPABILITY,
     reduction_pricing: { kind: 'regular_session' },
   } satisfies SqliteRecoveryActionCheck),
@@ -973,7 +979,7 @@ describe('BotPanelShellComponent', () => {
 
       await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell 2.5 QQQ'));
       expect(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).toBeTruthy();
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
       expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
 
@@ -987,7 +993,7 @@ describe('BotPanelShellComponent', () => {
         'Flatten is offered for a stopped bot holding one position, from the warning at the top of its page.',
       );
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' })).toBeNull();
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
       expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
 
@@ -1127,7 +1133,7 @@ describe('BotPanelShellComponent', () => {
 
   it('discards a flatten’s checked plan after route identity changes', async () => {
     const pendingCapability = deferred<SqliteRecoveryActionCheck>();
-    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(pendingCapability.promise);
+    brokersMock.checkSqliteRecoveryActionInFull.mockReturnValueOnce(pendingCapability.promise);
     const getPanel = vi.fn()
       .mockResolvedValueOnce(strandedPanel())
       .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
@@ -1148,7 +1154,7 @@ describe('BotPanelShellComponent', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
     await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
-    await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenCalledTimes(1));
 
     fixture.componentRef.setInput('sid', 'sid-002');
     fixture.detectChanges();
@@ -1271,7 +1277,7 @@ describe('BotPanelShellComponent', () => {
       // spec reads the defaults.
       mockService.getLiveSnapshot.mockReset().mockResolvedValue(liveSnapshot());
       mockService.getPanel.mockReset().mockResolvedValue(PANEL);
-      brokersMock.checkSqliteSafeFlatten.mockReset().mockResolvedValue({
+      brokersMock.checkSqliteRecoveryActionInFull.mockReset().mockResolvedValue({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: { kind: 'regular_session' },
       });
@@ -1296,7 +1302,7 @@ describe('BotPanelShellComponent', () => {
       fixture.detectChanges();
       await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
       await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
-      await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenCalledTimes(1));
       await settle(fixture);
       return fixture;
     }
@@ -1334,7 +1340,7 @@ describe('BotPanelShellComponent', () => {
     it('shows the live IBKR quote and sends the confirmed limit through the custody route', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'extended_limit',
@@ -1359,7 +1365,7 @@ describe('BotPanelShellComponent', () => {
       } satisfies SqliteRecoveryActionCheck);
       // Review asks the Clerk to read the operator's price; its answer is what
       // the confirm pane shows and what Send sends.
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'extended_limit',
@@ -1401,7 +1407,7 @@ describe('BotPanelShellComponent', () => {
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
       await settle(fixture);
       expect(within(ticket).getByText(/at limit \$479\.13/)).toBeTruthy();
-      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenLastCalledWith(
+      expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenLastCalledWith(
         expect.anything(),
         expect.anything(),
         expect.objectContaining({ proposed_limit_price: 479.13 }),
@@ -1430,7 +1436,7 @@ describe('BotPanelShellComponent', () => {
     it('fails the Sell step when the limit order is refused', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       mockService.executeExtendedSafeFlatten.mockRejectedValueOnce(new HttpErrorResponse({
         status: 409,
         error: { detail: { reason: 'stale_action_token', message: 'The flatten changed before it was sent.' } },
@@ -1450,9 +1456,9 @@ describe('BotPanelShellComponent', () => {
 
     it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));
       const fixture = await prepareFlatten();
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: {
           ...SAFE_FLATTEN_CAPABILITY,
           available: false,
@@ -1480,7 +1486,7 @@ describe('BotPanelShellComponent', () => {
     it('takes the execute token from a live panel read while the live projection is stalled (#2353)', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       const fixture = await prepareFlatten();
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
@@ -1527,7 +1533,7 @@ describe('BotPanelShellComponent', () => {
       // outage itself (Codex review 2026-09-19).
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       mockService.executeExtendedSafeFlatten.mockResolvedValueOnce({
         action_id: 'execute_safe_flatten',
         outcome: 'success',
@@ -1568,15 +1574,15 @@ describe('BotPanelShellComponent', () => {
           spread_warning_bps: 50, proposal: null,
         },
       } satisfies SqliteRecoveryActionCheck;
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
       const fixture = await prepareFlatten();
-      brokersMock.checkSqliteSafeFlatten.mockRejectedValueOnce(
+      brokersMock.checkSqliteRecoveryActionInFull.mockRejectedValueOnce(
         new HttpErrorResponse({
           status: 409,
           error: { detail: { reason: 'stale_action_token', message: 'The plan changed.' } },
         }),
       );
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
 
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
       fireEvent.click(within(ticket).getByRole('button', { name: 'Refresh quote' }));
@@ -1584,8 +1590,8 @@ describe('BotPanelShellComponent', () => {
 
       // Prepare, the refused refresh, then the retry — each with whatever
       // token the panel presented at the time.
-      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(3);
-      const tokens = brokersMock.checkSqliteSafeFlatten.mock.calls.map(
+      expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenCalledTimes(3);
+      const tokens = brokersMock.checkSqliteRecoveryActionInFull.mock.calls.map(
         (call: unknown[]) => (call[2] as { concurrency_token: string }).concurrency_token,
       );
       // Each call carries the token the panel presented at the time. The
@@ -1604,7 +1610,7 @@ describe('BotPanelShellComponent', () => {
       ['SIMULATED_RECOVERY_PRICE_UNAVAILABLE', null, 'Simulated Recovery Price Unavailable'],
     ] as const)('names a refused sale’s code (%s) and when the next session opens, instead of a ticket', async (code, opensAt, label) => {
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'refused',
@@ -1655,7 +1661,7 @@ describe('BotPanelShellComponent', () => {
       expect(document.activeElement?.textContent).toContain('Stale Action Token');
       expect(document.activeElement?.textContent).toContain('The custody state changed.');
       expect(progress()).toContain('Check the position with Alpaca: Failed The custody state changed.');
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
       // The sequence stops there: Reconcile is not sent again, and the page is
       // re-read so the next Flatten runs on what the Clerk shows now (#2874).
       expect(mockService.runBotAction).toHaveBeenCalledTimes(1);
@@ -2350,8 +2356,8 @@ describe('BotPanelShellComponent', () => {
 
   describe('the one view (#2563)', () => {
     beforeEach(() => {
-      brokersMock.checkSqliteSafeFlatten.mockReset();
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
+      brokersMock.checkSqliteRecoveryActionInFull.mockReset();
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValue({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: { kind: 'regular_session' },
       });
@@ -2495,7 +2501,7 @@ describe('BotPanelShellComponent', () => {
       expect(runBotAction.mock.calls.map(([, , action]) => action.action_id))
         .toEqual(['reconcile_now', 'execute_safe_flatten']);
       expect(runBotAction.mock.calls[1][2].concurrency_token).toBe('execute-token-18');
-      const check = brokersMock.checkSqliteSafeFlatten;
+      const check = brokersMock.checkSqliteRecoveryActionInFull;
       expect(check).toHaveBeenCalledWith(
         'clrk_spec', 'DUM284968',
         { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
@@ -2520,7 +2526,7 @@ describe('BotPanelShellComponent', () => {
         .mockResolvedValueOnce(strandedPanel())
         .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
       const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled.' }));
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: {
           ...SAFE_FLATTEN_CAPABILITY,
           reduction_plan: { ...SAFE_FLATTEN_PLAN, legs: [{ ...SAFE_FLATTEN_PLAN.legs[0], quantity: 3 }] },
@@ -2543,7 +2549,7 @@ describe('BotPanelShellComponent', () => {
         .mockResolvedValueOnce(strandedPanel())
         .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
       const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled.' }));
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValue({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
@@ -2595,7 +2601,7 @@ describe('BotPanelShellComponent', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
       await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Flatten…'));
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -2607,6 +2613,392 @@ describe('BotPanelShellComponent', () => {
 
       const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
       expect(results.violations).toEqual([]);
+    });
+  });
+
+  describe('settling an uncertain closing order (#2854)', () => {
+    /** A stopped bot still holding 2.5 QQQ whose closing order the Clerk could not confirm. */
+    const SETTLE_ACTION = fakeSqliteSettleAction({ revision: 17, concurrency_token: 'settle-token-17' });
+    const NOTHING_AT_ALPACA: SqliteAttestationFindings = {
+      attestation: 'absent',
+      would_settle: true,
+      refusal_reason_code: null,
+      lines: ['Alpaca shows no order under this order\'s id.', 'No order is working on QQQ.'],
+      observed_at_ms: 1_753_800_000_500,
+    };
+    const CHECKED = {
+      capability: { ...SAFE_FLATTEN_CAPABILITY, action_id: 'settle_unknown_exit_order', reduction_plan: null },
+      attestation_findings: NOTHING_AT_ALPACA,
+    } satisfies SqliteRecoveryActionCheck;
+    const SETTLED = fakeActionResult({
+      action_id: 'settle_unknown_exit_order', receipt_id: 'transition:41',
+      concurrency_token: 'settle-token-17', message: 'Settle the uncertain order completed.',
+    });
+    const BUSY_MESSAGE = 'The Clerk is working on this exit right now. Try again in a few seconds. Nothing was changed.';
+    const NO_ANSWER_MESSAGE = 'No answer came back, so the result is not known.';
+    const NO_ANSWER = new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' });
+    const REFUSED_BY_THE_CLERK = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          action_id: 'settle_unknown_exit_order', outcome: 'failure', receipt_id: null, recorded_at_ms: 1,
+          message: BUSY_MESSAGE, why: null, reason_code: null,
+        },
+      },
+    });
+
+    /** The page as a later read of the panel shows it: with the settle action as given, or none. */
+    function pageSnapshot(version: number, settle: PanelAction | null = SETTLE_ACTION): BotPanelLiveSnapshot {
+      return {
+        ...liveSnapshot(strandedPanel({ actions: settle === null ? [RECONCILE_ACTION] : [RECONCILE_ACTION, settle] })),
+        surface_version: version,
+      };
+    }
+
+    async function renderSettle(
+      runBotAction = vi.fn().mockResolvedValue(SETTLED),
+      getLiveSnapshot = vi.fn().mockResolvedValue(pageSnapshot(1)),
+    ) {
+      const checkSettlement = vi.fn().mockResolvedValue(CHECKED);
+      const view = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: { ...mockService, getLiveSnapshot, runBotAction } },
+          { provide: BrokersService, useValue: { ...brokersMock, checkSqliteRecoveryActionInFull: checkSettlement } },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await view.fixture.whenStable();
+      view.fixture.detectChanges();
+      return { ...view, runBotAction, checkSettlement, getLiveSnapshot, user: userEvent.setup() };
+    }
+
+    type User = ReturnType<typeof userEvent.setup>;
+
+    function openedTicket(): HTMLElement | null {
+      return screen.queryByRole('region', { name: 'Settle the uncertain order' });
+    }
+
+    async function openTicket(user: User): Promise<HTMLElement> {
+      const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+      await user.click(within(toolbar).getByRole('button', { name: 'Settle the uncertain order' }));
+      return screen.findByRole('region', { name: 'Settle the uncertain order' });
+    }
+
+    /** Say "Alpaca has no such order" and have the Clerk check it. */
+    async function sayNoSuchOrder(user: User, ticket: HTMLElement): Promise<void> {
+      await user.click(within(ticket).getByRole('radio', { name: /^Alpaca has no such order/ }));
+      await user.click(within(ticket).getByRole('button', { name: 'Ask the Clerk to check' }));
+      await within(ticket).findByRole('status', { name: 'What the Clerk found' });
+    }
+
+    async function confirmSettle(user: User, ticket: HTMLElement): Promise<void> {
+      await user.click(within(ticket).getByRole('button', { name: 'Settle the order…' }));
+      const dialog = screen.getByRole('dialog', { name: 'Settle the uncertain order?' });
+      await user.type(within(dialog).getByRole('textbox'), 'SETTLE');
+      await user.click(within(dialog).getByRole('button', { name: 'Settle the order' }));
+    }
+
+    /** A settlement on its way, whose answer the test gives when it is ready. */
+    function settlementInFlight() {
+      let refuse: (error: unknown) => void = () => undefined;
+      const runBotAction = vi.fn().mockReturnValueOnce(new Promise<PanelActionResult>((_resolve, reject) => {
+        refuse = reject;
+      }));
+      return { runBotAction, refuse: (error: unknown) => refuse(error) };
+    }
+
+    const keyOfTry = (runBotAction: ReturnType<typeof vi.fn>, index: number): unknown =>
+      runBotAction.mock.calls[index][0].idempotencyKey;
+
+    it('opens the ticket from the toolbar with the Clerk’s words, and sends and confirms nothing yet', async () => {
+      const { runBotAction, checkSettlement, user } = await renderSettle();
+
+      const ticket = await openTicket(user);
+
+      expect(ticket.textContent).toContain(SETTLE_ACTION.settlement?.ticket);
+      // The ticket holds the confirmation: the button's own plain "are you sure" never opens.
+      expect(screen.queryByRole('dialog', { name: 'Settle the uncertain order?' })).toBeNull();
+      expect(runBotAction).not.toHaveBeenCalled();
+      expect(checkSettlement).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(document.activeElement).toBe(ticket));
+    });
+
+    it('has the Clerk check on the presented token, then settles with what was said and shows the receipt', async () => {
+      const { runBotAction, checkSettlement, user } = await renderSettle();
+      const ticket = await openTicket(user);
+
+      await sayNoSuchOrder(user, ticket);
+
+      expect(checkSettlement).toHaveBeenCalledExactlyOnceWith(
+        'clrk_spec', 'DUM284968',
+        { action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token-17', attestation: { kind: 'absent' } },
+        'sid-001',
+      );
+      expect(runBotAction).not.toHaveBeenCalled();
+
+      await confirmSettle(user, ticket);
+
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(1));
+      const [target, sid, action, reason, attestation] = runBotAction.mock.calls[0];
+      expect(target).toMatchObject({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001', capability: 'bot_action',
+      });
+      expect(target.idempotencyKey).toEqual(expect.any(String));
+      expect([sid, action, reason, attestation]).toEqual(['sid-001', SETTLE_ACTION, null, { kind: 'absent' }]);
+      // The result is the page's receipt, in the backend's words; the ticket is done.
+      expect(await screen.findByText('Settle the uncertain order completed.')).toBeTruthy();
+      expect(openedTicket()).toBeNull();
+    });
+
+    it('says the result is not known when no answer came back, re-reads the panel, and sends the next try under a new key', async () => {
+      const runBotAction = vi.fn().mockRejectedValueOnce(NO_ANSWER).mockResolvedValueOnce(SETTLED);
+      const { getLiveSnapshot, user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      const readsBefore = getLiveSnapshot.mock.calls.length;
+
+      await confirmSettle(user, ticket);
+
+      // The panel still offers this order, so the ticket stays and says what is known: nothing.
+      expect((await within(ticket).findByRole('alert')).textContent).toContain(NO_ANSWER_MESSAGE);
+      expect(getLiveSnapshot.mock.calls.length).toBeGreaterThan(readsBefore);
+      expect(screen.queryByText('Settle the uncertain order completed.')).toBeNull();
+
+      // The fleet never delivers a key twice: the next try is a command of its own.
+      await confirmSettle(user, ticket);
+      expect(await screen.findByText('Settle the uncertain order completed.')).toBeTruthy();
+      expect(runBotAction).toHaveBeenCalledTimes(2);
+      expect(keyOfTry(runBotAction, 1)).not.toBe(keyOfTry(runBotAction, 0));
+      for (const call of runBotAction.mock.calls) expect(call[4]).toEqual({ kind: 'absent' });
+    });
+
+    it.each([
+      [503, {
+        reason: 'clerk_routing_outcome_unknown',
+        message: 'Clerk clrk_spec failed serving bot_panel_quiesce_action with 500 after the dispatch.',
+        next_step: 'The command may have been applied. Reconcile by the idempotency key with the provider clerk\'s receipt.',
+      }],
+      [409, {
+        reason: 'broker_clerk_capability_unavailable',
+        message: 'Clerk clrk_spec does not serve bot actions right now.',
+        next_step: 'Wait for the lane to become ready, then try again.',
+      }],
+    ])('shows the fleet’s own refusal (HTTP %i), keeps the ticket usable, and sends the next try under a new key', async (status, body) => {
+      // The fleet's refusal is flat and names no outcome.
+      const runBotAction = vi.fn()
+        .mockRejectedValueOnce(new HttpErrorResponse({ status, error: body }))
+        .mockResolvedValueOnce(SETTLED);
+      const { user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+
+      await confirmSettle(user, ticket);
+
+      const refused = await within(ticket).findByRole('alert');
+      expect(refused.textContent).toContain(body.message);
+      expect(refused.textContent).toContain(body.next_step);
+      // What the Clerk found is still there, and so is the way to settle.
+      expect(within(ticket).getByRole('status', { name: 'What the Clerk found' })).toBeTruthy();
+
+      await confirmSettle(user, ticket);
+      expect(await screen.findByText('Settle the uncertain order completed.')).toBeTruthy();
+      expect(runBotAction).toHaveBeenCalledTimes(2);
+      expect(keyOfTry(runBotAction, 1)).not.toBe(keyOfTry(runBotAction, 0));
+    });
+
+    it('closes the ticket and says so on the page when, after no answer, the re-read panel no longer offers the order', async () => {
+      // The order was settled and only the answer was lost: the next read of the panel shows it.
+      const getLiveSnapshot = vi.fn()
+        .mockResolvedValueOnce(pageSnapshot(1))
+        .mockResolvedValue(pageSnapshot(2, null));
+      const runBotAction = vi.fn().mockRejectedValueOnce(NO_ANSWER);
+      const { user } = await renderSettle(runBotAction, getLiveSnapshot);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+
+      await confirmSettle(user, ticket);
+
+      // The ticket is gone with its order, so the page says what happened to the command.
+      const receipt = await screen.findByText(NO_ANSWER_MESSAGE);
+      expect(openedTicket()).toBeNull();
+      expect(ticket.contains(receipt)).toBe(false);
+      expect(within(screen.getByRole('toolbar', { name: 'Actions for this bot' }))
+        .queryByRole('button', { name: 'Settle the uncertain order' })).toBeNull();
+      expect(runBotAction).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps saying the result is not known when a later panel withdraws the order the ticket said it of', async () => {
+      const runBotAction = vi.fn().mockRejectedValueOnce(NO_ANSWER);
+      const { fixture, user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      await confirmSettle(user, ticket);
+      // The re-read panel still offers the order, so the ticket is where it is said.
+      expect((await within(ticket).findByRole('alert')).textContent).toContain(NO_ANSWER_MESSAGE);
+      expect(screen.queryByRole('alert', { name: 'Action outcome' })).toBeNull();
+
+      // A later panel has nothing to settle -- that command may be why -- and the ticket goes with its order.
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, null)));
+      await fixture.whenStable();
+
+      expect(openedTicket()).toBeNull();
+      const receipt = screen.getByRole('alert', { name: 'Action outcome' });
+      expect(receipt.textContent).toContain(NO_ANSWER_MESSAGE);
+      await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
+    });
+
+    it('closes the ticket when the page stops offering the order, and hands its keyboard to the toolbar', async () => {
+      const { fixture, runBotAction, user } = await renderSettle();
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      expect(ticket.contains(document.activeElement)).toBe(true);
+
+      // The Clerk found the order by itself: the next panel has nothing to settle.
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, null)));
+      await fixture.whenStable();
+
+      expect(openedTicket()).toBeNull();
+      expect(runBotAction).not.toHaveBeenCalled();
+      // The order's own entry left the toolbar with it; the keyboard is on the toolbar, not the page's body.
+      const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+      await vi.waitFor(() => expect(toolbar.contains(document.activeElement)).toBe(true));
+    });
+
+    it('leaves the keyboard alone when the page closes a ticket that did not have it', async () => {
+      const { fixture, user } = await renderSettle();
+      await openTicket(user);
+      const elsewhere = screen.getByRole('button', { name: 'Flatten…' });
+      elsewhere.focus();
+
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, null)));
+      await fixture.whenStable();
+
+      expect(openedTicket()).toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
+    });
+
+    it('starts the ticket over on the order’s newer send, and checks that one', async () => {
+      const { fixture, checkSettlement, runBotAction, user } = await renderSettle();
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      expect(ticket.contains(document.activeElement)).toBe(true);
+
+      // The Clerk sent the order again: the page presents the action under a new token.
+      const sentAgain = fakeSqliteSettleAction({ revision: 18, concurrency_token: 'settle-token-18' });
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2, sentAgain)));
+      await fixture.whenStable();
+
+      // Still open, with nothing said and nothing found: what was read was read for the older send.
+      expect(openedTicket()).toBe(ticket);
+      expect(within(ticket).queryByRole('status', { name: 'What the Clerk found' })).toBeNull();
+      expect(within(ticket).queryByRole('button', { name: 'Settle the order…' })).toBeNull();
+      expect(within(ticket).getAllByRole<HTMLInputElement>('radio').some((radio) => radio.checked)).toBe(false);
+      // What had the keyboard is gone from the ticket: it goes to the toolbar's entry for the order.
+      const entry = within(screen.getByRole('toolbar', { name: 'Actions for this bot' }))
+        .getByRole('button', { name: 'Settle the uncertain order' });
+      await vi.waitFor(() => expect(document.activeElement).toBe(entry));
+
+      await sayNoSuchOrder(user, ticket);
+      expect(checkSettlement).toHaveBeenLastCalledWith(
+        'clrk_spec', 'DUM284968',
+        { action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token-18', attestation: { kind: 'absent' } },
+        'sid-001',
+      );
+      await confirmSettle(user, ticket);
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(1));
+      expect(runBotAction.mock.calls[0][2]).toEqual(sentAgain);
+    });
+
+    it('re-reads the panel after a refused check, and says the refusal on the page when the ticket moved to a newer send', async () => {
+      // The Clerk sent the order again and the page has not heard yet: the check is refused as stale.
+      const stale = 'The recovery evidence changed. Refresh before confirming the action.';
+      const sentAgain = fakeSqliteSettleAction({ revision: 18, concurrency_token: 'settle-token-18' });
+      const getLiveSnapshot = vi.fn()
+        .mockResolvedValueOnce(pageSnapshot(1))
+        .mockResolvedValue(pageSnapshot(2, sentAgain));
+      const { checkSettlement, user } = await renderSettle(undefined, getLiveSnapshot);
+      checkSettlement.mockRejectedValueOnce(new HttpErrorResponse({
+        status: 409,
+        error: { detail: { reason: 'stale_action_token', message: stale } },
+      }));
+      const ticket = await openTicket(user);
+      await user.click(within(ticket).getByRole('radio', { name: /^Alpaca has no such order/ }));
+
+      await user.click(within(ticket).getByRole('button', { name: 'Ask the Clerk to check' }));
+
+      // The refusal was of the older send. The ticket is on the newer one now, with nothing said,
+      // so the page says why: its receipt carries the refusal and has the keyboard.
+      const receipt = await screen.findByRole('alert', { name: 'Action outcome' });
+      expect(receipt.textContent).toContain(stale);
+      expect(getLiveSnapshot).toHaveBeenCalledTimes(2);
+      expect(openedTicket()).toBe(ticket);
+      expect(within(ticket).queryByRole('alert')).toBeNull();
+      expect(within(ticket).getAllByRole<HTMLInputElement>('radio').some((radio) => radio.checked)).toBe(false);
+      await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
+
+      // The ticket asks about the newer send.
+      await sayNoSuchOrder(user, ticket);
+      expect(checkSettlement).toHaveBeenLastCalledWith(
+        'clrk_spec', 'DUM284968',
+        { action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token-18', attestation: { kind: 'absent' } },
+        'sid-001',
+      );
+    });
+
+    it('keeps the ticket open across a re-read of the panel that presents the same send', async () => {
+      const { fixture, user } = await renderSettle();
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+
+      emitOnLiveStream('snapshot', JSON.stringify(pageSnapshot(2)));
+      await fixture.whenStable();
+
+      expect(openedTicket()).toBe(ticket);
+      expect(within(ticket).getByRole('status', { name: 'What the Clerk found' })).toBeTruthy();
+      expect(within(ticket).getByRole('button', { name: 'Settle the order…' })).toBeTruthy();
+    });
+
+    it('names the bot in a notification when a refusal lands after the owner moved to another bot', async () => {
+      const { runBotAction, refuse } = settlementInFlight();
+      const { fixture, user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      await confirmSettle(user, ticket);
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(1));
+
+      fixture.componentRef.setInput('sid', 'sid-002');
+      await fixture.whenStable();
+      expect(openedTicket()).toBeNull();
+      messageService.add.mockClear();
+      refuse(REFUSED_BY_THE_CLERK);
+
+      await vi.waitFor(() => expect(messageService.add).toHaveBeenCalledTimes(1));
+      const toast = messageService.add.mock.calls[0][0] as { severity: string; detail: string };
+      expect(toast.severity).toBe('error');
+      expect(toast.detail).toContain('Ema Crossover');
+      expect(toast.detail).toContain(BUSY_MESSAGE);
+      // Nothing of the old bot's refusal is drawn on the bot now shown.
+      expect(screen.queryByText(BUSY_MESSAGE)).toBeNull();
+    });
+
+    it('names the bot in a notification when no answer came back and the owner has left the page', async () => {
+      const { runBotAction, refuse } = settlementInFlight();
+      const { fixture, user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      await confirmSettle(user, ticket);
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(1));
+
+      fixture.destroy();
+      messageService.add.mockClear();
+      refuse(NO_ANSWER);
+
+      await vi.waitFor(() => expect(messageService.add).toHaveBeenCalledTimes(1));
+      const toast = messageService.add.mock.calls[0][0] as { detail: string };
+      expect(toast.detail).toContain('Ema Crossover');
+      expect(toast.detail).toContain(NO_ANSWER_MESSAGE);
     });
   });
 });
