@@ -45,6 +45,13 @@ market leg inside the regular session, the refusal above included: "in any
 session" never reaches it. Outside the session it holds for the next regular
 open instead of pricing an extended-hours limit, and each re-drive records
 the same property, so it holds too if it meets the close.
+
+#2854: an EXIT whose closing order an operator attested Alpaca does not have
+ends with ``EXIT_STUCK`` already open, written with its ``EXIT_NOT_FLAT`` in
+one transition (``unknown_order_attestation``). No read of the account shows
+whether that order traded, so this watchdog never re-drives such an exit:
+every pass holds it as it holds an exit whose re-drives it gave up on, and
+the hold says which of the two it is.
 """
 
 from __future__ import annotations
@@ -71,9 +78,11 @@ from app.broker.alpaca.clerk.sqlite.exit import (
 )
 from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     DEFAULT_RECOVERY_INTERVAL_MS,
+    RECOVERY_STOPPED_AFTER_FAILURES,
     RecoveryResult,
     latest_exit_recovery,
     record_exit_recovery,
+    recovery_stopped_because,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     redrive_decision_prefix,
@@ -101,8 +110,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
     Capability,
     ReductionIntent,
-    automatic_exit_stopped,
     decide_capability,
+    open_exit_stuck,
     raise_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -176,6 +185,9 @@ class _StaleExit:
     # The refusal has settled for the policy's re-drive age: only from here on
     # does a refused re-drive spend regular-session failure time (#2622 review).
     settled_at_ms: int
+    # Why nothing is sent while ``stopped``, by the open ``EXIT_STUCK``
+    # episode's cause (#2854).
+    stopped_because: str = RECOVERY_STOPPED_AFTER_FAILURES
 
     @property
     def regular_failures(self) -> int:
@@ -253,14 +265,16 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
             continue
         token = redrive_episode_token(episode["uncertainty_id"])
         redrives, attempts = episode_attempts(repo, sid=sid, episode=episode, episode_token=token)
-        stopped = automatic_exit_stopped(repo, sid)
+        stuck = open_exit_stuck(repo, sid)
+        stopped = stuck is not None
         opposite = opposite_side_after_refusal(
             repo, facts.evidence_refs, symbol=cause.symbol, side=reducing_side(remaining),
         )
         settled = episode["observed_at_ms"] + policy.after_ms
         send_now = opposite == "ended" or replacement_ready(repo, facts.evidence_refs)
         ready = repo.clock() if not stopped and send_now else settled
-        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled))
+        because = RECOVERY_STOPPED_AFTER_FAILURES if stuck is None else recovery_stopped_because(stuck)
+        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled, because))
     return stale
 
 
@@ -305,7 +319,7 @@ def evaluate_recovery_wait(
 ) -> RecoveryResult | None:
     """Decide from the episode and current market evidence; never record or send."""
     if stale.stopped:
-        return RecoveryResult("hold", "EXIT_STUCK", "Automatic recovery stopped after repeated regular-session failures.")
+        return RecoveryResult("hold", "EXIT_STUCK", stale.stopped_because)
     if own_exit_working:
         return RecoveryResult("hold", "OWN_EXIT_WORKING", "An exit is in progress; the Clerk is waiting for its outcome.")
     verdict = reducing_send_verdict(now_ms=now_ms, extended_hours=False, valid_until_ms=None, liveness=liveness)

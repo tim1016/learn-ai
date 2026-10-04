@@ -30,6 +30,7 @@ from threading import Lock
 from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import anyio
 from alpaca.common.enums import Sort
@@ -60,6 +61,7 @@ from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerRateLimited,
+    BrokerRequestInvalid,
     BrokerUnavailable,
     BrokerUnreachable,
 )
@@ -315,6 +317,8 @@ class AlpacaTradingClient:
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {}
         if status is not None:
@@ -323,6 +327,10 @@ class AlpacaTradingClient:
             kwargs["limit"] = limit
         if after_ms is not None:
             kwargs["after"] = _ms_to_utc(after_ms)
+        if symbols is not None:
+            kwargs["symbols"] = list(symbols)
+        if until_ms is not None:
+            kwargs["until"] = _ms_to_utc(until_ms)
         request = GetOrdersRequest(direction=Sort.DESC, **kwargs)
         return await self._call(lambda c: c.get_orders(filter=request), describe="orders")
 
@@ -597,7 +605,20 @@ class AlpacaTradingClient:
         taxonomy as every other order read. Returns the raw order payload
         (the adapter maps it), or ``None`` when Alpaca reports the order
         definitively absent (HTTP 404).
+
+        An id that is not a UUID is refused here, as a request Alpaca could
+        not take (#2854): the SDK parses the id before it sends anything and
+        raises a bare ``ValueError`` for one it cannot parse, which no caller
+        of an order read expects.
         """
+        try:
+            UUID(order_id)
+        except ValueError as exc:
+            raise BrokerRequestInvalid(
+                f"{order_id!r} is not an Alpaca order id.",
+                broker=self.broker_id,
+                detail="An Alpaca order id is a UUID; nothing was asked of Alpaca.",
+            ) from exc
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:

@@ -72,9 +72,17 @@ class GuardedBrokerReadPort:
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[BrokerOrder]:
         self._assert_unfenced("list_orders")
-        return await self._inner.list_orders(status=status, limit=limit, after_ms=after_ms)
+        narrowed = {
+            **({} if symbols is None else {"symbols": symbols}),
+            **({} if until_ms is None else {"until_ms": until_ms}),
+        }
+        return await self._inner.list_orders(
+            status=status, limit=limit, after_ms=after_ms, **narrowed
+        )
 
     async def list_activities(
         self,

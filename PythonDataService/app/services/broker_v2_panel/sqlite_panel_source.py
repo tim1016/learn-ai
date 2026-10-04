@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -34,7 +35,9 @@ from app.broker.alpaca.clerk.sqlite.projections import (
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
+    RecoveryExecutionResult,
     execute_recovery_action,
+    recorded_settlement_result,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     PublishedPass,
@@ -928,6 +931,47 @@ async def read_sqlite_catalog_from_facade(
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
+def _attestation_digest(request: PanelActionRequest) -> str | None:
+    """What a replay of ``request`` under its idempotency key must say again (#2854).
+
+    The operator's attestation decides what a settlement does, so the key is
+    bound to it: the same key with another attestation is another request,
+    refused as a conflict, never answered with the first one's receipt.
+    ``None`` for every request that carries none.
+    """
+    if request.attestation is None:
+        return None
+    return hashlib.sha256(request.attestation.model_dump_json().encode("utf-8")).hexdigest()
+
+
+async def _settlement_the_clerk_recorded(
+    facade: SqliteAlpacaClerkFacade, strategy_instance_id: str, request: PanelActionRequest
+) -> RecoveryExecutionResult | None:
+    """The Clerk's own record of the settlement ``request`` asks for, when it made it (#2854). Reads only.
+
+    The Clerk writes a settlement before this panel's receipt ledger can: a
+    process that stops between the two leaves the order settled and the key
+    with no receipt. The settlement is found by the token the request was
+    presented, which names its order, so no other settlement answers.
+    """
+    if request.attestation is None:
+        return None
+    context = await read_recovery_context(facade, strategy_instance_id=strategy_instance_id)
+    if context is None:
+        return None
+    return recorded_settlement_result(
+        facade,
+        context=context,
+        request=RecoveryExecutionRequest(
+            action_id=request.action_id,
+            concurrency_token=request.concurrency_token,
+            execution_ref=None,
+            reason=request.reason,
+            attestation=request.attestation.to_attestation(),
+        ),
+    )
+
+
 async def execute_sqlite_panel_action(
     broker: str,
     account_id: str,
@@ -939,8 +983,12 @@ async def execute_sqlite_panel_action(
     availability_error: ActionNotAvailableError | None,
     facade: SqliteAlpacaClerkFacade | None,
     store: IdempotencyStore | None = None,
+    operator_identity: str | None = None,
 ) -> PanelActionResult | None:
     """Execute through the same policy that authored the presented action.
+
+    ``operator_identity`` is who asks: the configured operator the panel
+    route acts as, recorded on an order an operator settles (#2854).
 
     ``facade`` is the authority the bot's panel was read from
     (``bot_custody``'s one selection): a Dry Run's own
@@ -961,7 +1009,10 @@ async def execute_sqlite_panel_action(
     # revision fence accidentally doubled as its double-execution guard.
     ledger = store if store is not None else get_idempotency_store()
     record = await ledger.reserve_or_get(
-        strategy_instance_id, request.action_id, request.idempotency_key
+        strategy_instance_id,
+        request.action_id,
+        request.idempotency_key,
+        request_digest=_attestation_digest(request),
     )
     if record is not None:
         if record.state == "succeeded" and record.result is not None:
@@ -974,6 +1025,25 @@ async def execute_sqlite_panel_action(
                 concurrency_token=action.concurrency_token,
                 message=record.result.message,
             )
+        # A key with no receipt may still be a settlement the Clerk recorded
+        # (#2854): its record answers, and the key gets the receipt it lacked.
+        settled = await _settlement_the_clerk_recorded(facade, strategy_instance_id, request)
+        if settled is not None:
+            replayed = PanelActionResult(
+                action_id=request.action_id,
+                receipt_id=settled.receipt_id,
+                recorded_at_ms=settled.recorded_at_ms,
+                applied=False,
+                revision=panel.revision,
+                concurrency_token=action.concurrency_token,
+                message=_outcome_message(
+                    action, applied=False, simulated=facade.authority_kind == "synthetic"
+                ),
+            )
+            await ledger.complete(
+                strategy_instance_id, request.action_id, request.idempotency_key, replayed
+            )
+            return replayed
         if record.state == "failed":
             raise ActionNotAvailableError(
                 "This action previously failed; the idempotency key cannot be reused.",
@@ -1057,6 +1127,10 @@ async def execute_sqlite_panel_action(
                     capability.execution_ref if capability is not None else None
                 ),
                 reason=request.reason,
+                attestation=(
+                    None if request.attestation is None else request.attestation.to_attestation()
+                ),
+                operator=operator_identity,
             ),
             current_context=current_context,
         )

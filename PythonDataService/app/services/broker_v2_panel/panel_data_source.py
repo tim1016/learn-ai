@@ -1185,6 +1185,7 @@ async def _run_action_under_live_authority(
                 # repost of an applied SQLite recovery action replays as a no-op
                 # instead of re-executing (fleet run 2026-08-25 / F15).
                 store=durable_idempotency_store_for(registry.artifacts_root, sid),
+                operator_identity=operator_identity,
             )
         except SqlitePanelBotNotFound as exc:
             raise UnknownBotError(str(exc)) from exc

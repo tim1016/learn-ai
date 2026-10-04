@@ -1203,6 +1203,257 @@ async def test_an_extended_limit_on_any_other_recovery_action_is_refused(api: Fa
     assert response.status_code == 422
 
 
+# ── Settling a closing order whose outcome is unknown (#2854) ───────────────
+
+
+@pytest.fixture
+async def unknown_exit_api(tmp_path: Path):
+    """A stopped bot holding 10 SPY whose closing order's submit was lost and never reached Alpaca.
+
+    The real Clerk on a real ledger behind the routes; only Alpaca is faked.
+    Yields the app, the ledger and that Alpaca.
+    """
+    from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+    from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
+    from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=settling.ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1"
+    )
+    submit_start_run(
+        repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
+        lifecycle_run_id=settling.RUN_ID,
+    )
+    alpaca = settling._AlpacaAccount(repo, clock, submits=("never_arrives",))
+    await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=alpaca, trade=alpaca, account_mode="paper")
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        yield app, repo, alpaca
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+
+def _settle_routes(repo: ClerkSqliteRepository) -> tuple[str, str, str]:
+    from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
+
+    bot = f"/api/alpaca-clerk-sqlite/accounts/{repo.account_id}/bots/{settling.SID}"
+    return f"{bot}/snapshot", f"{bot}/recovery-actions/check", f"{bot}/recovery-actions/execute"
+
+
+async def _presented_settle_action(client: httpx.AsyncClient, snapshot_route: str) -> dict:
+    snapshot = await client.get(snapshot_route)
+    assert snapshot.status_code == 200, snapshot.text
+    return next(
+        item for item in snapshot.json()["recovery_actions"] if item["action_id"] == "settle_unknown_exit_order"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_check_route_answers_what_the_clerk_reads_for_an_attestation_and_settles_nothing(
+    unknown_exit_api,
+) -> None:
+    """The page asks before the operator confirms: the Clerk reads Alpaca and says what it found."""
+    from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
+
+    app, repo, alpaca = unknown_exit_api
+    snapshot_route, check_route, _execute_route = _settle_routes(repo)
+    async with _client(app) as client:
+        action = await _presented_settle_action(client, snapshot_route)
+        ledger = repo.custody_transitions()
+        token = {"action_id": action["action_id"], "concurrency_token": action["concurrency_token"]}
+
+        absent = await client.post(check_route, json={**token, "attestation": {"kind": "absent"}})
+        not_there = await client.post(
+            check_route,
+            json={**token, "attestation": {"kind": "exists", "broker_order_id": settling.NO_SUCH_ORDER_ID}},
+        )
+        plain = await client.post(check_route, json=token)
+
+    assert action["available"] is True
+    assert action["primary"] is False, "no page can run it yet, so nothing points an operator at it"
+    assert action["settlement"]["ticket"].startswith("The Clerk sent an order to sell 10 SPY on ")
+    assert [choice["attestation"] for choice in action["settlement"]["choices"]] == ["absent", "exists"]
+    assert absent.status_code == not_there.status_code == plain.status_code == 200, absent.text
+    findings = absent.json()["attestation_findings"]
+    assert (findings["attestation"], findings["would_settle"], findings["refusal_reason_code"]) == (
+        "absent", True, None,
+    )
+    assert findings["lines"][0] == "Alpaca shows no order under this order's id."
+    refused = not_there.json()["attestation_findings"]
+    assert (refused["would_settle"], refused["refusal_reason_code"]) == (False, "NO_SUCH_BROKER_ORDER")
+    assert plain.json()["attestation_findings"] is None
+    assert repo.custody_transitions() == ledger, "a check settles nothing"
+    assert len(alpaca.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_execute_route_settles_as_the_configured_operator_and_replays_its_receipt(
+    unknown_exit_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Who settled the order is the installation's operator identity, never a request field."""
+    from app.broker.alpaca.clerk.sqlite.facts import OrderOutcomeAttestedFacts
+
+    app, repo, alpaca = unknown_exit_api
+    monkeypatch.setattr(alpaca_clerk_sqlite.settings, "PANEL_OPERATOR_IDENTITY", "desk-operator")
+    snapshot_route, _check_route, execute_route = _settle_routes(repo)
+    async with _client(app) as client:
+        action = await _presented_settle_action(client, snapshot_route)
+        request = {
+            "action_id": action["action_id"],
+            "concurrency_token": action["concurrency_token"],
+            "execution_ref": action["execution_ref"],
+            "reason": "Alpaca's order list shows no sell of SPY.",
+        }
+        ledger = repo.custody_transitions()
+
+        unsaid = await client.post(execute_route, json=request)
+        named = await client.post(execute_route, json={**request, "operator": "someone-else"})
+        assert repo.custody_transitions() == ledger
+        first = await client.post(execute_route, json={**request, "attestation": {"kind": "absent"}})
+        retry = await client.post(execute_route, json={**request, "attestation": {"kind": "absent"}})
+
+    assert unsaid.status_code == 409
+    assert unsaid.json()["detail"]["reason"] == "recovery_execution_rejected"
+    assert "Say what Alpaca shows for this order" in unsaid.json()["detail"]["message"]
+    assert named.status_code == 422, "the operator is never a request field"
+    assert first.status_code == retry.status_code == 200, first.text
+    assert (first.json()["applied"], retry.json()["applied"]) == (True, False)
+    assert retry.json()["receipt_id"] == first.json()["receipt_id"]
+    attested = [
+        OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
+        for row in repo.custody_transitions()
+        if row["transition_kind"] == "ORDER_OUTCOME_ATTESTED"
+    ]
+    assert [(facts.operator, facts.operator_reason) for facts in attested] == [
+        ("desk-operator", "Alpaca's order list shows no sell of SPY.")
+    ]
+    assert len(alpaca.sent) == 1
+
+
+@pytest.fixture
+async def unseen_exit_api(tmp_path: Path):
+    """As ``unknown_exit_api``, but the lost closing order did reach Alpaca, which shows it only by its own id."""
+    from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+    from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
+    from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=settling.ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1"
+    )
+    submit_start_run(
+        repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
+        lifecycle_run_id=settling.RUN_ID,
+    )
+    alpaca = settling._AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    _exit_id, shown = await settling._a_stopped_bot_whose_closing_order_alpaca_has_unseen(repo, alpaca)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=alpaca, trade=alpaca, account_mode="paper")
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        yield app, repo, alpaca, shown.broker_order_id
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_an_alpaca_order_id_is_taken_in_any_spelling_of_its_uuid_and_settled_as_alpaca_spells_it(
+    unseen_exit_api,
+) -> None:
+    """The operator pastes the id in upper case with a space after it: it is still that order's id.
+
+    The check finds the order and the settlement takes it up, recording the
+    id as Alpaca spells it -- not "could not read the account", which an id
+    carried in another spelling used to be answered with.
+    """
+    app, repo, alpaca, alpaca_order_id = unseen_exit_api
+    snapshot_route, check_route, execute_route = _settle_routes(repo)
+    as_pasted = {"kind": "exists", "broker_order_id": f"{alpaca_order_id.upper()} "}
+    async with _client(app) as client:
+        action = await _presented_settle_action(client, snapshot_route)
+        token = {"action_id": action["action_id"], "concurrency_token": action["concurrency_token"]}
+
+        checked = await client.post(check_route, json={**token, "attestation": as_pasted})
+        settled = await client.post(
+            execute_route,
+            json={**token, "execution_ref": action["execution_ref"], "attestation": as_pasted},
+        )
+
+    assert checked.status_code == settled.status_code == 200, (checked.text, settled.text)
+    assert checked.json()["attestation_findings"]["would_settle"] is True
+    assert settled.json()["applied"] is True
+    (order,) = [order for order in repo.orders_for_strategy(settling_sid()) if order.role == "REDUCING"]
+    assert order.broker_order_id == alpaca_order_id
+    assert len(alpaca.sent) == 1
+
+
+def settling_sid() -> str:
+    from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
+
+    return settling.SID
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            {"action_id": "reconcile_now", "attestation": {"kind": "absent"}}, id="on-another-action"
+        ),
+        pytest.param(
+            {"action_id": "settle_unknown_exit_order", "attestation": {"kind": "exists"}},
+            id="an-order-shown-with-no-id",
+        ),
+        pytest.param(
+            {
+                "action_id": "settle_unknown_exit_order",
+                "attestation": {"kind": "absent", "broker_order_id": "61e69015-8549-4bfd-b9c3-01e75843f47d"},
+            },
+            id="no-such-order-with-an-id",
+        ),
+        pytest.param(
+            {
+                "action_id": "settle_unknown_exit_order",
+                "attestation": {"kind": "exists", "broker_order_id": "learn-ai/spy-bot/v1:close-1"},
+            },
+            id="the-client-order-id-pasted-as-the-alpaca-order-id",
+        ),
+        pytest.param(
+            {
+                "action_id": "settle_unknown_exit_order",
+                "attestation": {"kind": "exists", "broker_order_id": "   "},
+            },
+            id="a-blank-alpaca-order-id",
+        ),
+        pytest.param(
+            {"action_id": "settle_unknown_exit_order", "attestation": {"kind": "filled"}},
+            id="an-attestation-the-clerk-does-not-take",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_malformed_attestation_is_refused_before_any_route_runs(api: FastAPI, body: dict) -> None:
+    async with _client(api) as client:
+        for route in ("check", "execute"):
+            response = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/{route}",
+                json={"concurrency_token": "token", **body},
+            )
+            assert response.status_code == 422, (route, response.text)
+
+
 # ── A Dry Run whose Deploy crashed before its binding (#2559) ───────────────
 
 

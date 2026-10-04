@@ -10,13 +10,41 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from app.broker.alpaca.clerk.sqlite.facts import ExitRecoveryEvaluatedFacts
+from app.broker.alpaca.clerk.sqlite.facts import ExitRecoveryEvaluatedFacts, UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE, ExitStuckCause
 from app.services.session_authority import session_state_at_ms
 
 DEFAULT_RECOVERY_INTERVAL_MS = 15_000
+
+RECOVERY_STOPPED_AFTER_FAILURES = "Automatic recovery stopped after repeated regular-session failures."
+RECOVERY_LEFT_TO_THE_OPERATOR = (
+    "An operator said Alpaca has no such closing order, and the Clerk ended that exit as not sent. "
+    "The Clerk sends no order for this position by itself."
+)
+
+
+def attested_absent_order_ref(stuck_episode: Mapping[str, Any]) -> str | None:
+    """The closing order an operator attested Alpaca does not have, when that is why ``stuck_episode`` is open (#2854).
+
+    ``None`` for an ``EXIT_STUCK`` episode that re-drives led to, and for one
+    whose recorded facts cannot be read: that one is told as any stuck exit is.
+    """
+    try:
+        cause = ExitStuckCause.from_mapping(
+            UncertaintyRaisedFacts.from_facts_json(stuck_episode["facts_json"]).cause_facts
+        )
+    except (TypeError, ValueError, KeyError):
+        return None
+    return cause.attested_absent_order_ref
+
+
+def recovery_stopped_because(stuck_episode: Mapping[str, Any]) -> str:
+    """Why the Clerk sends no order by itself under the open ``EXIT_STUCK`` episode ``stuck_episode``, by its cause."""
+    if attested_absent_order_ref(stuck_episode) is not None:
+        return RECOVERY_LEFT_TO_THE_OPERATOR
+    return RECOVERY_STOPPED_AFTER_FAILURES
 
 
 @dataclass(frozen=True)

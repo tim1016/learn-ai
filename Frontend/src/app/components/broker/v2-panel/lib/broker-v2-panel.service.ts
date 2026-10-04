@@ -1,4 +1,4 @@
-import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
@@ -47,6 +47,7 @@ const QUIESCE_ACTIONS: Readonly<Record<PanelQuiesceActionId, true>> = {
   execute_safe_flatten: true,
   reconcile_now: true,
   discharge_attributed_residue: true,
+  settle_unknown_exit_order: true,
 };
 
 function isQuiesceAction(actionId: PanelActionRequest['action_id']): actionId is PanelQuiesceActionId {
@@ -368,31 +369,28 @@ export class BrokerV2PanelService {
   }
 
   /**
-   * Run a presented panel action, with a bounded fresh-token retry on a 409.
+   * Run a presented panel action: one command, submitted once.
    *
    * Every 409 from the action endpoint is a PRE-EXECUTION rejection
    * (`StaleRevisionError` / `ActionNotAvailableError` — the mid-flight
-   * `ActionOutcomeUnknownError` is a 500), so the action never ran and a retry
-   * cannot double-fire. On a 409 we refetch the authoritative panel and retry
-   * ONCE with the current token — but only if: the action requires no operator
-   * confirmation, is still offered, is still enabled, and its token changed;
-   * otherwise the original error is re-thrown so the operator sees an honest
-   * message instead of a silent re-post.
+   * `ActionOutcomeUnknownError` is a 500), so the action never ran. The
+   * refusal goes back to the caller as it is: the caller re-reads the panel,
+   * the operator reads the lane's own reason, and the next click is a new
+   * command with its own key and the token then presented.
    *
-   * The confirmation guard is load-bearing, not incidental: a safe flatten's
-   * token is bound to the reduction plan its confirmation was shown for (the
-   * recovery catalog's evidence token). Silently resubmitting a refreshed
-   * action after that confirmation was shown would let the operator
-   * unknowingly flatten a materially different position than the one they
-   * confirmed. Confirmed actions therefore always re-throw on a 409 — the
-   * operator sees the state changed and must re-confirm explicitly.
+   * Nothing is resubmitted here (#2874). A command's key is spent once the
+   * fleet coordinator has dispatched it: the lane's 409 settles it, and the
+   * coordinator answers a second request under that key itself, so the lane
+   * never sees it and its reason is replaced by a routing conflict. A second
+   * request under a new key would be a second lifecycle command the operator
+   * did not ask for — and for a confirmed action (a safe flatten, whose token
+   * is bound to the reduction plan its confirmation showed; the Clerk's stop,
+   * whose token names the run it was confirmed for) one acting on a state
+   * other than the one confirmed.
    *
-   * The Clerk's stop (`stop_bot_decisions`) carries a confirmation too, so it
-   * is never resubmitted either: its token names the run it was confirmed
-   * for, and a 409 means that run changed underneath the owner. Defect #10's
-   * fix for the 2026-07-30 Stop-409 storm is the backend's
+   * Defect #10's fix for the 2026-07-30 Stop-409 storm is the backend's
    * `panel_action_rejected` log line naming the 409 subclass
-   * (`StaleRevisionError` vs `ActionNotAvailableError`), not this retry.
+   * (`StaleRevisionError` vs `ActionNotAvailableError`), not a retry.
    *
    * This is the single public action entry point, so every caller (the bot
    * page AND Home) shares the same policy and there is no bare, dead-ending
@@ -403,45 +401,6 @@ export class BrokerV2PanelService {
     sid: string,
     action: PanelAction,
     reason: string | null = null,
-  ): Promise<PanelActionResult> {
-    if (target.idempotencyKey === null) {
-      throw new Error('A bot action requires a target frozen by its interaction owner.');
-    }
-    // A retry is still the same command, so it must keep the exact target the
-    // interaction owner captured before presenting the action.
-    const actionTarget = target;
-    try {
-      return await this.submitAction(actionTarget, sid, action, reason);
-    } catch (error) {
-      if (
-        !(error instanceof HttpErrorResponse) ||
-        error.status !== 409 ||
-        action.confirmation !== null
-      ) {
-        throw error;
-      }
-      const panel = await this.getPanel(actionTarget, sid);
-      const fresh = panel.actions.find(
-        (candidate) => candidate.action_id === action.action_id,
-      );
-      if (
-        fresh === undefined ||
-        !fresh.enabled ||
-        fresh.concurrency_token === action.concurrency_token
-      ) {
-        throw error;
-      }
-      // Same operator-confirmed action, resubmitted against a refreshed
-      // token — not a new action, so the same reason still applies.
-      return await this.submitAction(actionTarget, sid, fresh, reason);
-    }
-  }
-
-  private submitAction(
-    target: ResourceTarget,
-    sid: string,
-    action: PanelAction,
-    reason: string | null,
   ): Promise<PanelActionResult> {
     const idempotencyKey = target.idempotencyKey;
     if (idempotencyKey === null) {
@@ -454,7 +413,7 @@ export class BrokerV2PanelService {
       idempotency_key: idempotencyKey,
       reason,
     };
-    return this.runAction(target, sid, request);
+    return await this.runAction(target, sid, request);
   }
 
   /**

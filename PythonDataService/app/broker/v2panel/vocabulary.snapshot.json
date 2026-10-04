@@ -42,6 +42,7 @@
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
     "satisfied",
+    "settle_unknown_exit_order",
     "stale",
     "stop_bot_decisions",
     "unexplained_order",
@@ -198,6 +199,10 @@
     "satisfied": {
       "label": "Satisfied",
       "explanation": "This station completed with recorded evidence."
+    },
+    "settle_unknown_exit_order": {
+      "label": "Settle the uncertain order",
+      "explanation": "Say what Alpaca shows for a closing order the Clerk could not confirm. The Clerk reads Alpaca itself first and sends no order."
     },
     "stale": {
       "label": "Stale",

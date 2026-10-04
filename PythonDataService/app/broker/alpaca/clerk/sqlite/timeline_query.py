@@ -191,9 +191,12 @@ def _append_execution_filter(
 def uncertainty_sequence(uncertainty_id: str) -> int:
     """The sequence of the transition that raised episode ``uncertainty_id``; -1 for no such id.
 
-    An episode is minted ``uncertainty:<sequence>`` by the fold of its raise.
+    An episode is minted ``uncertainty:<sequence>`` by the fold of its raise,
+    and a second one the same fold opens ``uncertainty:<sequence>:<reason
+    code>`` (#2854).
     """
-    prefix, separator, raw_sequence = uncertainty_id.partition(":")
+    prefix, separator, minted = uncertainty_id.partition(":")
+    raw_sequence = minted.partition(":")[0]
     if prefix != "uncertainty" or separator == "" or not raw_sequence.isdecimal():
         return -1
     return int(raw_sequence)

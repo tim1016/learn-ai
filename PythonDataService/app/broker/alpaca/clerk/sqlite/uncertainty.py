@@ -112,6 +112,37 @@ def _effective_identity(
     return policy, "ACCOUNT_CLERK", None
 
 
+def uncertainty_envelope(
+    *,
+    reason_code: str,
+    headline: str,
+    explanation: str,
+    operator_impact: str,
+    next_step: str,
+    evidence_refs: tuple[str, ...] = (),
+    cause_facts: dict[str, Any] | None = None,
+    severity: str = "warning",
+) -> UncertaintyRaisedFacts:
+    """The envelope one typed episode is raised or refreshed with.
+
+    What the episode permits is read from its registered policy; an
+    unregistered cause blocks new exposure and allows no reduction.
+    """
+    policy = reason_policy(reason_code)
+    return UncertaintyRaisedFacts(
+        severity=severity,
+        blocks_new_exposure=True if policy is None else policy.blocks_new_exposure,
+        allows_reduction=False if policy is None else policy.allows_reduction,
+        reason_code=reason_code,
+        headline=headline,
+        explanation=explanation,
+        operator_impact=operator_impact,
+        next_step=next_step,
+        evidence_refs=list(evidence_refs),
+        cause_facts=cause_facts or {},
+    )
+
+
 def raise_uncertainty(
     repo: ClerkSqliteRepository,
     *,
@@ -135,24 +166,19 @@ def raise_uncertainty(
     operator's only signal for whether an outage is new or ongoing. Callers
     that only care whether anything was recorded compare to ``"unchanged"``.
     """
-    policy, scope, effective_strategy_instance_id = _effective_identity(
+    _policy, scope, effective_strategy_instance_id = _effective_identity(
         reason_code=reason_code, strategy_instance_id=strategy_instance_id
     )
-    blocks_new_exposure = True if policy is None else policy.blocks_new_exposure
-    allows_reduction = False if policy is None else policy.allows_reduction
-    facts = UncertaintyRaisedFacts(
-        severity=severity,
-        blocks_new_exposure=blocks_new_exposure,
-        allows_reduction=allows_reduction,
+    facts_json = uncertainty_envelope(
         reason_code=reason_code,
         headline=headline,
         explanation=explanation,
         operator_impact=operator_impact,
         next_step=next_step,
-        evidence_refs=list(evidence_refs),
-        cause_facts=cause_facts or {},
-    )
-    facts_json = facts.to_facts_json()
+        evidence_refs=evidence_refs,
+        cause_facts=cause_facts,
+        severity=severity,
+    ).to_facts_json()
 
     def build_transition(transition_kind: str) -> TransitionInput:
         return TransitionInput(
@@ -416,14 +442,19 @@ def resolve_exit_stuck_uncertainty(
     )
 
 
+def open_exit_stuck(repo: ClerkSqliteRepository, strategy_instance_id: str) -> dict | None:
+    """This bot's open ``EXIT_STUCK`` episode, or ``None``: the one read of "the Clerk stopped exiting it by itself"."""
+    return repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=strategy_instance_id,
+    )
+
+
 def automatic_exit_stopped(repo: ClerkSqliteRepository, strategy_instance_id: str) -> bool:
     """Whether the Clerk has stopped exiting this bot's position by itself: its ``EXIT_STUCK`` episode is open.
 
     The Clerk then sends no sale of its own for it: no re-drive, and no sale at the bot's scheduled end (#2854).
     """
-    return repo.active_uncertainty(
-        scope="CUSTODY_SUBJECT", reason_code=EXIT_STUCK_REASON_CODE, strategy_instance_id=strategy_instance_id,
-    ) is not None
+    return open_exit_stuck(repo, strategy_instance_id) is not None
 
 
 def resolve_flat_exit_fences(
@@ -1277,6 +1308,7 @@ __all__ = [
     "classify_admission_refusal",
     "decide_capability",
     "failed_enter_fill_is_answered",
+    "open_exit_stuck",
     "raise_failed_enter_filled_uncertainty",
     "raise_uncertainty",
     "require_admission",

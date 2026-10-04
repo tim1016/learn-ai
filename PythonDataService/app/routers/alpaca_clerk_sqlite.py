@@ -50,6 +50,7 @@ from app.broker.alpaca.clerk.sqlite.projections import (
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
+    check_settlement_attestation,
     execute_recovery_action,
     operator_stop_run,
 )
@@ -68,7 +69,9 @@ from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON
 from app.broker.contract.errors import BrokerError
+from app.config import settings
 from app.schemas.alpaca_clerk_sqlite import (
+    AttestationFindingsResponse,
     ClerkProjectionResponse,
     CommandResponse,
     HistoricalExecutionRecoveryConfirmRequest,
@@ -502,6 +505,19 @@ async def _check_recovery_action(
                 ).model_dump(mode="json"),
             },
         ) from exc
+    if body.attestation is not None:
+        # #2854: the reads a settlement would rest on, made now and answered.
+        # Nothing is settled: only the execute route does that.
+        findings = await check_settlement_attestation(
+            facade,
+            context=context,
+            capability=capability,
+            attestation=body.attestation.to_attestation(),
+        )
+        return RecoveryActionCheckResponse(
+            capability=RecoveryCapabilityResponse.model_validate(capability),
+            attestation_findings=AttestationFindingsResponse.model_validate(findings),
+        )
     plan = capability.reduction_plan
     if plan is None:
         return RecoveryActionCheckResponse(
@@ -688,6 +704,12 @@ async def _execute_presented_recovery_action(
                 confirmed_limit=(
                     None if body.extended_limit is None else body.extended_limit.to_confirmed()
                 ),
+                attestation=(
+                    None if body.attestation is None else body.attestation.to_attestation()
+                ),
+                # Who asks is this installation's configured operator, never
+                # a request field (#2854).
+                operator=settings.PANEL_OPERATOR_IDENTITY,
             ),
             current_context=current_context,
         )

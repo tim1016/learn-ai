@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import recovery_policy
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedExecutionCoverageConflict,
     ProjectedOrder,
@@ -13,6 +14,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
+    ProjectedUnknownExitOrder,
     RecoveryCapability,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
@@ -26,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
     recheck_recovery_action,
+    unknown_order_lookup_settles_at_ms,
 )
 from app.schemas.alpaca_clerk_sqlite import RecoveryCapabilityResponse
 
@@ -87,6 +90,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
         "prepare_safe_flatten",
         "execute_safe_flatten",
         "discharge_attributed_residue",
+        "settle_unknown_exit_order",
         "stop_bot_decisions",
         "open_custody_timeline",
     }
@@ -1273,3 +1277,260 @@ def test_a_plan_presented_under_a_pass_is_never_committed_as_a_receipts_plan() -
             reconciled, action_id="execute_safe_flatten", concurrency_token=plan.concurrency_token
         )
 
+
+
+# ── Settling a closing order whose outcome is unknown (#2854) ────────────────
+
+_UNKNOWN_ORDER_SENT_AT_MS = 1_700_000_000_000
+
+
+def _unknown_exit_order(**changes: object) -> ProjectedUnknownExitOrder:
+    """A closing order to sell 10 SPY, sent once, whose answer was lost."""
+    return replace(
+        ProjectedUnknownExitOrder(
+            effect_operation_id="exit-1",
+            order_ref="bot:spy-bot:close-1",
+            symbol="SPY",
+            side="SELL",
+            quantity=10.0,
+            created_at_ms=_UNKNOWN_ORDER_SENT_AT_MS - 5,
+            first_sent_at_ms=_UNKNOWN_ORDER_SENT_AT_MS,
+            latest_send_sequence=41,
+            lookup_wait_from_ms=_UNKNOWN_ORDER_SENT_AT_MS,
+            answered_as_client_order_id=None,
+            uncertainty_id="uncertainty:40",
+        ),
+        **changes,
+    )
+
+
+def _stopped_with_an_unknown_exit(**overrides: object) -> RecoveryPolicyContext:
+    """A stopped bot whose closing order's wait has passed."""
+    order = _unknown_exit_order()
+    values: dict[str, object] = {
+        "runs": (),
+        "unknown_exit_orders": (order,),
+        "now_ms": unknown_order_lookup_settles_at_ms(order),
+    }
+    values.update(overrides)
+    return _context(**values)
+
+
+def _settle(context: RecoveryPolicyContext) -> RecoveryCapability:
+    return next(
+        action
+        for action in build_recovery_catalog(context)
+        if action.action_id == "settle_unknown_exit_order"
+    )
+
+
+def test_settling_is_offered_for_a_stopped_bots_unknown_closing_order() -> None:
+    action = _settle(_stopped_with_an_unknown_exit())
+
+    assert action.available is True
+    assert action.needed is True
+    assert action.mutation is True
+    assert action.confirmation is not None
+    assert action.execution_ref == "bot:spy-bot:close-1"
+    assert [item.reference for item in action.evidence] == ["order:bot:spy-bot:close-1"]
+
+
+def test_settling_is_kept_off_every_operator_surface_until_a_page_can_run_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No page collects an attestation yet, so nothing points an operator at the action.
+
+    It is never the primary action -- what a roster row's command and a bot
+    page's primary command are taken from -- and the account's catalog does
+    not list it. The bot's own catalog still carries it, available, for the
+    routes that recheck a request against it. One constant surfaces it.
+    """
+    bot = _stopped_with_an_unknown_exit(uncertainties=(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"),))
+    account = replace(bot, strategy_instance_id=None)
+
+    assert (_settle(bot).available, _settle(bot).primary) == (True, False)
+    assert [action.action_id for action in build_recovery_catalog(bot) if action.primary] == ["reconcile_now"]
+    assert "settle_unknown_exit_order" not in {
+        action.action_id for action in build_recovery_catalog(account)
+    }
+
+    monkeypatch.setattr(recovery_policy, "SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE", True)
+
+    # Reconcile now cannot settle an order no read shows, so this is the bot's cure.
+    assert [action.action_id for action in build_recovery_catalog(bot) if action.primary] == [
+        "settle_unknown_exit_order"
+    ]
+    on_the_desk = _settle(account)
+    assert (on_the_desk.available, on_the_desk.unavailable_reason_code) == (False, "NO_UNKNOWN_EXIT_ORDER")
+    assert on_the_desk.unavailable_reason == "An uncertain closing order is settled from its bot's page."
+
+
+def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> None:
+    settlement = _settle(_stopped_with_an_unknown_exit()).settlement
+
+    assert settlement is not None
+    assert (settlement.symbol, settlement.side, settlement.quantity) == ("SPY", "sell", 10.0)
+    assert settlement.ticket == (
+        "The Clerk sent an order to sell 10 SPY on Tue Nov 14, 17:13 ET and could not confirm it. "
+        "It holds the position and starts no other closing order for this bot. While the order's "
+        "session is open, the Clerk sends this same order again by itself, after a wait that grows "
+        "to 5 minutes and then stays there. If it does, look at Alpaca again and open this action "
+        "again."
+    )
+    answered = _settle(
+        _stopped_with_an_unknown_exit(
+            unknown_exit_orders=(_unknown_exit_order(answered_as_client_order_id="another-id"),)
+        )
+    ).settlement
+    assert answered is not None
+    assert answered.ticket == (
+        "The Clerk sent an order to sell 10 SPY on Tue Nov 14, 17:13 ET, and Alpaca answered under "
+        "another order id. The Clerk holds the position and starts no other closing order for this "
+        "bot, and does not send this order again."
+    )
+    assert [(choice.attestation, choice.asks_broker_order_id) for choice in settlement.choices] == [
+        ("absent", False),
+        ("exists", True),
+    ]
+    # What "no such order" leaves the operator to do is said before they choose it and
+    # again as they confirm: the Clerk sells nothing by itself afterwards.
+    assert settlement.choices[0].explanation == (
+        "The Clerk checks once more that this order is not at Alpaca and that nothing is working on "
+        "SPY. If so, it ends this exit as not sent. The shares stay with the bot, and the Clerk "
+        "sends no order for them by itself: you then sell them or write them off from this page. "
+        "This cannot be undone."
+    )
+    confirmation = _settle(_stopped_with_an_unknown_exit()).confirmation
+    assert confirmation is not None
+    assert confirmation.explanation == (
+        "The Clerk reads Alpaca again and settles the order only if what it reads agrees with what "
+        "you said. It sends no order. If you said Alpaca has no such order, the position stays with "
+        "the bot and the Clerk sends no order for it by itself: you then close it or write it off "
+        "from this page. This cannot be undone."
+    )
+    # The wire carries it to the page that asks the operator.
+    assert RecoveryCapabilityResponse.model_validate(
+        _settle(_stopped_with_an_unknown_exit())
+    ).settlement is not None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_code", "needed"),
+    [
+        ({"unknown_exit_orders": ()}, "NO_UNKNOWN_EXIT_ORDER", False),
+        # A Dry Run's and a Shadow's orders reach no broker an operator could look at.
+        ({"account_id": "sim:spy-bot"}, "NO_UNKNOWN_EXIT_ORDER", False),
+        ({"account_id": "shadow:PA-LIVE"}, "NO_UNKNOWN_EXIT_ORDER", False),
+        (
+            {
+                "runs": (
+                    ProjectedRun(
+                        run_id="run-1",
+                        strategy_instance_id="spy-bot",
+                        lifecycle_run_id="lifecycle-1",
+                        state="ACTIVE",
+                        started_at_ms=1_700_000_000_000,
+                        stopped_at_ms=None,
+                    ),
+                )
+            },
+            "RUN_STILL_ACTIVE",
+            True,
+        ),
+        (
+            {"now_ms": unknown_order_lookup_settles_at_ms(_unknown_exit_order()) - 1},
+            "ORDER_LOOKUP_STILL_SETTLING",
+            True,
+        ),
+        (
+            {"unknown_exit_orders": (_unknown_exit_order(answered_as_client_order_id=""),)},
+            "ANSWERED_ORDER_NAMES_NO_ID",
+            True,
+        ),
+    ],
+)
+def test_settling_is_refused_outside_its_state(
+    overrides: dict[str, object], reason_code: str, needed: bool
+) -> None:
+    action = _settle(_stopped_with_an_unknown_exit(**overrides))
+
+    assert action.available is False
+    assert action.unavailable_reason_code == reason_code
+    assert action.needed is needed
+    assert action.execution_ref is None
+    assert action.settlement is None
+
+
+def test_an_order_answered_under_another_client_order_id_is_offered_without_the_wait() -> None:
+    """The Clerk never sends it again or finds it by itself, so there is nothing to wait for."""
+    answered = _unknown_exit_order(answered_as_client_order_id="another-id")
+
+    action = _settle(
+        _stopped_with_an_unknown_exit(
+            unknown_exit_orders=(answered,), now_ms=answered.lookup_wait_from_ms
+        )
+    )
+
+    assert action.available is True
+
+
+def test_an_order_answered_with_no_client_order_id_is_not_offered_and_the_reason_says_why() -> None:
+    """The regression (#2854 review): Alpaca answered the send with an order that names no client order id.
+
+    The action was offered, and neither choice could run: "no such order"
+    refuses with no id to read that order by, and "Alpaca shows it" takes up
+    only an order under the id that was sent. It is unavailable now, in
+    words that say what happened, that the Clerk keeps the position, and
+    that this action cannot settle it -- for a running bot too, which is not
+    told to stop for an action that would still not run.
+    """
+    unnamed = _unknown_exit_order(answered_as_client_order_id="")
+    running = ProjectedRun(
+        run_id="run-1", strategy_instance_id="spy-bot", lifecycle_run_id="lifecycle-1",
+        state="ACTIVE", started_at_ms=1_700_000_000_000, stopped_at_ms=None,
+    )
+
+    for runs in ((), (running,)):
+        action = _settle(_stopped_with_an_unknown_exit(unknown_exit_orders=(unnamed,), runs=runs))
+
+        assert (action.available, action.needed) == (False, True)
+        assert action.unavailable_reason_code == "ANSWERED_ORDER_NAMES_NO_ID"
+        assert action.unavailable_reason == (
+            "Alpaca answered this order's send with an order that names no client order id, so the "
+            "Clerk has no id to read that order by and cannot tell what it did. The Clerk keeps the "
+            "position held. This action cannot settle the order."
+        )
+        assert action.next_step == (
+            "Look at this account's orders at Alpaca for the order it answered with. No action of "
+            "the Clerk settles this order yet."
+        )
+        assert (action.execution_ref, action.settlement) == (None, None)
+
+
+def test_the_settle_token_outlives_a_pass_and_not_a_send_made_again() -> None:
+    """A pass changes the clock and the episode's time, never the order's latest send."""
+    presented = _stopped_with_an_unknown_exit()
+    token = _settle(presented).concurrency_token
+    a_pass_later = replace(
+        presented,
+        now_ms=presented.now_ms + 15_000,
+        control_revision=presented.control_revision + 1,
+        uncertainties=(replace(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"), observed_at_ms=presented.now_ms + 15_000),),
+    )
+
+    assert recheck_recovery_action(
+        a_pass_later, action_id="settle_unknown_exit_order", concurrency_token=token
+    ).available
+
+    for changed in (
+        _unknown_exit_order(latest_send_sequence=57),
+        _unknown_exit_order(answered_as_client_order_id="another-id"),
+        _unknown_exit_order(uncertainty_id="uncertainty:99"),
+        _unknown_exit_order(order_ref="bot:spy-bot:close-2"),
+    ):
+        with pytest.raises(StaleRecoveryTokenError):
+            recheck_recovery_action(
+                replace(a_pass_later, unknown_exit_orders=(changed,)),
+                action_id="settle_unknown_exit_order",
+                concurrency_token=token,
+            )

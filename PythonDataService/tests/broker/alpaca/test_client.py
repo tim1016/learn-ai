@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from datetime import UTC, datetime
 from http.client import RemoteDisconnected
 from pathlib import Path
 from threading import Event
@@ -116,6 +117,20 @@ async def test_list_orders_builds_filter() -> None:
     assert fake.orders_filter.status == QueryOrderStatus.OPEN
     assert fake.orders_filter.limit == 5
     assert fake.orders_filter.after is not None
+    assert fake.orders_filter.direction == Sort.DESC
+
+
+async def test_list_orders_narrows_to_a_symbol_and_a_window_for_paging() -> None:
+    """One symbol's orders between two times: what a caller pages a long order history with (#2854)."""
+    fake = _FakeAlpaca()
+    await _client(fake).list_orders(
+        status="all", limit=500, after_ms=1_700_000_000_000, symbols=("SPY",), until_ms=1_700_000_600_000
+    )
+
+    assert fake.orders_filter.status == QueryOrderStatus.ALL
+    assert fake.orders_filter.symbols == ["SPY"]
+    assert fake.orders_filter.after == datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    assert fake.orders_filter.until == datetime.fromtimestamp(1_700_000_600, tz=UTC)
     assert fake.orders_filter.direction == Sort.DESC
 
 
@@ -374,6 +389,26 @@ async def test_get_order_by_broker_order_id_404_is_absent_and_5xx_stays_uncertai
     else:
         with pytest.raises(expected):
             await _client(fake).get_order_by_broker_order_id("00000000-0000-0000-0000-00000000000b")
+
+
+@pytest.mark.parametrize(
+    "not_an_order_id",
+    ["learn-ai/spy-bot/v1:close-1", "", "00000000-0000-0000-0000-00000000000"],
+    ids=["a-client-order-id", "empty", "one-digit-short"],
+)
+async def test_get_order_by_broker_order_id_refuses_an_id_that_is_not_a_uuid(not_an_order_id: str) -> None:
+    """The SDK parses the id before any request and raises a bare ``ValueError`` (#2854).
+
+    The client refuses it as a request Alpaca could not take, a contract
+    error every caller of an order read already handles, and asks Alpaca
+    nothing.
+    """
+    fake = _FakeAlpaca()
+
+    with pytest.raises(BrokerRequestInvalid, match="is not an Alpaca order id"):
+        await _client(fake).get_order_by_broker_order_id(not_an_order_id)
+
+    assert not hasattr(fake, "broker_id_lookup_call")
 
 
 async def test_api_error_maps_to_contract_error(make_api_error: ApiErrorFactory) -> None:

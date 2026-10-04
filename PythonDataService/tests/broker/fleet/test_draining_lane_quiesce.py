@@ -225,6 +225,10 @@ def test_a_read_declaring_quiesce_is_refused_by_the_catalog_validator() -> None:
         "lane_stop_all_bots",
         "lane_account_quiet_read",
         "custody_account_snapshot",
+        # What the Clerk reads at the broker for an operator's attestation,
+        # asked before an uncertain order is settled on the quiesce operation
+        # (#2854): a check, which settles nothing.
+        "custody_bot_recovery_check",
         "bot_panel_read",
         "orders_read",
         "positions_read",
@@ -312,15 +316,19 @@ def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -
     assert quiesce <= set(ACTION_IDS)
     assert quiesce <= set(get_args(PanelQuiesceActionRequest.model_fields["action_id"].annotation))
     # Every recovery id whose executor only stops decisions, cancels owned
-    # verified working orders, submits a reduction, reconciles, or discharges
+    # verified working orders, submits a reduction, reconciles, discharges
     # a residue the broker proves it does not hold (#2381: a draining lane
-    # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs it to answer quiet).
+    # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs it to answer quiet), or
+    # settles a closing order whose outcome is unknown on the Clerk's own
+    # reads of the broker (#2854: a lane holding one cannot answer quiet; it
+    # sends no order and requires no active run).
     assert quiesce & set(get_args(RecoveryActionId)) == {
         "stop_bot_decisions",
         "cancel_verified_working_orders",
         "execute_safe_flatten",
         "reconcile_now",
         "discharge_attributed_residue",
+        "settle_unknown_exit_order",
     }
     # Rewrites fill evidence and can lift a hold a running bot is under.
     assert "resolve_execution_coverage" not in quiesce

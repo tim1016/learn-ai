@@ -322,9 +322,15 @@ class AlpacaBroker:
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[BrokerOrder]:
+        narrowed = {
+            **({} if symbols is None else {"symbols": symbols}),
+            **({} if until_ms is None else {"until_ms": until_ms}),
+        }
         payloads = await self._client.list_orders(
-            status=status, limit=limit, after_ms=after_ms
+            status=status, limit=limit, after_ms=after_ms, **narrowed
         )
         return _mapped_evidence(
             "order",

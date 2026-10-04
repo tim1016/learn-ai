@@ -1095,6 +1095,42 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
     assert second.json()["receipt_id"] == first.json()["receipt_id"]
 
 
+async def test_a_presented_action_reaches_the_clerk_as_the_routes_configured_operator(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The operator the route acts as travels with the action to the SQLite executor (#2854).
+
+    An order an operator settles records who settled it, so the identity must
+    arrive where the Clerk is asked: never a request field, always the
+    route's configured one.
+    """
+    app, _repo = api
+    acted_as: list[str | None] = []
+    executor = broker_v2_panel.ds.execute_sqlite_panel_action
+
+    async def execute(*args: object, **kwargs: object):
+        acted_as.append(kwargs.get("operator_identity"))  # type: ignore[arg-type]
+        return await executor(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(broker_v2_panel.ds, "execute_sqlite_panel_action", execute)
+    monkeypatch.setattr(broker_v2_panel.settings, "PANEL_OPERATOR_IDENTITY", "desk-operator")
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
+        answered = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions/quiesce",
+            json={
+                "action_id": "reconcile_now",
+                "revision": panel.json()["revision"],
+                "concurrency_token": action["concurrency_token"],
+                "idempotency_key": "who-asks",
+            },
+        )
+
+    assert answered.status_code == 200, answered.text
+    assert acted_as == ["desk-operator"]
+
+
 async def test_action_refuses_malformed_sid_before_touching_receipt_path(
     api,
     monkeypatch: pytest.MonkeyPatch,
