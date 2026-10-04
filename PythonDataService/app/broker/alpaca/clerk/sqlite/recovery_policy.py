@@ -214,12 +214,13 @@ class _Descriptor:
 
 
 def _confirmation(
-    title: str, explanation: str, confirm_label: str
+    title: str, explanation: str, confirm_label: str, *, required_token: str = ""
 ) -> Callable[[RecoveryPolicyContext], RecoveryConfirmation]:
     copy = RecoveryConfirmation(
         title=title,
         explanation=explanation,
         confirm_label=confirm_label,
+        required_token=required_token,
     )
     return lambda _ctx: copy
 
@@ -341,6 +342,7 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
             "The Clerk reads Alpaca again and settles the order only if what it reads "
             "agrees with what you said. It sends no order. This cannot be undone.",
             "Settle the order",
+            required_token="SETTLE",
         ),
     ),
     _Descriptor(
