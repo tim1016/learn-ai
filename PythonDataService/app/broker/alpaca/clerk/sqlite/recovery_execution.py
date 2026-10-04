@@ -8,6 +8,7 @@ cannot drift into separate guard implementations.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -17,12 +18,17 @@ from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
 from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource, RunResource
-from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ProjectedUnknownExitOrder,
+    RecoveryCapability,
+    SafeFlattenPlan,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionId,
     RecoveryPolicyContext,
     recheck_recovery_action,
+    settle_unknown_exit_order_token,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.residue_discharge import (
@@ -32,6 +38,14 @@ from app.broker.alpaca.clerk.sqlite.residue_discharge import (
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
     SafeFlattenResult,
+)
+from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
+    AttestationFindings,
+    OrderOutcomeAttestation,
+    UnknownOrderSettlementReceipt,
+    UnknownOrderSettlementRefused,
+    recorded_settlement,
+    settled_orders,
 )
 from app.broker.contract.errors import BrokerError
 
@@ -97,6 +111,24 @@ class ActiveSqliteRecoveryFacade(Protocol):
         reason: str | None,
     ) -> ResidueDischargeReceipt: ...
 
+    async def settle_unknown_exit_order(
+        self,
+        *,
+        strategy_instance_id: str,
+        presented: ProjectedUnknownExitOrder,
+        attestation: OrderOutcomeAttestation,
+        operator: str,
+        reason: str | None,
+    ) -> UnknownOrderSettlementReceipt: ...
+
+    async def check_unknown_exit_order(
+        self,
+        *,
+        strategy_instance_id: str,
+        presented: ProjectedUnknownExitOrder,
+        attestation: OrderOutcomeAttestation,
+    ) -> AttestationFindings: ...
+
 
 @dataclass(frozen=True)
 class RecoveryExecutionRequest:
@@ -107,6 +139,12 @@ class RecoveryExecutionRequest:
     # The operator's confirmed extended-hours limit for ``execute_safe_flatten``
     # (#2007); ``None`` everywhere else and inside the regular session.
     confirmed_limit: ConfirmedRecoveryLimit | None = None
+    # What the operator says Alpaca shows, for ``settle_unknown_exit_order``
+    # (#2854); ``None`` everywhere else.
+    attestation: OrderOutcomeAttestation | None = None
+    # Who asks: the installation's configured operator identity, recorded on a
+    # settled order. Never taken from a request body.
+    operator: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +198,11 @@ async def execute_recovery_action(
                 receipt_id=receipt.receipt_id,
                 recorded_at_ms=receipt.recorded_at_ms,
             )
+    # The same settlement asked for again: a settled order is no longer
+    # presented, so its token is spent, and the recorded receipt answers.
+    settled_before = recorded_settlement_result(facade, context=context, request=request)
+    if settled_before is not None:
+        return settled_before
     capability = recheck_recovery_action(
         context,
         action_id=request.action_id,
@@ -279,9 +322,136 @@ async def execute_recovery_action(
             receipt_id=f"transition:{receipt.sequence}",
             recorded_at_ms=receipt.recorded_at_ms,
         )
+    if request.action_id == "settle_unknown_exit_order":
+        strategy_instance_id = _require_strategy_instance(context)
+        presented = _presented_unknown_exit_order(context, capability, request.execution_ref)
+        if request.attestation is None:
+            raise RecoveryExecutionError(
+                "Say what Alpaca shows for this order: that it has no such order, or the order's "
+                "Alpaca order id. Nothing was changed."
+            )
+        if request.operator is None:
+            raise RecoveryExecutionError(
+                "A settled order records who settled it, and this request names no operator. "
+                "Nothing was changed."
+            )
+        try:
+            settled = await facade.settle_unknown_exit_order(
+                strategy_instance_id=strategy_instance_id,
+                presented=presented,
+                attestation=request.attestation,
+                operator=request.operator,
+                reason=request.reason,
+            )
+        except UnknownOrderSettlementRefused as exc:
+            raise RecoveryExecutionError(str(exc)) from exc
+        return RecoveryExecutionResult(
+            action_id=request.action_id,
+            applied=True,
+            receipt_id=f"transition:{settled.sequence}",
+            recorded_at_ms=settled.recorded_at_ms,
+        )
     raise RecoveryExecutionError(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "
         "it has no direct broker mutation"
+    )
+
+
+def recorded_settlement_result(
+    facade: ActiveSqliteRecoveryFacade,
+    *,
+    context: RecoveryPolicyContext,
+    request: RecoveryExecutionRequest,
+) -> RecoveryExecutionResult | None:
+    """The receipt of the settlement ``request`` asks for, when the Clerk already made it (#2854). Reads only.
+
+    ``None`` for any other request, and for a settlement that is not on the
+    ledger. The Clerk's own route names the order it settles
+    (``execution_ref``). A bot's page names none and sends only the token it
+    was presented: its order is the one, among the orders the bot's
+    settlements settled, that the settle action carried that token for. Not
+    the latest one alone: the bot may have settled another order before
+    this request was asked again. So a request about another order, or one
+    that was refused, is never answered with another settlement's receipt.
+    """
+    strategy_instance_id = context.strategy_instance_id
+    if (
+        request.action_id != "settle_unknown_exit_order"
+        or request.attestation is None
+        or strategy_instance_id is None
+    ):
+        return None
+    order_ref = request.execution_ref
+    if order_ref is None:
+        order_ref = next(
+            (
+                settled_order.order_ref
+                for settled_order in settled_orders(
+                    facade.repository, strategy_instance_id=strategy_instance_id
+                )
+                if hmac.compare_digest(
+                    settle_unknown_exit_order_token(context, settled_order), request.concurrency_token
+                )
+            ),
+            None,
+        )
+        if order_ref is None:
+            return None
+    settled = recorded_settlement(
+        facade.repository,
+        strategy_instance_id=strategy_instance_id,
+        order_ref=order_ref,
+        attestation=request.attestation,
+    )
+    if settled is None:
+        return None
+    return RecoveryExecutionResult(
+        action_id=request.action_id,
+        applied=False,
+        receipt_id=f"transition:{settled.sequence}",
+        recorded_at_ms=settled.recorded_at_ms,
+    )
+
+
+async def check_settlement_attestation(
+    facade: ActiveSqliteRecoveryFacade,
+    *,
+    context: RecoveryPolicyContext,
+    capability: RecoveryCapability,
+    attestation: OrderOutcomeAttestation,
+) -> AttestationFindings:
+    """What the Clerk reads at the broker now for ``attestation``, settling nothing (#2854).
+
+    ``capability`` is the settle action as ``context`` presents it, already
+    rechecked against the caller's token; the order asked about is the one
+    it authorizes. The reads a settlement would rest on are made and
+    answered; only :func:`execute_recovery_action` settles.
+    """
+    return await facade.check_unknown_exit_order(
+        strategy_instance_id=_require_strategy_instance(context),
+        presented=_presented_unknown_exit_order(context, capability, capability.execution_ref),
+        attestation=attestation,
+    )
+
+
+def _presented_unknown_exit_order(
+    context: RecoveryPolicyContext,
+    capability: RecoveryCapability,
+    execution_ref: str | None,
+) -> ProjectedUnknownExitOrder:
+    """The closing order an available settle action was presented for, as ``context`` read it (#2854).
+
+    ``execution_ref`` is the order the caller names; it must be the one the
+    capability authorizes.
+    """
+    if capability.execution_ref is None or execution_ref != capability.execution_ref:
+        raise RecoveryExecutionError(
+            "The order does not match the one authorized by the presented action."
+        )
+    return next(
+        order
+        for order in context.unknown_exit_orders
+        if order.order_ref == capability.execution_ref
     )
 
 

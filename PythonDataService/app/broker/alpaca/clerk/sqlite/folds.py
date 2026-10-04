@@ -54,10 +54,12 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ManualOrderReplacedFacts,
     OrderCancelRequestedFacts,
     OrderFillObservedFacts,
+    OrderOutcomeAttestedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
     StrategyInstanceRetiredFacts,
+    UncertaintyRaisedFacts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
@@ -88,6 +90,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     fold_uncertainty_resolved as _fold_uncertainty_resolved,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    open_or_refresh_episode as _open_or_refresh_episode,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     open_or_refresh_unknown_outcome as _open_or_refresh_unknown_outcome,
@@ -1598,6 +1603,47 @@ def _fold_order_cancel_requested(_conn: sqlite3.Connection, payload: dict[str, A
 
 
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", _fold_order_cancel_requested)
+
+
+def _fold_order_outcome_attested(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """An operator's attestation of an unknown order outcome settles the order in its own write (#2854).
+
+    The attestation and what it does are one transition, so a ledger never
+    holds one without the other, whenever the process stops.
+
+    ``absent`` ends the order's EXIT, citing the order, so the
+    unknown-outcome episode's identity for it closes with it. An EXIT whose
+    bot still holds the position fails, and two episodes are opened here, or
+    refresh the ones already open, from the envelopes the row records: the
+    ``EXIT_NOT_FLAT`` notice it ends under, and the ``EXIT_STUCK`` episode
+    under which the Clerk sends no order for the position by itself. Both
+    are in this one write, so no pass of the Clerk ever finds the first
+    without the second. An EXIT whose bot holds nothing succeeds, as
+    attributed flat.
+
+    ``exists`` records the order's broker order id on the order. The EXIT
+    stays as it is: the order's own evidence, read by that id, is folded by
+    the transitions that follow, or by the Clerk's next pass.
+    """
+    facts = OrderOutcomeAttestedFacts.from_facts_json(payload["facts_json"])
+    if facts.attestation == "exists":
+        conn.execute(
+            "UPDATE orders SET broker_order_id = COALESCE(broker_order_id, ?), updated_at_ms = ? "
+            "WHERE order_ref = ?",
+            (facts.broker_order_id, payload["recorded_at_ms"], payload["order_ref"]),
+        )
+        return
+    if facts.exit_not_flat is None or facts.exit_stuck is None:
+        _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+        return
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _open_or_refresh_episode(conn, payload, UncertaintyRaisedFacts(**facts.exit_not_flat))
+    _open_or_refresh_episode(
+        conn, payload, UncertaintyRaisedFacts(**facts.exit_stuck), beside_another=True
+    )
+
+
+DEFAULT_FOLD_REGISTRY.register("ORDER_OUTCOME_ATTESTED", _fold_order_outcome_attested)
 DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
 

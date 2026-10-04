@@ -147,8 +147,13 @@ class SyntheticBroker:
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[BrokerOrder]:
-        return filter_synthesized_orders(self._latest_orders(), status=status, limit=limit, after_ms=after_ms)
+        return filter_synthesized_orders(
+            self._latest_orders(), status=status, limit=limit, after_ms=after_ms,
+            symbols=symbols, until_ms=until_ms,
+        )
 
     async def list_activities(
         self,
@@ -505,6 +510,8 @@ def filter_synthesized_orders(
     status: str | None,
     limit: int | None,
     after_ms: int | None,
+    symbols: tuple[str, ...] | None = None,
+    until_ms: int | None = None,
 ) -> list[BrokerOrder]:
     """The read port's order filter, newest first (shared with the shadow read port).
 
@@ -525,6 +532,11 @@ def filter_synthesized_orders(
             raise ValueError(f"unknown order query category {status!r}")
     if after_ms is not None:
         orders = [order for order in orders if (order.updated_at_ms or 0) >= after_ms]
+    if symbols is not None:
+        wanted = {symbol.upper() for symbol in symbols}
+        orders = [order for order in orders if order.symbol.upper() in wanted]
+    if until_ms is not None:
+        orders = [order for order in orders if (order.submitted_at_ms or 0) < until_ms]
     return list(reversed(orders))[:limit]
 
 

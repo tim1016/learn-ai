@@ -47,6 +47,7 @@ const QUIESCE_ACTIONS: Readonly<Record<PanelQuiesceActionId, true>> = {
   execute_safe_flatten: true,
   reconcile_now: true,
   discharge_attributed_residue: true,
+  settle_unknown_exit_order: true,
 };
 
 function isQuiesceAction(actionId: PanelActionRequest['action_id']): actionId is PanelQuiesceActionId {

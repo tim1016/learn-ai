@@ -92,6 +92,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
     DryRunAuthorityLeaseLostError,
     ExecutionAuthorityRevivedError,
+    IdempotencyKeyConflictError,
     StaleRevisionError,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -221,7 +222,13 @@ def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest
             "conflict"
             if isinstance(
                 error,
-                (StaleRevisionError, ExecutionAuthorityRevivedError, DryRunAuthorityLeaseLostError),
+                (
+                    StaleRevisionError,
+                    ExecutionAuthorityRevivedError,
+                    DryRunAuthorityLeaseLostError,
+                    # Nothing applied: the key belongs to another request (#2854).
+                    IdempotencyKeyConflictError,
+                ),
             )
             else "failure"
         )

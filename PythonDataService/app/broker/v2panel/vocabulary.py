@@ -131,6 +131,7 @@ ActionId = Literal[
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
 ]
@@ -143,6 +144,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
 )
@@ -162,13 +164,16 @@ RecordedActionId = Literal[ActionId, RetiredActionId]
 # reconcile (#2351) — the one closed set a draining lane still executes. They
 # travel on their own operation (``bot_panel_quiesce_action``, whose request
 # schema is this Literal) while the rest of the action set refuses: new
-# deployment would start decisions again. All five are the SQLite recovery
+# deployment would start decisions again. All six are the SQLite recovery
 # executor's (``recovery_execution.execute_recovery_action``), which for these
 # ids stops decisions, cancels owned verified working orders, submits a
-# reducing order, reconciles against the broker, or discharges a residue the
+# reducing order, reconciles against the broker, discharges a residue the
 # broker proves it does not hold (#2381) — the one cure a draining lane
 # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs to answer quiet; it requires no
-# active run, so it cannot let a bot trade again. Excluded on purpose:
+# active run, so it cannot let a bot trade again — or settles a closing order
+# whose outcome is unknown on what the Clerk itself reads at the broker
+# (#2854): a lane holding one cannot answer quiet either, and the action
+# sends no order and requires no active run. Excluded on purpose:
 # ``resolve_execution_coverage`` rewrites fill evidence and can lift a hold,
 # which can let a still-running bot submit ENTERs again; the view and
 # preparation ids (``prepare_safe_flatten``, ``open_custody_timeline``,
@@ -179,6 +184,7 @@ QuiesceActionId = Literal[
     "execute_safe_flatten",
     "reconcile_now",
     "discharge_attributed_residue",
+    "settle_unknown_exit_order",
 ]
 QUIESCE_ACTION_IDS: Final[tuple[QuiesceActionId, ...]] = get_args(QuiesceActionId)
 if not set(QUIESCE_ACTION_IDS) <= set(ACTION_IDS):
@@ -364,6 +370,11 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Discharge stranded residue",
         "Write off an attributed position the broker does not hold. The Clerk re-reads "
         "the broker first and sends no order.",
+    ),
+    "settle_unknown_exit_order": OperatorCopy(
+        "Settle the uncertain order",
+        "Say what Alpaca shows for a closing order the Clerk could not confirm. The Clerk "
+        "reads Alpaca itself first and sends no order.",
     ),
     "stop_bot_decisions": OperatorCopy(
         "Stop bot decisions",

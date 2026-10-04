@@ -25,6 +25,11 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     cumulative_recovery_fills_for_order,
     execution_coverage_proof,
 )
+from app.broker.alpaca.clerk.sqlite.exit_recovery import (
+    RECOVERY_STOPPED_AFTER_FAILURES,
+    attested_absent_order_ref,
+    recovery_stopped_because,
+)
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
 from app.broker.alpaca.clerk.sqlite.order_projection import (
@@ -77,6 +82,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODE_SQL_PLACEHOLDERS,
     ExecutionCoverageConflictCause,
 )
+from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import read_unknown_exit_orders
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
@@ -114,9 +120,9 @@ def project_uncertainties(
     stopped recovery take precedence even without a fresh evaluation.
     """
     rows = tuple(rows)
-    escalated = frozenset(
-        row["strategy_instance_id"] for row in rows if row["reason_code"] == EXIT_STUCK_REASON_CODE
-    )
+    escalated = {
+        row["strategy_instance_id"]: row for row in rows if row["reason_code"] == EXIT_STUCK_REASON_CODE
+    }
     not_flat = frozenset(
         row["strategy_instance_id"]
         for row in rows
@@ -128,9 +134,10 @@ def project_uncertainties(
             row,
             now_ms=now_ms,
             recovery_connection=recovery_connection,
-            redrives_stopped=(
-                row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
-                and row["strategy_instance_id"] in escalated
+            stuck=(
+                escalated.get(row["strategy_instance_id"])
+                if row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
+                else None
             ),
             exit_working=(
                 row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
@@ -148,7 +155,9 @@ _REDRIVES_STOPPED_NEXT_STEP = (
 """An escalated ``EXIT_NOT_FLAT``'s next step (#2440 review).
 
 The episode's own next step was written when the watchdog was still going to
-try, and may point at the time it no longer shows."""
+try, and may point at the time it no longer shows. Not so the notice of an
+exit an operator settled as not sent (#2854): the watchdog never tried for
+it, and its own next step already says what the operator does."""
 
 
 _UNREADABLE_LOGGED: set[tuple[str, int]] = set()
@@ -178,10 +187,16 @@ def _projected_uncertainty(
     *,
     now_ms: int,
     recovery_connection: sqlite3.Connection | None,
-    redrives_stopped: bool,
+    stuck: Mapping[str, Any] | None,
     exit_working: bool,
 ) -> ProjectedUncertainty:
-    """Project current cause and recovery evidence; contain one unreadable row."""
+    """Project current cause and recovery evidence; contain one unreadable row.
+
+    ``stuck`` is the open ``EXIT_STUCK`` episode beside an ``EXIT_NOT_FLAT``
+    one, under which the Clerk sends nothing for the position by itself.
+    """
+    redrives_stopped = stuck is not None and attested_absent_order_ref(stuck) is None
+    stopped_because = RECOVERY_STOPPED_AFTER_FAILURES if stuck is None else recovery_stopped_because(stuck)
     recovery_status = None
     try:
         cause_facts = _checked_record(
@@ -194,7 +209,7 @@ def _projected_uncertainty(
                 if recovery_connection is None else read_recovery_status(
                     recovery_connection, strategy_instance_id=row["strategy_instance_id"],
                     uncertainty_id=row["uncertainty_id"], now_ms=now_ms,
-                    stopped=redrives_stopped, working=exit_working,
+                    stopped=stuck is not None, working=exit_working, stopped_because=stopped_because,
                 )
             )
     except (TypeError, ValueError, OverflowError):
@@ -582,6 +597,12 @@ class SqliteClerkProjectionReader:
             ),
             published_pass=None if strategy_instance_id is None else published_pass,
             subject_custody_sequence=subject_custody_sequence,
+            # Settled for one bot from that bot's page only (#2854).
+            unknown_exit_orders=(
+                ()
+                if strategy_instance_id is None
+                else read_unknown_exit_orders(self._conn, strategy_instance_id)
+            ),
         )
 
     def timeline_page(

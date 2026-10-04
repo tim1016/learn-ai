@@ -767,6 +767,162 @@ class AttributedResidueDischargedFacts:
 
 
 @dataclass(frozen=True)
+class EndedForeignOrder:
+    """An order the Clerk did not place, in the attested order's symbol, that had ended when it was read (#2854).
+
+    ``side`` is the side it was on and ``filled_quantity`` what it had
+    filled on that side, which may be nothing.
+    """
+
+    broker_order_id: str
+    broker_state: str
+    side: str
+    filled_quantity: float
+
+
+_ORDER_OUTCOME_ATTESTATIONS = ("absent", "exists")
+# What only one of the two attestations records. Omitted when absent, so a
+# row carries exactly what its own attestation read.
+_ABSENT_ATTESTATION_FIELDS = (
+    "open_orders_read",
+    "orders_since_read",
+    "orders_read_since_ms",
+    "broker_qty",
+    "account_attributed_qty",
+)
+_EXISTS_ATTESTATION_FIELDS = ("broker_order_id", "broker_state", "broker_filled_quantity")
+# What an ``exists`` attestation records only when the broker stated it.
+_EXISTS_ATTESTATION_OPTIONAL_FIELDS = ("broker_filled_avg_price", "broker_updated_at_ms")
+
+
+@dataclass(frozen=True)
+class OrderOutcomeAttestedFacts:
+    """``ORDER_OUTCOME_ATTESTED`` (#2854): an operator said what Alpaca shows for an
+    order whose outcome was unknown, and the Clerk's own reads agreed.
+
+    Who said it (``operator``, the installation's configured operator
+    identity) and their reason when given; the order it was said of, by the
+    client order id that was sent, with its symbol, side and quantity and
+    its latest send (``latest_send_sequence``); the open unknown-outcome
+    episode it settles; and when the Clerk read the broker.
+
+    ``attestation`` is ``"absent"`` -- Alpaca has no such order -- or
+    ``"exists"`` -- it is the order under ``broker_order_id``. Each records
+    what the Clerk itself read for it, and nothing of the other:
+
+    - ``absent``: how many open orders, and how many orders of any state in
+      the order's symbol since ``orders_read_since_ms``, it read, none of
+      them this order and none of them working. ``broker_qty`` and
+      ``account_attributed_qty`` are the broker's position in the symbol and
+      the account-wide attribution as the Clerk read them then. They are a
+      record of what was seen, and no condition of the attestation: a
+      position cannot show whether the order traded.
+      ``ended_foreign_orders`` are the orders among those read, on either
+      side, that the Clerk did not place, each with its side and what it had
+      filled: what the operator and the Clerk were looking at when the order
+      was ended as not sent. Each had ended. Recorded only when there were
+      any. ``answered_as_order`` is the order Alpaca answered this order's
+      send with, under another client order id, as the Clerk read it: ended,
+      with nothing filled. Recorded only for an order whose send was
+      answered so, and never among ``ended_foreign_orders``.
+    - ``exists``: the broker order id that was read, its state and its
+      cumulative filled quantity as read. ``broker_filled_avg_price`` is the
+      average price of what had filled, recorded when anything had, and
+      ``broker_updated_at_ms`` the broker's own time for that state, when it
+      gave one. With them the row holds everything the order's evidence is
+      folded from, so an order that had ended when it was read can be
+      finished from the row should the broker no longer answer for its id
+      (``exit_resolution._attested_order_as_recorded``). Both are omitted
+      when absent, like every optional fact here.
+
+    The row is the settlement, not a note beside it: its own fold settles
+    the order (``folds._fold_order_outcome_attested``), so no ledger holds an
+    attestation that did not take effect. An ``absent`` row ends the order's
+    EXIT. ``exit_not_flat`` is the ``EXIT_NOT_FLAT`` notice it ends under and
+    ``exit_stuck`` the ``EXIT_STUCK`` episode that keeps the Clerk from
+    sending any order for the position by itself -- each the whole envelope,
+    opened by the same fold. The two are recorded together, when the bot
+    still holds the position; without them the bot held nothing and the EXIT
+    ended attributed-flat. An ``exists`` row records the order's broker order
+    id on the order, which the Clerk reads it by from then on.
+    """
+
+    attestation: str
+    operator: str
+    client_order_id: str
+    symbol: str
+    side: str
+    quantity: float
+    latest_send_sequence: int
+    uncertainty_id: str
+    broker_observed_at_ms: int
+    operator_reason: str | None = None
+    open_orders_read: int | None = None
+    orders_since_read: int | None = None
+    orders_read_since_ms: int | None = None
+    broker_qty: float | None = None
+    account_attributed_qty: float | None = None
+    ended_foreign_orders: tuple[EndedForeignOrder, ...] | None = None
+    answered_as_order: EndedForeignOrder | None = None
+    exit_not_flat: dict[str, Any] | None = None
+    exit_stuck: dict[str, Any] | None = None
+    broker_order_id: str | None = None
+    broker_state: str | None = None
+    broker_filled_quantity: float | None = None
+    broker_filled_avg_price: float | None = None
+    broker_updated_at_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.attestation not in _ORDER_OUTCOME_ATTESTATIONS:
+            raise ValueError(f"Unknown order-outcome attestation {self.attestation!r}")
+        if not self.operator or len(self.operator) > 64:
+            raise ValueError("An attestation records who made it, in 1 to 64 characters")
+        recorded, left_out = (
+            (
+                _ABSENT_ATTESTATION_FIELDS,
+                (*_EXISTS_ATTESTATION_FIELDS, *_EXISTS_ATTESTATION_OPTIONAL_FIELDS),
+            )
+            if self.attestation == "absent"
+            else (
+                _EXISTS_ATTESTATION_FIELDS,
+                (
+                    *_ABSENT_ATTESTATION_FIELDS,
+                    "ended_foreign_orders",
+                    "answered_as_order",
+                    "exit_not_flat",
+                    "exit_stuck",
+                ),
+            )
+        )
+        if any(getattr(self, name) is None for name in recorded) or any(
+            getattr(self, name) is not None for name in left_out
+        ):
+            raise ValueError(
+                f"An {self.attestation!r} attestation records {', '.join(recorded)} and none of "
+                f"{', '.join(left_out)}"
+            )
+        if (self.exit_not_flat is None) != (self.exit_stuck is None):
+            raise ValueError(
+                "An attestation that leaves a position open records the notice its EXIT ends "
+                "under and the episode that holds the position, both or neither"
+            )
+
+    def to_facts_json(self) -> str:
+        return canonicalize({name: value for name, value in asdict(self).items() if value is not None})
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderOutcomeAttestedFacts:
+        facts = json.loads(facts_json)
+        if facts.get("ended_foreign_orders") is not None:
+            facts["ended_foreign_orders"] = tuple(
+                EndedForeignOrder(**order) for order in facts["ended_foreign_orders"]
+            )
+        if facts.get("answered_as_order") is not None:
+            facts["answered_as_order"] = EndedForeignOrder(**facts["answered_as_order"])
+        return cls(**facts)
+
+
+@dataclass(frozen=True)
 class OrderFillObservedFacts:
     """The evidence ``_fold_order_fill_observed`` needs beyond the outer
     transition row: Alpaca's REST-reported *cumulative* ``filled_quantity``

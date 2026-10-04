@@ -605,8 +605,13 @@ class ShadowAccountReadPort:
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[BrokerOrder]:
-        return filter_synthesized_orders(self._book.orders(), status=status, limit=limit, after_ms=after_ms)
+        return filter_synthesized_orders(
+            self._book.orders(), status=status, limit=limit, after_ms=after_ms,
+            symbols=symbols, until_ms=until_ms,
+        )
 
     async def list_activities(
         self,

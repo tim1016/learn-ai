@@ -49,12 +49,20 @@ class BrokerReadPort(Protocol):
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
     ) -> list[BrokerOrder]:
         """Return orders newest first by submitted timestamp.
 
         Consumers may retain the first rows as the most recent per-symbol
         activity, so every broker adapter must establish this ordering before
         applying its vendor-side limit.
+
+        ``symbols`` narrows the answer to orders in those symbols, and
+        ``until_ms`` to orders submitted before it. With ``after_ms`` they
+        let a caller read one symbol's orders in a window a page at a time:
+        the next page ends where the oldest order of the last one was
+        submitted.
         """
         ...
 

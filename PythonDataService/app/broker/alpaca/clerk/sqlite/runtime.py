@@ -135,7 +135,10 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     unresolved_order_refs,
     working_order_refs,
 )
-from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ProjectedUnknownExitOrder,
+    SafeFlattenPlan,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -161,6 +164,13 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLED_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
+    AttestationFindings,
+    OrderOutcomeAttestation,
+    UnknownOrderSettlementReceipt,
+    check_unknown_exit_order,
+    settle_unknown_exit_order,
+)
 from app.broker.alpaca.clerk.stream_health import (
     STREAM_HEALTH_REASON_CODE,
     StreamHealthGate,
@@ -1853,6 +1863,46 @@ class SqliteAlpacaClerkFacade:
             strategy_instance_id=strategy_instance_id,
             symbol=symbol,
             operator_reason=reason,
+        )
+
+    async def settle_unknown_exit_order(
+        self,
+        *,
+        strategy_instance_id: str,
+        presented: ProjectedUnknownExitOrder,
+        attestation: OrderOutcomeAttestation,
+        operator: str,
+        reason: str | None,
+    ) -> UnknownOrderSettlementReceipt:
+        """Settle one bot's closing order on an operator's attestation, once this Clerk's own reads agree (#2854)."""
+        return await settle_unknown_exit_order(
+            self._repo,
+            read=self._read,
+            trade=self._trade,
+            intake=self._intake,
+            strategy_instance_id=strategy_instance_id,
+            presented=presented,
+            attestation=attestation,
+            operator=operator,
+            operator_reason=reason,
+        )
+
+    async def check_unknown_exit_order(
+        self,
+        *,
+        strategy_instance_id: str,
+        presented: ProjectedUnknownExitOrder,
+        attestation: OrderOutcomeAttestation,
+    ) -> AttestationFindings:
+        """What this Clerk reads at the broker for an attestation, settling nothing (#2854)."""
+        return await check_unknown_exit_order(
+            self._repo,
+            read=self._read,
+            trade=self._trade,
+            intake=self._intake,
+            strategy_instance_id=strategy_instance_id,
+            presented=presented,
+            attestation=attestation,
         )
 
     async def cancel_verified_working_orders(

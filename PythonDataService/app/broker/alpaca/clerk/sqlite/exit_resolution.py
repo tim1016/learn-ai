@@ -78,7 +78,7 @@ import base64
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import ClassVar, Literal, NamedTuple
+from typing import Any, ClassVar, Literal, NamedTuple, TypedDict
 
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
@@ -106,8 +106,10 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
     OrderCancelRequestedFacts,
+    OrderOutcomeAttestedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
+    UncertaintyRaisedFacts,
     UnknownOutcomeNotice,
 )
 from app.broker.alpaca.clerk.sqlite.flatten_cover import (
@@ -115,6 +117,7 @@ from app.broker.alpaca.clerk.sqlite.flatten_cover import (
     FLATTEN_COVER_NEXT_STEPS,
     account_lists_order,
     flatten_cover_refusal,
+    held_text,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -159,8 +162,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     raise_uncertainty,
     require_capability,
     resolve_exit_not_flat_uncertainty,
+    uncertainty_envelope,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause, ExitStuckCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import RedriveThenEscalate, reason_age_policy
+from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
+from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -692,6 +699,24 @@ def _fold_exit_not_flat(
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     held = f"attributed_qty={attributed_qty} remains for {symbol!r}."
+    # The notice is written before the failure (#2854). Each is its own
+    # write, and a process that stops between them must not leave an EXIT
+    # that failed and released its entry with nothing telling the operator
+    # or the watchdog: no pass visits a failed EXIT again. Stopped after the
+    # notice alone, the EXIT is still unfinished, so the next pass drives it
+    # here again; the notice it then raises is the one already open.
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=effect.strategy_instance_id,
+        **_exit_not_flat_notice(
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=attributed_qty,
+            headline=headline,
+            explanation=explanation,
+            next_step=next_step,
+        ),
+    )
     fold_failed(
         repo,
         effect_operation_id=effect_operation_id,
@@ -702,27 +727,53 @@ def _fold_exit_not_flat(
         transition_kind="EXIT_NOT_FLAT",
         refusal=refusal,
     )
-    raise_uncertainty(
-        repo,
-        strategy_instance_id=effect.strategy_instance_id,
-        reason_code=EXIT_NOT_FLAT_REASON_CODE,
-        headline=headline,
-        explanation=explanation,
-        operator_impact=_EXIT_NOT_FLAT_OPERATOR_IMPACT,
-        next_step=next_step,
-        evidence_refs=(order_ref,),
-        cause_facts=ExitNotFlatCause(
-            symbol=symbol.upper(),
-            attributed_qty=attributed_qty,
-        ).to_mapping(),
-        severity="error",
-    )
 
 
 _EXIT_NOT_FLAT_OPERATOR_IMPACT = (
     "New exposure is on hold for this strategy; exact risk reduction and "
     "reconciliation remain available."
 )
+
+
+class _ExitNotFlatNotice(TypedDict):
+    """What every ``EXIT_NOT_FLAT`` episode an EXIT ends under is raised with."""
+
+    reason_code: str
+    headline: str
+    explanation: str
+    operator_impact: str
+    next_step: str
+    evidence_refs: tuple[str, ...]
+    cause_facts: dict[str, Any]
+    severity: str
+
+
+def _exit_not_flat_notice(
+    *,
+    order_ref: str,
+    symbol: str,
+    attributed_qty: float,
+    headline: str,
+    explanation: str,
+    next_step: str,
+) -> _ExitNotFlatNotice:
+    """The ``EXIT_NOT_FLAT`` notice of an EXIT that ended with ``attributed_qty`` of ``symbol`` still held.
+
+    One shape for the episode raised as its own transition
+    (:func:`_fold_exit_not_flat`) and the one an operator's attestation
+    opens in the write that ends the EXIT
+    (:func:`attested_absent_exit_episodes`): the watchdog reads both the same.
+    """
+    return {
+        "reason_code": EXIT_NOT_FLAT_REASON_CODE,
+        "headline": headline,
+        "explanation": explanation,
+        "operator_impact": _EXIT_NOT_FLAT_OPERATOR_IMPACT,
+        "next_step": next_step,
+        "evidence_refs": (order_ref,),
+        "cause_facts": ExitNotFlatCause(symbol=symbol.upper(), attributed_qty=attributed_qty).to_mapping(),
+        "severity": "error",
+    }
 
 
 def _fold_observed_reducing_order(
@@ -1645,6 +1696,12 @@ async def _refresh_or_resume_reducing_order(
     run: OffLoop,
 ) -> None:
     observed = await broker.observe_exact(reducing.client_order_id)
+    if observed is None and reducing.broker_order_id is not None:
+        observed = await _observe_by_broker_order_id(broker, reducing)
+        if observed is None:
+            # The broker answered that it has no order under either id. A
+            # read that failed is an error above, and never reaches here.
+            observed = await run(lambda: _attested_order_as_recorded(repo, reducing))
     if isinstance(observed, BrokerError):
         await run(
             lambda: fold_uncertain(
@@ -1721,6 +1778,96 @@ async def _refresh_or_resume_reducing_order(
         pricing=pricing,
         read=read,
         run=run,
+    )
+
+
+async def _observe_by_broker_order_id(
+    broker: ClaimedBrokerIO, reducing: OrderResource
+) -> BrokerOrder | BrokerError | None:
+    """The reducing order read by the broker order id the Clerk recorded for it (#2854).
+
+    Asked only when the order's exact lookup by client order id reads absent
+    while the Clerk holds a broker order id for it: the broker acknowledged
+    the order, or an operator pointed the Clerk at it
+    (:func:`fold_exit_attested_order`), so "absent" is a lookup that does not
+    show an order the broker has. Without this the order, working or filled,
+    folded back to ``unknown`` on every pass.
+
+    The answer is evidence only for the order it names: one that carries
+    another client order id is an error, never this order's state.
+    """
+    assert reducing.broker_order_id is not None
+    observed = await broker.observe_broker_order(reducing.broker_order_id)
+    if isinstance(observed, BrokerOrder) and observed.client_order_id != reducing.client_order_id:
+        return BrokerError(
+            f"broker order {reducing.broker_order_id!r} carries "
+            f"client_order_id={observed.client_order_id!r}, expected {reducing.client_order_id!r}"
+        )
+    return observed
+
+
+def _attested_order_as_recorded(
+    repo: ClerkSqliteRepository, reducing: OrderResource
+) -> BrokerOrder | None:
+    """The reducing order as the Clerk read it for an operator's attestation, when that read was its end (#2854).
+
+    For an order taken up by its broker order id
+    (:func:`fold_exit_attested_order`) whose evidence was not all folded
+    before the process stopped, once the broker answers that it has no order
+    under that id. The attestation's own row records what the Clerk read of
+    the order: its state, its cumulative filled quantity, the average price
+    of that, and the broker's time for it. An order that had ended does
+    nothing more, so that read is its whole outcome, and it is folded from
+    the row exactly as it would have been from the answer: the fill is
+    credited by its difference from what is already recorded, so never
+    twice.
+
+    ``None``, and the order stays ``unknown`` for the next pass to ask the
+    broker about again, for an order no attestation took up under this
+    broker order id, for one that was still working when it was read -- what
+    it did since is not on the row -- and for a row that records a fill and
+    no price for it.
+
+    Asked only after the broker answered that it has no such order. A read
+    that failed is not that answer, and is retried.
+    """
+    row = repo.last_order_transition(
+        order_ref=reducing.order_ref, transition_kind="ORDER_OUTCOME_ATTESTED"
+    )
+    if row is None:
+        return None
+    facts = OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
+    if facts.attestation != "exists" or facts.broker_order_id != reducing.broker_order_id:
+        return None
+    assert facts.broker_state is not None and facts.broker_filled_quantity is not None
+    if not _is_terminal(facts.broker_state):
+        return None
+    if facts.broker_filled_quantity > 0 and facts.broker_filled_avg_price is None:
+        return None
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    return BrokerOrder(
+        broker=BROKER_ID,
+        order_id=facts.broker_order_id,
+        client_order_id=reducing.client_order_id,
+        symbol=facts.symbol,
+        asset_class=None,
+        side=facts.side.lower(),
+        order_type=created.order_type,
+        time_in_force=created.time_in_force,
+        quantity=facts.quantity,
+        filled_quantity=facts.broker_filled_quantity,
+        limit_price=created.limit_price,
+        stop_price=None,
+        extended_hours=created.extended_hours,
+        filled_avg_price=facts.broker_filled_avg_price,
+        status=facts.broker_state,
+        submitted_at_ms=None,
+        created_at_ms=None,
+        updated_at_ms=facts.broker_updated_at_ms,
+        filled_at_ms=None,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        observed_at_ms=facts.broker_observed_at_ms,
     )
 
 
@@ -2341,6 +2488,200 @@ def _fold_submit_refused(
     )
 
 
+ORDER_ATTESTED_ABSENT = "ORDER_ATTESTED_ABSENT"
+"""How an EXIT ended whose closing order an operator attested Alpaca does not have (#2854)."""
+
+
+class AttestedAbsentEpisodes(NamedTuple):
+    """The two episodes an EXIT ends under when an operator attested Alpaca does not have its closing order (#2854)."""
+
+    exit_not_flat: UncertaintyRaisedFacts
+    exit_stuck: UncertaintyRaisedFacts
+
+
+def attested_absent_exit_episodes(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    broker_qty: float,
+    account_attributed_qty: float,
+    observed_at_ms: int,
+) -> AttestedAbsentEpisodes | None:
+    """The episodes an EXIT ends under when an operator attested Alpaca does not have its closing order (#2854).
+
+    The caller has read the broker itself and found no such order and none
+    working on the symbol (``unknown_order_attestation``), and records both
+    envelopes on the one transition that ends the EXIT: the order is ended
+    as not sent and the EXIT fails releasably (owner decision on #2854), so
+    its entry is freed. Nothing is written here.
+
+    No read of the account shows whether the order traded, so the position
+    is left to the operator. ``exit_not_flat`` says the position is still
+    open. ``exit_stuck`` is the episode the watchdog escalates to once its
+    re-drives have failed (``exit_watchdog``), opened here with no re-drive
+    tried: under it the Clerk sends no order for the position by itself.
+    The operator sells the position, with the Flatten's own check of the
+    account, or writes it off; either leaves the bot attributed-flat, which
+    resolves both episodes as it resolves any stuck exit.
+
+    The attributed quantity is never changed by this. ``broker_qty`` and
+    ``account_attributed_qty`` -- the broker's position in the symbol and the
+    account-wide attribution, as the caller read them -- are told, and are
+    no proof of anything. Each quantity is said by its own sign, a short as a
+    short, and what to do is said by the order's side: a closing sale is
+    made again by selling, a cover by buying back.
+
+    ``None`` for an EXIT whose bot holds nothing in the symbol: it has
+    nothing left to exit and ends attributed-flat instead, citing the same
+    order, as a resubmission does (:func:`_created_leg_may_be_sent`).
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    created = _reducing_order_facts(repo, order_ref)
+    held = repo.position(effect.strategy_instance_id, created.symbol)
+    if not position_quantity_is_nonzero(held):
+        return None
+    symbol = created.symbol
+    covers = created.side.upper() == "BUY"
+    still = f"{held_text(held, symbol)} is still {'held' if held > 0 else 'open'}"
+    sends_nothing = f"sends no order for {'it' if covers else 'them'} by itself"
+    cure = (
+        "Buy it back or write it off from the bot's page."
+        if covers
+        else "Sell them or write them off from the bot's page."
+    )
+    exit_not_flat = uncertainty_envelope(
+        **_exit_not_flat_notice(
+            order_ref=order_ref,
+            symbol=symbol,
+            attributed_qty=held,
+            headline="A closing order was settled as not sent; the position is still open",
+            explanation=(
+                f"The Clerk could not confirm the order to {_the_reduction(created)}. An operator "
+                "said Alpaca has no such order, the Clerk's own reads of Alpaca found no order under "
+                f"its client order id and none working on {symbol}, and the exit was ended as not "
+                f"sent; {still}. When the Clerk read the account, Alpaca held "
+                f"{held_text(broker_qty, symbol)} and the Clerk's records said "
+                f"{held_text(account_attributed_qty, symbol)}; that does not show whether the order "
+                f"traded. The Clerk {sends_nothing}."
+            ),
+            next_step=(
+                "Look at this account's position at Alpaca. "
+                + (
+                    "If Alpaca is not short these shares, write off the short the Clerk records; "
+                    "otherwise buy back what is short. Both are on the bot's page."
+                    if covers
+                    else "If Alpaca does not hold these shares, write off the missing shares; "
+                    "otherwise sell what is held. Both are on the bot's page."
+                )
+            ),
+        )
+    )
+    stuck_reason_code = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate).escalate_to
+    carried = _open_exit_episode(repo, effect.strategy_instance_id, EXIT_NOT_FLAT_REASON_CODE)
+    standing = _standing_stuck_cause(repo, effect.strategy_instance_id, stuck_reason_code)
+    exit_stuck = uncertainty_envelope(
+        reason_code=stuck_reason_code,
+        headline="A closing order was settled as not sent; the Clerk sends no order for the position by itself",
+        explanation=(
+            f"An operator said Alpaca does not have this bot's order to {_the_reduction(created)}, "
+            f"and the Clerk ended this exit as not sent. It holds {held_text(held, symbol)} for the "
+            f"bot and {sends_nothing}."
+        ),
+        operator_impact=(
+            "New exposure stays on hold for this strategy, and the Clerk sends no order for this "
+            "position by itself. Exact operator reduction and the write-off remain available."
+        ),
+        next_step=cure,
+        evidence_refs=(order_ref,),
+        cause_facts=ExitStuckCause(
+            symbol=symbol.upper(),
+            attributed_qty=held,
+            redrive_count=0 if standing is None else standing.redrive_count,
+            first_observed_at_ms=(
+                standing.first_observed_at_ms
+                if standing is not None
+                else observed_at_ms if carried is None else carried["observed_at_ms"]
+            ),
+            attested_absent_order_ref=order_ref,
+        ).to_mapping(),
+        severity="error",
+    )
+    return AttestedAbsentEpisodes(exit_not_flat=exit_not_flat, exit_stuck=exit_stuck)
+
+
+def _open_exit_episode(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, reason_code: str
+) -> dict[str, Any] | None:
+    return repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=reason_code, strategy_instance_id=strategy_instance_id
+    )
+
+
+def _standing_stuck_cause(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, stuck_reason_code: str
+) -> ExitStuckCause | None:
+    """The cause of the bot's open stuck-EXIT episode, when it has one this build can read.
+
+    An attestation refreshes an episode that is already open: how many
+    re-drives it had seen, and since when, stay as recorded.
+    """
+    open_stuck = _open_exit_episode(repo, strategy_instance_id, stuck_reason_code)
+    if open_stuck is None:
+        return None
+    try:
+        return ExitStuckCause.from_mapping(
+            UncertaintyRaisedFacts.from_facts_json(open_stuck["facts_json"]).cause_facts
+        )
+    except (TypeError, ValueError, KeyError):
+        # An episode this build cannot read is replaced whole.
+        return None
+
+
+def fold_exit_attested_order(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, observed: BrokerOrder
+) -> None:
+    """Take up a closing order an operator pointed the Clerk at by its Alpaca order id (#2854).
+
+    The caller read the order by that id and checked it is this EXIT's own:
+    it carries the reducing order's client order id, symbol, side and
+    quantity (``unknown_order_attestation``). From here it is folded exactly
+    as the answer of the order's own exact lookup is
+    (:func:`_fold_observed_reducing_order`), and the EXIT is finalized on it.
+    A working order is followed. A fill is credited from the order's
+    cumulative total, by its difference from what is already recorded, so
+    never twice. An order that ended unfilled fails the EXIT through
+    ``EXIT_NOT_FLAT``.
+
+    The attestation's own transition already recorded the order's broker
+    order id on the order, before any of this is written. So should the
+    process stop between the writes made here, each of which commits alone,
+    the next pass reads the order by that id while its client-id lookup still
+    reads absent (:func:`_observe_by_broker_order_id`) and folds what is
+    left; nothing here is lost with it. Should the broker answer that pass
+    that it has no order under the id, an order that had ended when the
+    attestation read it is finished from the attestation's own record
+    (:func:`_attested_order_as_recorded`).
+    """
+    reducing = _read_exit_claim_state(repo, effect_operation_id).reducing
+    if reducing is None or observed.client_order_id != reducing.client_order_id:
+        raise AssertionError(
+            f"broker order {observed.order_id!r} is not EXIT {effect_operation_id!r}'s reducing order"
+        )
+    _fold_observed_reducing_order(
+        repo,
+        effect_operation_id=effect_operation_id,
+        reducing=reducing,
+        observed=observed,
+        simulated_authority=False,
+    )
+    # Read again: the fold above settled the unknown outcome this EXIT was in.
+    _finalize_claimed_exit(
+        repo, effect_operation_id, _read_exit_claim_state(repo, effect_operation_id), reducing
+    )
+
+
 def priced_reduction_reference_price(repo: ClerkSqliteRepository, order_ref: str) -> float | None:
     """The bid (sell) or ask (cover) a priced reducing leg's fills are measured from.
 
@@ -2558,10 +2899,9 @@ def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
         anchor_ms = created["recorded_at_ms"]
         sends = 0
     else:
-        anchor_ms = (
-            latest.requested["recorded_at_ms"]
-            if latest.answer is None
-            else max(latest.requested["recorded_at_ms"], latest.answer["recorded_at_ms"])
+        anchor_ms = send_wait_from_ms(
+            sent_at_ms=latest.requested["recorded_at_ms"],
+            answer_recorded_at_ms=None if latest.answer is None else latest.answer["recorded_at_ms"],
         )
         sends = repo.count_order_transitions(
             order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED", at_most=_SENDS_COUNTED
@@ -2596,8 +2936,10 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
 
 
 __all__ = [
+    "attested_absent_exit_episodes",
     "cancel_and_prove_owned_entry",
     "flatten_send_refusal",
+    "fold_exit_attested_order",
     "priced_reduction_reference_price",
     "resolve_exit",
 ]
