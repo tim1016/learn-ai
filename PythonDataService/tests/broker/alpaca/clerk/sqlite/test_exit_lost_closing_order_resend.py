@@ -902,10 +902,10 @@ REFUSED_AGAIN_NEXT_STEP = (
     "the Clerk sends the order again by itself, waiting longer after each refusal (up to 5 "
     "minutes), and takes it up as soon as Alpaca shows it."
 )
-# What the bot's page says of a closing sale that was sent, never confirmed, and outlived its session (#2854).
+# What the bot's page says of a closing sale that was sent, never confirmed, and may no longer be sent again (#2854).
 HELD_PAST_SESSION_EXPLANATION = (
-    "The Clerk sent an order to sell 10 SPY and could not confirm it. The order's session has "
-    "ended, so the Clerk will not send it again. It holds the shares and sends no other order "
+    "The Clerk sent an order to sell 10 SPY and could not confirm it. The Clerk will not send it "
+    "again. The order may be at Alpaca, so the Clerk holds the shares and sends no other order "
     "for this bot."
 )
 SETTLE_NEXT_STEP = (
@@ -985,8 +985,8 @@ async def test_a_refused_send_made_again_is_not_repeated_once_its_session_has_en
     sent again, half a minute before it. Once the session has closed a market
     order can no longer go out, and nothing more is sent. The order may be at
     Alpaca all the same, so the EXIT does not fail: it stays ``unknown`` with
-    custody of the position, and the bot's page says the session has ended
-    and where the order is settled, in place of the refusal.
+    custody of the position, and the bot's page says the order will not be
+    sent again and where it is settled, in place of the refusal.
     """
     repo, clock = crashed_with_exposure
     close_ms = session_close_ms_utc(et_date_at_ms(clock()))

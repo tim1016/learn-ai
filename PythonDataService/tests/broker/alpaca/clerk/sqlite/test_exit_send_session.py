@@ -289,7 +289,7 @@ async def test_a_market_leg_whose_submit_was_lost_before_the_close_is_not_resent
     assert repo.active_exit_for_order(entry_ref) is not None
     assert _exit_not_flat(repo) is None
     held = _open_unknown_outcome(repo)
-    assert held is not None and "The order's session has ended" in held["explanation"]
+    assert held is not None and "The Clerk will not send it again" in held["explanation"]
 
 
 async def test_a_program_after_hours_limit_is_never_sent_past_the_session_it_was_priced_for(
@@ -1086,7 +1086,7 @@ async def test_a_market_exit_lost_before_the_close_is_not_sent_again_the_next_mo
     assert _exit_not_flat(repo) is None
     assert repo.active_exit_for_order(entry_ref) is not None
     held = _open_unknown_outcome(repo)
-    assert held is not None and "The order's session has ended" in held["explanation"]
+    assert held is not None and "The Clerk will not send it again" in held["explanation"]
 
 
 async def test_a_failed_lookup_past_the_session_raises_no_working_order_alarm(

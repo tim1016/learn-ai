@@ -1250,21 +1250,24 @@ def _hold_past_its_session(
 
     The open notice says so in place of whatever it said while the order
     could still go out, and it is recorded once (:func:`_hold_sent_order`).
+    It says nothing of a session having ended. :func:`_past_its_session` also
+    holds an order whose own bound for sending has passed while the broker
+    would still work it: a pre-market limit, past 09:30, works at the broker
+    until the after-hours close if it is there.
     """
     wrote = _hold_sent_order(
         repo,
         effect_operation_id=effect_operation_id,
         order_ref=order_ref,
         why=(
-            "This reducing order was sent to the broker, its outcome is unknown, and the session "
-            "it was sent in has ended. An earlier send may have reached the broker, so the EXIT is "
-            "not failed and the order is not sent again: custody is kept until the order is found "
-            "or an operator settles it."
+            "This reducing order was sent to the broker, its outcome is unknown, and it may no "
+            "longer be sent again. An earlier send may have reached the broker, so the EXIT is not "
+            "failed: custody is kept until the order is found or an operator settles it."
         ),
         notice=UnknownOutcomeNotice(
             explanation=(
                 f"The Clerk sent an order to {_the_reduction(created)} and could not confirm it. "
-                "The order's session has ended, so the Clerk will not send it again. It holds "
+                "The Clerk will not send it again. The order may be at Alpaca, so the Clerk holds "
                 f"{_what_is_held(created)} and sends no other order for this bot."
             ),
             next_step=SETTLE_THE_ORDER_NEXT_STEP,
@@ -1272,7 +1275,7 @@ def _hold_past_its_session(
     )
     if wrote:
         logger.warning(
-            "a reducing order sent to the broker outlived its session with its outcome unknown; custody is kept",
+            "a reducing order sent to the broker may no longer be sent again and its outcome is unknown; custody is kept",
             extra={
                 "action": "reducing_order_held_past_session",
                 "account_id": repo.account_id,
