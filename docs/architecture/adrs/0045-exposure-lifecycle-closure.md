@@ -441,5 +441,10 @@ amendment of 2026-10-03 to the scheduled end, above).
 A held order is also work in flight on its symbol: while it stands the Clerk
 re-drives no other bot's failed exit of that symbol, and such an exit is told
 as stuck after the usual eight regular-session minutes. That bot's notices
-name the bot whose order is held and say to settle it from that bot's page,
-since no reconciliation settles an order no read shows.
+name the bot whose order is held and point at that bot's page, and they do
+not say to settle that order first. The blocked bot's next step is its own
+Reconcile now and safe flatten: that flatten needs nothing of the held order
+and is available the whole time, and the held order may be one no action
+settles. Once the blocked exit is `EXIT_STUCK` the watchdog never re-drives
+it, so the notice also says that the Clerk does not send that bot's exit by
+itself again, even after the other bot's order is settled.
