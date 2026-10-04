@@ -535,6 +535,33 @@ async def test_a_refused_end_sale_is_redriven_as_a_market_order_at_the_next_open
     assert _accepted(repo, redriven).regular_session_only is True
 
 
+async def test_an_end_left_pending_after_its_sale_was_refused_is_carried_out_and_puts_no_sale_in_again(
+    repo: ClerkSqliteRepository, schedule: _Schedule, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2854: Alpaca refused the end's sale, and the record that the end was carried out did
+    not land. The Clerk still exits the bot by itself, so the refused sale is the watchdog's to
+    send again: the next pass records the end carried out with the bot still holding, and puts
+    no end sale in again."""
+    await _hold_ten(repo)
+    schedule.ends[SID] = _end("SELL")
+    _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
+    await _pass(repo, _FakeTradePort(submit_error=_wash_trade_rejection()))
+    [sale] = _end_sales(repo)
+    assert repo.effect_operation(sale).state == "failed"
+    schedule.carried_out.clear()
+    schedule.ends[SID] = _end("SELL")  # as if the carried-out record had not landed
+    after_hours = _FakeTradePort()
+    caplog.clear()
+
+    _walk_clock_to(repo, _at(_WEDNESDAY, 16, 1))
+    await _pass(repo, after_hours, pricing=_live_touch())
+
+    assert [end for end, _at_ms in schedule.carried_out] == [_end("SELL")]
+    assert repo.position(SID, "SPY") == 10 and after_hours.submitted_legs == []
+    assert _end_sales(repo) == [sale]
+    assert [record for record in caplog.records if getattr(record, "action", None) == "scheduled_end_sale"] == []
+
+
 async def test_an_end_found_after_a_half_day_close_waits_for_the_next_sessions_open(
     repo: ClerkSqliteRepository, schedule: _Schedule,
 ) -> None:

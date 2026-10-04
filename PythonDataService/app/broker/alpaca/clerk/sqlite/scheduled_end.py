@@ -47,7 +47,9 @@ attention bell lists it (:func:`end_sales_waiting_for_open`) until it is sent.
 No sale is accepted while the Clerk has stopped exiting the bot's position by
 itself (``EXIT_STUCK``, #2854): the end stays pending, the bell and the bot's
 page say why (:func:`end_sales_waiting_for_operator`), and once the bot is
-flat the end is recorded carried out with nothing sold.
+flat the end is recorded carried out with nothing sold. A sale accepted
+before then does not complete the end either: once it has ended failed, its
+holding is left to the operator with the rest.
 """
 
 from __future__ import annotations
@@ -283,7 +285,8 @@ def _sales_owed(
     Nothing either while the Clerk has stopped exiting the bot by itself
     (#2854): those sales are the operator's, and ``left_to_operator`` asks
     for exactly them instead -- every holding the end's own sale has not
-    taken, the operator's Flatten working on it or not.
+    taken or, once accepted, ended failed on, the operator's Flatten working
+    on it or not.
     """
     sid = end.strategy_instance_id
     if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]):
@@ -338,8 +341,11 @@ def _carried_out(repo: ClerkSqliteRepository, end: ScheduledEnd, *, sells: bool)
     outcome not yet known, by the STOP proof's own definitions -- can still
     fill outside an EXIT's custody; and, for a SELL end, every holding's sale
     is accepted -- from then on it is that EXIT's, held for the open if it
-    must be. A holding another EXIT still owns keeps the end pending until
-    that EXIT resolves.
+    must be, and the watchdog's to send again if it ended failed. A holding
+    another EXIT still owns keeps the end pending until that EXIT resolves.
+    While the Clerk has stopped exiting the bot by itself nothing of its own
+    sells a holding, an accepted sale that ended failed included, so only a
+    flat bot's end is carried out (#2854).
     """
     sid = end.strategy_instance_id
     if repo.active_run(sid) is not None:
@@ -349,10 +355,10 @@ def _carried_out(repo: ClerkSqliteRepository, end: ScheduledEnd, *, sells: bool)
         return False
     if not sells or end.end.end_action == "KEEP":
         return True
-    return all(
-        holding.state == "closing"
-        for holding in bot_holdings(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
-    )
+    holdings = bot_holdings(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+    if automatic_exit_stopped(repo, sid):
+        return not holdings
+    return all(holding.state in ("closing", "failed") for holding in holdings)
 
 
 def _outside_an_exit(repo: ClerkSqliteRepository, order_ref: str) -> bool:

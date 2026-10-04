@@ -643,6 +643,117 @@ async def test_an_end_sale_whose_answer_was_lost_is_not_sent_again(
     )
 
 
+async def _the_pending_ends_sale_ends_unsent(
+    repo: ClerkSqliteRepository, schedule: _Schedule, alpaca: _Alpaca, market: _AlpacaOrders,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[str, list[_Sent]]:
+    """The records an earlier Clerk left when it stopped between accepting the stuck bot's end
+    sale and recording the end carried out: the sale held for the open, the end still pending.
+    This Clerk's first pass ends the sale unsent. Returns the sale and the orders Alpaca had refused."""
+    sale, refused = await _a_sale_accepted_after_the_close_is_held_for_the_open(repo, alpaca, market, monkeypatch)
+    schedule.ends[SID] = _the_end()
+    await _passes(repo, alpaca, market, 1)
+    _ended_unsent_for_the_operator(repo, sale)
+    return sale, refused
+
+
+async def test_an_end_whose_accepted_sale_ended_unsent_stays_pending_until_the_position_is_written_off(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pass that ended the sale unsent used to take the ended sale for the close itself: it
+    recorded the end carried out with the bot still holding, and the bell and the bot's page
+    dropped the wait. The end now stays pending and is told as waiting for the operator, through
+    the open and after, until the write-off leaves the bot flat. It then completes with no sale."""
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    sale, refused = await _the_pending_ends_sale_ends_unsent(repo, schedule, alpaca, market, monkeypatch)
+
+    assert schedule.carried_out == [] and schedule.ends[SID] == _the_end(), (
+        "the end was recorded carried out with the bot still holding"
+    )
+    await _the_end_is_told_as_waiting_for_the_operator(repo, monkeypatch)
+    _walk_clock_to(repo, _THE_NEXT_OPEN_MS)
+    await _passes(repo, alpaca, market, TEN_MINUTES_OF_PASSES)
+    assert schedule.carried_out == [] and _sent(market) == refused and _end_sales(repo) == [sale]
+    await _the_end_is_told_as_waiting_for_the_operator(repo, monkeypatch)
+
+    alpaca.holds = 0.0
+    await _passes(repo, alpaca, market, 1)
+    await discharge_attributed_residue(
+        repo, read=alpaca, intake=ReentrantAsyncLock(), strategy_instance_id=SID, symbol="SPY",
+        operator_reason="Sold by hand at Alpaca.",
+    )
+    [after] = await _passes(repo, alpaca, market, 1)
+
+    assert repo.position(SID, "SPY") == 0
+    assert after.verdict == "clean" and _open_reasons(repo) == set()
+    assert [end for end, _at_ms in schedule.carried_out] == [_the_end()]
+    assert _sent(market) == refused and _end_sales(repo) == [sale], "the end sold again"
+    assert await _end_lines(repo, monkeypatch) == []
+
+
+async def test_an_end_whose_accepted_sale_ended_unsent_completes_with_no_sale_once_the_operator_sells(
+    tmp_path: Path, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same records, and the operator flattens the position from the bot's page at the open.
+    The end waits while that sale works, and is carried out with no sale of its own once it fills."""
+    repo = _a_running_bot(tmp_path, exit_terms=DEPLOY_EXIT_TERMS)
+    try:
+        alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+        sale, refused = await _the_pending_ends_sale_ends_unsent(repo, schedule, alpaca, market, monkeypatch)
+        _walk_clock_to(repo, _THE_NEXT_OPEN_MS)
+        await _passes(repo, alpaca, market, 1)
+        assert schedule.carried_out == [] and _sent(market) == refused
+
+        _walk_clock_to(repo, repo.clock() + PASS_MS)
+        facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=alpaca, trade=market)
+        assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+        flatten = await safe_flatten._execute(facade, _context_of(repo, SID), confirmed_limit=None)
+        assert flatten.applied is True and _sent(market) == [*refused, _THE_SALE]
+        await _passes(repo, alpaca, market, 1)
+        assert schedule.carried_out == [], "the end waits for the operator's sale to finish"
+        await _the_end_is_told_as_waiting_for_the_operator(repo, monkeypatch)
+        [operators_sale] = market.sent
+        await market.fill(repo, operators_sale)
+        alpaca.holds = 0.0
+        [after] = await _passes(repo, alpaca, market, 1)
+
+        assert repo.position(SID, "SPY") == 0
+        assert after.verdict == "clean" and _open_reasons(repo) == set()
+        assert [end for end, _at_ms in schedule.carried_out] == [_the_end()]
+        assert _sent(market) == [*refused, _THE_SALE] and _end_sales(repo) == [sale], "the end sold again"
+        assert await _end_lines(repo, monkeypatch) == []
+    finally:
+        repo.close()
+
+
+async def test_an_end_whose_sent_sale_is_unanswered_stays_pending_and_then_waits_for_the_operator(
+    repo: ClerkSqliteRepository, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An earlier Clerk sent the stuck bot's end sale at its end, lost the answer, and stopped
+    before it recorded the end carried out. The end used to be recorded on the next pass, on the
+    strength of a sale Alpaca never had. It stays pending while the sale's outcome is unknown,
+    and waits for the operator once the sale has ended as not sent again."""
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    refused = await _the_clerk_stops_exiting_the_bot(repo, alpaca, market)
+    _the_run_is_stopped(repo)
+    _the_end_comes(repo, schedule)
+    market.refuses = BrokerUnavailable("the submit timed out")
+    sale = await _the_end_sale_as_master_accepted_it(repo, market, monkeypatch)
+    market.refuses = None
+
+    await _passes(repo, alpaca, market, 1)
+
+    assert repo.effect_operation(sale).state == "unknown"
+    assert schedule.carried_out == [], "the end was recorded carried out on a sale whose outcome is unknown"
+    assert await _end_lines(repo, monkeypatch) == [], "a sale that may have reached Alpaca is told as not sent"
+
+    await _passes(repo, alpaca, market, TEN_MINUTES_OF_PASSES)
+
+    _ended_unsent_for_the_operator(repo, sale)
+    assert schedule.carried_out == [] and _sent(market) == [*refused, _THE_SALE]
+    await _the_end_is_told_as_waiting_for_the_operator(repo, monkeypatch)
+
+
 async def test_a_store_rebuilt_from_its_mirror_holds_the_same_unsent_end_sale(
     tmp_path: Path, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

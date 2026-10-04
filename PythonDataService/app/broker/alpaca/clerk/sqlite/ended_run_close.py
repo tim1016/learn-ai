@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import ExitSubmission
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop
+from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.ports import BrokerTradePort
@@ -57,12 +58,15 @@ class Holding:
     """One symbol an ended bot holds, and where its close under one prefix stands.
 
     ``owed``: nothing has closed it and no EXIT owns it. ``closing``: the
-    close under this prefix was accepted (driven, folded or finished).
-    ``other_exit``: another EXIT -- the bot's own, the operator's -- still owns it.
+    close under this prefix was accepted and has not ended failed (driven,
+    held or finished). ``failed``: that close was accepted and ended failed,
+    so nothing of it closes the holding any more, whatever EXIT now owns it
+    (#2854); it is never accepted again. ``other_exit``: another EXIT -- the
+    bot's own, the operator's -- still owns it.
     """
 
     close: OwedClose
-    state: Literal["owed", "closing", "other_exit"]
+    state: Literal["owed", "closing", "failed", "other_exit"]
 
 
 def bot_holdings(repo: ClerkSqliteRepository, strategy_instance_id: str, *, decision_prefix: str) -> list[Holding]:
@@ -79,10 +83,11 @@ def bot_holdings(repo: ClerkSqliteRepository, strategy_instance_id: str, *, deci
             continue
         decision_id = f"{decision_prefix}{hashlib.sha256(target.order_ref.encode('utf-8')).hexdigest()[:16]}"
         close = OwedClose(strategy_instance_id, symbol, target.order_ref, decision_id)
-        if repo.effect_operation(
+        accepted = repo.effect_operation(
             exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
-        ) is not None:
-            holdings.append(Holding(close, "closing"))
+        )
+        if accepted is not None:
+            holdings.append(Holding(close, "failed" if accepted.state in FAILED_EFFECT_STATES else "closing"))
         elif target.exit_owned:
             holdings.append(Holding(close, "other_exit"))
         else:

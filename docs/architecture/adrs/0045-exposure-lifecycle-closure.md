@@ -273,7 +273,11 @@ outside the regular session, for the open -- and ends, with nothing sent
 again, on the pass that would send it again. Either way its EXIT then fails
 through `EXIT_NOT_FLAT`, as a Flatten the account does not cover does: from
 then no EXIT holds the symbol, and the operator's flatten and write-off are
-admissible. A `sim:` authority is unchanged.
+admissible. An accepted sale never completes the end while the episode is
+open: the end stays pending while that sale's outcome is unknown, and waits
+for the operator once it has ended. With no such episode a sale that ended
+failed still completes the end as before, and the watchdog sends it again. A
+`sim:` authority is unchanged.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing
