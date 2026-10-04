@@ -16,12 +16,13 @@ agree. It never sends an order.
 Attestation ``absent`` -- "Alpaca has no such order". The Clerk reads the
 account twice, the second time after the first returned (the re-read rule of
 ``residue_discharge``, for the same reason: one round reads its lists with no
-consistency fence between them). Each round is the order's exact lookup, the
-open orders, then the positions, then every order of any state in the
-order's symbol since the closing order was created, a page at a time. The
-order is ended as not sent only when every read answered and was read to its
-end, no order carries its client order id, and no order is working on its
-symbol.
+consistency fence between them). Each round is the order's exact lookup,
+every order of any state in the order's symbol since the closing order was
+created, a page at a time, then the open orders, then the positions: last,
+so that every order a round lists as ended was over before the position it
+is set against was read. The order is ended as not sent only when every read
+answered and was read to its end, no order carries its client order id, and
+no order is working on its symbol.
 
 An order on its side of its symbol that the Clerk did not place may be this
 one under another identity. While it works it refuses. Once it has ended it
@@ -66,8 +67,10 @@ Clerk's own records refuse is refused before the claim is taken and before
 Alpaca is asked anything. Every durable check and every write happen in one
 fenced run, which reads the order again as the catalog presented it: an
 order sent again, acknowledged or filled since refuses, and nothing is
-written. A check makes the same reads and applies the same rules with no
-claim, and writes nothing.
+written. That run renews the claim before it writes: a settlement whose claim
+ran out while it waited for the fence may have lost the EXIT to a pass that
+is about to send the order again, and writes nothing. A check makes the same
+reads and applies the same rules with no claim, and writes nothing.
 
 One ``ORDER_OUTCOME_ATTESTED`` transition records who attested what and
 what the Clerk read, and its own fold settles the order: an ``absent`` one
@@ -77,7 +80,11 @@ attestation that did not take effect, or an effect with no attestation,
 wherever the process stops. What an order taken up by its id then did -- a
 fill, its ending -- is folded in writes of their own, as any answer about
 the Clerk's own order is; a process that stops between those leaves an order
-the Clerk's next pass reads by that id and finishes.
+the Clerk's next pass reads by that id and finishes. The attestation records
+what the Clerk read of the order -- its state, how much had filled, at what
+price, and Alpaca's time for it -- so an order that had ended by then is
+finished from that record should Alpaca answer that it no longer has an
+order under the id. A read that fails is never such an answer.
 """
 
 from __future__ import annotations
@@ -106,6 +113,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitUncertainFacts,
     UncertaintyRaisedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.flatten_cover import held_text
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
@@ -433,10 +441,13 @@ async def settle_unknown_exit_order(
     except OperationClaimError as busy:
         raise _exit_is_busy() from busy
 
-    def renew_the_claim() -> None:
-        if not repo.renew_operation_claim(
+    def keeps_the_claim() -> bool:
+        return repo.renew_operation_claim(
             effect_operation_id=presented.effect_operation_id, token=claim_token
-        ):
+        )
+
+    def renew_the_claim() -> None:
+        if not keeps_the_claim():
             raise OperationClaimError(
                 f"effect_operation {presented.effect_operation_id!r} lost its broker-contact claim"
             )
@@ -455,6 +466,7 @@ async def settle_unknown_exit_order(
             presented=presented,
             alpaca_read=alpaca_read,
             by=by,
+            keeps_the_claim=keeps_the_claim,
         )
     except OperationClaimError as lost:
         raise _exit_is_busy() from lost
@@ -561,6 +573,14 @@ def _exit_is_busy() -> UnknownOrderSettlementRefused:
     )
 
 
+def _claim_was_lost() -> UnknownOrderSettlementRefused:
+    return UnknownOrderSettlementRefused(
+        "EXIT_CLAIM_LOST",
+        "This settlement took too long, and another check of this exit may have started "
+        "meanwhile. Nothing was changed. Try again in a few seconds.",
+    )
+
+
 def _require_settleable(
     repo: ClerkSqliteRepository,
     *,
@@ -623,14 +643,22 @@ def _require_settleable(
 async def _read_account(
     alpaca: _AlpacaReads, presented: ProjectedUnknownExitOrder, *, since_ms: int
 ) -> _AccountRead:
-    """One round: the exact lookup, the open orders, then the positions, then the symbol's orders since ``since_ms``.
+    """One round: the exact lookup, the symbol's orders since ``since_ms``, then the open orders, then the positions.
 
-    In that sequence an order that arrives between two reads of a round is
-    in a later one: among the open orders if it works, among the orders
-    since if it has ended. Any read that fails refuses; so does the order's
-    own exact lookup answering. The open orders are the whole account's; the
-    orders since are asked for in the closing order's symbol only, so a busy
-    account's other symbols cannot crowd them out.
+    The positions are read last, because they are what answers for every
+    ended order the round lists: an order the symbol's orders show ended was
+    over before the open orders and the positions were read, so whatever it
+    sold is in those positions. Read the other way round, an order that
+    filled after the positions were read was listed ended beside a position
+    from before its fill. An order that arrives after the symbol's orders
+    were read is among the open orders if it still works, and in the
+    positions if it has filled, where the other round's positions show the
+    change.
+
+    Any read that fails refuses; so does the order's own exact lookup
+    answering. The open orders are the whole account's; the orders since are
+    asked for in the closing order's symbol only, so a busy account's other
+    symbols cannot crowd them out.
 
     A send Alpaca answered under another client order id is followed by the
     exact lookup of that id too: what that order did is what "no such order"
@@ -641,11 +669,12 @@ async def _read_account(
         raise _order_is_at_alpaca(exact)
     answered_as = presented.answered_as_client_order_id
     answered_order = await alpaca.order_sent_as(answered_as) if answered_as else None
+    orders_since = await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms)
     open_orders, positions = await alpaca.open_orders_then_positions()
     return _AccountRead(
         open_orders=open_orders,
         positions=positions,
-        orders_since=await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms),
+        orders_since=orders_since,
         answered_order=answered_order,
     )
 
@@ -962,9 +991,10 @@ def _prove_absent(
     if not proof.account_agrees and not _open_drift_names(repo, symbol):
         raise UnknownOrderSettlementRefused(
             "POSITION_DIFFERENCE_NOT_RECORDED",
-            f"Alpaca holds {proof.broker_qty:g} {symbol} and the Clerk's records say "
-            f"{proof.account_attributed_qty:g}. The Clerk has not recorded that difference yet. "
-            "Check the account against Alpaca, then settle again. Nothing was changed.",
+            f"Alpaca holds {held_text(proof.broker_qty, symbol)} and the Clerk's records say "
+            f"{held_text(proof.account_attributed_qty, symbol)}. The Clerk has not recorded that "
+            "difference yet. Check the account against Alpaca, then settle again. Nothing was "
+            "changed.",
         )
     return proof
 
@@ -1036,11 +1066,23 @@ def _commit(
     presented: ProjectedUnknownExitOrder,
     alpaca_read: _AlpacaRead,
     by: _Operator,
+    keeps_the_claim: Callable[[], bool],
 ) -> UnknownOrderSettlementReceipt:
-    """The fenced run of a settlement: every durable check again, then the settlement."""
+    """The fenced run of a settlement: every durable check again, the claim again, then the settlement.
+
+    ``keeps_the_claim`` renews the EXIT's claim and answers whether it is
+    still this settlement's. Every read of Alpaca renewed it, but the wait
+    for this run is no read: a claim that ran out in it may be a pass's by
+    now, and a pass that finds the order absent sends it again. The order's
+    own records do not show that until the pass writes, so the claim itself
+    is asked here, in the run that writes. Held, it keeps every pass off the
+    EXIT until the settlement is written.
+    """
     proof = _prove(
         repo, strategy_instance_id=strategy_instance_id, presented=presented, alpaca_read=alpaca_read
     )
+    if not keeps_the_claim():
+        raise _claim_was_lost()
     if isinstance(alpaca_read, _AbsentReads):
         assert proof is not None
         return _commit_absent(repo, presented=presented, reads=alpaca_read, proof=proof, by=by)
@@ -1117,15 +1159,24 @@ def _commit_absent(
 
 
 def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -> tuple[str, ...]:
-    """What the Clerk found, as the operator reads it before confirming."""
+    """What the Clerk found, as the operator reads it before confirming.
+
+    Each quantity is said by its own sign, a short as a short; what to write
+    off is said by the order's side, a cover's as a short.
+    """
     symbol, side = presented.symbol.upper(), presented.side.lower()
     position = (
-        f"Alpaca holds {proof.broker_qty:g} {symbol}, as the Clerk's records say."
+        f"Alpaca holds {held_text(proof.broker_qty, symbol)}, as the Clerk's records say."
         if proof.account_agrees
         else (
-            f"Alpaca holds {proof.broker_qty:g} {symbol} and the Clerk's records say "
-            f"{proof.account_attributed_qty:g}. That difference is already recorded. After "
-            "settling, write off the missing shares if Alpaca does not hold them."
+            f"Alpaca holds {held_text(proof.broker_qty, symbol)} and the Clerk's records say "
+            f"{held_text(proof.account_attributed_qty, symbol)}. That difference is already "
+            "recorded. After settling, "
+            + (
+                "write off the short the Clerk records if Alpaca is not short these shares."
+                if side == "buy"
+                else "write off the missing shares if Alpaca does not hold them."
+            )
         )
     )
     # The order Alpaca answered the send with has a line of its own; the
@@ -1212,8 +1263,18 @@ def _settled(
     *,
     attestation: SettlementAttestation,
 ) -> UnknownOrderSettlementReceipt:
+    """The receipt of the settlement just written: its own row, as a replay reads it.
+
+    Dated by the row and not by the clock again, which has moved on by now:
+    the same request asked again is answered from that row
+    (:func:`recorded_settlement`), and must be answered with the same time.
+    """
     effect = repo.effect_operation(presented.effect_operation_id)
     assert effect is not None
+    row = repo.last_order_transition(
+        order_ref=presented.order_ref, transition_kind=ORDER_OUTCOME_ATTESTED
+    )
+    assert row is not None and row["sequence"] == committed.sequence
     logger.warning(
         "an operator settled a closing order whose outcome was unknown",
         extra={
@@ -1229,8 +1290,8 @@ def _settled(
         },
     )
     return UnknownOrderSettlementReceipt(
-        sequence=committed.sequence,
-        recorded_at_ms=repo.clock(),
+        sequence=row["sequence"],
+        recorded_at_ms=row["recorded_at_ms"],
         order_ref=presented.order_ref,
         attestation=attestation,
     )
@@ -1347,6 +1408,14 @@ def _commit_order(
             broker_order_id=observed.order_id,
             broker_state=observed.status,
             broker_filled_quantity=observed.filled_quantity,
+            # The price ``_require_same_order`` checked: stated only for an
+            # order that had filled anything.
+            broker_filled_avg_price=(
+                observed.filled_avg_price
+                if position_quantity_is_nonzero(observed.filled_quantity)
+                else None
+            ),
+            broker_updated_at_ms=observed.updated_at_ms,
         ),
         observed_at_ms=order_read.observed_at_ms,
         operation_state="unknown",
@@ -1356,7 +1425,10 @@ def _commit_order(
     # What that order did is folded as the Clerk folds any answer about its
     # own order, in writes that each commit alone. Should the process stop
     # between them, the Clerk's next pass reads the order by that id and
-    # folds what is left (``exit_resolution._observe_by_broker_order_id``).
+    # folds what is left (``exit_resolution._observe_by_broker_order_id``);
+    # and should Alpaca then have no order under that id, an order that had
+    # ended is finished from what the write above recorded of it
+    # (``exit_resolution._attested_order_as_recorded``).
     fold_exit_attested_order(
         repo, effect_operation_id=presented.effect_operation_id, observed=observed
     )

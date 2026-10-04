@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
 )
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
+from app.broker.contract.errors import BrokerUnavailable
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
     SWEEP_INTERVAL_MS,
     _closing_order,
@@ -275,6 +276,117 @@ async def test_a_settlement_the_process_dies_in_is_finished_by_a_retry_or_the_cl
 
     _assert_settled(repo, alpaca, exit_id, attestation, expected)
     assert len(_attested(repo)) == 1
+
+
+async def _dies_once_the_attestation_is_written(
+    repo: ClerkSqliteRepository, alpaca: _AlpacaAccount, attestation: OrderOutcomeAttestation
+) -> str:
+    """The process dies right after the attestation's own row is written. Returns the Alpaca order id it took up."""
+    with _the_process_dies_after(repo, 1) as written, pytest.raises(_ProcessDied):
+        await _settle(_facade(repo, alpaca), _context_of(repo, SID), attestation)
+    assert written == ["ORDER_OUTCOME_ATTESTED"]
+    assert attestation.broker_order_id is not None
+    assert _closing_order(repo).broker_order_id == attestation.broker_order_id
+    return attestation.broker_order_id
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected", "cost"),
+    [
+        pytest.param(
+            _alpaca_filled_it,
+            _Settled("succeeded", held=0.0, exit_not_flat_is_open=False, filled=10.0, taken_up=True),
+            1_000.0,
+            id="filled",
+        ),
+        pytest.param(
+            _alpaca_canceled_it_unfilled,
+            _Settled("failed", held=10.0, exit_not_flat_is_open=True, filled=0.0, taken_up=True),
+            0.0,
+            id="canceled-unfilled",
+        ),
+    ],
+)
+async def test_an_order_that_had_ended_when_it_was_taken_up_is_finished_from_that_read_once_alpaca_has_no_such_order(
+    crashed_with_exposure,  # noqa: F811
+    scenario: _Scenario,
+    expected: _Settled,
+    cost: float,
+) -> None:
+    """The regression (#2854 review): the process dies right after the attestation is written, and Alpaca forgets the order.
+
+    The row took the order up by its Alpaca order id and recorded how much
+    of it had filled, and not at what price. Finishing rested on reading the
+    order by that id again; when Alpaca answered that it has no order under
+    it, every pass folded the EXIT back to ``unknown``, for good, with a fill
+    that could never be credited.
+
+    The row now records the price of what had filled and Alpaca's time for
+    it. An order that had ended does nothing more, so that read is its whole
+    outcome: when Alpaca answers that it has no such order, the pass
+    finishes from the row. The fill is credited once, at that price.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id, attestation = await scenario(repo, alpaca)
+    alpaca.has_no_order_under.add(await _dies_once_the_attestation_is_written(repo, alpaca, attestation))
+
+    await _passes(repo, _the_sweep(repo, alpaca), 2 * PASSES)
+
+    _assert_settled(repo, alpaca, exit_id, attestation, expected)
+    assert repo.effective_fill_totals_for_order(_closing_order(repo).order_ref) == (expected.filled, cost)
+
+
+async def test_an_order_taken_up_is_never_finished_from_its_row_while_alpaca_cannot_be_read(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A read that fails is no answer: nothing is credited from the row, and every pass asks Alpaca again.
+
+    Only Alpaca answering that it has no such order lets the row stand in
+    for it. Once Alpaca can be read, the pass finishes from what it shows.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id, attestation = await _alpaca_filled_it(repo, alpaca)
+    broker_order_id = await _dies_once_the_attestation_is_written(repo, alpaca, attestation)
+    closing = _closing_order(repo)
+    alpaca.by_broker_id[broker_order_id] = BrokerUnavailable("alpaca timed out")
+
+    await _passes(repo, _the_sweep(repo, alpaca), 2 * PASSES)
+
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.effective_fill_totals_for_order(closing.order_ref) == (0.0, 0.0)
+    assert repo.position(SID, "SPY") == 10.0
+
+    del alpaca.by_broker_id[broker_order_id]
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+
+    _assert_settled(
+        repo, alpaca, exit_id, attestation,
+        _Settled("succeeded", held=0.0, exit_not_flat_is_open=False, filled=10.0, taken_up=True),
+    )
+
+
+async def test_an_order_that_was_working_when_it_was_taken_up_is_not_finished_from_its_row(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """What a working order did after the Clerk read it is not on the row, so the row settles nothing.
+
+    Alpaca answers that it has no order under the id: the EXIT stays
+    ``unknown``, custody is kept, and nothing is credited or sent.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id, attestation = await _alpaca_has_it_working(repo, alpaca)
+    alpaca.has_no_order_under.add(await _dies_once_the_attestation_is_written(repo, alpaca, attestation))
+
+    await _passes(repo, _the_sweep(repo, alpaca), 2 * PASSES)
+
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.active_exit_for_strategy(SID) is not None, "the EXIT keeps custody of the position"
+    assert repo.effective_fill_totals_for_order(_closing_order(repo).order_ref) == (0.0, 0.0)
+    assert repo.position(SID, "SPY") == 10.0
+    assert len(alpaca.sent) == 1
 
 
 async def test_an_order_that_settled_by_itself_is_never_reported_as_settled_by_the_operator(

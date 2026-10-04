@@ -1423,6 +1423,11 @@ def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> 
             "ORDER_LOOKUP_STILL_SETTLING",
             True,
         ),
+        (
+            {"unknown_exit_orders": (_unknown_exit_order(answered_as_client_order_id=""),)},
+            "ANSWERED_ORDER_NAMES_NO_ID",
+            True,
+        ),
     ],
 )
 def test_settling_is_refused_outside_its_state(
@@ -1448,6 +1453,39 @@ def test_an_order_answered_under_another_client_order_id_is_offered_without_the_
     )
 
     assert action.available is True
+
+
+def test_an_order_answered_with_no_client_order_id_is_not_offered_and_the_reason_says_why() -> None:
+    """The regression (#2854 review): Alpaca answered the send with an order that names no client order id.
+
+    The action was offered, and neither choice could run: "no such order"
+    refuses with no id to read that order by, and "Alpaca shows it" takes up
+    only an order under the id that was sent. It is unavailable now, in
+    words that say what happened, that the Clerk keeps the position, and
+    that this action cannot settle it -- for a running bot too, which is not
+    told to stop for an action that would still not run.
+    """
+    unnamed = _unknown_exit_order(answered_as_client_order_id="")
+    running = ProjectedRun(
+        run_id="run-1", strategy_instance_id="spy-bot", lifecycle_run_id="lifecycle-1",
+        state="ACTIVE", started_at_ms=1_700_000_000_000, stopped_at_ms=None,
+    )
+
+    for runs in ((), (running,)):
+        action = _settle(_stopped_with_an_unknown_exit(unknown_exit_orders=(unnamed,), runs=runs))
+
+        assert (action.available, action.needed) == (False, True)
+        assert action.unavailable_reason_code == "ANSWERED_ORDER_NAMES_NO_ID"
+        assert action.unavailable_reason == (
+            "Alpaca answered this order's send with an order that names no client order id, so the "
+            "Clerk has no id to read that order by and cannot tell what it did. The Clerk keeps the "
+            "position held. This action cannot settle the order."
+        )
+        assert action.next_step == (
+            "Look at this account's orders at Alpaca for the order it answered with. No action of "
+            "the Clerk settles this order yet."
+        )
+        assert (action.execution_ref, action.settlement) == (None, None)
 
 
 def test_the_settle_token_outlives_a_pass_and_not_a_send_made_again() -> None:

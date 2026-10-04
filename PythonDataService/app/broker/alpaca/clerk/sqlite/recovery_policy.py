@@ -1101,26 +1101,38 @@ def unknown_order_lookup_settles_at_ms(order: ProjectedUnknownExitOrder) -> int:
     return order.lookup_wait_from_ms + grace_ms
 
 
-_SETTLEMENT_CHOICES: tuple[SettlementChoice, ...] = (
-    SettlementChoice(
-        attestation="absent",
-        label="Alpaca has no such order",
-        explanation=(
-            "The Clerk checks once more. If it finds nothing, it ends this exit as not sent. "
-            "The shares stay with the bot; the Clerk may sell again after checking the account. "
-            "This cannot be undone."
+def _settlement_choices(side: Literal["buy", "sell"]) -> tuple[SettlementChoice, ...]:
+    """The two attestations an operator chooses between (#2854).
+
+    "No such order" says what stays with the bot by the order's side: the
+    shares a closing sale would have sold, or the short a cover would have
+    bought back.
+    """
+    stays = (
+        "The shares stay with the bot; the Clerk may sell again after checking the account."
+        if side == "sell"
+        else "The short position stays with the bot; the Clerk may try again to buy it back "
+        "after checking the account."
+    )
+    return (
+        SettlementChoice(
+            attestation="absent",
+            label="Alpaca has no such order",
+            explanation=(
+                "The Clerk checks once more. If it finds nothing, it ends this exit as not sent. "
+                f"{stays} This cannot be undone."
+            ),
+            asks_broker_order_id=False,
         ),
-        asks_broker_order_id=False,
-    ),
-    SettlementChoice(
-        attestation="exists",
-        label="Alpaca shows it",
-        explanation=(
-            "The Clerk reads that order and takes it only if it is the same order. Nothing is sent."
+        SettlementChoice(
+            attestation="exists",
+            label="Alpaca shows it",
+            explanation=(
+                "The Clerk reads that order and takes it only if it is the same order. Nothing is sent."
+            ),
+            asks_broker_order_id=True,
         ),
-        asks_broker_order_id=True,
-    ),
-)
+    )
 
 
 def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) -> UnknownOrderSettlement:
@@ -1134,7 +1146,7 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     were presented, out of date. An order Alpaca answered under another
     client order id is never sent again.
     """
-    side = "sell" if order.side.upper() == "SELL" else "buy"
+    side: Literal["buy", "sell"] = "sell" if order.side.upper() == "SELL" else "buy"
     sent = (
         f"The Clerk sent an order to {side} {order.quantity:g} {order.symbol} on "
         f"{et_when_words(order.first_sent_at_ms, now_ms=ctx.now_ms)}"
@@ -1159,7 +1171,7 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
         quantity=order.quantity,
         first_sent_at_ms=order.first_sent_at_ms,
         ticket=ticket,
-        choices=_SETTLEMENT_CHOICES,
+        choices=_settlement_choices(side),
     )
 
 
@@ -1202,6 +1214,14 @@ def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision
     order whose send the broker answered under another client order id is
     offered at once: the Clerk will never send it again or find it by itself.
 
+    An order whose send the broker answered with an order that names no
+    client order id (recorded as the empty string) is not offered: neither
+    attestation can settle it. "No such order" rests on the Clerk's own read
+    of the order the broker answered with, and there is no id to read it by;
+    "it is this order" takes up only an order under the client order id that
+    was sent, which that answer did not carry. The Clerk keeps the position,
+    and the reason says so, whether or not the bot is still running.
+
     The token names the order and its latest send, never a pass's own record
     that the order is still absent: every pass writes one, and a token naming
     them would go stale under the operator's hands every 15 s with nothing
@@ -1226,6 +1246,17 @@ def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision
         else:
             reason = "An uncertain closing order is settled from its bot's page."
             next_step = "Open the bot whose closing order the Clerk could not confirm."
+    elif order.answered_as_client_order_id == "":
+        reason_code = "ANSWERED_ORDER_NAMES_NO_ID"
+        reason = (
+            "Alpaca answered this order's send with an order that names no client order id, so "
+            "the Clerk has no id to read that order by and cannot tell what it did. The Clerk "
+            "keeps the position held. This action cannot settle the order."
+        )
+        next_step = (
+            "Look at this account's orders at Alpaca for the order it answered with. No action "
+            "of the Clerk settles this order yet."
+        )
     elif active_runs:
         reason_code = "RUN_STILL_ACTIVE"
         reason = "Stop the bot before settling its uncertain order."
