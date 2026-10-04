@@ -429,10 +429,14 @@ held for the bot, now as a stuck exit the Clerk sends nothing for: Flatten is
 the operator's again, and Clear waits for the sale or the write-off. The
 stopped bot's budget stays committed, and a new Deploy is a new bot and is not
 blocked. A bot's own exit and the sale at a scheduled end are still sent with
-no check of the account, and that sale does not keep to the stuck exit's hold
-either: an end left pending behind a held order puts its sale in once the
-order is settled as "no such order". Both are a separate change (#2854
-item 8).
+no check of the account; that is a separate change (#2854 item 8).
+
+The sale at a scheduled end does keep to the stuck exit's hold. An end left
+pending behind a held order puts no sale in once the order is settled as "no
+such order": that settlement opens `EXIT_STUCK`, and the end accepts no sale
+while it is open. The end stays pending until the operator sells the position
+or writes it off, and is then recorded carried out with nothing sold (the
+amendment of 2026-10-03 to the scheduled end, above).
 
 A held order is also work in flight on its symbol: while it stands the Clerk
 re-drives no other bot's failed exit of that symbol, and such an exit is told
