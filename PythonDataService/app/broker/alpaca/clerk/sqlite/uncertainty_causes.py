@@ -200,27 +200,42 @@ class ExitNotFlatCause:
 
 @dataclass(frozen=True)
 class ExitStuckCause:
-    """A stale EXIT_NOT_FLAT episode that exhausted automatic re-drives."""
+    """A stale EXIT_NOT_FLAT episode the Clerk no longer works by itself.
+
+    It exhausted automatic re-drives, or -- with ``attested_absent_order_ref``
+    -- an operator attested that Alpaca does not have that closing order
+    (#2854), and the position was left to the operator at once, with no
+    re-drive tried. The key is omitted from an episode re-drives led to, so
+    those keep the four keys they always had.
+    """
 
     symbol: str
     attributed_qty: float
     redrive_count: int
     first_observed_at_ms: int
+    attested_absent_order_ref: str | None = None
 
     def to_mapping(self) -> dict[str, Any]:
-        return {
+        mapping: dict[str, Any] = {
             "symbol": self.symbol,
             "attributed_qty": self.attributed_qty,
             "redrive_count": self.redrive_count,
             "first_observed_at_ms": self.first_observed_at_ms,
         }
+        if self.attested_absent_order_ref is not None:
+            mapping["attested_absent_order_ref"] = self.attested_absent_order_ref
+        return mapping
 
     @classmethod
     def from_mapping(cls, value: Any) -> ExitStuckCause:
         if not isinstance(value, dict):
             raise ValueError("EXIT-stuck cause must be an object")
+        attested = value.get("attested_absent_order_ref")
+        if "attested_absent_order_ref" in value and (not isinstance(attested, str) or not attested):
+            raise ValueError("EXIT-stuck attested_absent_order_ref must be a non-empty string")
         _require_exact_keys(
-            value, {"symbol", "attributed_qty", "redrive_count", "first_observed_at_ms"}
+            {key: item for key, item in value.items() if key != "attested_absent_order_ref"},
+            {"symbol", "attributed_qty", "redrive_count", "first_observed_at_ms"},
         )
         symbol = value["symbol"]
         if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
@@ -240,6 +255,7 @@ class ExitStuckCause:
             attributed_qty=_finite_number(value["attributed_qty"], field_name="attributed_qty"),
             redrive_count=redrive_count,
             first_observed_at_ms=first_observed_at_ms,
+            attested_absent_order_ref=attested,
         )
 
 
