@@ -75,9 +75,7 @@ def adjustment_companion(path: PurePosixPath, payload: bytes, version: str) -> t
 
 def current_version(root: Path, symbol: str) -> str:
     try:
-        # A request's symbol names this file, so it stays under ``root``.
-        snapshot = confine_path_to_root(root / current_snapshot_path(symbol), root, label="adjustment snapshot")
-        return hashlib.sha256(snapshot.read_bytes()).hexdigest()
+        return hashlib.sha256((root / current_snapshot_path(symbol)).read_bytes()).hexdigest()
     except OSError as exc:
         raise AdjustmentVersionError(
             f"{symbol}: corporate-action version is unavailable; rebuild adjusted data before running"
@@ -119,11 +117,13 @@ def verify_adjustment_receipt(
 
 
 def adjusted_file_gap(path: Path, file_sha256: str, symbol: str) -> AdjustedFileGap | None:
-    """Name what a reader refuses about one adjusted file, or ``None`` when it would read it.
+    """Name the evidence one adjusted file lacks, or ``None`` when its receipt holds.
 
-    The verdict is :func:`verify_adjustment_receipt`'s, so a view built on
-    this cannot disagree with the reader; this adds only which evidence is
-    absent. A file outside an adjusted root needs no receipt.
+    The check a writer makes before it reuses a file: the record against the
+    digest the catalog holds (:func:`verify_adjustment_receipt`). A reader
+    hashes the bytes it opens instead, so a file altered after its commit
+    passes here and is still refused by a run. A file outside an adjusted
+    root needs no receipt.
     """
     if adjusted_root_for(path) is None:
         return None

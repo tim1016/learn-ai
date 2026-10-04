@@ -459,8 +459,8 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
         data_root_id: UUID | None = None,
     ) -> list[ArtifactCoverageRow]:
         return [
-            ArtifactCoverageRow(date(2024, 5, 20), "complete", 101, "equity/usa/minute/spy/20240520_trade.zip", "b" * 64),
-            ArtifactCoverageRow(date(2024, 5, 22), "failed", 102, "equity/usa/minute/spy/20240522_trade.zip", None),
+            ArtifactCoverageRow(date(2024, 5, 20), "complete", 101, "SPY", "equity/usa/minute/spy/20240520_trade.zip", "b" * 64),
+            ArtifactCoverageRow(date(2024, 5, 22), "failed", 102, "SPY", "equity/usa/minute/spy/20240522_trade.zip", None),
         ]
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _mixed_coverage)
@@ -522,8 +522,8 @@ async def test_coverage_reports_a_complete_session_a_run_cannot_read_as_needs_re
         data_root_id: UUID | None = None,
     ) -> list[ArtifactCoverageRow]:
         return [
-            ArtifactCoverageRow(date(2024, 10, 30), "complete", 7, readable, hashlib.sha256(b"wednesday").hexdigest()),
-            ArtifactCoverageRow(date(2024, 10, 31), "complete", 8, no_record, hashlib.sha256(b"thursday").hexdigest()),
+            ArtifactCoverageRow(date(2024, 10, 30), "complete", 7, "GLD", readable, hashlib.sha256(b"wednesday").hexdigest()),
+            ArtifactCoverageRow(date(2024, 10, 31), "complete", 8, "GLD", no_record, hashlib.sha256(b"thursday").hexdigest()),
         ]
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _complete_rows)

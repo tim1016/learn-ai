@@ -2,18 +2,14 @@
 
 <div class="lake__intro">
   <p class="lake__lead">Which symbols a run can read today, what is missing, and a backfill to fix it.</p>
-  <div class="mode" role="group" aria-label="Price adjustment">
-    @for (option of modeOptions; track option) {
-      <button
-        type="button"
-        class="mode__option"
-        [class.mode__option--on]="option === mode()"
-        [attr.aria-pressed]="option === mode()"
-        (click)="mode.set(option)"
-      >
-        {{ option | receiptLabel }}
-      </button>
-    }
+  <div class="lake__views">
+    <app-lake-toggle label="Bars" [options]="barTypeOptions" [value]="bars()" (picked)="bars.set($event)" />
+    <app-lake-toggle
+      label="Price adjustment"
+      [options]="modeOptions"
+      [value]="mode()"
+      (picked)="mode.set($event)"
+    />
   </div>
 </div>
 
@@ -25,7 +21,7 @@
       [totals]="totals()"
       [selected]="selectedRow()?.rebuild ?? null"
       [busy]="backfillBusy()"
-      [progress]="rebuildProgress()"
+      [progress]="queueProgress()"
       (rebuildAll)="rebuildAll()"
       (rebuildSelected)="rebuild([$event])"
     />
@@ -55,7 +51,7 @@
       [seedStartTradingDate]="seedStart"
       [seedEndTradingDate]="seedEnd"
       [priceAdjustmentMode]="mode()"
-      (runFinished)="onRunFinished($event)"
+      (runFinished)="onRunFinished()"
     />
   </app-lake-panel>
 
@@ -69,14 +65,6 @@
     @if (selectedSymbol(); as symbol) {
       <app-asset-identity slot="head" [symbol]="symbol" size="sm" />
     }
-    <label slot="head" class="bars">
-      Bars
-      <select class="bars__select" (change)="onBars($event)">
-        @for (option of barTypeOptions; track option) {
-          <option [value]="option" [selected]="option === bars()">{{ option | receiptLabel }}</option>
-        }
-      </select>
-    </label>
     <app-coverage-heatmap [board]="board()" [selected]="selection()" (cellSelected)="selectSession($event)" />
   </app-lake-panel>
 

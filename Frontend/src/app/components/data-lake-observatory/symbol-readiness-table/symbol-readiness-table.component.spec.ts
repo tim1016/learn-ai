@@ -23,7 +23,12 @@ function row(overrides: Partial<SymbolReadinessRow> & { symbol: string }): Symbo
   };
 }
 
-const GLD_REBUILD: RebuildRequest = { symbol: 'GLD', from: '2024-08-06', to: '2026-09-18' };
+const GLD_REBUILD: RebuildRequest = {
+  symbol: 'GLD',
+  from: '2024-08-06',
+  to: '2026-09-18',
+  includeQuotes: false,
+};
 const ROWS: readonly SymbolReadinessRow[] = [
   row({ symbol: 'GLD', state: 'unreadable', runReadyCount: 0, rebuildableCount: 532, rebuild: GLD_REBUILD }),
   // Rebuilt already; what is left is older than the provider's history.

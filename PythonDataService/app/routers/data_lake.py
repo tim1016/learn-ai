@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -78,6 +79,11 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
+
+
+def _provider_history_floor() -> date:
+    """The oldest trading date the provider serves, as of today in ET."""
+    return polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
 
 
 async def _ensure_catalog_pool() -> None:
@@ -226,15 +232,8 @@ async def get_coverage(
     # The catalog calls a session complete once its price file is committed; a
     # split-adjusted reader also refuses a file without a valid adjustment
     # record. One stat and one small read per session, off the event loop.
-    gaps = (
-        await asyncio.to_thread(
-            coverage_gaps,
-            list(rows_by_date.values()),
-            path_policy.resolve_lake_root(price_adjustment_mode),
-            symbol,
-        )
-        if needs_adjustment_record(price_adjustment_mode)
-        else {}
+    gaps = await asyncio.to_thread(
+        coverage_gaps, list(rows_by_date.values()), path_policy.resolve_lake_root(price_adjustment_mode)
     )
     days = []
     for window in windows:
@@ -347,9 +346,8 @@ async def get_run_readiness(
         data_type,
     )
     data_root_id = root_identity.active_root_id()
-    rebuild_floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
     counts = await catalog_client.select_symbol_revision_counts(
-        market, price_adjustment_mode, data_type, rebuild_floor, data_root_id=data_root_id
+        market, price_adjustment_mode, data_type, _provider_history_floor(), data_root_id=data_root_id
     )
     versions = (
         await asyncio.to_thread(
@@ -407,15 +405,12 @@ class BackfillDefaults(BaseModel):
 @router.get("/backfill-defaults", response_model=BackfillDefaults)
 async def get_backfill_defaults(market: Literal["usa"] = "usa") -> BackfillDefaults:
     """Spec constants for a backfill form. Reads no catalog state."""
-    today_et = trading_date_at_ms(int(time.time() * 1000))
     return BackfillDefaults(
         market=market,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         max_trading_range_days=MAX_TRADING_RANGE_DAYS,
         max_symbol_length=MAX_SYMBOL_LENGTH,
-        provider_history_start_ms=trading_date_to_calendar_anchor_ms(
-            polygon_history_floor(today_et)
-        ),
+        provider_history_start_ms=trading_date_to_calendar_anchor_ms(_provider_history_floor()),
     )
 
 
@@ -586,7 +581,7 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
     # (#2241). Only this side holds the credential, so only this side can
     # refuse it — and refusing here covers the operator typing a date into
     # the Observatory panel exactly as it covers the picker's gate.
-    floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
+    floor = _provider_history_floor()
     if spec.start_trading_date < floor:
         raise HTTPException(
             status_code=422,

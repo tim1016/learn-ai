@@ -445,4 +445,4 @@ async def test_revision_counts_group_sessions_by_version_and_rebuild_floor(clean
         start_trading_date=date(2024, 5, 22),
         end_trading_date=date(2024, 5, 22),
     )
-    assert (row.file_path, row.file_sha256) == ("equity/usa/minute/gld/20240522_trade.zip", "b" * 64)
+    assert (row.symbol, row.file_path, row.file_sha256) == ("GLD", "equity/usa/minute/gld/20240522_trade.zip", "b" * 64)

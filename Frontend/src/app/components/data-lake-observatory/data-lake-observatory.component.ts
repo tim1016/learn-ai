@@ -10,7 +10,6 @@ import {
 } from '@angular/core';
 
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { formatTimestampDisplay } from '../../shared/timestamp/timestamp-display';
 import { ArtifactInspectorDrawerComponent } from './artifact-inspector/artifact-inspector-drawer.component';
@@ -19,17 +18,17 @@ import {
   CoverageHeatmapComponent,
   type CoverageCellSelection,
 } from './coverage-heatmap/coverage-heatmap.component';
+import { LakePanelComponent } from './lake-panel/lake-panel.component';
+import { LakeToggleComponent } from './lake-toggle/lake-toggle.component';
 import {
   ReadinessBannerComponent,
   type RebuildProgress,
 } from './readiness-banner/readiness-banner.component';
 import { SessionInspectorComponent } from './session-inspector/session-inspector.component';
 import { SessionNeedsComponent } from './session-needs/session-needs.component';
-import { LakePanelComponent } from './lake-panel/lake-panel.component';
 import { LakeStorageFoldComponent } from './storage-summary/lake-storage-fold.component';
 import { SymbolReadinessTableComponent } from './symbol-readiness-table/symbol-readiness-table.component';
 import { buildCoverageBoard, type CoverageBoard } from './lib/coverage-board';
-import type { BackfillPhase } from './lib/data-lake-backfill.store';
 import {
   PRICE_ADJUSTMENT_OPTIONS,
   coverageWindow,
@@ -59,11 +58,27 @@ const EMPTY_BOARD: CoverageBoard = {
   lastSessionMs: null,
 };
 
-interface CoverageParams {
-  readonly row: SymbolReadinessRow;
+/** What the session grid reads. Compared by value, so a re-read of readiness alone does not reset the grid. */
+interface CoverageRequest {
+  readonly symbol: string;
+  readonly from: string;
+  readonly to: string;
   readonly mode: PriceAdjustmentMode;
   readonly bars: DataLakeDataType;
-  readonly capDays: number;
+}
+
+function sameCoverageRequest(
+  a: CoverageRequest | undefined,
+  b: CoverageRequest | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.symbol === b.symbol &&
+    a.from === b.from &&
+    a.to === b.to &&
+    a.mode === b.mode &&
+    a.bars === b.bars
+  );
 }
 
 /**
@@ -94,13 +109,13 @@ function tradingDateAt(ms: number): string {
   styleUrl: './data-lake-observatory.component.scss',
   imports: [
     PageHeaderComponent,
-    ReceiptLabelPipe,
     AssetIdentityComponent,
     ArtifactInspectorDrawerComponent,
     CoverageHeatmapComponent,
     LakeBackfillPanelComponent,
     LakePanelComponent,
     LakeStorageFoldComponent,
+    LakeToggleComponent,
     ReadinessBannerComponent,
     SessionInspectorComponent,
     SessionNeedsComponent,
@@ -114,7 +129,11 @@ export class DataLakeObservatoryComponent {
   protected readonly modeOptions = PRICE_ADJUSTMENT_OPTIONS;
   protected readonly barTypeOptions = BAR_TYPE_OPTIONS;
 
-  /** Split-adjusted first: it is the view every sweep and Golden Search reads. */
+  /**
+   * The view the whole page reads: readiness, the session grid and the tree a
+   * backfill writes. Split-adjusted trade bars first: they are what every
+   * sweep and Golden Search reads.
+   */
   protected readonly mode = signal<PriceAdjustmentMode>('polygon_split_adjusted');
   protected readonly bars = signal<DataLakeDataType>('trade');
 
@@ -123,8 +142,8 @@ export class DataLakeObservatoryComponent {
   protected readonly seedEnd = tradingDateAt(Date.now());
 
   protected readonly readiness = resource({
-    params: () => this.mode(),
-    loader: ({ params }) => this.lake.runReadiness(params),
+    params: () => ({ mode: this.mode(), bars: this.bars() }),
+    loader: ({ params }) => this.lake.runReadiness(params.mode, params.bars),
   });
 
   protected readonly storage = resource({
@@ -137,7 +156,7 @@ export class DataLakeObservatoryComponent {
 
   protected readonly rows = computed(() => {
     const read = this.readiness.value();
-    return read?.kind === 'ok' ? readinessRows(read.value.symbols) : [];
+    return read?.kind === 'ok' ? readinessRows(read.value.symbols, this.bars()) : [];
   });
 
   protected readonly totals = computed(() => readinessTotals(this.rows()));
@@ -156,12 +175,33 @@ export class DataLakeObservatoryComponent {
     () => this.rows().find((row) => row.symbol === this.selectedSymbol()) ?? null,
   );
 
-  protected readonly coverage = resource({
-    params: (): CoverageParams | undefined => {
+  protected readonly backfillDefaults = computed(() => {
+    const read = this.defaults.value();
+    return read?.kind === 'ok' ? read.value : null;
+  });
+
+  protected readonly maxTradingRangeDays = computed(
+    () => this.backfillDefaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
+  );
+
+  private readonly coverageRequest = computed<CoverageRequest | undefined>(
+    () => {
       const row = this.selectedRow();
       if (row === null) return undefined;
-      return { row, mode: this.mode(), bars: this.bars(), capDays: this.maxTradingRangeDays() };
+      const window = coverageWindow(row, this.maxTradingRangeDays());
+      return {
+        symbol: row.symbol,
+        from: window.from,
+        to: window.to,
+        mode: this.mode(),
+        bars: this.bars(),
+      };
     },
+    { equal: sameCoverageRequest },
+  );
+
+  protected readonly coverage = resource({
+    params: () => this.coverageRequest(),
     loader: ({ params }) => this.loadBoard(params),
   });
 
@@ -176,26 +216,17 @@ export class DataLakeObservatoryComponent {
   /** Read off the board, so a re-read after a backfill shows the session as it now stands. */
   protected readonly selection = computed<CoverageCellSelection | null>(() => {
     const dateMs = this.selectedDateMs();
-    const row = this.board().rows[0];
+    const row = this.board().rows.at(0);
     const cell = row?.cells.find((candidate) => candidate.tradingDateMs === dateMs);
     return row === undefined || cell === undefined ? null : { symbol: row.symbol, cell };
   });
 
   protected readonly receipt = signal<CoverageCellSelection | null>(null);
 
-  protected readonly backfillDefaults = computed(() => {
-    const read = this.defaults.value();
-    return read?.kind === 'ok' ? read.value : null;
-  });
-
   protected readonly storageSummary = computed(() => {
     const read = this.storage.value();
     return read?.kind === 'ok' ? read.value : null;
   });
-
-  protected readonly maxTradingRangeDays = computed(
-    () => this.backfillDefaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
-  );
 
   protected readonly readinessProblem = computed(() => describeFailure(this.readiness.value()));
 
@@ -213,18 +244,19 @@ export class DataLakeObservatoryComponent {
     if (this.selectedSymbol() === null) return 'The lake holds no symbol in this view to show sessions for.';
     return 'The exchange calendar has no sessions in this window.';
   });
+
   protected readonly storageProblem = computed(() => describeFailure(this.storage.value()));
 
   protected readonly backfillBusy = computed(() => this.backfillPanel()?.busy() ?? false);
 
-  /** The symbols a "rebuild all" still has to run, after the one running now. */
-  private readonly rebuildQueue = signal<readonly RebuildRequest[]>([]);
-  protected readonly rebuildProgress = signal<RebuildProgress | null>(null);
+  /** The symbol a rebuild is on and its place in the list; null when none is running. */
+  private readonly rebuildProgress = signal<RebuildProgress | null>(null);
 
-  protected onBars(event: Event): void {
-    const value = (event.target as HTMLSelectElement).value;
-    this.bars.set(value === 'quote' ? 'quote' : 'trade');
-  }
+  /** What the banner narrates: a list of symbols. A single symbol's run is the backfill panel's to show. */
+  protected readonly queueProgress = computed(() => {
+    const progress = this.rebuildProgress();
+    return progress !== null && progress.total > 1 ? progress : null;
+  });
 
   protected selectSession(selection: CoverageCellSelection): void {
     this.selectedDateMs.set(selection.cell.tradingDateMs);
@@ -234,52 +266,50 @@ export class DataLakeObservatoryComponent {
     await this.rebuild(rebuildRequests(this.rows()));
   }
 
-  /** Runs the requests one after another: each symbol has its own window, so each is its own backfill. */
-  protected async rebuild(requests: readonly RebuildRequest[]): Promise<void> {
-    if (requests.length === 0 || this.backfillBusy()) return;
-    this.rebuildQueue.set(requests.slice(1));
-    await this.startRebuild(requests[0], 1, requests.length);
-  }
-
   /**
-   * A finished backfill changes what is on disk, so readiness and storage
-   * re-read (coverage follows readiness). A run that failed or was cancelled
-   * ends a "rebuild all" too: whatever stopped one symbol would stop the next.
+   * Runs the requests one after another: each symbol has its own window, so
+   * each is its own backfill.
+   *
+   * The list ends at the first run that does not complete — whatever stopped
+   * one symbol would stop the next — and when the operator moves to another
+   * view, because the backfill panel writes the view on screen and the rest
+   * of the list was composed for the one they left.
    */
-  protected async onRunFinished(phase: BackfillPhase): Promise<void> {
-    this.readiness.reload();
-    this.storage.reload();
-    const progress = this.rebuildProgress();
-    const [next, ...rest] = this.rebuildQueue();
-    if (phase !== 'completed' || progress === null || next === undefined) {
-      this.endRebuild();
-      return;
+  protected async rebuild(requests: readonly RebuildRequest[]): Promise<void> {
+    const panel = this.backfillPanel();
+    if (panel === undefined || this.backfillBusy() || this.rebuildProgress() !== null) return;
+    const mode = this.mode();
+    const bars = this.bars();
+    try {
+      for (const [index, request] of requests.entries()) {
+        if (this.mode() !== mode || this.bars() !== bars) return;
+        this.rebuildProgress.set({
+          symbol: request.symbol,
+          position: index + 1,
+          total: requests.length,
+        });
+        if ((await panel.rebuild(request)) !== 'completed') return;
+      }
+    } finally {
+      this.rebuildProgress.set(null);
     }
-    this.rebuildQueue.set(rest);
-    await this.startRebuild(next, progress.position + 1, progress.total);
   }
 
-  private async startRebuild(request: RebuildRequest, position: number, total: number): Promise<void> {
-    this.rebuildProgress.set({ symbol: request.symbol, position, total });
-    const started = (await this.backfillPanel()?.rebuild(request)) ?? false;
-    // The form refused the run and says why in the backfill panel.
-    if (!started) this.endRebuild();
+  /** A finished backfill changes what is on disk, so every read of the lake is taken again. */
+  protected onRunFinished(): void {
+    this.readiness.reload();
+    this.coverage.reload();
+    this.storage.reload();
   }
 
-  private endRebuild(): void {
-    this.rebuildQueue.set([]);
-    this.rebuildProgress.set(null);
-  }
-
-  private async loadBoard(params: CoverageParams): Promise<CoverageBoard> {
-    const window = coverageWindow(params.row, params.capDays);
+  private async loadBoard(request: CoverageRequest): Promise<CoverageBoard> {
     const read = await this.lake.coverage({
-      symbol: params.row.symbol,
-      startTradingDate: window.from,
-      endTradingDate: window.to,
-      dataType: params.bars,
-      priceAdjustmentMode: params.mode,
+      symbol: request.symbol,
+      startTradingDate: request.from,
+      endTradingDate: request.to,
+      dataType: request.bars,
+      priceAdjustmentMode: request.mode,
     });
-    return buildCoverageBoard([{ symbol: params.row.symbol, read }]);
+    return buildCoverageBoard([{ symbol: request.symbol, read }]);
   }
 }

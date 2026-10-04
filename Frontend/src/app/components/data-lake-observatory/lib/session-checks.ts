@@ -1,6 +1,7 @@
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import type { PriceAdjustmentMode } from '../../../shared/data-lake';
 import type { CoverageCell } from './coverage-board';
+import { needsAdjustmentRecord } from './lake-readiness';
 
 /** `ok` holds, `bad` is what stops a run, `muted` does not apply or cannot be told yet. */
 export type CheckTone = 'ok' | 'bad' | 'muted';
@@ -31,7 +32,7 @@ function priceFile(cell: CoverageCell): SessionCheck {
 
 function adjustmentRecord(cell: CoverageCell, mode: PriceAdjustmentMode): SessionCheck {
   const label = 'Adjustment record';
-  if (mode !== 'polygon_split_adjusted') {
+  if (!needsAdjustmentRecord(mode)) {
     return { label, tone: 'muted', detail: 'Not needed in this view' };
   }
   if (cell.status === 'complete') return { label, tone: 'ok', detail: 'Current' };

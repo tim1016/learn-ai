@@ -47,7 +47,7 @@ const META = entry({ symbol: 'META', session_count: 71, run_ready_count: 63, unr
 
 describe('readinessRows', () => {
   it('puts symbols a backfill can fix first, then the rest that are unreadable, then ready', () => {
-    const rows = readinessRows([SPY, META, GLD, AMZN]);
+    const rows = readinessRows([SPY, META, GLD, AMZN], 'trade');
 
     expect(rows.map((row) => [row.symbol, row.state])).toEqual([
       ['AMZN', 'unreadable'],
@@ -58,16 +58,27 @@ describe('readinessRows', () => {
   });
 
   it('separates the sessions a backfill can rebuild from the ones too old to fetch again', () => {
-    const [amzn] = readinessRows([AMZN]);
+    const [amzn] = readinessRows([AMZN], 'trade');
 
     expect(amzn.rebuildableCount).toBe(1245);
     expect(amzn.unrebuildableCount).toBe(9);
     // The window starts at the oldest session the provider still serves.
-    expect(amzn.rebuild).toEqual({ symbol: 'AMZN', from: '2021-10-05', to: '2026-09-18' });
+    expect(amzn.rebuild).toEqual({
+      symbol: 'AMZN',
+      from: '2021-10-05',
+      to: '2026-09-18',
+      includeQuotes: false,
+    });
+  });
+
+  it('asks a rebuild of quote bars to derive quotes, since a backfill writes trade bars alone otherwise', () => {
+    const [gld] = readinessRows([GLD], 'quote');
+
+    expect(gld.rebuild?.includeQuotes).toBe(true);
   });
 
   it('offers no rebuild for a symbol whose only unreadable sessions are too old', () => {
-    const [meta] = readinessRows([META]);
+    const [meta] = readinessRows([META], 'trade');
 
     expect(meta.rebuildableCount).toBe(0);
     expect(meta.rebuild).toBeNull();
@@ -76,7 +87,7 @@ describe('readinessRows', () => {
 
 describe('readinessTotals', () => {
   it('counts only the symbols and sessions a backfill can rebuild', () => {
-    const rows = readinessRows([SPY, META, GLD, AMZN]);
+    const rows = readinessRows([SPY, META, GLD, AMZN], 'trade');
 
     expect(readinessTotals(rows)).toEqual({
       symbolCount: 4,
@@ -91,13 +102,13 @@ describe('readinessTotals', () => {
 
 describe('coverageWindow', () => {
   it('reads the whole held span when the coverage endpoint accepts it', () => {
-    const [gld] = readinessRows([GLD]);
+    const [gld] = readinessRows([GLD], 'trade');
 
     expect(coverageWindow(gld, 1830)).toEqual({ from: '2024-08-06', to: '2026-09-18' });
   });
 
   it('keeps the newest sessions when the span is longer than the endpoint accepts', () => {
-    const [gld] = readinessRows([GLD]);
+    const [gld] = readinessRows([GLD], 'trade');
 
     expect(coverageWindow(gld, 30)).toEqual({ from: '2026-08-20', to: '2026-09-18' });
   });

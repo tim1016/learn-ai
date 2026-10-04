@@ -1,5 +1,6 @@
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { By } from '@angular/platform-browser';
 import userEvent from '@testing-library/user-event';
 
 import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
@@ -24,6 +25,7 @@ import {
 } from '../../../shared/ticker-catalog/testing/fake-ticker-catalog';
 import type { VendorSymbolEntry } from '../../../shared/symbol-catalog/vendor-catalog.service';
 import type { TickerOption } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { MultiInstrumentCardComponent } from '../../../shared/multi-ticker-range-picker/multi-instrument-card.component';
 import { LakeBackfillPanelComponent } from './lake-backfill-panel.component';
 
 /** 09:30 America/New_York on 2026-05-20, as int64 ms UTC. */
@@ -68,6 +70,8 @@ interface PanelOptions {
   priceAdjustmentMode?: PriceAdjustmentMode;
   seedStartTradingDate?: string;
   seedEndTradingDate?: string;
+  /** The symbols picked in the card before the test begins. */
+  picked?: readonly string[];
   /** What `JobsService.jobs()` already holds when the panel mounts. */
   liveJobs?: readonly Partial<JobState>[];
   /** The vendor catalog rows the fake asset catalog serves. */
@@ -107,12 +111,16 @@ async function renderPanel(options: PanelOptions = {}) {
     ],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
-      seedSymbols: 'SPY',
       seedStartTradingDate: options.seedStartTradingDate ?? '2026-05-18',
       seedEndTradingDate: options.seedEndTradingDate ?? '2026-05-22',
       priceAdjustmentMode: options.priceAdjustmentMode ?? 'raw',
     },
   });
+  // Picking is the card's job; its model is what an operator's pick writes.
+  const card = view.fixture.debugElement.query(By.directive(MultiInstrumentCardComponent))
+    .componentInstance as MultiInstrumentCardComponent;
+  card.symbols.set([...(options.picked ?? ['SPY'])]);
+  view.detectChanges();
   const store = view.fixture.debugElement.injector.get(DataLakeBackfillStore);
   return {
     ...view,
@@ -126,11 +134,9 @@ async function renderPanel(options: PanelOptions = {}) {
 }
 
 describe('LakeBackfillPanelComponent', () => {
-  it('seeds the form from the window the page is showing', async () => {
+  it('starts the form on the window the page hands it', async () => {
     await renderPanel();
 
-    // The seed symbol arrives as a picked chip, not hand-typed text.
-    expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
     const dates = within(screen.getByRole('group', { name: 'Backfill dates' }));
     expect(dates.getByRole<HTMLInputElement>('textbox', { name: 'Start date' }).value).toBe('2026-05-18');
     expect(dates.getByRole<HTMLInputElement>('textbox', { name: 'End date' }).value).toBe('2026-05-22');
@@ -147,22 +153,6 @@ describe('LakeBackfillPanelComponent', () => {
     await vi.waitFor(() => expect(startJob).toHaveBeenCalled());
     const [, payload] = startJob.mock.calls[0] as [string, { spec: { symbols: string[] } }];
     expect(payload.spec.symbols).toEqual(['SPY', 'QQQ']);
-  });
-
-  it("keeps the operator's picks when the host rebinds the seed window", async () => {
-    // The host binds the seeds from the URL query; a reactive seed would
-    // wipe the chips every time the heatmap's window moved.
-    const { fixture, detectChanges } = await renderPanel();
-    fireEvent.click(screen.getByRole('button', { name: 'SPY (remove)' }));
-    detectChanges();
-    expect(screen.queryByRole('button', { name: /remove/ })).toBeNull();
-
-    fixture.componentRef.setInput('seedSymbols', 'SPY, QQQ, TSLA');
-    fixture.componentRef.setInput('seedStartTradingDate', '2026-06-01');
-    fixture.componentRef.setInput('seedEndTradingDate', '2026-06-30');
-    detectChanges();
-
-    expect(screen.queryByRole('button', { name: /remove/ })).toBeNull();
   });
 
   it('offers delisted symbols only behind the explicit toggle', async () => {
@@ -221,11 +211,10 @@ describe('LakeBackfillPanelComponent', () => {
     expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
   });
 
-  it('blocks a seed the vendor catalog cannot vouch for, by name', async () => {
-    // Seeds arrive from the coverage board's free text; lake membership made
-    // them visible but never made them backfillable. With the vendor having
-    // answered, an unvouched pick blocks submission and names itself.
-    // The vendor catalog answers without SPY: the seeded pick is unvouched.
+  it('blocks a pick the vendor catalog cannot vouch for, by name', async () => {
+    // Lake membership makes a symbol visible but never made it backfillable.
+    // With the vendor having answered, an unvouched pick blocks submission
+    // and names itself. The vendor catalog answers without SPY.
     await renderPanel({
       vendorEntries: [vendorEntry({ symbol: 'QQQ', name: 'Invesco QQQ', exchange: 'NASDAQ' })],
     });
@@ -360,62 +349,67 @@ describe('LakeBackfillPanelComponent', () => {
     expect(screen.getByText('plan does not include this feed')).toBeTruthy();
   });
 
-  it.each([
-    ['job.completed', 'completed'],
-    ['job.failed', 'failed'],
-    ['job.cancelled', 'cancelled'],
-  ])('tells the page to re-read coverage after %s, and how the run ended', async (terminalEvent, phase) => {
-    // `run_backfill` writes session by session, so a run that died — or
-    // that the operator stopped — between per-day writes still left
-    // completed artifacts on disk. Every terminal phase leaves the
-    // heatmap stale, not just the successful one.
-    const { store, fixture, detectChanges, emitJobEvent } = await renderPanel();
-    const finished = vi.fn();
-    fixture.componentInstance.runFinished.subscribe(finished);
+  it.each(['job.completed', 'job.failed', 'job.cancelled'])(
+    'tells the page to re-read coverage after %s',
+    async (terminalEvent) => {
+      // `run_backfill` writes session by session, so a run that died — or
+      // that the operator stopped — between per-day writes still left
+      // completed artifacts on disk. Every terminal phase leaves the
+      // heatmap stale, not just the successful one.
+      const { store, fixture, detectChanges, emitJobEvent } = await renderPanel();
+      const finished = vi.fn();
+      fixture.componentInstance.runFinished.subscribe(finished);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
-    await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
-    emitJobEvent({
-      type: terminalEvent,
-      code: 'io_error',
-      message: 'disk full',
+      fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+      await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
+      emitJobEvent({
+        type: terminalEvent,
+        code: 'io_error',
+        message: 'disk full',
+      });
+      detectChanges();
+
+      expect(finished).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("rebuilds one symbol over its own window, in the page's view, and reports how the run ended", async () => {
+    const { startJob, store, fixture, emitJobEvent } = await renderPanel({
+      priceAdjustmentMode: 'polygon_split_adjusted',
     });
-    detectChanges();
 
-    expect(finished).toHaveBeenCalledTimes(1);
-    expect(finished).toHaveBeenCalledWith(phase);
-  });
-
-  it("rebuilds one symbol over its own window, in the page's view", async () => {
-    const { startJob, fixture } = await renderPanel({ priceAdjustmentMode: 'polygon_split_adjusted' });
-
-    const started = await fixture.componentInstance.rebuild({
+    const ended = fixture.componentInstance.rebuild({
       symbol: 'QQQ',
       from: '2024-08-06',
       to: '2026-09-18',
+      includeQuotes: true,
     });
+    await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
 
-    expect(started).toBe(true);
     const [, payload] = startJob.mock.calls[0] as [string, { spec: Record<string, unknown> }];
     expect(payload.spec).toMatchObject({
       symbols: ['QQQ'],
       start_trading_date_ms: Date.UTC(2024, 7, 6, 12, 0),
       end_trading_date_ms: Date.UTC(2026, 8, 18, 12, 0),
+      data_types: ['trade', 'quote'],
       price_adjustment_mode: 'polygon_split_adjusted',
     });
+    emitJobEvent({ type: 'job.completed' });
+    expect(await ended).toBe('completed');
   });
 
   it('refuses a rebuild the form cannot run, and starts no job', async () => {
     const { startJob, fixture, detectChanges } = await renderPanel({ defaults: null });
 
-    const started = await fixture.componentInstance.rebuild({
+    const ended = await fixture.componentInstance.rebuild({
       symbol: 'QQQ',
       from: '2024-08-06',
       to: '2026-09-18',
+      includeQuotes: false,
     });
     detectChanges();
 
-    expect(started).toBe(false);
+    expect(ended).toBeNull();
     expect(startJob).not.toHaveBeenCalled();
     expect(screen.getByText('Backfill is unavailable until the data plane answers.')).toBeTruthy();
   });

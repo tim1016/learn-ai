@@ -92,11 +92,19 @@ def test_adjusted_file_gap_asks_nothing_of_a_raw_file(tmp_path: Path) -> None:
 def test_coverage_gaps_checks_only_complete_sessions(adjusted_root: Path) -> None:
     _write(adjusted_root, RELATIVE, PRICE_BYTES)
     rows = [
-        ArtifactCoverageRow(date(2024, 10, 31), "complete", 1, str(RELATIVE), PRICE_SHA),
-        ArtifactCoverageRow(date(2024, 11, 1), "failed", 2, "equity/usa/minute/gld/20241101_trade.zip", None),
+        ArtifactCoverageRow(date(2024, 10, 31), "complete", 1, "GLD", str(RELATIVE), PRICE_SHA),
+        ArtifactCoverageRow(date(2024, 11, 1), "failed", 2, "GLD", "equity/usa/minute/gld/20241101_trade.zip", None),
     ]
 
-    assert coverage_gaps(rows, adjusted_root, "GLD") == {date(2024, 10, 31): "adjustment_record_missing"}
+    assert coverage_gaps(rows, adjusted_root) == {date(2024, 10, 31): "adjustment_record_missing"}
+
+
+def test_coverage_gaps_asks_nothing_of_a_raw_root(tmp_path: Path) -> None:
+    raw_root = tmp_path / "lake" / "raw"
+    rows = [ArtifactCoverageRow(date(2024, 10, 31), "complete", 1, "GLD", str(RELATIVE), PRICE_SHA)]
+
+    # Not even the price file is looked for: a raw backfill would not rebuild a session over it.
+    assert coverage_gaps(rows, raw_root) == {}
 
 
 def test_current_versions_is_none_for_a_symbol_with_no_snapshot(adjusted_root: Path) -> None:

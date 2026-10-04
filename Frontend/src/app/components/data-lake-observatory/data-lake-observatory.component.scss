@@ -46,48 +46,9 @@
   }
 }
 
-// Which tree the whole page reads: a pressed button per view.
-.mode {
-  display: inline-flex;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-
-  &__option {
-    padding: var(--space-2) var(--space-4);
-    font-size: var(--fs-sm);
-    background: var(--bg-surface);
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-
-    &:focus-visible {
-      outline: 2px solid var(--accent-text);
-      outline-offset: -2px;
-    }
-
-    &--on {
-      font-weight: var(--fw-semi);
-      background: var(--accent);
-      color: var(--text-on-accent);
-    }
-  }
-}
-
-.bars {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-  font-size: var(--fs-xs);
-  color: var(--text-subtle);
-
-  &__select {
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--fs-sm);
-    background: var(--bg-sunken);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-  }
+// Which bars and which tree the whole page reads.
+.lake__views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
 }

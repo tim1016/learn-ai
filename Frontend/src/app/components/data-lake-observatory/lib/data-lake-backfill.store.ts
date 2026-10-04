@@ -20,6 +20,9 @@ export type BackfillPhase =
   | 'failed'
   | 'cancelled';
 
+/** How a run ended. `detached` is a run this store stopped watching before it finished. */
+export type BackfillRunEnd = 'completed' | 'failed' | 'cancelled' | 'detached';
+
 export interface BackfillProgress {
   readonly current: number;
   readonly total: number;
@@ -133,6 +136,13 @@ export class DataLakeBackfillStore {
       return;
     }
     this.jobIdState.set(this.runState()?.jobId ?? null);
+  }
+
+  /** Start a run and resolve once it ends; a refused submission ends it as `failed`. */
+  async run(spec: DataRunSpec): Promise<BackfillRunEnd> {
+    await this.start(spec);
+    const run = this.runState();
+    return run === null ? 'failed' : (await run.terminal).kind;
   }
 
   /**

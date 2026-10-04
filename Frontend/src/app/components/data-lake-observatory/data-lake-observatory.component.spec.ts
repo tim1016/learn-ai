@@ -135,11 +135,16 @@ function vendorEntry(symbol: string): VendorSymbolEntry {
   return { symbol, name: symbol, asset_class: 'us_equity', exchange: 'ARCA', status: 'active' };
 }
 
-async function renderObservatory(symbols: readonly SymbolRunReadiness[] = [GLD, SPY]) {
+const DARK: DataLakeRead<BackfillDefaults> = { kind: 'unavailable', message: 'The data plane did not respond.' };
+
+async function renderObservatory(
+  symbols: readonly SymbolRunReadiness[] = [GLD, SPY],
+  defaults: DataLakeRead<BackfillDefaults> = { kind: 'ok', value: DEFAULTS },
+) {
   const lake = {
     runReadiness: vi.fn().mockResolvedValue(readiness(symbols)),
     storageSummary: vi.fn().mockResolvedValue({ kind: 'ok', value: EMPTY_STORAGE }),
-    backfillDefaults: vi.fn().mockResolvedValue({ kind: 'ok', value: DEFAULTS }),
+    backfillDefaults: vi.fn().mockResolvedValue(defaults),
     coverage: vi.fn().mockResolvedValue(GLD_COVERAGE),
     artifact: vi.fn().mockResolvedValue({ kind: 'ok', value: ARTIFACT }),
   };
@@ -187,7 +192,7 @@ describe('DataLakeObservatoryComponent', () => {
   it('says up front that symbols on disk cannot be read, and that a backfill writes what is missing', async () => {
     const { lake } = await renderObservatory();
 
-    expect(lake.runReadiness).toHaveBeenCalledWith('polygon_split_adjusted');
+    expect(lake.runReadiness).toHaveBeenCalledWith('polygon_split_adjusted', 'trade');
     expect(
       screen.getByRole('heading', { name: '1 of 2 symbols needs a rebuild before a run can read it' }),
     ).toBeTruthy();
@@ -250,8 +255,51 @@ describe('DataLakeObservatoryComponent', () => {
     endJob('job-1', 'job.failed');
 
     await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(screen.queryByText(/\(\d of 2\)/)).toBeNull());
     expect(startJob).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/Rebuilding AMZN/)).toBeNull();
+  });
+
+  it('ends a rebuild of every symbol when the operator moves to another view', async () => {
+    // The backfill panel writes the view on screen. Left running, the rest of
+    // the list would be fetched into raw over windows composed for
+    // split-adjusted, and the sessions it set out to rebuild would stay unreadable.
+    const { startJob, endJob } = await renderObservatory([GLD, AMZN]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Raw' }));
+    endJob('job-1', 'job.completed');
+
+    await vi.waitFor(() => expect(screen.queryByText(/\(\d of 2\)/)).toBeNull());
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(specOf(startJob, 0)).toMatchObject({ price_adjustment_mode: 'polygon_split_adjusted' });
+  });
+
+  it('starts nothing when the backfill form cannot run, and says why', async () => {
+    const { startJob } = await renderObservatory([GLD, AMZN], DARK);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
+
+    expect(await screen.findByText('Backfill is unavailable until the data plane answers.')).toBeTruthy();
+    await vi.waitFor(() => expect(screen.queryByText(/\(\d of 2\)/)).toBeNull());
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it('reads and rebuilds the bars the operator picks', async () => {
+    const { lake, startJob } = await renderObservatory();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+    await vi.waitFor(() =>
+      expect(lake.runReadiness).toHaveBeenLastCalledWith('polygon_split_adjusted', 'quote'),
+    );
+    await vi.waitFor(() =>
+      expect(lake.coverage).toHaveBeenLastCalledWith(expect.objectContaining({ dataType: 'quote' })),
+    );
+
+    // A backfill derives quote bars only alongside trade, so the rebuild asks for both.
+    fireEvent.click(await screen.findByRole('button', { name: 'Rebuild GLD' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    expect(specOf(startJob, 0)).toMatchObject({ symbols: ['GLD'], data_types: ['trade', 'quote'] });
   });
 
   it('reads the view the operator switches to, and refuses to backfill one nothing derives', async () => {
@@ -259,9 +307,25 @@ describe('DataLakeObservatoryComponent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Lean Adjusted' }));
 
-    await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenLastCalledWith('lean_adjusted'));
+    await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenLastCalledWith('lean_adjusted', 'trade'));
     expect(await screen.findByText(/Nothing derives/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps the grid and the picked session on screen while the lake is read again', async () => {
+    // Every finished run re-reads readiness; that alone must not blank a grid
+    // whose symbol, window and view have not changed.
+    const { lake, startJob, endJob } = await renderObservatory();
+    fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
+    await screen.findByText("A run can't read this session");
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild GLD only' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    endJob('job-1', 'job.completed');
+
+    await vi.waitFor(() => expect(lake.coverage).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('Walking the calendar…')).toBeNull();
+    expect(screen.getByText("A run can't read this session")).toBeTruthy();
   });
 
   it('passes AXE with a symbol that needs a rebuild and a picked session', async () => {

@@ -10,7 +10,7 @@ complete in the catalog and refused by every reader.
 Two views answer for it:
 
 * ``coverage_gaps`` checks one symbol's sessions against the files on disk,
-  with the reader's own verifier.
+  the way a writer checks a file before it reuses it.
 * ``fold_run_readiness`` counts a whole lake from the version the catalog
   recorded for each session, so it opens one snapshot per symbol instead of
   one record per session.
@@ -33,15 +33,16 @@ def needs_adjustment_record(price_adjustment_mode: PriceAdjustmentMode) -> bool:
     return price_adjustment_mode == "polygon_split_adjusted"
 
 
-def coverage_gaps(
-    rows: Sequence[ArtifactCoverageRow], lake_root: Path, symbol: str
-) -> dict[date, AdjustedFileGap]:
-    """The complete sessions among ``rows`` that a reader on ``lake_root`` refuses, and why."""
+def coverage_gaps(rows: Sequence[ArtifactCoverageRow], lake_root: Path) -> dict[date, AdjustedFileGap]:
+    """The complete sessions among ``rows`` whose file under ``lake_root`` lacks a valid receipt, and why.
+
+    Empty for a root whose files need no adjustment record.
+    """
     gaps: dict[date, AdjustedFileGap] = {}
     for row in rows:
         if row.status != "complete":
             continue
-        gap = adjusted_file_gap(lake_root / row.file_path, row.file_sha256 or "", symbol)
+        gap = adjusted_file_gap(lake_root / row.file_path, row.file_sha256 or "", row.symbol)
         if gap is not None:
             gaps[row.trading_date] = gap
     return gaps

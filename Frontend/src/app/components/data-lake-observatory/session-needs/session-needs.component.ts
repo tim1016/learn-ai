@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import type { PriceAdjustmentMode } from '../../../shared/data-lake';
+import { needsAdjustmentRecord } from '../lib/lake-readiness';
 
 /**
  * The three things a run needs for one session, and that a backfill writes
@@ -19,7 +20,7 @@ export class SessionNeedsComponent {
   /** Symbols with sessions a backfill can rebuild. */
   readonly missingSymbolCount = input(0);
 
-  protected readonly needsRecord = computed(() => this.mode() === 'polygon_split_adjusted');
+  protected readonly needsRecord = computed(() => needsAdjustmentRecord(this.mode()));
 
   protected readonly missing = computed(() => {
     const count = this.missingSymbolCount();

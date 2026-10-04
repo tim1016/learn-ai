@@ -1675,6 +1675,8 @@ class ArtifactCoverageRow:
     trading_date: date
     status: str
     artifact_id: int
+    #: The catalog's own spelling of the symbol the row was queried by.
+    symbol: str
     file_path: str
     #: Null until the row reaches 'complete'.
     file_sha256: str | None
@@ -1703,7 +1705,7 @@ async def select_artifact_coverage(
     root_id = _resolve_data_root_id(data_root_id)
     query = """
         SELECT "TradingDate" AS trading_date, "Status" AS status, "Id" AS artifact_id,
-               "FilePath" AS file_path, "FileSha256" AS file_sha256
+               "Symbol" AS symbol, "FilePath" AS file_path, "FileSha256" AS file_sha256
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = 'minute'
