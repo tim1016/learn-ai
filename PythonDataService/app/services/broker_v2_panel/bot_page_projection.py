@@ -49,7 +49,7 @@ from app.services.broker_v2_panel.catalog_projection_service import duty_outcome
 from app.utils.et_words import et_clock_words, et_day_words
 from app.utils.session_anchors import et_date_at_ms
 
-SUMMARY_TEMPLATE_VERSION = 1
+SUMMARY_TEMPLATE_VERSION = 2
 # A run the Clerk admitted whose launch record cannot be read.
 _UNREADABLE_RUN = "This bot's latest run record could not be read."
 # The bot page lists a run's newest fills; a longer run still counts every trade.
@@ -77,6 +77,8 @@ class RunFacts:
     released_cents: int | None
     # A sale the Clerk is still working for this bot (#2504).
     exit_in_progress: bool
+    # That sale's order was sent and the Clerk could not confirm it: nothing more is sent (#2854).
+    exit_unconfirmed: bool = False
 
 
 def run_facts(
@@ -87,6 +89,7 @@ def run_facts(
     activity: RunActivity | None,
     budget: Mapping[str, int | None] | None,
     exit_in_progress: bool,
+    exit_unconfirmed: bool = False,
 ) -> RunFacts:
     """The run's facts from its record, its fills, its activity and the bot's budget row."""
     terminal = None if run is None else run.terminal_outcome
@@ -103,6 +106,7 @@ def run_facts(
         committed_cents=None if budget is None else budget["committed_cents"],
         released_cents=None if budget is None else budget["released_cents"],
         exit_in_progress=exit_in_progress,
+        exit_unconfirmed=exit_unconfirmed,
     )
 
 
@@ -213,7 +217,10 @@ def run_summary_facts(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> Run
             HeldPositionFact(symbol=symbol, quantity=quantity_text(quantity))
             for symbol, quantity in sorted(panel.exposure.items())
         ],
-        exit_queued=run.exit_in_progress or (panel.end is not None and panel.end.status == "ending"),
+        # An exit whose order could not be confirmed is held, not queued: nothing more goes out for it.
+        exit_queued=(run.exit_in_progress and not run.exit_unconfirmed)
+        or (panel.end is not None and panel.end.status == "ending"),
+        exit_unconfirmed=run.exit_unconfirmed,
         authored_at_ms=now_ms,
     )
 
@@ -254,10 +261,14 @@ def _money_words(facts: RunSummaryFacts) -> str | None:
 
 
 def run_summary_text(facts: RunSummaryFacts) -> str:
-    """Template v1: the run in one line, a pure function of its facts.
+    """Template v2: the run in one line, a pure function of its facts.
 
     "Ran Wed Sep 30, 14:30–15:59 ET · ended on schedule · 5 decisions, no
     trades · $800.00 back to the account."
+
+    v2 (#2854): a closing order the Clerk could not confirm is said as that.
+    v1 said "a sale is queued" of it, and none is: the Clerk holds the
+    position and sends nothing more until the order is settled.
     """
     if facts.ending == "unreadable":
         return _UNREADABLE_RUN
@@ -275,7 +286,9 @@ def run_summary_text(facts: RunSummaryFacts) -> str:
     money = _money_words(facts)
     if money is not None:
         parts.append(money)
-    if facts.exit_queued:
+    if facts.exit_unconfirmed:
+        parts.append("a closing order is unconfirmed")
+    elif facts.exit_queued:
         parts.append("a sale is queued")
     return " · ".join(parts) + "."
 
@@ -409,6 +422,12 @@ def _deploy_again_entry(panel: BotPanelView) -> ToolbarActionView:
     return _entry("deploy_again", "Deploy again", "bot", "available", "Deploy a new bot with these settings.")
 
 
+_SETTLE_BEFORE_CLEAR = (
+    "The Clerk holds this bot's position until its uncertain order is settled. "
+    f'Use "{_CUSTODY_ENTRIES["settle_unknown_exit_order"].label}" first.'
+)
+
+
 def _clear_entry(panel: BotPanelView) -> ToolbarActionView:
     if panel.status == "cleared":
         return _entry("archive", "Clear from Home", "bot", "not_needed", "This bot is already cleared from Home.")
@@ -417,6 +436,11 @@ def _clear_entry(panel: BotPanelView) -> ToolbarActionView:
         return _entry("archive", "Clear from Home", "bot", "not_needed", "A running bot stays on Home.")
     if archive.enabled:
         return _entry("archive", "Clear from Home", "bot", "available", "Take this finished bot off Home.")
+    settle = next((action for action in panel.actions if action.action_id == "settle_unknown_exit_order"), None)
+    if settle is not None and settle.needed:
+        # Clear's own refusal says to sell first, and a sale is refused too
+        # while a closing order is unconfirmed (#2854): the way on is to settle it.
+        return _entry("archive", "Clear from Home", "bot", "blocked", _SETTLE_BEFORE_CLEAR)
     reason = archive.blockers[0].headline if archive.blockers else archive.explanation
     return _entry("archive", "Clear from Home", "bot", "blocked", reason)
 

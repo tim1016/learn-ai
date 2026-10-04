@@ -1362,6 +1362,42 @@ def test_settling_is_the_bots_cure_and_the_accounts_catalog_says_where_it_is_don
     assert on_the_desk.settlement is None
 
 
+def test_a_flatten_refused_behind_an_unconfirmed_closing_order_says_to_settle_it() -> None:
+    """A Flatten is refused while the bot's closing order is unconfirmed, and no reconciliation cures that.
+
+    Its refusal used to say "Run Reconcile now", which finds nothing for an
+    order no read shows. It names the settle action instead. Any other
+    unknown outcome of the bot keeps the refusal it had.
+    """
+    held = _stopped_with_an_unknown_exit(
+        positions=_residue_context().positions,
+        uncertainties=(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"),),
+    )
+
+    def flatten(context: RecoveryPolicyContext) -> RecoveryCapability:
+        return next(
+            action for action in build_recovery_catalog(context) if action.action_id == "prepare_safe_flatten"
+        )
+
+    refused = flatten(held)
+    assert (refused.available, refused.unavailable_reason_code) == (False, "EXPOSURE_NOT_PROVEN")
+    assert refused.unavailable_reason == (
+        "The Clerk sent a closing order for this bot and could not confirm it, so a flatten could "
+        "close the position a second time."
+    )
+    assert refused.next_step == (
+        "Settle that order first: look at this account's orders at Alpaca, then use "
+        '"Settle the uncertain order".'
+    )
+
+    another_unknown = flatten(replace(held, unknown_exit_orders=()))
+    assert (another_unknown.available, another_unknown.unavailable_reason_code) == (False, "EXPOSURE_NOT_PROVEN")
+    assert another_unknown.unavailable_reason == (
+        "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
+    )
+    assert another_unknown.next_step == "Run Reconcile now and refresh the custody snapshot."
+
+
 def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> None:
     settlement = _settle(_stopped_with_an_unknown_exit()).settlement
 

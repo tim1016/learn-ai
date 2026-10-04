@@ -796,6 +796,18 @@ def _account_evidence(
     return _pass_evidence(ctx, positions) or receipt
 
 
+# A Flatten is refused while a closing order of the bot is unconfirmed, and
+# no reconciliation cures that: the operator settles the order (#2854).
+_UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN = (
+    "The Clerk sent a closing order for this bot and could not confirm it, so a flatten could "
+    "close the position a second time."
+)
+_SETTLE_BEFORE_FLATTEN = (
+    "Settle that order first: look at this account's orders at Alpaca, then use "
+    '"Settle the uncertain order".'
+)
+
+
 def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
     non_finite_positions = _non_finite_positions(ctx)
@@ -829,7 +841,11 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason = "Cancel and prove every working order terminal before preparing reduction."
     elif relevant_uncertainties:
         reason_code = "EXPOSURE_NOT_PROVEN"
-        reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
+        reason = (
+            _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN
+            if ctx.unknown_exit_orders
+            else "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
+        )
     else:
         checked = _account_evidence(ctx, positions, reconciliation_evidence)
         if isinstance(checked, AccountCheckEvidence):
@@ -910,6 +926,8 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             else (
                 "Cancel verified working orders first."
                 if working_orders
+                else _SETTLE_BEFORE_FLATTEN
+                if reason == _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN
                 else "Run Reconcile now and refresh the custody snapshot."
             )
         ),

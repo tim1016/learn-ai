@@ -77,6 +77,8 @@ class RunSummaryFacts(BaseModel):
     returned_usd: str | None
     held: list[HeldPositionFact]
     exit_queued: bool
+    # A closing order the Clerk sent and could not confirm: it holds the position, and no sale is queued (#2854).
+    exit_unconfirmed: bool = False
     # When the line was written: a run in another ET year names its year.
     authored_at_ms: EpochMs
 

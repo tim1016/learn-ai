@@ -42,11 +42,19 @@ from app.services.broker_v2_panel.action_execution_service import (
     IdempotencyKeyConflictError,
     IdempotencyStore,
 )
-from app.services.broker_v2_panel.bot_page_projection import bot_own_status, toolbar_actions
+from app.services.broker_v2_panel.bot_page_projection import (
+    bot_own_status,
+    run_facts,
+    run_summary_facts,
+    run_summary_text,
+    toolbar_actions,
+)
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     _catalog_row_action,
     _recovery_cure,
     adapt_sqlite_panel,
+    exit_in_progress,
+    exit_unconfirmed,
     has_bot_scoped_custody_problem,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
@@ -367,6 +375,75 @@ def test_the_bot_page_offers_settling_from_its_toolbar_with_the_ticket_it_opens(
     assert [item["settlement"] for item in wire["actions"] if item["action_id"] != SETTLE] == [None] * (
         len(wire["actions"]) - 1
     )
+
+
+def test_sell_and_clear_are_refused_with_the_way_to_settle_while_a_closing_order_is_unconfirmed(
+    lost_closing_order,
+) -> None:
+    """The Clerk holds the position behind the unconfirmed order, so Sell and Clear stay refused (#2854).
+
+    Sell said "Run Reconcile now" and Clear said to sell first; neither is a
+    way on. Both now name the action that is: settling the order.
+    """
+    repo, _alpaca, _facade = lost_closing_order
+
+    _served, toolbar = _bot_page(repo, running=False)
+
+    by_id = {item.action_id: item for item in toolbar}
+    sell, clear = by_id["prepare_safe_flatten"], by_id["archive"]
+    assert (sell.availability, sell.reason) == (
+        "blocked",
+        "The Clerk sent a closing order for this bot and could not confirm it, so a flatten could "
+        "close the position a second time.",
+    )
+    assert (clear.availability, clear.reason) == (
+        "blocked",
+        "The Clerk holds this bot's position until its uncertain order is settled. "
+        'Use "Settle the uncertain order" first.',
+    )
+    assert by_id[SETTLE].label == "Settle the uncertain order"
+
+
+async def test_the_run_summary_says_a_closing_order_is_unconfirmed_never_that_a_sale_is_queued(
+    started_bot,
+) -> None:
+    """The summary said "a sale is queued" of an order the Clerk could not confirm (#2854).
+
+    None is: the Clerk holds the position and sends nothing more for the
+    bot. The line says the order is unconfirmed while it is, and says nothing
+    of an exit once the order is settled.
+    """
+    repo, alpaca, facade = started_bot
+    await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+
+    def summary() -> tuple[bool, bool, str]:
+        projection = _projection(repo)
+        served, _toolbar = _bot_page(repo, running=False)
+        facts = run_summary_facts(
+            served,
+            run_facts(
+                None, run_fills=[], activity=None, budget=None,
+                exit_in_progress=exit_in_progress(projection, settling.SID),
+                exit_unconfirmed=exit_unconfirmed(projection, settling.SID),
+            ),
+            now_ms=repo.clock(),
+        )
+        text = run_summary_text(facts.model_copy(update={"ending": "stopped", "started_at_ms": FIXTURE_RTH_MS}))
+        return facts.exit_unconfirmed, facts.exit_queued, text
+
+    unconfirmed, queued, text = summary()
+    assert (unconfirmed, queued) == (True, False)
+    assert text.endswith("holds 10 SPY · a closing order is unconfirmed.")
+    assert "a sale is queued" not in text
+
+    settled = await _run_from_the_panel(
+        repo, facade, IdempotencyStore(wait_timeout_s=0),
+        attestation=UnknownOrderAttestationRequest(kind="absent"), idempotency_key="settle-1",
+    )
+    assert settled is not None and settled.applied is True
+    unconfirmed, queued, text = summary()
+    assert (unconfirmed, queued) == (False, False)
+    assert text.endswith("holds 10 SPY.")
 
 
 async def test_the_bot_page_offers_settling_only_while_the_clerks_catalog_does(started_bot) -> None:

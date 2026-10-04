@@ -948,6 +948,21 @@ def exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
     )
 
 
+def exit_unconfirmed(projection: ClerkProjection, sid: str) -> bool:
+    """An exit whose closing order the Clerk sent and could not confirm (#2854).
+
+    The EXIT is ``unknown`` and has its closing order. The Clerk holds the
+    position and sends no other order for the bot, so no sale is queued.
+    """
+    return any(
+        operation.kind == "EXIT"
+        and operation.state == "unknown"
+        and any(order.role == "REDUCING" for order in operation.orders)
+        for operation in projection.operations
+        if operation.strategy_instance_id == sid
+    )
+
+
 # Every fix it names is on the bot's own page (hurdle H29): it never sends
 # the owner to the broker outside the app.
 _POSITION_UNVERIFIED = ExposureNoticeView(
@@ -1281,6 +1296,7 @@ __all__ = [
     "adapt_sqlite_panel",
     "build_sqlite_catalog",
     "exit_in_progress",
+    "exit_unconfirmed",
     "has_bot_scoped_custody_problem",
     "recent_fill_view",
 ]

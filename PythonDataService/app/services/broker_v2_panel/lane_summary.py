@@ -15,8 +15,9 @@ claimed is Finished, not attention (hurdles H13, H34).
 Locks a beat takes: the bot counts read the runner's task table only -- no
 lock, no file. The attention count is the attention read: one SQLite read
 transaction on its own connection for the account projection, plus short
-holds of the repository's write lock for each roster query and for each
-registration that can still need attention. A retired registration with no
+holds of the repository's write lock for each roster query, for each
+registration that can still need attention, and for each bot whose order
+outcome is unknown. A retired registration with no
 live custody is skipped (it is the catalog's inert row, #1911), so the walk
 does not grow with retired history. No lock is held across the event loop
 or around a broker call; it all runs off the loop.
@@ -26,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
@@ -89,8 +90,9 @@ _SETTINGS = LaneAttentionAction(label="Open Settings", destination="settings")
 #: What each episode is about, and where its fix lives. A hold on losses is
 #: cleared in Settings; a channel is checked there; an order or position the
 #: account and Alpaca disagree on is recovered from Activity's order records;
-#: an exit that has not flattened is its bot's. An episode not named here
-#: opens its bot, or the order records when it names none.
+#: an exit that has not flattened is its bot's, and so is a closing order the
+#: Clerk could not confirm (``_UNCONFIRMED_CLOSING_ORDER_LINE``). An episode
+#: not named here opens its bot, or the order records when it names none.
 _EPISODE_LINES: dict[str, tuple[LaneAttentionKind, LaneAttentionAction]] = {
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: ("hold", _SETTINGS),
     STREAM_HEALTH_HOLD_REASON_CODE: ("channel", LaneAttentionAction(label="Check connection", destination="settings")),
@@ -111,6 +113,12 @@ _EPISODE_LINES: dict[str, tuple[LaneAttentionKind, LaneAttentionAction]] = {
     EXIT_NOT_FLAT_REASON_CODE: ("exit", _OPEN_BOT),
     EXIT_STUCK_REASON_CODE: ("exit", _OPEN_BOT),
 }
+
+#: A bot's closing order whose outcome is unknown is settled on the bot's own
+#: page ("Settle the uncertain order"), which the order records do not offer
+#: (#2854). It is an exit that has not flattened, so the bot is not named a
+#: second time as merely stopped and holding, with a Flatten that is refused.
+_UNCONFIRMED_CLOSING_ORDER_LINE: tuple[LaneAttentionKind, LaneAttentionAction] = ("exit", _OPEN_BOT)
 
 #: The provider behind each channel, named as the owner knows it: IBKR
 #: supplies market data and Alpaca the account's orders.
@@ -158,7 +166,14 @@ async def lane_attention_read() -> LaneAttentionRead:
             exits_in_progress=repository.strategies_with_active_exit,
         ))
         world = runtime.selected_account_authority_kind or "real_paper"
-    items = [*account_items, *(_episode_item(uncertainty) for uncertainty in uncertainties)]
+    unconfirmed = await asyncio.to_thread(_bots_with_an_unconfirmed_closing_order, repository, uncertainties)
+    items = [
+        *account_items,
+        *(
+            _episode_item(uncertainty, closing_order_unconfirmed=uncertainty.strategy_instance_id in unconfirmed)
+            for uncertainty in uncertainties
+        ),
+    ]
     items.extend(await asyncio.to_thread(_end_sale_items, repository))
     # One line per bot: a bot whose exit is already named above is not named
     # again as merely stopped.
@@ -219,12 +234,38 @@ def _account_standing_items(projection: ClerkProjection) -> list[LaneAttentionIt
     )]
 
 
-def _episode_item(uncertainty: ProjectedUncertainty) -> LaneAttentionItem:
-    """One active episode as one line, with the fix its kind names."""
+def _bots_with_an_unconfirmed_closing_order(
+    repository: ClerkSqliteRepository, uncertainties: Sequence[ProjectedUncertainty]
+) -> frozenset[str]:
+    """The bots whose open unknown-outcome episode is about a closing order an operator settles (#2854).
+
+    Read from the ledger as the settle action itself is offered
+    (``unknown_exit_orders``): one read per bot with such an episode open,
+    and usually none. Blocking: runs off the event loop.
+    """
+    return frozenset(
+        uncertainty.strategy_instance_id
+        for uncertainty in uncertainties
+        if uncertainty.reason_code == ORDER_OUTCOME_UNKNOWN_REASON_CODE
+        and uncertainty.strategy_instance_id is not None
+        and repository.unknown_exit_orders(uncertainty.strategy_instance_id)
+    )
+
+
+def _episode_item(
+    uncertainty: ProjectedUncertainty, *, closing_order_unconfirmed: bool = False
+) -> LaneAttentionItem:
+    """One active episode as one line, with the fix its kind names.
+
+    ``closing_order_unconfirmed``: the episode is a bot's unknown order
+    outcome, and the order is a closing order its page settles.
+    """
     kind, action = _EPISODE_LINES.get(
         uncertainty.reason_code,
         ("uncertainty", _ORDER_RECORDS if uncertainty.strategy_instance_id is None else _OPEN_BOT),
     )
+    if closing_order_unconfirmed and uncertainty.reason_code == ORDER_OUTCOME_UNKNOWN_REASON_CODE:
+        kind, action = _UNCONFIRMED_CLOSING_ORDER_LINE
     headline = (
         _channel_headline(uncertainty.evidence_refs)
         if uncertainty.reason_code == STREAM_HEALTH_HOLD_REASON_CODE

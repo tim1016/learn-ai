@@ -46,6 +46,13 @@ def _facts(**overrides: object) -> RunSummaryFacts:
             "Ran Wed Sep 30, 14:30–15:59 ET · stopped · 1 decision, 2 trades · holds 1 SPY · a sale is queued.",
         ),
         (
+            # A closing order the Clerk could not confirm is said as that, never as a sale that is queued (#2854).
+            {"ending": "stopped", "decision_count": 1, "trade_count": 2, "returned_usd": None,
+             "held": [HeldPositionFact(symbol="SPY", quantity="1")], "exit_queued": True, "exit_unconfirmed": True},
+            "Ran Wed Sep 30, 14:30–15:59 ET · stopped · 1 decision, 2 trades · holds 1 SPY · "
+            "a closing order is unconfirmed.",
+        ),
+        (
             {"ending": "running", "ended_at_ms": None, "scheduled_end_at_ms": _END, "returned_usd": None,
              "set_aside_usd": "800.00", "decision_count": 0},
             "Running since Wed Sep 30, 14:30 ET · ends 15:59 ET · no decisions, no trades · $800.00 set aside.",
