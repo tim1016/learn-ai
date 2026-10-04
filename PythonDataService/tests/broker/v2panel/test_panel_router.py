@@ -2003,10 +2003,13 @@ async def test_a_bots_page_says_only_what_is_true_while_its_end_waits_for_the_op
 
     assert before["bot_page"]["summary"]["text"].endswith("· holds 1 SPY · a sale is queued.")
     assert (before["end"]["waits_for_operator"], before["end"]["notice"]) == (False, None)
+    reached, sells = before["end"]["headline"].rsplit(" · ", 1)
+    assert sells == "sells"
     summary = body["bot_page"]["summary"]
     assert summary["facts"]["exit_queued"] is False
     assert summary["text"].endswith("· holds 1 SPY."), "the summary says a sale is queued"
     assert (body["end"]["status"], body["end"]["waits_for_operator"]) == ("ending", True)
+    assert body["end"]["headline"] == f"{reached} · no order sent", "the headline says the end sells"
     assert body["end"]["explanation"] == (
         "Its end has come and the bot is stopped. "
         "At its end the Clerk sent no order for the position the bot holds."

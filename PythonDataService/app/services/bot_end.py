@@ -141,13 +141,14 @@ def end_edit_refusal(pending: BotEnd | None, *, running: bool, now_ms: int) -> B
     It can while the bot runs with no end still to be carried out, and while
     an end is still to come -- a bot whose run died keeps its end, which the
     Clerk still carries out. It cannot once that end has come (the Clerk is
-    carrying it out), nor for a stopped bot with no end pending.
+    carrying it out, or it waits for the operator, #2854: the words hold in
+    both), nor for a stopped bot with no end pending.
     """
     if pending is not None and pending.end_at_ms <= now_ms:
         return BotEndRefused(
-            "This bot's end has come; the Clerk is carrying it out.",
+            "This bot's end has come, so it can no longer be changed.",
             detail="An end can be changed only before its time.",
-            next_action="The bot page shows how it ended once the Clerk is done.",
+            next_action="The bot's page says what completes it.",
             http_status=409,
         )
     if pending is None and not running:
@@ -215,10 +216,13 @@ def bot_end_view_waiting_for_operator(view: BotEndView, *, why: str) -> BotEndVi
     """``view``, an end that has come, while the Clerk leaves the bot's position to the operator (#2854).
 
     The Clerk sends no order at such an end and is not carrying it out, so the
-    words that say it is are replaced. ``why`` is the Clerk's own account of
-    what it did not send and what completes the end; it is the notice.
+    words that say it is are replaced: the headline's last words, which
+    :func:`bot_end_view` takes from the end's action, among them. ``why`` is
+    the Clerk's own account of what it did not send and what completes the
+    end; it is the notice.
     """
     return view.model_copy(update={
+        "headline": view.headline.removesuffix(_ACTION_WORDS[view.end_action]) + "no order sent",
         "explanation": (
             "Its end has come and the bot is stopped. "
             "At its end the Clerk sent no order for the position the bot holds."
