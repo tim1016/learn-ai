@@ -768,7 +768,11 @@ class AttributedResidueDischargedFacts:
 
 @dataclass(frozen=True)
 class EndedForeignOrder:
-    """An order the Clerk did not place, in the attested order's symbol, that had ended with nothing filled when it was read (#2854)."""
+    """An order the Clerk did not place, in the attested order's symbol, that had ended when it was read (#2854).
+
+    ``filled_quantity`` is what it had filled: nothing, unless it was on the
+    attested order's own side.
+    """
 
     broker_order_id: str
     broker_state: str
@@ -811,9 +815,11 @@ class OrderOutcomeAttestedFacts:
       account-wide attribution it was set against. ``ended_foreign_orders``
       are the orders among them, on either side, that the Clerk did not
       place: what the operator and the Clerk were looking at when the order
-      was ended as not sent. Each had ended with nothing filled -- one that
-      had filled anything refuses the attestation -- so ``filled_quantity``
-      is zero in every one. Recorded only when there were any.
+      was ended as not sent. Each had ended. One on the other side from this
+      order's had filled nothing -- one that had filled anything refuses the
+      attestation -- so a ``filled_quantity`` above zero is of an order on
+      this order's own side, such as a sale made by hand at Alpaca, and is
+      in ``broker_qty``. Recorded only when there were any.
       ``answered_as_order`` is the order Alpaca answered
       this order's send with, under another client order id, as the Clerk
       read it: ended, with nothing filled. Recorded only for an order whose
