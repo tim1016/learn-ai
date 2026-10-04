@@ -504,7 +504,7 @@ def _a_bot_on_the_real_clerk(tmp_path: Path) -> tuple[ClerkSqliteRepository, set
 async def test_a_bot_whose_closing_order_is_unconfirmed_is_one_line_that_opens_the_bot(tmp_path: Path) -> None:
     """Home's line for an unconfirmed closing order opened the order records, which cannot settle it (#2854).
 
-    The Clerk holds the position until the order is settled, and it is
+    The Clerk holds the position behind that order, and the order is
     settled on the bot's page ("Settle the uncertain order"). So the line
     opens the bot. It is the bot's one line: the bot is not named again as
     stopped and holding, under a Flatten that is refused.

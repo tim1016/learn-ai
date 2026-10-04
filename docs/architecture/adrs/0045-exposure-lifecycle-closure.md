@@ -388,7 +388,9 @@ For an order with a recorded send on a real-broker port:
   The lane's attention line for it opens that page. Each pass still looks the
   order up by its client order id and folds it if Alpaca shows it.
 - The way out is the operator's: they look at Alpaca and settle the order (the
-  amendment above). The Clerk does not release the position by itself.
+  amendment above). The Clerk does not release the position by itself. After
+  "no such order" the position stays with the bot and the Clerk still sends
+  nothing for it by itself: the operator sells it or writes it off.
 
 Unchanged: evidence that the bot is flat ends the EXIT first; a lost order is
 still sent again, under the same client order id, while its session is open
@@ -403,7 +405,12 @@ above).
 
 Consequences. A position can now stay held overnight, with no bot managing it,
 until an operator settles its order; Clear and Flatten are refused meanwhile
-and name the settle action. The stopped bot's budget stays committed, and a
-new Deploy is a new bot and is not blocked. A bot's own exit and the sale at a
-scheduled end are still sent with no check of the account; that check is a
-separate change (#2854 item 8).
+and name the settle action. Settled as "no such order", the position is still
+held for the bot, now as a stuck exit the Clerk sends nothing for: Flatten is
+the operator's again, and Clear waits for the sale or the write-off. The
+stopped bot's budget stays committed, and a new Deploy is a new bot and is not
+blocked. A bot's own exit and the sale at a scheduled end are still sent with
+no check of the account, and that sale does not keep to the stuck exit's hold
+either: an end left pending behind a held order puts its sale in once the
+order is settled as "no such order". Both are a separate change (#2854
+item 8).

@@ -1265,8 +1265,7 @@ def _hold_past_its_session(
             explanation=(
                 f"The Clerk sent an order to {_the_reduction(created)} and could not confirm it. "
                 "The order's session has ended, so the Clerk will not send it again. It holds "
-                f"{_what_is_held(created)} and sends no other order for this bot until the order "
-                "is settled."
+                f"{_what_is_held(created)} and sends no other order for this bot."
             ),
             next_step=SETTLE_THE_ORDER_NEXT_STEP,
         ),

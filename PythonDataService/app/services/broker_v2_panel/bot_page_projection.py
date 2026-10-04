@@ -268,7 +268,9 @@ def run_summary_text(facts: RunSummaryFacts) -> str:
 
     v2 (#2854): a closing order the Clerk could not confirm is said as that.
     v1 said "a sale is queued" of it, and none is: the Clerk holds the
-    position and sends nothing more until the order is settled.
+    position and sends nothing more for the bot. None is queued once the
+    order is settled as not sent either: the position is then the operator's
+    to sell or write off.
     """
     if facts.ending == "unreadable":
         return _UNREADABLE_RUN
@@ -423,7 +425,7 @@ def _deploy_again_entry(panel: BotPanelView) -> ToolbarActionView:
 
 
 _SETTLE_BEFORE_CLEAR = (
-    "The Clerk holds this bot's position until its uncertain order is settled. "
+    "The Clerk holds this bot's position behind a closing order it could not confirm. "
     f'Use "{_CUSTODY_ENTRIES["settle_unknown_exit_order"].label}" first.'
 )
 

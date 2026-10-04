@@ -906,7 +906,7 @@ REFUSED_AGAIN_NEXT_STEP = (
 HELD_PAST_SESSION_EXPLANATION = (
     "The Clerk sent an order to sell 10 SPY and could not confirm it. The order's session has "
     "ended, so the Clerk will not send it again. It holds the shares and sends no other order "
-    "for this bot until the order is settled."
+    "for this bot."
 )
 SETTLE_NEXT_STEP = (
     "Look at this account's orders and position at Alpaca, then settle the order from the bot's "

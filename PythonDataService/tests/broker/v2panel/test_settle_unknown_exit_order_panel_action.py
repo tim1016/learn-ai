@@ -464,7 +464,7 @@ def test_sell_and_clear_are_refused_with_the_way_to_settle_while_a_closing_order
     )
     assert (clear.availability, clear.reason) == (
         "blocked",
-        "The Clerk holds this bot's position until its uncertain order is settled. "
+        "The Clerk holds this bot's position behind a closing order it could not confirm. "
         'Use "Settle the uncertain order" first.',
     )
     assert by_id[SETTLE].label == "Settle the uncertain order"
