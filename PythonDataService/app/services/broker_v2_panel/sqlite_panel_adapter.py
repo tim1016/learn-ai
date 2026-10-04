@@ -1015,12 +1015,18 @@ def _closing_order_unconfirmed(settle: RecoveryCapability) -> ExposureNoticeView
     to settle the order, which is on the bot's own page. While ``settle``,
     the bot's settle action, is itself refused, the notice gives its reason
     and next step.
+
+    Refused because the Clerk's run for the bot is still active, it gives the
+    next step alone: the reason says to stop the bot as well, in a notice
+    that has just said its run ended.
     """
-    way_on = (
-        f'Use "{settle.label}" on the bot\'s page.'
-        if settle.available
-        else settle_unavailable_words(settle.unavailable_reason, settle.next_step)
-    )
+    if settle.available:
+        way_on = f'Use "{settle.label}" on the bot\'s page.'
+    else:
+        run_still_active = settle.unavailable_reason_code == "RUN_STILL_ACTIVE"
+        way_on = settle_unavailable_words(
+            None if run_still_active else settle.unavailable_reason, settle.next_step
+        )
     return ExposureNoticeView(
         kind="position_unverified",
         label="A closing order could not be confirmed",

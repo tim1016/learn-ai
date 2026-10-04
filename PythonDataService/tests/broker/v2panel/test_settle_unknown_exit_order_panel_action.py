@@ -581,6 +581,32 @@ async def test_an_ended_bots_notice_says_its_closing_order_is_unconfirmed_and_ho
     assert "Reconcile now" not in notice.explanation
 
 
+async def test_an_ended_bots_notice_says_once_to_stop_bot_decisions_while_the_clerks_run_is_still_active(
+    started_bot,
+) -> None:
+    """The bot's process ended uncleanly and the Clerk's run for it is still active (#2854).
+
+    Settling is refused until that run is stopped. The notice said "The ended
+    run manages nothing", then the settle action's reason, "Stop the bot
+    before settling its uncertain order", then its next step, which says to
+    stop it again. It now gives the next step alone.
+    """
+    repo, alpaca, _facade = started_bot
+    await settling._the_runner_sends_the_exit(repo, alpaca)
+    projection = _projection(repo)
+    (settle,) = [action for action in projection.recovery_actions if action.action_id == SETTLE]
+    assert (settle.available, settle.unavailable_reason_code) == (False, "RUN_STILL_ACTIVE")
+    assert settle.unavailable_reason == "Stop the bot before settling its uncertain order."
+
+    (notice,) = terminal_exposure_notices(
+        projection, sid=settling.SID, symbol="SPY", kind="EXITED_UNVERIFIED", running=False, pass_proof=None,
+    )
+
+    assert notice.explanation == (
+        f'{_HELD_BEHIND_THE_ORDER} "Settle the uncertain order" cannot be used now: Stop bot decisions first.'
+    )
+
+
 async def test_the_run_summary_says_a_closing_order_is_unconfirmed_never_that_a_sale_is_queued(
     started_bot,
 ) -> None:
