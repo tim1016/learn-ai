@@ -86,7 +86,10 @@ the broker answered under another client order id is never sent again: the
 same client order id cannot protect a second send from an order that may exist
 under a different one (:func:`_retain_answered_as_another_order`). In both of
 those the broker answered, so the open unknown-outcome notice says what it
-answered instead of that a response was lost (#2854).
+answered instead of that a response was lost (#2854). No notice outlasts a
+later send whose own answer is lost: after a refusal, and after the account
+check held a send, the notice then says a response was lost again
+(:func:`_lost_answer_after_a_notice`).
 """
 
 from __future__ import annotations
@@ -182,6 +185,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     uncertainty_envelope,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause, ExitStuckCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import LOST_ANSWER_NOTICE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import RedriveThenEscalate, reason_age_policy
 from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
 from app.broker.alpaca.config import BROKER_ID
@@ -1344,6 +1348,28 @@ def _hold_uncovered_resend(
         )
 
 
+def _lost_answer_after_a_notice(repo: ClerkSqliteRepository, order_ref: str) -> UnknownOutcomeNotice | None:
+    """What the open notice says once a send made after a notice is lost too, or ``None`` to leave it as it is (#2854).
+
+    A lost answer records no notice: the notice it opens, or finds open,
+    already says a broker response was lost. That is not so once a notice has
+    been recorded for the order: that the account check held a send made
+    again (:func:`_hold_uncovered_resend`), or that Alpaca refused one
+    (:func:`_retain_refused_resend`). Those words are about the order before
+    this send. Left standing, they told the operator that nothing was sent,
+    and that the order goes out once the account covers it, after it had gone
+    out. So this send's lost answer records the lost-answer words as its own
+    notice. Once, as every notice is: ``None`` for an order with no notice,
+    and for one whose newest notice already says this.
+    """
+    told = repo.last_order_notice_transition(order_ref=order_ref)
+    if told is None:
+        return None
+    if OrderSubmitUncertainFacts.from_facts_json(told["facts_json"]).notice == LOST_ANSWER_NOTICE:
+        return None
+    return LOST_ANSWER_NOTICE
+
+
 @dataclass(frozen=True)
 class _Unpriced:
     """A price for now was tried and refused; ``refusal`` says why.
@@ -2239,6 +2265,7 @@ async def _submit_reducing_order(
                 effect_operation_id=effect_operation_id,
                 order_ref=reducing.order_ref,
                 why=unavailable_why,
+                notice=_lost_answer_after_a_notice(repo, reducing.order_ref),
             )
         )
         return

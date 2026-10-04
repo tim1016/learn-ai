@@ -976,6 +976,30 @@ async def test_a_send_made_again_that_alpaca_refuses_is_told_in_alpacas_own_word
     assert _the_open_notice(repo) is None
 
 
+async def test_a_refusal_is_no_longer_told_once_a_later_send_of_the_order_is_lost(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Alpaca's refusal stayed on the bot's page after a later send of the same order went unanswered (#2854).
+
+    Alpaca refuses the send made again, and the page says what it answered.
+    The next send times out: that send is now the one whose outcome is
+    unknown, and the page says a broker response was lost.
+    """
+    repo, clock = crashed_with_exposure
+    refused = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused, "never_arrives"))
+    await _the_runner_sends_the_exit(repo, alpaca)
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=2)
+    told = _the_open_notice(repo)
+    assert told is not None and told.next_step == REFUSED_AGAIN_NEXT_STEP
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=3)
+
+    lost = _the_open_notice(repo)
+    assert lost is not None and lost.uncertainty_id == told.uncertainty_id
+    assert (lost.explanation, lost.next_step) == (LOST_ANSWER_EXPLANATION, LOST_ANSWER_NEXT_STEP)
+
+
 async def test_a_refused_send_made_again_is_not_repeated_once_its_session_has_ended(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
@@ -1481,6 +1505,54 @@ async def test_an_operators_flatten_is_not_sent_again_once_the_account_no_longer
     assert len(alpaca.sent) == 2
     assert {sent.client_order_id for sent in alpaca.sent} == {closing.client_order_id}
     assert _exit_state(repo, exit_id) == "in_progress"
+
+
+async def test_a_flatten_sent_again_once_the_account_covers_it_is_no_longer_told_as_held_by_the_account_check(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The bot's page said the account check had stopped a send after that send had gone out (#2854).
+
+    The Flatten's first send is lost and the account does not cover the send
+    made again, so the page says the check stopped it, that nothing was sent,
+    and that the order goes out once the account covers it. The shares come
+    back, the order goes out, and that send is lost too. The page now says
+    what is unknown of the order: a broker response was lost, as it said
+    before the check held the order. When the account stops covering the
+    order again, the page says what the check answered again.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", "never_arrives"))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    await _flatten(facade, current_context)
+    exit_id = _flatten_exit(repo)
+
+    async def the_sweep() -> object:
+        return await facade.reconcile_account(trigger="AUTOMATIC")
+
+    alpaca.holds = 0.0
+    await _passes(repo, the_sweep, RESEND_AFTER_MS // SWEEP_INTERVAL_MS)
+    held = _the_open_notice(repo)
+    assert held is not None
+    assert "the Clerk checked the account" in held.explanation and "nothing was sent" in held.explanation
+    assert len(alpaca.sent) == 1
+
+    alpaca.holds = 10.0
+    await _passes(repo, the_sweep, 1)
+
+    assert len(alpaca.sent) == 2
+    assert _exit_state(repo, exit_id) == "unknown"
+    lost_again = _the_open_notice(repo)
+    assert lost_again is not None and lost_again.uncertainty_id == held.uncertainty_id
+    assert (lost_again.explanation, lost_again.next_step) == (LOST_ANSWER_EXPLANATION, LOST_ANSWER_NEXT_STEP)
+
+    # The shares leave again while the order waits to be sent a third time: the check holds it, and says so.
+    alpaca.holds = 0.0
+    await _passes(repo, the_sweep, WAIT_AFTER_A_SECOND_SEND_MS // SWEEP_INTERVAL_MS)
+
+    assert len(alpaca.sent) == 2
+    held_again = _the_open_notice(repo)
+    assert held_again is not None
+    assert (held_again.explanation, held_again.next_step) == (held.explanation, held.next_step)
 
 
 async def test_a_flatten_whose_order_the_account_lists_is_never_sent_again_however_long_its_lookup_reads_absent(
