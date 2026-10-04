@@ -1405,10 +1405,10 @@ def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> 
     assert (settlement.symbol, settlement.side, settlement.quantity) == ("SPY", "sell", 10.0)
     assert settlement.ticket == (
         "The Clerk sent an order to sell 10 SPY on Tue Nov 14, 17:13 ET and could not confirm it. "
-        "It holds the position and starts no other closing order for this bot. While the order's "
-        "session is open, the Clerk sends this same order again by itself, after a wait that grows "
-        "to 5 minutes and then stays there. If it does, look at Alpaca again and open this action "
-        "again."
+        "It holds the position and starts no other closing order for this bot. While the session "
+        "the order was sent in is open, the Clerk sends this same order again by itself, after a "
+        "wait that grows to 5 minutes and then stays there. If it does, look at Alpaca again and "
+        "open this action again. Once that session has ended, the Clerk never sends the order again."
     )
     answered = _settle(
         _stopped_with_an_unknown_exit(

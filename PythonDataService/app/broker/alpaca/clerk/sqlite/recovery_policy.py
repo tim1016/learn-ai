@@ -1157,12 +1157,15 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     """What the operator is asked about ``order``, in the Clerk's own words (#2854).
 
     The ticket says what the Clerk does meanwhile, which is not nothing. It
-    starts no other closing order for the bot, but while the order's session
-    is open it sends this same order again by itself, after waits that grow
-    to a ceiling and then stay there (``exit_resolution.resend_wait_ms``),
-    and each send makes what the operator saw at Alpaca, and the action they
-    were presented, out of date. An order Alpaca answered under another
-    client order id is never sent again.
+    starts no other closing order for the bot, but while the session the
+    order was sent in is open it sends this same order again by itself, after
+    waits that grow to a ceiling and then stay there
+    (``exit_resolution.resend_wait_ms``), and each send makes what the
+    operator saw at Alpaca, and the action they were presented, out of date.
+    Once that session has ended it never sends the order again, on that day
+    or a later one, and the ticket says so: an operator reading it the next
+    morning must not wait for a send that will not come. An order Alpaca
+    answered under another client order id is never sent again.
     """
     side: Literal["buy", "sell"] = "sell" if order.side.upper() == "SELL" else "buy"
     sent = (
@@ -1172,10 +1175,11 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     holds = "holds the position and starts no other closing order for this bot"
     if order.answered_as_client_order_id is None:
         ticket = (
-            f"{sent} and could not confirm it. It {holds}. While the order's session is open, "
-            "the Clerk sends this same order again by itself, after a wait that grows to "
-            f"{RESEND_WAIT_CEILING_MS // 60_000} minutes and then stays there. If it does, look "
-            "at Alpaca again and open this action again."
+            f"{sent} and could not confirm it. It {holds}. While the session the order was "
+            "sent in is open, the Clerk sends this same order again by itself, after a wait "
+            f"that grows to {RESEND_WAIT_CEILING_MS // 60_000} minutes and then stays there. If "
+            "it does, look at Alpaca again and open this action again. Once that session has "
+            "ended, the Clerk never sends the order again."
         )
     else:
         ticket = (

@@ -365,7 +365,7 @@ def test_the_bot_page_offers_settling_from_its_toolbar_with_the_ticket_it_opens(
         order.order_ref, "SPY", "sell", 10.0,
     )
     assert settlement["ticket"].startswith("The Clerk sent an order to sell 10 SPY on ")
-    assert settlement["ticket"].endswith("look at Alpaca again and open this action again.")
+    assert settlement["ticket"].endswith("Once that session has ended, the Clerk never sends the order again.")
     assert [
         (choice["attestation"], choice["label"], choice["asks_broker_order_id"])
         for choice in settlement["choices"]
