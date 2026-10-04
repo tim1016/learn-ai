@@ -269,8 +269,8 @@ carried out with nothing sold. A sale accepted before this rule is not sent.
 One that has sent nothing ends on the first pass that drives it, held for the
 open or not, and whatever the account then holds. One already sent, its answer
 lost, is held as any unconfirmed order is -- through its absence wait and,
-outside the regular session, for the open -- and ends, with nothing sent
-again, on the pass that would send it again. Either way its EXIT then fails
+outside the regular session, for the open -- and ends on the pass that would
+send it again, with no second send. Either way its EXIT then fails
 through `EXIT_NOT_FLAT`, as a Flatten the account does not cover does: from
 then no EXIT holds the symbol, and the operator's flatten and write-off are
 admissible. An accepted sale never completes the end while the episode is
@@ -366,9 +366,9 @@ off; attributed-flat proof then resolves both episodes, as it resolves any
 stuck exit. A bot that holds nothing ends its EXIT attributed-flat and opens
 neither.
 
-The sale at a bot's scheduled end does not keep to that hold yet. A separate
-change makes it (#2854 item 8), and this action is offered on no operator
-surface before that change lands.
+The sale at a bot's scheduled end keeps to that hold: none is accepted while
+`EXIT_STUCK` is open (the amendment of 2026-10-03 to the scheduled end,
+above).
 
 Known gap: an order Alpaca answered under another client order id cannot be
 taken up yet. "No such order" rests on the Clerk's own read of that order.
