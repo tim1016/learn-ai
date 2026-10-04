@@ -1,11 +1,11 @@
-import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, input, linkedSignal, model, output, untracked, viewChild } from '@angular/core';
-import type { FormValueControl } from '@angular/forms/signals';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, linkedSignal, model, output, untracked, viewChild } from '@angular/core';
+import { FORM_FIELD, type FormValueControl } from '@angular/forms/signals';
 import { Popover } from 'primeng/popover';
 
 import type { IsoDate } from '../date/iso-date';
 import { UNBOUNDED, type DateBounds } from './date-bounds';
 import { DateCalendarComponent } from './date-calendar.component';
-import { checkDate, fieldText } from './date-check';
+import { checkDate, fieldText, showFieldText } from './date-check';
 
 let nextNoteId = 0;
 
@@ -58,6 +58,8 @@ export class DateFieldComponent implements FormValueControl<string> {
 
   protected readonly noteId = `date-field-note-${nextNoteId++}`;
   private emitted: string | null = null;
+  /** The form field a host bound this control to with ``[formField]``; null for a host that binds the date itself. */
+  private readonly formField = inject(FORM_FIELD, { optional: true, self: true });
   private readonly field = viewChild.required<ElementRef<HTMLInputElement>>('field');
   private readonly opener = viewChild.required<ElementRef<HTMLButtonElement>>('opener');
   private readonly popover = viewChild(Popover);
@@ -78,6 +80,16 @@ export class DateFieldComponent implements FormValueControl<string> {
       this.disabled();
       untracked(() => this.handOver());
     });
+    // #2866: Angular leaves a control showing its own value when its write and its host's write back land in one
+    // task. Bound to a form, the field takes the form's date; this goes once signal forms record a control's own writes.
+    const formField = this.formField;
+    if (formField !== null) {
+      effect(() => {
+        const held = formField.state().controlValue();
+        if (typeof held === 'string' && held !== untracked(this.value)) this.value.set(held);
+      });
+    }
+    showFieldText(this.field, this.text);
   }
 
   focus(options?: FocusOptions): void {
@@ -121,6 +133,10 @@ export class DateFieldComponent implements FormValueControl<string> {
     }
     const { date } = this.entry();
     this.emitted = date;
-    if (this.value() !== date) this.value.set(date);
+    if (this.value() !== date) {
+      this.value.set(date);
+      // Read now, or the form never sees its date change when the host puts the previous one back in this task (#2866).
+      this.formField?.state().value();
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { Component, signal } from '@angular/core';
+import { FormField, form } from '@angular/forms/signals';
 import { By } from '@angular/platform-browser';
-import { render, screen } from '@testing-library/angular';
+import { render, screen, type RenderResult } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
@@ -31,16 +32,40 @@ class HostComponent {
   readonly touches = signal(0);
 }
 
-async function renderField() {
-  const view = await render(HostComponent);
-  const host = view.fixture.componentInstance;
-  const field = screen.getByLabelText('Development from') as HTMLInputElement;
-  const retype = async (text: string): Promise<void> => {
+/** A host that binds the field to a signal form, as the bot end editor does. */
+@Component({
+  imports: [DateFieldComponent, FormField],
+  template: `
+    <label for="bot-end">End date</label>
+    <app-date-field inputId="bot-end" [formField]="endForm.date" />
+  `,
+})
+class FormHostComponent {
+  readonly end = signal({ date: '2026-09-30' });
+  protected readonly endForm = form(this.end);
+}
+
+/** Types `text` over what the field holds and leaves it. */
+function retyper(view: RenderResult<unknown>, field: HTMLInputElement): (text: string) => Promise<void> {
+  return async (text) => {
     await userEvent.clear(field);
     if (text !== '') await userEvent.type(field, text);
     await userEvent.tab();
     await view.fixture.whenStable();
   };
+}
+
+async function renderFormField() {
+  const view = await render(FormHostComponent);
+  const field = screen.getByLabelText<HTMLInputElement>('End date');
+  return { view, host: view.fixture.componentInstance, field, retype: retyper(view, field) };
+}
+
+async function renderField() {
+  const view = await render(HostComponent);
+  const host = view.fixture.componentInstance;
+  const field = screen.getByLabelText('Development from') as HTMLInputElement;
+  const retype = retyper(view, field);
   /** PrimeNG's day cell for a date; its months are zero-based. */
   const day = (within: Element, date: string): HTMLElement => {
     const [year, month, dayOfMonth] = date.split('-').map(Number);
@@ -225,6 +250,34 @@ describe('DateFieldComponent', () => {
 
     expect(host.value()).toBe('2022-12-01');
     expect(field.value).toBe('2022-12-01');
+  });
+
+  it('bound to a form, shows the date the form holds when its host puts the previous date back in the same task as a typed one (#2866)', async () => {
+    const { view, host, field, retype } = await renderFormField();
+
+    // A touch tap on a control that resets the form: no render between the field's change and the host's write.
+    await userEvent.clear(field);
+    await userEvent.type(field, '2026-12-01');
+    field.dispatchEvent(new Event('change'));
+    host.end.set({ date: '2026-09-30' });
+    await view.fixture.whenStable();
+
+    expect(field.value).toBe('2026-09-30');
+    expect(host.end().date).toBe('2026-09-30');
+
+    // The field holds the form's date again, so the same date typed once more is a change and reaches the form.
+    await retype('2026-12-01');
+    expect([field.value, host.end().date]).toEqual(['2026-12-01', '2026-12-01']);
+  });
+
+  it('bound to a form, keeps an unusable entry in the field with its reason and hands the form an empty date', async () => {
+    const { host, field, retype } = await renderFormField();
+
+    await retype('12/01/2026');
+
+    expect(field.value).toBe('12/01/2026');
+    expect(screen.getByRole('alert').textContent).toBe('Enter a date as YYYY-MM-DD.');
+    expect(host.end().date).toBe('');
   });
 
   it('has no accessibility violations', async () => {
