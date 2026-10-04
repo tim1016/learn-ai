@@ -44,6 +44,7 @@ from app.broker.alpaca.clerk.sqlite.scheduled_end import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
+    EXIT_STUCK_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
 )
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
@@ -80,7 +81,7 @@ from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import
     _the_runner_sends_the_exit,
     _the_sweep,
 )
-from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of, _exit_not_flat
+from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of, _exit_not_flat, _flatten
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
     RUN_ID,
@@ -89,13 +90,16 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_scheduled_end import _Schedule
 from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import (
+    _THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD,
     ABSENT,
+    SIXTY_PASSES,
     _AlpacaAccount,
     _facade,
     _open_episode,
     _presented,
     _settle,
     _the_ledger_records_the_bots_shares_written_off,
+    _the_position_is_left_to_the_operator,
 )
 
 # The session these tests cross, and the one after it, from the canonical calendar: an
@@ -468,23 +472,80 @@ async def test_no_such_order_settles_the_held_exit_the_next_morning(
     """The operator looks at Alpaca the next morning, finds no such order, and says so.
 
     The Clerk reads Alpaca itself, finds nothing, and ends the EXIT as not
-    sent: the unknown outcome closes, the position is told as still open, and
-    it is free to be exited again. Settling sent nothing.
+    sent: the unknown outcome closes and the held EXIT no longer stands over
+    the entry. The bot still holds its 10 SPY, and they are the operator's
+    now: the position is told as still open and its exit as stuck, so the
+    Clerk sends nothing for them by itself, through fifteen minutes of
+    passes in the session that has opened. Settling sent nothing either.
+
+    The operator then sells from the bot's page. The Flatten that was refused
+    behind the unconfirmed order is offered again, and sells the 10 once,
+    under a client order id of its own: the bot is flat and both episodes
+    close.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
     exit_id, facade, current_context = await _a_bot_stopped_the_next_morning_with_its_exit_still_held(repo, alpaca)
+    closing = _closing_order(repo)
     (entry,) = repo.entry_orders_for_strategy(SID)
+    sweep = _the_sweep(repo, alpaca)
 
     result = await _settle(facade, current_context, ABSENT, reason="No sell of SPY at Alpaca since yesterday.")
 
     assert result.applied is True
     assert len(alpaca.sent) == 1, "settling never sends an order"
-    assert _exit_state(repo, exit_id) == "failed"
-    assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
-    assert _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE) is not None
+    _the_position_is_left_to_the_operator(repo, exit_id)
     assert repo.position(SID, "SPY") == _shares(10)
     assert repo.active_exit_for_order(entry.order_ref) is None
+    assert _the_open_notice(repo) is None
+
+    await _passes(repo, sweep, SIXTY_PASSES)
+
+    assert NEXT_OPEN_MS < clock() < session_close_ms_utc(next_trading_day(SESSION_DAY))
+    assert len(alpaca.sent) == 1, "the Clerk sold a position it had left to the operator"
+    _the_position_is_left_to_the_operator(repo, exit_id)
+
+    assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+    await _flatten(facade, current_context)
+
+    _lost, sold = alpaca.sent
+    assert (sold.leg.side, sold.leg.quantity) == ("sell", _shares(10))
+    assert sold.client_order_id != closing.client_order_id
+    alpaca.fills(sold.client_order_id)
+    await _passes(repo, sweep, 2)
+
+    assert repo.position(SID, "SPY") == _shares(0)
+    assert _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE) is None
+    assert _open_episode(repo, EXIT_STUCK_REASON_CODE) is None
+    assert len(alpaca.sent) == 2, "the 10 SPY were sold once, by the operator"
+
+
+@_THE_END_SALE_DOES_NOT_KEEP_TO_THE_HOLD
+async def test_a_sell_end_left_pending_behind_the_held_exit_sells_nothing_once_it_is_settled_as_not_sent(
+    crashed_with_exposure,  # noqa: F811
+    end_schedule: _Schedule,
+) -> None:
+    """The bot's scheduled SELL end stayed pending overnight behind its held EXIT, and the order is settled as not sent.
+
+    The end stopped the run and started no sale of its own while the EXIT
+    held the position. "No such order" ends that EXIT and leaves the position
+    to the operator, so the end's sale must not go out in the session that
+    has opened: no read shows whether the lost order sold the shares.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_running_bot_loses_its_exit_just_before_the_close(repo, alpaca)
+    end_schedule.ends[SID] = _sell_at(CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS + 10_000)
+    sweep = _the_sweep(repo, alpaca)
+    await _passes_across_the_close(repo, sweep)
+    await _passes_across_the_next_open(repo, sweep)
+    assert repo.active_run(SID) is None and _scheduled_end_sales(repo) == []
+
+    await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
+    _the_position_is_left_to_the_operator(repo, exit_id)
+    await _passes(repo, sweep, SIXTY_PASSES)
+
+    assert len(alpaca.sent) == 1, "the end's sale went out for a position left to the operator"
 
 
 async def test_alpaca_shows_it_settles_the_held_exit_the_next_morning(
@@ -493,8 +554,9 @@ async def test_alpaca_shows_it_settles_the_held_exit_the_next_morning(
     """The lost order filled at Alpaca, and no lookup of the Clerk's own shows it: the operator names it.
 
     The Clerk reads that order by its Alpaca order id, takes it up as its
-    own, and credits the fill once: the bot is flat, the EXIT succeeds and
-    the notice closes. Nothing is sent.
+    own, and credits the fill once: the bot is flat, the EXIT succeeds, and
+    nothing is left open about it -- no unknown outcome, no open position, no
+    stuck exit. Nothing is sent.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
@@ -507,15 +569,23 @@ async def test_alpaca_shows_it_settles_the_held_exit_the_next_morning(
 
     result = await _settle(facade, current_context, it_is_this_order)
 
+    def the_bot_is_flat_with_nothing_left_open() -> None:
+        assert _exit_state(repo, exit_id) == "succeeded"
+        assert repo.position(SID, "SPY") == _shares(0)
+        assert repo.active_exit_for_strategy(SID) is None
+        assert [
+            reason_code
+            for reason_code in (ORDER_OUTCOME_UNKNOWN_REASON_CODE, EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE)
+            if _open_episode(repo, reason_code) is not None
+        ] == []
+
     assert result.applied is True
     assert len(alpaca.sent) == 1
-    assert _exit_state(repo, exit_id) == "succeeded"
-    assert repo.position(SID, "SPY") == _shares(0)
-    assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
+    the_bot_is_flat_with_nothing_left_open()
 
     await _passes(repo, _the_sweep(repo, alpaca), 3)
 
-    assert repo.position(SID, "SPY") == _shares(0)
+    the_bot_is_flat_with_nothing_left_open()
     assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == _shares(10)
     assert len(alpaca.sent) == 1
 

@@ -11,7 +11,9 @@ sold them. A closing order that was sent is no longer failed by the Clerk
 itself: its EXIT keeps custody until the order is found or an operator
 settles it. So the EXIT now fails when the operator, who sees no such order
 at Alpaca either, settles it as not sent. Either way the EXIT is failed with
-its order's outcome unknown and the position still attributed.
+its order's outcome unknown and the position still attributed. Settled so,
+the position is left to the operator as a stuck exit: the Clerk sends no
+order for it by itself, and still looks the order up.
 
 Nothing was sold twice, but nothing looked the failed EXIT's order up again
 either: only a failed ENTER's order was. The position stayed attributed, and
@@ -41,7 +43,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import (
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.alpaca.clerk.sqlite.uncertainty import POSITION_DRIFT_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_STUCK_REASON_CODE, POSITION_DRIFT_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.contract.models import BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
@@ -67,6 +69,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _position,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
 )
+from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import _open_episode
 
 # How long a closing order rests between two lookups: every other pass.
 REST_BETWEEN_LOOKUPS_MS = 30_000
@@ -81,6 +84,11 @@ def _position_drift(repo: ClerkSqliteRepository) -> dict | None:
     return repo.active_uncertainty(
         scope="ACCOUNT_CLERK", reason_code=POSITION_DRIFT_REASON_CODE, strategy_instance_id=None
     )
+
+
+def _exit_stuck(repo: ClerkSqliteRepository) -> dict | None:
+    """The bot's open episode under which the Clerk sends no order for its position by itself, if it has one."""
+    return _open_episode(repo, EXIT_STUCK_REASON_CODE)
 
 
 def _the_sweep(facade: SqliteAlpacaClerkFacade) -> Callable[[], Awaitable[AccountReconciliationResult]]:
@@ -109,7 +117,8 @@ async def _the_operator_settles_it_as_not_sent(repo: ClerkSqliteRepository, faca
     How an EXIT whose closing order was sent now ends with that order's
     outcome unknown: the Clerk no longer fails it by itself. Dispatched as
     the bot's page dispatches it; the EXIT ends as not sent, failed, with the
-    position still attributed.
+    position still attributed and left to the operator: the exit is stuck,
+    so no pass that follows sends anything for the bot by itself.
     """
     current_context = _context_of(repo, SID)
     presented = next(
@@ -131,6 +140,7 @@ async def _the_operator_settles_it_as_not_sent(repo: ClerkSqliteRepository, faca
         current_context=current_context,
     )
     assert settled.applied is True
+    assert _exit_not_flat(repo) is not None and _exit_stuck(repo) is not None
 
 
 async def _a_flatten_failed_after_its_own_order_filled_unseen(
@@ -268,7 +278,7 @@ async def test_a_failed_flattens_own_order_that_filled_unseen_is_found_and_credi
         ("SELL", 10.0, 100.0)
     ]
     assert _position_drift(repo) is None
-    assert _exit_not_flat(repo) is None
+    assert _exit_not_flat(repo) is None and _exit_stuck(repo) is None
     # The EXIT's own record is not rewritten: it failed, and its order's fill is on its timeline.
     assert _exit_state(repo, exit_id) == "failed"
     assert len(alpaca.sent) == 1
