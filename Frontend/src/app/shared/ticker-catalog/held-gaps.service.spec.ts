@@ -117,6 +117,38 @@ describe('HeldGapsService', () => {
     expect(gaps()).toEqual({ unheldMs: new Set(), problem: null });
   });
 
+  it('starts a read over when a re-read is asked for while it is in flight, and keeps the old answer on screen meanwhile', async () => {
+    const answers: ((read: DataLakeRead<CoverageResponse>) => void)[] = [];
+    const read = vi.fn(() => new Promise<DataLakeRead<CoverageResponse>>((resolve) => answers.push(resolve)));
+    TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
+    const service = TestBed.inject(HeldGapsService);
+    const span = heldBounds('QQQ', '2026-09-14', '2026-09-18');
+    const settle = async (): Promise<DataGaps | null> => {
+      TestBed.tick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      TestBed.tick();
+      return service.gapsFor('raw', 'QQQ', span, 'minute');
+    };
+
+    service.gapsFor('raw', 'QQQ', span, 'minute');
+    await settle();
+    // The holdings are read again before the first answer is back: it may predate a backfill.
+    service.reload('raw');
+    await settle();
+    expect(read).toHaveBeenCalledTimes(2);
+
+    answers[0](coverage({ '2026-09-15': 'missing' }));
+    expect(await settle()).toBeNull();
+    answers[1](coverage({ '2026-09-15': 'complete' }));
+    expect(await settle()).toEqual({ unheldMs: new Set(), problem: null });
+
+    // A later re-read keeps that answer on screen until its own arrives.
+    service.reload('raw');
+    expect(await settle()).toEqual({ unheldMs: new Set(), problem: null });
+    answers[2](coverage({ '2026-09-16': 'failed' }));
+    expect(await settle()).toEqual({ unheldMs: new Set([sessionOpenMs('2026-09-16')]), problem: null });
+  });
+
   it("reads a tree's gaps again when its holdings were read again: a filled gap goes, and a failed read is retried", async () => {
     let answer: DataLakeRead<CoverageResponse> = { kind: 'unavailable', message: 'The data plane did not respond.' };
     const { after, asked, service, settled } = await gapsFor(() => answer, '2026-09-14', '2026-09-18');
