@@ -10,6 +10,3 @@
 .exposure[data-state='not_opened'] i { color: var(--bull); }
 .exposure[data-state='previously_used'], .exposure[data-state='history_unknown'] { background: var(--warn-soft); }
 .exposure[data-state='previously_used'] i, .exposure[data-state='history_unknown'] i { color: var(--warn); }
-.dates { display: grid; gap: var(--space-3); }
-.dates > summary { color: var(--accent-text); font-size: var(--fs-sm); cursor: pointer; width: fit-content; }
-.dates[open] > summary { margin-bottom: var(--space-3); }

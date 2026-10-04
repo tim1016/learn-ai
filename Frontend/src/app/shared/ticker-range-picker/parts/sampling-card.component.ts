@@ -3,7 +3,7 @@ import {
   Component,
   computed,
   input,
-  model,
+  output,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -22,6 +22,9 @@ import type {
  *  ``hidden``   = Session group not rendered at all. */
 export type SessionMode = 'preview' | 'disabled' | 'hidden';
 
+/** The fields the sampling card sets. */
+export type SamplingChange = Partial<Pick<TickerRange, 'resolution' | 'multiplier' | 'session' | 'autoFetch'>>;
+
 @Component({
   selector: 'app-sampling-card',
   imports: [CommonModule, FormsModule, Tooltip],
@@ -30,7 +33,14 @@ export type SessionMode = 'preview' | 'disabled' | 'hidden';
   styleUrls: ['./sampling-card.component.scss'],
 })
 export class SamplingCardComponent {
-  readonly value = model.required<TickerRange>();
+  readonly value = input.required<TickerRange>();
+  /**
+   * Only what a control changed, for the host to merge into the value it
+   * holds now. This card's own copy can be one render behind a sibling card:
+   * a date typed and a control tapped in the same instant would otherwise put
+   * the old date back.
+   */
+  readonly changed = output<SamplingChange>();
   readonly availableResolutions = input<readonly Resolution[]>([
     'minute',
     'hour',
@@ -48,19 +58,19 @@ export class SamplingCardComponent {
   );
 
   setResolution(r: Resolution): void {
-    this.value.set({ ...this.value(), resolution: r });
+    this.changed.emit({ resolution: r });
   }
 
   setMultiplier(m: number): void {
-    this.value.set({ ...this.value(), multiplier: m });
+    this.changed.emit({ multiplier: m });
   }
 
   setSession(s: Session): void {
     if (s === 'extended' && this.sessionMode() === 'disabled') return;
-    this.value.set({ ...this.value(), session: s });
+    this.changed.emit({ session: s });
   }
 
   setAutoFetch(on: boolean): void {
-    this.value.set({ ...this.value(), autoFetch: on });
+    this.changed.emit({ autoFetch: on });
   }
 }

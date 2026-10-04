@@ -411,17 +411,32 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.bot_config(self._conn, strategy_instance_id)
 
+    def strategy_ran_before(
+        self: ClerkSqliteRepository,
+        *,
+        strategy_instance_id: str,
+        lifecycle_run_id: str,
+    ) -> bool:
+        with self._write_lock:
+            return reads.strategy_ran_before(
+                self._conn,
+                strategy_instance_id=strategy_instance_id,
+                lifecycle_run_id=lifecycle_run_id,
+            )
+
     def decision_receipt_tail(
         self: ClerkSqliteRepository,
         *,
         strategy_instance_id: str,
         limit: int,
+        before_seq: int | None = None,
     ) -> list[DecisionReceiptResource]:
         with self._write_lock:
             return reads.decision_receipt_tail(
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
                 limit=limit,
+                before_seq=before_seq,
             )
 
     def external_order(

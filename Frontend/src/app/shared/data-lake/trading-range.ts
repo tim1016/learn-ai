@@ -25,8 +25,8 @@ const DAY_MS = 86_400_000;
  * calendar.
  *
  * Returns `null` when either endpoint is not a `YYYY-MM-DD` date, which is
- * the shape both `<input type="date">` controls produce and the shape the
- * endpoints' `date` params take.
+ * the shape the date picker hands over and the shape the endpoints' `date`
+ * params take.
  */
 export function tradingRangeSpanDays(start: string, end: string): number | null {
   const from = parseIsoDateUtc(start);
@@ -67,7 +67,7 @@ export function tradingRangeRejection(
  * `end_trading_date_ms` query params, and (since #1877) `POST /ensure-data`'s
  * and `POST /backfill`'s request-body fields of the same names — takes this
  * value, never an ISO date. The `YYYY-MM-DD` strings stay on this side of
- * that boundary because they are what `<input type="date">` produces and
+ * that boundary because they are what the date picker hands over and
  * what the operator reads — the conversion happens once, here, at the HTTP
  * seam.
  *

@@ -9,7 +9,7 @@
  * value leaves.
  */
 
-/** ``YYYY-MM-DD`` and ``HH:MM``, the values `<input type="date">` and `<input type="time">` carry. */
+/** ``YYYY-MM-DD`` and ``HH:MM``, the values a date field and a time field carry. */
 export interface LocalWallClock {
   readonly date: string;
   readonly clock: string;

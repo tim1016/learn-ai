@@ -218,6 +218,11 @@ NONTERMINAL_EFFECT_STATES: frozenset[str] = frozenset(
     {"reserved", "accepted", "in_progress", "unknown"}
 )
 
+#: Effect-operation states that ended in failure. The effect's order row and
+#: its decision receipt stay stored, so their presence alone never says the
+#: effect happened: the terminal state does.
+FAILED_EFFECT_STATES: frozenset[str] = frozenset({"failed", "rejected"})
+
 
 def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: bool = False) -> set[str]:
     """Roster ids whose custody can still change, or still needs attention.
@@ -332,16 +337,39 @@ def bot_config(conn: sqlite3.Connection, strategy_instance_id: str) -> BotConfig
     return BotConfigResource(**dict(row)) if row is not None else None
 
 
+def strategy_ran_before(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+) -> bool:
+    """Whether the instance has a run on record other than ``lifecycle_run_id`` (#2859)."""
+    row = conn.execute(
+        "SELECT 1 FROM runs WHERE strategy_instance_id = ? AND lifecycle_run_id != ? LIMIT 1",
+        (strategy_instance_id, lifecycle_run_id),
+    ).fetchone()
+    return row is not None
+
+
 def decision_receipt_tail(
     conn: sqlite3.Connection,
     *,
     strategy_instance_id: str,
     limit: int,
+    before_seq: int | None = None,
 ) -> list[DecisionReceiptResource]:
+    """The newest ``limit`` receipts in ascending sequence order.
+
+    ``before_seq`` reads the newest ``limit`` rows older than that sequence
+    instead (#2859). Either way it is one bounded range walk down the primary
+    key, starting where the range does.
+    """
+    older_than = "" if before_seq is None else "AND seq < ? "
+    bounds = (limit,) if before_seq is None else (before_seq, limit)
     rows = conn.execute(
         f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
-        "WHERE strategy_instance_id = ? ORDER BY seq DESC LIMIT ?",
-        (strategy_instance_id, limit),
+        f"WHERE strategy_instance_id = ? {older_than}ORDER BY seq DESC LIMIT ?",
+        (strategy_instance_id, *bounds),
     ).fetchall()
     return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
 

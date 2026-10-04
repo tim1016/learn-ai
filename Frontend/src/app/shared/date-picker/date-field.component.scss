@@ -1,0 +1,39 @@
+@use './date-control';
+@use '../../styles/filled-controls' as filled;
+
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.date-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+// The calendar opened in place, under the field.
+.date-field__inline {
+  align-self: start;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+// Among a form's filled fields the fill is the field: no outline until it has focus.
+:host(.date-field--filled) {
+  .date-control__input {
+    @include filled.filled-field;
+    flex: 1;
+    width: auto;
+  }
+
+  .date-control__open {
+    @include filled.filled-surface;
+
+    &:hover:not(:disabled) { @include filled.filled-surface-hover; }
+    &:focus-visible { @include filled.filled-surface-active; }
+    &:disabled { cursor: not-allowed; }
+  }
+}

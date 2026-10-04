@@ -13,6 +13,7 @@ import { ProviderBoundsService } from '../date-picker';
 import { TimeWindowCardComponent } from '../ticker-range-picker/parts/time-window-card.component';
 import {
   SamplingCardComponent,
+  type SamplingChange,
   type SessionMode,
 } from '../ticker-range-picker/parts/sampling-card.component';
 import type {
@@ -31,9 +32,8 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
  *
  * Reuses the canonical picker's TimeWindow + Sampling sub-components
  * via a TickerRange projection — those sub-components don't know about
- * the universe shape; they two-way-bind a single-symbol TickerRange,
- * and this composer projects/applies the per-call patches onto the
- * MultiTickerRange.
+ * the universe shape; they read a single-symbol TickerRange, and this
+ * composer applies what each one changed onto the MultiTickerRange.
  *
  * The universe is the joined catalog (ADR 0066): the vendor's listing
  * walk with the lake's coverage on each row, and an unheld pick gated on
@@ -114,16 +114,13 @@ export class MultiTickerRangePickerComponent {
     };
   });
 
-  protected onSinglePatch(updated: TickerRange): void {
-    const v = this.value();
-    this.value.set({
-      ...v,
-      from: updated.from,
-      to: updated.to,
-      resolution: updated.resolution,
-      multiplier: updated.multiplier,
-      session: updated.session,
-      autoFetch: updated.autoFetch,
-    });
+  /** The dates card hands back a whole range; only its dates are its own. */
+  protected setDates(updated: TickerRange): void {
+    this.value.set({ ...this.value(), from: updated.from, to: updated.to });
+  }
+
+  /** Merges what the sampling card set into the value held now. */
+  protected patch(change: SamplingChange): void {
+    this.value.set({ ...this.value(), ...change });
   }
 }

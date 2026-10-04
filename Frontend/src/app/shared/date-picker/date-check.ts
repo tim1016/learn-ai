@@ -1,3 +1,5 @@
+import { linkedSignal, type Signal, type WritableSignal } from '@angular/core';
+
 import { isWeekend, parseIsoDate, type IsoDate } from '../date/iso-date';
 import type { DateBounds } from './date-bounds';
 import type { TradingSessions } from './trading-sessions';
@@ -53,4 +55,19 @@ export function checkRange(fromText: string, toText: string, context: DateCheckC
     return { from: REFUSED('The start date is after the end date.'), to };
   }
   return { from, to };
+}
+
+/**
+ * The text of a date field, which is not always the date its host holds: an
+ * unusable entry stays in the field while the host is handed an empty date.
+ *
+ * The text follows the host's date, except when that date is the one the
+ * field itself just handed over. Then the host is echoing the field back, and
+ * the text the person typed stays.
+ */
+export function fieldText(hostDate: Signal<string>, lastHanded: () => string | null): WritableSignal<string> {
+  return linkedSignal<string, string>({
+    source: hostDate,
+    computation: (date, previous) => (previous !== undefined && date === lastHanded() ? previous.value : date),
+  });
 }

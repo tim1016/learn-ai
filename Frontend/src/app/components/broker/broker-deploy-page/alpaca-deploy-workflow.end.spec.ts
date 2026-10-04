@@ -228,7 +228,7 @@ describe('AlpacaDeployWorkflowComponent — the bot’s end (#2607)', () => {
     await renderWorkflow(service);
 
     const editor = endEditor();
-    fireEvent.input(within(editor).getByLabelText('End date'), { target: { value: '2023-11-16' } });
+    fireEvent.change(within(editor).getByLabelText('End date'), { target: { value: '2023-11-16' } });
     fireEvent.input(within(editor).getByLabelText(/^End time/), { target: { value: '10:30' } });
     fireEvent.click(within(editor).getByRole('radio', { name: 'Keep its shares' }));
 
@@ -382,9 +382,10 @@ describe('AlpacaDeployWorkflowComponent — the bot’s end (#2607)', () => {
     const date = within(endEditor()).getByLabelText<HTMLInputElement>('End date');
     const time = within(endEditor()).getByLabelText<HTMLInputElement>(/^End time/);
 
-    fireEvent.input(date, { target: { value: '' } });
+    // The date applies when the field is left; the change arrives just before the blur does.
+    fireEvent.change(date, { target: { value: '' } });
 
-    // Nothing is said while the owner is still in the field …
+    // Nothing is said until the owner has left the field …
     expect(within(endEditor()).queryByRole('alert')).toBeNull();
     // … but the earlier end's words go at once, and How says what it needs.
     expect(within(endSummary()).queryByText(DEFAULT_END.headline)).toBeNull();
@@ -455,7 +456,7 @@ describe('AlpacaDeployWorkflowComponent — the bot’s end (#2607)', () => {
     await renderWorkflow();
     await within(endSummary()).findByText(DEFAULT_END.headline);
     const date = within(endEditor()).getByLabelText('End date');
-    fireEvent.input(date, { target: { value: '' } });
+    fireEvent.change(date, { target: { value: '' } });
     fireEvent.blur(date);
     await within(endEditor()).findByRole('alert');
 

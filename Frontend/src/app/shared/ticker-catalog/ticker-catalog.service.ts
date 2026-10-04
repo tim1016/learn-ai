@@ -9,6 +9,7 @@ import type {
   SymbolCoverageSpan,
 } from '../data-lake';
 import type { TickerOption } from '../ticker-range-picker';
+import { HeldGapsService } from './held-gaps.service';
 import type { TickerCatalog, TickerCatalogView } from './ticker-catalog';
 import { SEED_RECENT_TICKERS, TICKER_LABELS } from './ticker-labels';
 
@@ -57,6 +58,7 @@ const RUNNABLE_DATA_TYPE: DataLakeDataType = 'trade';
 export class TickerCatalogService implements TickerCatalog {
   private readonly lake = inject(DataLakeService);
   private readonly injector = inject(Injector);
+  private readonly heldGaps = inject(HeldGapsService);
   private readonly views = new Map<PriceAdjustmentMode, TickerCatalogView>();
 
   viewFor(mode: PriceAdjustmentMode): TickerCatalogView {
@@ -97,7 +99,11 @@ export class TickerCatalogService implements TickerCatalog {
         if (read === undefined || read.kind === 'ok') return null;
         return read.message;
       }),
-      reload: () => summary.reload(),
+      // The gaps inside a held span come from the same lake, so they are read again with it.
+      reload: () => {
+        summary.reload();
+        this.heldGaps.reload(mode);
+      },
     };
     this.views.set(mode, view);
     return view;
