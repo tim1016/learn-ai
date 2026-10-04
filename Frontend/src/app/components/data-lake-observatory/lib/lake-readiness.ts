@@ -138,11 +138,12 @@ export function rebuildRequests(rows: readonly SymbolReadinessRow[]): RebuildReq
   return rows.flatMap((row) => (row.rebuild === null ? [] : [row.rebuild]));
 }
 
+/** A symbol with a gap a backfill can fill. */
+export type FillRow = SymbolReadinessRow & { readonly fill: RebuildRequest };
+
 /** The symbols with a gap a backfill can fill. */
-export function fillRows(
-  rows: readonly SymbolReadinessRow[],
-): (SymbolReadinessRow & { readonly fill: RebuildRequest })[] {
-  return rows.filter((row): row is SymbolReadinessRow & { readonly fill: RebuildRequest } => row.fill !== null);
+export function fillRows(rows: readonly SymbolReadinessRow[]): FillRow[] {
+  return rows.filter((row): row is FillRow => row.fill !== null);
 }
 
 const DAY_MS = 86_400_000;

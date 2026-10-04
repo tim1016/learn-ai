@@ -2,7 +2,7 @@ import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
-import type { RebuildRequest, SymbolReadinessRow } from '../lib/lake-readiness';
+import type { FillRow, RebuildRequest } from '../lib/lake-readiness';
 import type { RebuildProgress } from '../readiness-banner/readiness-banner.component';
 
 /** How many symbols the banner names before it counts the rest. */
@@ -25,7 +25,7 @@ const NAMED = 5;
 })
 export class GapBannerComponent {
   /** The symbols with a gap a backfill can fill. */
-  readonly rows = input.required<readonly (SymbolReadinessRow & { readonly fill: RebuildRequest })[]>();
+  readonly rows = input.required<readonly FillRow[]>();
   /** True while any backfill runs, so a second one cannot be started over it. */
   readonly busy = input(false);
   readonly progress = input<RebuildProgress | null>(null);

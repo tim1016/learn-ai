@@ -1,12 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type { RebuildRequest, SymbolReadinessRow } from '../lib/lake-readiness';
+import type { FillRow, RebuildRequest } from '../lib/lake-readiness';
 import { GapBannerComponent } from './gap-banner.component';
 
-type GapRow = SymbolReadinessRow & { readonly fill: RebuildRequest };
-
-function gapRow(symbol: string, gapSessionCount: number): GapRow {
+function gapRow(symbol: string, gapSessionCount: number): FillRow {
   return {
     symbol,
     state: 'ready',

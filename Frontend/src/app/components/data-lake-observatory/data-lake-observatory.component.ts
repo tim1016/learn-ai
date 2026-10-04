@@ -50,9 +50,6 @@ import {
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 30;
-
-/** Which banner started a list of backfills: each narrates only its own. */
-type BackfillList = 'rebuild' | 'fill';
 const BAR_TYPE_OPTIONS: readonly DataLakeDataType[] = ['trade', 'quote'];
 
 const EMPTY_BOARD: CoverageBoard = {
@@ -62,6 +59,9 @@ const EMPTY_BOARD: CoverageBoard = {
   firstSessionMs: null,
   lastSessionMs: null,
 };
+
+/** Which banner started a list of backfills: each narrates only its own. */
+type BackfillList = 'rebuild' | 'fill';
 
 /** What the session grid reads. Compared by value, so a re-read of readiness alone does not reset the grid. */
 interface CoverageRequest {
@@ -271,7 +271,6 @@ export class DataLakeObservatoryComponent {
   protected async rebuildAll(): Promise<void> {
     await this.rebuild(rebuildRequests(this.rows()));
   }
-
 
   /**
    * Runs the requests one after another: each symbol has its own window, so
