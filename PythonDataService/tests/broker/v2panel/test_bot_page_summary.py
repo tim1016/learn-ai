@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.schemas.bot_end import BotEnd, BotEndView, RecordedEnd
 from app.schemas.bot_page import HeldPositionFact, RunSummaryFacts
-from app.services.broker_v2_panel.bot_page_projection import run_facts, run_summary_text
+from app.services.bot_end import bot_end_view, bot_end_view_waiting_for_operator
+from app.services.broker_v2_panel.bot_page_projection import RunFacts, run_facts, run_summary, run_summary_text
 
 # Wed Sep 30 2026, 14:30 and 15:59 ET; the line is written that evening, or a year later.
 _START = 1_790_793_000_000
@@ -85,6 +89,35 @@ def test_the_summary_line_is_written_from_its_facts(overrides: dict[str, object]
     assert run_summary_text(facts) == text
     # The same facts give the same line.
     assert run_summary_text(RunSummaryFacts.model_validate(facts.model_dump())) == text
+
+
+def _stopped_holding_ten(end: BotEndView) -> SimpleNamespace:
+    """What the summary reads of the panel: a stopped bot that holds 10 SPY, and its end."""
+    return SimpleNamespace(health=SimpleNamespace(running=False), end=end, exposure={"SPY": 10.0})
+
+
+def test_the_operators_working_sale_is_told_while_the_end_waits_for_the_operator() -> None:
+    """#2854: an end that waits for the operator sent no order and queues no sale. The operator's
+    own Flatten is a sale the Clerk is working like any other, so while it works the line says a
+    sale is queued, exactly as it does for a stopped bot with no end."""
+    no_end = bot_end_view(None, now_ms=_WRITTEN, dry_run=False, running=False, use_rth=True)
+    reached = bot_end_view(
+        RecordedEnd.scheduled(BotEnd(end_at_ms=_END)), now_ms=_WRITTEN, dry_run=False, running=False, use_rth=True,
+    )
+    waiting = bot_end_view_waiting_for_operator(reached, why="The end's sale of 10 SPY was not sent.")
+    flatten_working = RunFacts(
+        run_id="run-1", started_at_ms=_START, ended_at_ms=_END, ending_kind="STOPPED", unreadable=False,
+        decision_count=5, decision_count_is_floor=False, trade_count=1, orders_sent=1,
+        committed_cents=None, released_cents=None, exit_in_progress=True,
+    )
+
+    summary = run_summary(_stopped_holding_ten(waiting), flatten_working, now_ms=_WRITTEN)
+
+    assert summary.facts.exit_queued is True
+    assert summary.text == (
+        "Ran Wed Sep 30, 14:30–15:59 ET · stopped · 5 decisions, 1 trade · holds 10 SPY · a sale is queued."
+    )
+    assert summary.text == run_summary(_stopped_holding_ten(no_end), flatten_working, now_ms=_WRITTEN).text
 
 
 def _fill(event_key: str, quantity: float) -> FillRecord:

@@ -213,7 +213,8 @@ def run_summary_facts(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> Run
             HeldPositionFact(symbol=symbol, quantity=quantity_text(quantity))
             for symbol, quantity in sorted(panel.exposure.items())
         ],
-        # An end that waits for the operator queues no sale (#2854).
+        # An end that waits for the operator queues no sale (#2854). The operator's
+        # own Flatten, while it works, is a sale in progress like any other.
         exit_queued=run.exit_in_progress
         or (panel.end is not None and panel.end.status == "ending" and not panel.end.waits_for_operator),
         authored_at_ms=now_ms,
