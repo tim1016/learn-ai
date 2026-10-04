@@ -52,6 +52,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 from app.broker.alpaca.clerk.sqlite.repository import DEFAULT_CLAIM_TTL_MS, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.residue_discharge import ATTRIBUTED_RESIDUE_DISCHARGED
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.scheduled_end import ScheduledEnd
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
@@ -67,11 +68,13 @@ from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
 )
 from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerPosition
+from app.schemas.bot_end import BotEnd
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
     _clock_at,
+    _make_held_position,
     _TestClock,
     _walk_clock_to,
 )
@@ -102,6 +105,10 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     SID,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
 )
+from tests.broker.alpaca.clerk.sqlite.test_scheduled_end import (
+    _Schedule,
+    schedule,  # noqa: F401 -- the runner's schedule of the bots' ends, installed for one test
+)
 
 SETTLE = "settle_unknown_exit_order"
 OPERATOR = "ops-desk"
@@ -117,6 +124,8 @@ UNREADABLE_ORDER_ID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 BY_HAND_ORDER_ID = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
 UNNAMED_ORDER_ID = "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e7f"
 ANOTHER_BOTS_ORDER_ID = "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f80"
+# A second bot of the same account, in the same symbol.
+ANOTHER_BOT = "another-bot"
 
 type _Context = Callable[[], Awaitable[object]]
 
@@ -1142,6 +1151,72 @@ async def test_a_position_closed_by_hand_at_alpaca_is_refused_until_the_clerk_ha
     assert _exit_state(repo, exit_id) == "unknown"
     assert repo.position(SID, "SPY") == 10.0
     assert len(alpaca.sent) == 1
+
+
+@pytest.mark.parametrize(
+    "another_bot_holds_the_symbol",
+    [
+        pytest.param(False, id="the-bot-alone-in-the-symbol"),
+        pytest.param(
+            True,
+            id="another-bot-holds-the-symbol",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "Known gap (#2854 item 8): the sale at a bot's scheduled end is held back only by "
+                    "the recorded difference's own rule for a reduction, which lets it through while "
+                    "Alpaca still holds as much as it sells -- here another bot's shares. A separate "
+                    "change gives that sale the watchdog's check; the settle action is on no operator "
+                    "surface until it lands."
+                ),
+            ),
+        ),
+    ],
+)
+async def test_a_position_closed_by_hand_is_not_sold_again_at_the_bots_scheduled_end(
+    crashed_with_exposure,  # noqa: F811
+    schedule: _Schedule,  # noqa: F811
+    another_bot_holds_the_symbol: bool,
+) -> None:
+    """The bot's owner set it to sell at its end, its closing order is lost, and the operator closes the position by hand.
+
+    The end comes: the Clerk stops the run, and the sale the end owes waits
+    for the EXIT that holds the position. "No such order", taken under the
+    recorded difference, ends that EXIT, and the end's sale is owed. It must
+    not go out while Alpaca's position differs from the Clerk's records: the
+    bot's shares were sold by hand, and whatever Alpaca still holds in the
+    symbol is another bot's.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    if another_bot_holds_the_symbol:
+        repo.register_strategy_instance(
+            exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=ANOTHER_BOT, symbol="SPY", config_hash="h2"
+        )
+        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, lifecycle_run_id="run-2")
+        await _make_held_position(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, run_id="run-2",
+            decision_id="enter-2", execution_id="exec-2",
+        )
+        alpaca.holds = 20.0
+    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+    schedule.ends[SID] = ScheduledEnd(
+        strategy_instance_id=SID, end=BotEnd(end_at_ms=repo.clock(), end_action="SELL")
+    )
+    alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, status="filled", filled_quantity=10.0)]
+    alpaca.holds -= 10.0
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    assert repo.active_run(SID) is None, "the Clerk stopped the run at its end"
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    assert _open_position_drift(repo) is not None
+    assert _exit_state(repo, exit_id) == "unknown" and len(alpaca.sent) == 1
+
+    await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
+    assert _exit_state(repo, exit_id) == "failed"
+    await _passes(repo, _the_sweep(repo, alpaca), 3 * FIVE_MINUTES_OF_PASSES)
+
+    assert len(alpaca.sent) == 1, "the shares sold by hand are never sold again"
+    assert repo.position(SID, "SPY") == 10.0
 
 
 async def test_a_replaced_sale_is_read_through_to_the_order_that_replaced_it(
