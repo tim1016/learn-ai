@@ -2,7 +2,6 @@
   <fieldset class="news-form__group">
     <legend>Ticker</legend>
     <div class="news-form__field">
-      <span>Ticker</span>
       <app-symbol-picker
         [symbol]="valueOf('ticker')"
         (symbolChange)="setTicker($event)"

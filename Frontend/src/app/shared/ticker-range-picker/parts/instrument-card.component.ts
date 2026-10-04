@@ -30,6 +30,8 @@ import type { PickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import { toPickerSymbol } from '../../symbol-catalog/symbol-catalog.types';
 import type { PriceAdjustmentMode } from '../../data-lake';
 import { AssetIdentityComponent } from '../../asset-identity';
+import { TradingCalendarService } from '../../date-picker';
+import { addDays } from '../../date/iso-date';
 import { toMostRecentTradingDayIso } from '../../date/weekday';
 
 /**
@@ -112,7 +114,15 @@ export class InstrumentCardComponent {
    */
   readonly universe = input<readonly TickerOption[] | null>(null);
 
+  /**
+   * Whether a pick may move the host's date window onto the days the lake
+   * holds. A symbol-only host has no window, so it turns this off and the
+   * card never asks for the trading calendar on its behalf.
+   */
+  readonly movesWindow = input(true);
+
   private readonly symbols = inject(SymbolCatalogService);
+  private readonly calendar = inject(TradingCalendarService);
   private readonly destroyRef = inject(DestroyRef);
   /** This card's coverage gate — see {@link CoverageGateController}. */
   readonly gate = new CoverageGateController(() => this.adjustmentMode());
@@ -355,27 +365,23 @@ export class InstrumentCardComponent {
     // This branch never executed before the lake-backed catalog: no entry in
     // the constant it replaced carried a date, so `pickTicker` only ever
     // changed the symbol.
-    if (t.lastHeld && !overlapsHeldRange(current, t)) {
-      // Sidecar validator rejects weekend endpoints with 422. ``last``
-      // arrives from a data-availability response so it's usually
-      // already a weekday, but ``last - 30 days`` lands on a weekend
-      // whenever ``last`` falls Mon-Wed. Operate entirely on the ISO
-      // string via ``toMostRecentTradingDayIso`` so the walk is
-      // UTC-internal — the earlier ``Date``-based path silently
-      // re-introduced a weekend in west-of-UTC browsers because
-      // ``new Date("YYYY-MM-DD")`` parses as UTC midnight (= prior
-      // local evening), the local-time walk then stepped onto a
-      // local Friday whose UTC instant fell on Saturday, and
-      // ``isoDate``'s UTC ``toISOString`` round-trip emitted the
-      // Saturday day stamp (PR #346 P1 review).
-      const start = toMostRecentTradingDayIso(t.lastHeld, -30);
+    if (this.movesWindow() && t.lastHeld && !overlapsHeldRange(current, t)) {
+      // The proposed window is the last thirty days held, both ends on a
+      // session: the date picker refuses a closed day, and the sidecar
+      // validator rejects one with a 422. The trading calendar says which
+      // days are sessions once the page's date picker has read it; until
+      // then the walk steps back off weekends only, on the ISO string so no
+      // local/UTC boundary is crossed (PR #346).
+      const sessions = this.calendar.sessions();
+      const monthBack = addDays(t.lastHeld, -30);
+      const start = sessions?.onOrBefore(monthBack) ?? toMostRecentTradingDayIso(monthBack);
       // Clamp to where the held range begins. A thinly-backfilled symbol
       // would otherwise open on a 30-day window of which almost none is
       // readable, and the run would refuse data the picker had proposed.
-      // `firstHeld` is a real trading date, so it needs no weekday walk —
-      // walking it would step before the range and defeat the clamp.
+      // `firstHeld` is a real trading date, so it needs no walk — walking it
+      // would step before the range and defeat the clamp.
       patch.from = t.firstHeld && t.firstHeld > start ? t.firstHeld : start;
-      patch.to = toMostRecentTradingDayIso(t.lastHeld);
+      patch.to = sessions?.onOrBefore(t.lastHeld) ?? toMostRecentTradingDayIso(t.lastHeld);
     }
     this.value.set({ ...current, ...patch });
     this.closeDropdown();

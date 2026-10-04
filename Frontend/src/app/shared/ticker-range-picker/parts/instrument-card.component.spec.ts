@@ -23,6 +23,8 @@ import {
 } from '../../symbol-catalog/testing/fake-symbol-catalog';
 import type { TickerOption, TickerRange } from '../ticker-range-picker.types';
 import type { VendorSymbolEntry } from '../../symbol-catalog/vendor-catalog.service';
+import { TradingCalendarService } from '../../date-picker';
+import { fakeSessions, fakeTradingCalendar, provideFakeDateWorld } from '../../date-picker/testing/fake-trading-calendar';
 
 describe('InstrumentCardComponent', () => {
   const baseValue: TickerRange = {
@@ -66,6 +68,8 @@ describe('InstrumentCardComponent', () => {
         provideFakeTickerCatalog(catalog),
         provideFakeVendorCatalog(alpaca),
         provideFakeEnsureCoverage(coverage),
+        // Labor Day 2026 is closed; the calendar the page's date picker has read.
+        ...provideFakeDateWorld(fakeTradingCalendar(fakeSessions('2025-01-01', '2026-12-31', { '2026-09-07': 'Labor Day' }), '2026-12-01')),
       ],
     }).compileComponents();
 
@@ -307,6 +311,51 @@ describe('InstrumentCardComponent', () => {
 
     expect(component.value().from).toBe('2026-04-24');
     expect(component.value().to).toBe('2026-05-25');
+  });
+
+  it('pickTicker proposes a window on sessions: a start on a holiday steps back to the session before', () => {
+    fixture.detectChanges();
+    component.openDropdown();
+    fixture.detectChanges();
+
+    // lastHeld = Wed 2026-10-07 → −30 = Mon 2026-09-07, Labor Day → Fri 2026-09-04.
+    // A weekday walk would keep the holiday, and the date picker refuses it.
+    component.pickTicker({ symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-10-07' });
+    fixture.detectChanges();
+
+    expect(component.value().from).toBe('2026-09-04');
+    expect(component.value().to).toBe('2026-10-07');
+  });
+
+  it('pickTicker steps back off weekends on its own while the calendar has not been read', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [InstrumentCardComponent],
+      providers: [
+        provideRouter([]),
+        provideFakeTickerCatalog(catalog),
+        provideFakeVendorCatalog(alpaca),
+        provideFakeEnsureCoverage(coverage),
+        { provide: TradingCalendarService, useValue: fakeTradingCalendar(null, '2026-12-01') },
+      ],
+    });
+    const unread = TestBed.createComponent(InstrumentCardComponent);
+    unread.componentRef.setInput('value', baseValue);
+    unread.detectChanges();
+
+    unread.componentInstance.pickTicker({ symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-05-25' });
+
+    // −30 = Sat 2026-04-25 → Fri 2026-04-24.
+    expect(unread.componentInstance.value().from).toBe('2026-04-24');
+  });
+
+  it('leaves the window alone for a host that has none', () => {
+    fixture.componentRef.setInput('movesWindow', false);
+    fixture.detectChanges();
+
+    component.pickTicker({ symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-10-07' });
+
+    expect(component.value()).toMatchObject({ symbol: 'AAPL', from: baseValue.from, to: baseValue.to });
   });
 
   it('pickTicker clamps the proposed window to the first day held', () => {

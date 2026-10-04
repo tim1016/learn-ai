@@ -9,20 +9,20 @@
 .row__name {
   overflow: hidden;
   color: var(--text-subtle);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .row__meta {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: var(--fs-sm);
   text-align: right;
 }
 
 .row__held {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   text-align: right;
 }
 
