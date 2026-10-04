@@ -50,7 +50,10 @@ from app.broker.alpaca.clerk.sqlite.timeline_query import TimelineFilters, _enco
 from app.broker.contract.models import BrokerAccountSnapshot, OrderSide
 from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
-from app.schemas.alpaca_clerk_sqlite import HistoricalExecutionRecoveryPlanResponse
+from app.schemas.alpaca_clerk_sqlite import (
+    NOT_AN_ALPACA_ORDER_ID,
+    HistoricalExecutionRecoveryPlanResponse,
+)
 from app.schemas.market_liveness import TopOfBookQuote
 from app.utils.error_handlers import request_validation_exception_handler
 
@@ -1452,6 +1455,32 @@ async def test_a_malformed_attestation_is_refused_before_any_route_runs(api: Fas
                 json={"concurrency_token": "token", **body},
             )
             assert response.status_code == 422, (route, response.text)
+
+
+@pytest.mark.parametrize("pasted", ["learn-ai/spy-bot/v1:close-1", "   "], ids=["a-client-order-id", "blank"])
+@pytest.mark.asyncio
+async def test_an_id_that_is_not_an_alpaca_order_id_is_refused_in_words_the_operator_reads(
+    api: FastAPI, pasted: str
+) -> None:
+    """The operator typed the id, so its refusal is theirs to read (#2854).
+
+    A 422 as before, in the body of a route's own refusal: the page shows
+    its message as it shows any other, and never the validator's list.
+    """
+    async with _client(api) as client:
+        for route in ("check", "execute"):
+            response = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/{route}",
+                json={
+                    "action_id": "settle_unknown_exit_order",
+                    "concurrency_token": "token",
+                    "attestation": {"kind": "exists", "broker_order_id": pasted},
+                },
+            )
+            assert response.status_code == 422, (route, response.text)
+            assert response.json() == {
+                "detail": {"reason": "not_an_alpaca_order_id", "message": NOT_AN_ALPACA_ORDER_ID}
+            }, route
 
 
 # ── A Dry Run whose Deploy crashed before its binding (#2559) ───────────────

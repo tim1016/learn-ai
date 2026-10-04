@@ -34,7 +34,6 @@ import type {
   SqliteRecoveryActionCheck,
   SqliteRecoveryResult,
   SqliteTimelinePage,
-  SqliteUnknownOrderAttestation,
   TodayStatement,
 } from '../api/alpaca.types';
 import type { components } from '../api/broker.types';
@@ -388,16 +387,20 @@ export class BrokersService {
     action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'>,
     strategyInstanceId: string | null = null,
   ): Promise<SqliteRecoveryAction> {
-    return (await this.checkSqliteSafeFlatten(clerkId, accountId, action, strategyInstanceId))
+    return (await this.checkSqliteRecoveryActionInFull(clerkId, accountId, action, strategyInstanceId))
       .capability;
   }
 
   /**
    * The same re-check, answered in full: a single-leg safe-flatten plan also
    * carries `reduction_pricing` — how it would go out now, with the live IBKR
-   * bid and ask outside the regular session (#2007).
+   * bid and ask outside the regular session (#2007). A settle's `attestation`
+   * — what the operator says Alpaca shows for a bot's uncertain closing order
+   * (#2854) — is answered with `attestation_findings`: what the Clerk reads
+   * at Alpaca for it now, in its own sentences. Nothing is settled, and a
+   * refusal is an answer: findings that would not settle.
    */
-  checkSqliteSafeFlatten(
+  checkSqliteRecoveryActionInFull(
     clerkId: string,
     accountId: string,
     action: components['schemas']['RecoveryActionCheckRequest'],
@@ -420,33 +423,8 @@ export class BrokersService {
           concurrency_token: action.concurrency_token,
           ...(action.proposed_limit_price === undefined ? {} : { proposed_limit_price: action.proposed_limit_price }),
           ...(action.band_override === undefined ? {} : { band_override: action.band_override }),
+          ...(action.attestation == null ? {} : { attestation: action.attestation }),
         },
-      ),
-    );
-  }
-
-  /**
-   * What the Clerk reads at Alpaca now for what the operator says it shows
-   * for a bot's uncertain closing order (#2854): `attestation_findings`, the
-   * Clerk's own sentences. A read like the checks above: nothing is settled,
-   * and a refusal is an answer -- findings that would not settle.
-   */
-  checkSqliteSettlement(
-    clerkId: string,
-    accountId: string,
-    strategyInstanceId: string,
-    concurrencyToken: string,
-    attestation: SqliteUnknownOrderAttestation,
-  ): Promise<SqliteRecoveryActionCheck> {
-    return firstValueFrom(
-      this.http.post<SqliteRecoveryActionCheck>(
-        operationUrl('custody_bot_recovery_check', {
-          broker: 'alpaca',
-          clerkId,
-          accountId,
-          sid: strategyInstanceId,
-        }),
-        { action_id: 'settle_unknown_exit_order', concurrency_token: concurrencyToken, attestation },
       ),
     );
   }

@@ -13,6 +13,7 @@ import {
   output,
   signal,
   viewChild,
+  viewChildren,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
@@ -193,6 +194,8 @@ export class BotToolbarComponent {
   readonly pending = input(false);
   readonly deployAgain = input.required<AccountWorkspaceLink>();
   readonly manualOrder = input<ManualOrderTicketNavigation | null>(null);
+  /** The action a press of which opens the host's own ticket, which confirms there (#2854); the host says which. */
+  readonly ticketActionId = input<PanelAction['action_id'] | null>(null);
 
   readonly actionRequested = output<PanelActionTrigger>();
   readonly changeEnd = output();
@@ -231,6 +234,7 @@ export class BotToolbarComponent {
   private readonly moreToggle = viewChild.required<ElementRef<HTMLButtonElement>>('moreToggle');
   private readonly moreMenu = viewChild<ElementRef<HTMLElement>>('moreMenu');
   private readonly allActionsPanel = viewChild<ElementRef<HTMLElement>>('allActionsPanel');
+  private readonly actionButtons = viewChildren(PanelActionButtonComponent);
 
   constructor() {
     // On a phone More and All actions open near the window's edge.
@@ -245,13 +249,16 @@ export class BotToolbarComponent {
     () => new Map(this.panel().actions.map((action) => [action.action_id as string, action])),
   );
 
-  protected panelAction(entry: ToolbarActionView): PanelAction | null {
-    return this.actionsById().get(entry.action_id) ?? null;
+  /** Moves the keyboard to the named action's button, e.g. when the host's ticket for it closed
+   * by itself (#2854); to More when the toolbar does not draw that action now. */
+  focusAction(actionId: PanelAction['action_id']): void {
+    const button = this.actionButtons().find((candidate) => candidate.action().action_id === actionId);
+    if (button === undefined) this.moreToggle().nativeElement.focus();
+    else button.focus();
   }
 
-  /** An action that carries the order it settles is confirmed in the host's ticket, not in the button's dialog (#2854). */
-  protected opensTicket(action: PanelAction): boolean {
-    return action.settlement != null;
+  protected panelAction(entry: ToolbarActionView): PanelAction | null {
+    return this.actionsById().get(entry.action_id) ?? null;
   }
 
   protected showLabel(entry: ToolbarActionView): boolean {

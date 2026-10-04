@@ -466,6 +466,29 @@ def test_exit_stuck_cause_roundtrips_and_rejects_malformed_mappings() -> None:
                                      "redrive_count": -1, "first_observed_at_ms": 1})
 
 
+def test_exit_stuck_cause_names_an_attested_absent_order_only_when_that_is_why_it_is_open() -> None:
+    """#2854: an episode re-drives led to keeps its four keys; one an attestation opened names the order.
+
+    The cause is what authorizes a reduction under the episode, so the one
+    extra key is read strictly too: a string that names an order, and no
+    other key beside it.
+    """
+    after_redrives = ExitStuckCause(
+        symbol="SPY", attributed_qty=4.0, redrive_count=3, first_observed_at_ms=1_700_000_000_000
+    )
+    attested = ExitStuckCause(
+        symbol="SPY", attributed_qty=4.0, redrive_count=0, first_observed_at_ms=1_700_000_000_000,
+        attested_absent_order_ref="order-1",
+    )
+    assert set(after_redrives.to_mapping()) == {"symbol", "attributed_qty", "redrive_count", "first_observed_at_ms"}
+    assert ExitStuckCause.from_mapping(attested.to_mapping()) == attested
+    for not_an_order in ("", None, 7):
+        with pytest.raises(ValueError):
+            ExitStuckCause.from_mapping({**after_redrives.to_mapping(), "attested_absent_order_ref": not_an_order})
+    with pytest.raises(ValueError):
+        ExitStuckCause.from_mapping({**attested.to_mapping(), "another_key": "x"})
+
+
 def test_exit_stuck_blocks_new_exposure_and_foreign_symbol_reduction(repo) -> None:
     raise_uncertainty(
         repo,

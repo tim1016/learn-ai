@@ -501,10 +501,21 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
     return UnknownEvidenceDisposition(True, False, False)
 
 
-def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Open one database-unique, versioned R5 uncertainty episode."""
+def fold_uncertainty_raised(
+    conn: sqlite3.Connection, payload: dict[str, Any], *, beside_another: bool = False
+) -> None:
+    """Open one database-unique, versioned R5 uncertainty episode.
+
+    The episode is named for the transition being folded,
+    ``uncertainty:<sequence>``. One transition names one episode so; the
+    second episode of a fold that opens two (``beside_another``, #2854) is
+    named for its reason too, ``uncertainty:<sequence>:<reason code>``.
+    """
     facts = UncertaintyRaisedFacts.from_facts_json(payload["facts_json"])
     scope, subject_id, strategy_instance_id = _uncertainty_custody(conn, payload)
+    uncertainty_id = f"uncertainty:{_transition_sequence(conn)}"
+    if beside_another:
+        uncertainty_id = f"{uncertainty_id}:{facts.reason_code}"
     conn.execute(
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
         "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, headline, "
@@ -512,7 +523,7 @@ def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -
         "evidence_refs_json, facts_schema_version, facts_json) "
         "VALUES (?, ?, ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
         (
-            f"uncertainty:{_transition_sequence(conn)}",
+            uncertainty_id,
             scope,
             facts.severity,
             1 if facts.blocks_new_exposure else 0,
@@ -561,7 +572,11 @@ def fold_uncertainty_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]
 
 
 def open_or_refresh_episode(
-    conn: sqlite3.Connection, payload: dict[str, Any], facts: UncertaintyRaisedFacts
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    *,
+    beside_another: bool = False,
 ) -> None:
     """Open the episode ``facts`` describes inside another transition's own fold, or refresh the open one (#2854).
 
@@ -570,7 +585,9 @@ def open_or_refresh_episode(
     holds the ending. The episode is opened and refreshed exactly as
     ``UNCERTAINTY_RAISED`` and ``UNCERTAINTY_REFRESHED`` do it, with ``facts``
     as its envelope; one opened here takes its id from the transition being
-    folded, as every episode does.
+    folded, as every episode does. A fold that opens two episodes says so
+    for its second (``beside_another``), which is named for its reason as
+    well (:func:`fold_uncertainty_raised`).
     """
     envelope = {
         **payload,
@@ -584,7 +601,7 @@ def open_or_refresh_episode(
         (scope, facts.reason_code, subject_id),
     ).fetchone()
     if active is None:
-        fold_uncertainty_raised(conn, envelope)
+        fold_uncertainty_raised(conn, envelope, beside_another=beside_another)
     else:
         fold_uncertainty_refreshed(conn, envelope)
 

@@ -8,6 +8,12 @@ after the operator asks again, and after the Clerk's ordinary passes alone,
 the order is settled exactly as an uninterrupted settlement settles it.
 Nothing is sent in any of them.
 
+"Alpaca has no such order" is one write: its row ends the EXIT and opens,
+with the notice that the position is still open, the episode under which
+the Clerk sends nothing for it by itself. So a process that dies right after
+that write leaves the position held for the operator, never free for the
+watchdog to sell.
+
 A process that dies releases nothing: the claim it held on the EXIT stands
 until it expires, and every pass before then defers the EXIT. So the passes
 here run until the first one after the claim's expiry.
@@ -36,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_STUCK_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.contract.errors import BrokerUnavailable
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
@@ -52,10 +59,12 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import (
     ABSENT,
+    SIXTY_PASSES,
     _a_stopped_bot_whose_closing_order_alpaca_has_unseen,
     _a_stopped_bot_whose_closing_order_was_lost,
     _AlpacaAccount,
     _attested,
+    _elsewhere,
     _facade,
     _open_episode,
     _presented,
@@ -117,6 +126,8 @@ class _Settled:
     exit_not_flat_is_open: bool
     filled: float
     taken_up: bool
+    # The position is left to the operator: the Clerk sends nothing for it by itself.
+    held_for_the_operator: bool = False
 
 
 type _Scenario = Callable[[ClerkSqliteRepository, _AlpacaAccount], Awaitable[tuple[str, OrderOutcomeAttestation]]]
@@ -167,7 +178,10 @@ async def _alpaca_canceled_it_unfilled(
 SETTLEMENTS = [
     pytest.param(
         "never_arrives", _alpaca_never_had_it,
-        _Settled("failed", held=10.0, exit_not_flat_is_open=True, filled=0.0, taken_up=False),
+        _Settled(
+            "failed", held=10.0, exit_not_flat_is_open=True, filled=0.0, taken_up=False,
+            held_for_the_operator=True,
+        ),
         id="absent",
     ),
     pytest.param(
@@ -202,6 +216,7 @@ def _assert_settled(
     assert repo.position(SID, "SPY") == expected.held
     assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
     assert (_open_episode(repo, EXIT_NOT_FLAT_REASON_CODE) is not None) == expected.exit_not_flat_is_open
+    assert (_open_episode(repo, EXIT_STUCK_REASON_CODE) is not None) == expected.held_for_the_operator
     assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == expected.filled
     assert closing.broker_order_id == (attestation.broker_order_id if expected.taken_up else None)
     assert len(alpaca.sent) == 1, "no settlement, whole or interrupted, ever sends an order"
@@ -248,6 +263,11 @@ async def test_a_settlement_the_process_dies_in_is_finished_by_a_retry_or_the_cl
     Asked again, the Clerk answers with the settlement's own record -- the
     one attestation row there is -- and never with a record of something
     that did not happen. One send, and one credit of a fill, however it ends.
+
+    An order settled as absent leaves its position held for the operator
+    from its one write on. However the process died, fifteen minutes of
+    passes afterwards send nothing, though Alpaca holds the bot's 10 SPY as
+    the Clerk's records say.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=(submit,))  # type: ignore[arg-type]
@@ -276,6 +296,9 @@ async def test_a_settlement_the_process_dies_in_is_finished_by_a_retry_or_the_cl
 
     _assert_settled(repo, alpaca, exit_id, attestation, expected)
     assert len(_attested(repo)) == 1
+    if expected.held_for_the_operator:
+        await _passes(repo, _the_sweep(repo, alpaca), SIXTY_PASSES)
+        _assert_settled(repo, alpaca, exit_id, attestation, expected)
 
 
 async def _dies_once_the_attestation_is_written(
@@ -404,10 +427,10 @@ async def test_an_order_that_settled_by_itself_is_never_reported_as_settled_by_t
     closing = _closing_order(repo)
     facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
     presented = await _presented(current_context)
-    alpaca.holds = 0.0
-    with pytest.raises(RecoveryExecutionError, match="has not recorded that difference"):
+    alpaca.open_orders = [_elsewhere("someone-buys", side="buy")]
+    with pytest.raises(RecoveryExecutionError, match="An order for SPY is working at Alpaca"):
         await _settle(facade, current_context, ABSENT, presented=presented)
-    alpaca.holds = 10.0
+    alpaca.open_orders = []
 
     await _passes(repo, _the_sweep(repo, alpaca), 1)
     assert len(alpaca.sent) == 2, "the Clerk sent the order again by itself"

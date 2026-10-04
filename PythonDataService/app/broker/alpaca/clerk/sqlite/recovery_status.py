@@ -5,7 +5,11 @@ from __future__ import annotations
 import sqlite3
 from typing import Literal
 
-from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS, recovery_with_freshness
+from app.broker.alpaca.clerk.sqlite.exit_recovery import (
+    DEFAULT_RECOVERY_INTERVAL_MS,
+    RECOVERY_STOPPED_AFTER_FAILURES,
+    recovery_with_freshness,
+)
 from app.broker.alpaca.clerk.sqlite.facts import ExitRecoveryEvaluatedFacts
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryStatus
 
@@ -15,13 +19,16 @@ RecoveryStatusKind = Literal["unknown", "stuck", "broker_unreachable", "working"
 def read_recovery_status(
     conn: sqlite3.Connection, *, strategy_instance_id: str, uncertainty_id: str,
     now_ms: int, stopped: bool, working: bool,
+    stopped_because: str = RECOVERY_STOPPED_AFTER_FAILURES,
 ) -> RecoveryStatus:
     # The immutable episode id names its original raise sequence. Refreshes
-    # can change observed_at_ms, but cannot change this starting instant.
+    # can change observed_at_ms, but cannot change this starting instant. An
+    # operator's attestation opens the episode in its own row (#2854).
     prefix, _, sequence = uncertainty_id.partition(":")
     raised = None if prefix != "uncertainty" or not sequence.isdecimal() else conn.execute(
         "SELECT clerk_observed_at_ms FROM custody_transitions WHERE sequence = ? "
-        "AND transition_kind = 'UNCERTAINTY_RAISED' AND strategy_instance_id = ?",
+        "AND transition_kind IN ('UNCERTAINTY_RAISED', 'ORDER_OUTCOME_ATTESTED') "
+        "AND strategy_instance_id = ?",
         (int(sequence), strategy_instance_id),
     ).fetchone()
     since = None if raised is None else raised["clerk_observed_at_ms"]
@@ -39,7 +46,7 @@ def read_recovery_status(
         return RecoveryStatus(kind, reason_code, explanation, last_checked, since, allowed_from_ms)
 
     if stopped:
-        return status("stuck", "EXIT_STUCK", "Automatic recovery stopped after repeated regular-session failures.")
+        return status("stuck", "EXIT_STUCK", stopped_because)
     if working:
         return status("working", "OWN_EXIT_WORKING", "An exit is in progress; the Clerk is waiting for its outcome.")
     unknown = "Recovery status is unknown until the Clerk completes a fresh check."

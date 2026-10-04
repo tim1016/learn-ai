@@ -590,6 +590,7 @@ def _panel_action(
                 body=capability.explanation,
                 consequence=confirmation.explanation,
                 confirm_label=confirmation.confirm_label,
+                required_token=confirmation.required_token,
             )
         ),
         revision=revision,

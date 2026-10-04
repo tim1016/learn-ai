@@ -21,7 +21,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 10px;
+    font-size: var(--fs-sm);
     font-weight: var(--fw-bold);
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -61,7 +61,7 @@
   background: transparent;
   border: none;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semi);
   cursor: pointer;
   padding: 0;
@@ -92,7 +92,7 @@
   border: 1px solid rgba(var(--accent-rgb, 38, 166, 154), 0.3);
   border-radius: var(--radius-pill);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semi);
   cursor: pointer;
   transition:
@@ -117,6 +117,6 @@
 
 .catalog-note {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--text-subtle);
 }

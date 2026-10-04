@@ -1,11 +1,13 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   computed,
   inject,
   input,
   output,
   signal,
+  viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
 
@@ -124,6 +126,13 @@ export class PanelActionButtonComponent {
   protected readonly disabled = computed(
     () => !this.action().enabled || this.pending(),
   );
+
+  private readonly button = viewChild.required<ElementRef<HTMLButtonElement>>('button');
+
+  /** Moves the keyboard to the action's button, e.g. when the ticket it opened closed by itself (#2854). */
+  focus(): void {
+    this.button().nativeElement.focus();
+  }
 
   protected trigger(): void {
     if (this.disabled()) return;

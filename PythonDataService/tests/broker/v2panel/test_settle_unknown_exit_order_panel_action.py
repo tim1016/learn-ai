@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionRead
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.schemas.alpaca_clerk_sqlite import UnknownOrderAttestationRequest
+from app.schemas.alpaca_clerk_sqlite import NOT_AN_ALPACA_ORDER_ID, UnknownOrderAttestationRequest
 from app.schemas.bot_page import ToolbarActionView
 from app.schemas.broker_v2_panel import (
     BotPanelView,
@@ -233,13 +233,13 @@ async def test_a_settlement_the_process_died_after_is_answered_with_its_receipt_
         for action in build_recovery_catalog(await _context_of(repo, settling.SID)())
         if action.action_id == SETTLE
     )
-    alpaca.holds = 0.0
-    with pytest.raises(ActionNotAvailableError, match="has not recorded that difference"):
+    alpaca.open_orders = [settling._elsewhere("someone-buys", side="buy")]
+    with pytest.raises(ActionNotAvailableError, match="An order for SPY is working at Alpaca"):
         await _run_from_the_panel(
             repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
             attestation=absent, idempotency_key="refused",
         )
-    alpaca.holds = 10.0
+    alpaca.open_orders = []
     with pytest.raises(ActionNotAvailableError, match="previously failed"):
         await _run_from_the_panel(
             repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
@@ -436,6 +436,8 @@ def test_the_bot_page_offers_settling_from_its_toolbar_with_the_ticket_it_opens(
     ] == [("absent", "Alpaca has no such order", False), ("exists", "Alpaca shows it", True)]
     assert all(choice["explanation"] for choice in settlement["choices"])
     assert action["confirmation"]["confirm_label"] == "Settle the order"
+    # The word the page asks the operator to type is the Clerk's, never the page's own.
+    assert action["confirmation"]["required_token"] == "SETTLE"
     assert [item["settlement"] for item in wire["actions"] if item["action_id"] != SETTLE] == [None] * (
         len(wire["actions"]) - 1
     )
@@ -579,6 +581,9 @@ async def test_the_quiesce_route_carries_the_attestation_and_acts_as_the_configu
             route, json={**body, "action_id": "reconcile_now", "attestation": exists}
         )
         named = await client.post(route, json={**body, "attestation": exists, "operator_identity": "x"})
+        not_an_order_id = await client.post(
+            route, json={**body, "attestation": {"kind": "exists", "broker_order_id": "learn-ai/spy-bot/v1:close-1"}}
+        )
 
         async def the_key_was_used_for_another_request(*_args: object, **_kwargs: object) -> PanelActionResult:
             raise IdempotencyKeyConflictError("This idempotency key was already used for a different request.")
@@ -588,6 +593,11 @@ async def test_the_quiesce_route_carries_the_attestation_and_acts_as_the_configu
 
     assert settled.status_code == 200, settled.text
     assert (on_another_action.status_code, named.status_code) == (422, 422)
+    # An id the operator typed that is no Alpaca order id: refused in words they read, as the Clerk's check refuses it.
+    assert not_an_order_id.status_code == 422, not_an_order_id.text
+    assert not_an_order_id.json() == {
+        "detail": {"reason": "not_an_alpaca_order_id", "message": NOT_AN_ALPACA_ORDER_ID}
+    }
     assert conflicting.status_code == 409, conflicting.text
     assert conflicting.json()["detail"]["outcome"] == "conflict"
     assert "already used for a different request" in conflicting.json()["detail"]["message"]
