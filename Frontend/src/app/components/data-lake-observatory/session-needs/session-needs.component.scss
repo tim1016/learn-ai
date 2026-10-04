@@ -1,0 +1,110 @@
+:host {
+  display: block;
+}
+
+.needs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--text-primary);
+  }
+
+  &__lead {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+  }
+
+  // Three cards of four columns each on the page's twelve.
+  &__cards {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: var(--space-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+}
+
+.card {
+  grid-column: span 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+
+  &--loud {
+    border-color: var(--warn);
+    box-shadow: inset 0 0 0 1px var(--warn);
+  }
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--text-primary);
+  }
+
+  &__tag {
+    padding: 2px var(--space-2);
+    font-size: var(--fs-xs);
+    background: var(--bull-soft);
+    border: 1px solid var(--bull);
+    border-radius: var(--radius-pill);
+    color: var(--bull);
+  }
+
+  &__file {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    overflow-wrap: anywhere;
+    color: var(--text-secondary);
+  }
+
+  &__text,
+  &__muted,
+  &__missing {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+  }
+
+  &__muted {
+    color: var(--text-subtle);
+  }
+
+  &__missing {
+    font-weight: var(--fw-semi);
+    color: var(--warn);
+  }
+}
+
+@media (max-width: 60rem) {
+  .card {
+    grid-column: 1 / -1;
+  }
+}

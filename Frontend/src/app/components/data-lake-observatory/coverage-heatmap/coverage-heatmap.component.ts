@@ -29,8 +29,9 @@ interface LegendEntry {
  * One cell per session the canonical NYSE calendar returned — weekends and
  * holidays are absent from the endpoint's own day list, so the strip has no
  * gaps to explain and none are invented here. Each cell carries its state as
- * a glyph and in its accessible name, so the four artifact states plus
- * `missing` are distinguishable without colour.
+ * a glyph and in its accessible name, so every state is distinguishable
+ * without colour. Every cell can be selected: a session with nothing on disk
+ * is as much an answer as one with a receipt.
  */
 @Component({
   selector: 'app-coverage-heatmap',
@@ -41,8 +42,8 @@ interface LegendEntry {
 })
 export class CoverageHeatmapComponent {
   readonly board = input.required<CoverageBoard>();
-  /** Artifact currently open in the inspector, so its cell reads as selected. */
-  readonly selectedArtifactId = input<number | null>(null);
+  /** The session open in the inspector, so its cell reads as selected. */
+  readonly selected = input<CoverageCellSelection | null>(null);
 
   readonly cellSelected = output<CoverageCellSelection>();
 
@@ -64,18 +65,23 @@ export class CoverageHeatmapComponent {
   /**
    * The cell's whole story in one accessible name: which symbol, which
    * trading date (date-anchored ET — a viewer-local render drifts a day
-   * west of UTC), which state, and whether there is a receipt to open.
+   * west of UTC) and which state.
    */
   protected cellLabel(row: CoverageRow, cell: CoverageCell): string {
     const date = formatTimestampDisplay(cell.tradingDateMs, { mode: 'date-et' });
-    const status = formatReceiptLabel(cell.status);
-    return cell.artifactId === null
-      ? `${row.symbol}, ${date}, ${status}, no artifact receipt`
-      : `${row.symbol}, ${date}, ${status}, open artifact receipt`;
+    return `${row.symbol}, ${date}, ${formatReceiptLabel(cell.status)}`;
+  }
+
+  protected isSelected(row: CoverageRow, cell: CoverageCell): boolean {
+    const selected = this.selected();
+    return (
+      selected !== null &&
+      selected.symbol === row.symbol &&
+      selected.cell.tradingDateMs === cell.tradingDateMs
+    );
   }
 
   protected select(row: CoverageRow, cell: CoverageCell): void {
-    if (cell.artifactId === null) return;
     this.cellSelected.emit({ symbol: row.symbol, cell });
   }
 }

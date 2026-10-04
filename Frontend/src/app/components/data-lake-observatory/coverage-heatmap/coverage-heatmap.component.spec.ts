@@ -3,8 +3,13 @@ import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
 import { buildCoverageBoard, type CoverageBoard } from '../lib/coverage-board';
-import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake';
-import { CoverageHeatmapComponent } from './coverage-heatmap.component';
+import type {
+  CoverageResponse,
+  CoverageStatus,
+  DataLakeRead,
+  RebuildReason,
+} from '../../../shared/data-lake';
+import { CoverageHeatmapComponent, type CoverageCellSelection } from './coverage-heatmap.component';
 
 /** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */
 function sessionOpenMs(day: number): number {
@@ -13,7 +18,7 @@ function sessionOpenMs(day: number): number {
 
 function coverageRead(
   symbol: string,
-  days: readonly { day: number; status: CoverageStatus; artifactId?: number }[],
+  days: readonly { day: number; status: CoverageStatus; artifactId?: number; reason?: RebuildReason }[],
 ): DataLakeRead<CoverageResponse> {
   return {
     kind: 'ok',
@@ -28,12 +33,13 @@ function coverageRead(
         trading_date_ms: sessionOpenMs(entry.day),
         status: entry.status,
         artifact_id: entry.artifactId ?? null,
+        rebuild_reason: entry.reason ?? null,
       })),
     },
   };
 }
 
-const ALL_FOUR_STATES: CoverageBoard = buildCoverageBoard([
+const EVERY_STATE: CoverageBoard = buildCoverageBoard([
   {
     symbol: 'SPY',
     read: coverageRead('SPY', [
@@ -42,36 +48,29 @@ const ALL_FOUR_STATES: CoverageBoard = buildCoverageBoard([
       { day: 20, status: 'stale', artifactId: 13 },
       { day: 21, status: 'failed', artifactId: 14 },
       { day: 22, status: 'missing' },
+      { day: 26, status: 'needs_rebuild', artifactId: 15, reason: 'adjustment_record_missing' },
     ]),
   },
 ]);
 
-async function renderHeatmap(board: CoverageBoard = ALL_FOUR_STATES) {
+async function renderHeatmap(board: CoverageBoard = EVERY_STATE) {
   return render(CoverageHeatmapComponent, { componentInputs: { board } });
 }
 
 describe('CoverageHeatmapComponent', () => {
   it.each([
-    ['2026-05-18', 'Complete', 'open artifact receipt'],
-    ['2026-05-19', 'Fetching', 'open artifact receipt'],
-    ['2026-05-20', 'Stale', 'open artifact receipt'],
-    ['2026-05-21', 'Failed', 'open artifact receipt'],
-    ['2026-05-22', 'Missing', 'no artifact receipt'],
-  ])('renders %s as %s', async (date, status, receipt) => {
+    ['2026-05-18', 'Complete'],
+    ['2026-05-19', 'Fetching'],
+    ['2026-05-20', 'Stale'],
+    ['2026-05-21', 'Failed'],
+    ['2026-05-22', 'Missing'],
+    ['2026-05-26', 'Needs Rebuild'],
+  ])('names %s as %s, by its ET trading date', async (date, status) => {
+    // The 09:30 ET open is 13:30 UTC; the label is the contract that the
+    // date is resolved in ET, never the viewer's own zone.
     await renderHeatmap();
 
-    expect(screen.getByRole('button', { name: `SPY, ${date}, ${status}, ${receipt}` })).toBeTruthy();
-  });
-
-  it('anchors each cell to its ET trading date, not the viewer local one', async () => {
-    // The 09:30 ET open is 13:30 UTC; rendering it in a US local zone would
-    // still read 2026-05-18, but a UTC-shifted render of a midnight anchor
-    // would drift a day. The label is the contract either way.
-    await renderHeatmap();
-
-    expect(
-      screen.getByRole('button', { name: 'SPY, 2026-05-18, Complete, open artifact receipt' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: `SPY, ${date}, ${status}` })).toBeTruthy();
   });
 
   it('draws one cell per calendar session and no gap for the weekend between', async () => {
@@ -98,27 +97,31 @@ describe('CoverageHeatmapComponent', () => {
     expect(new Set(glyphs).size).toBe(cells.length);
   });
 
-  it('emits the clicked cell so the inspector can open its receipt', async () => {
+  it('emits the clicked cell, with why a run refuses it', async () => {
     const view = await renderHeatmap();
-    let emitted: { symbol: string; cell: { artifactId: number | null } } | null = null;
+    let emitted: CoverageCellSelection | null = null;
     view.fixture.componentInstance.cellSelected.subscribe((selection) => {
       emitted = selection;
     });
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'SPY, 2026-05-18, Complete, open artifact receipt' }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'SPY, 2026-05-26, Needs Rebuild' }));
 
-    expect(emitted).toMatchObject({ symbol: 'SPY', cell: { artifactId: 11 } });
+    expect(emitted).toMatchObject({
+      symbol: 'SPY',
+      cell: { artifactId: 15, status: 'needs_rebuild', rebuildReason: 'adjustment_record_missing' },
+    });
   });
 
-  it('refuses to offer a receipt for a session with no artifact', async () => {
-    await renderHeatmap();
-
-    const missing = screen.getByRole('button', {
-      name: 'SPY, 2026-05-22, Missing, no artifact receipt',
+  it('lets a session with nothing on disk be picked: that is an answer too', async () => {
+    const view = await renderHeatmap();
+    let emitted: CoverageCellSelection | null = null;
+    view.fixture.componentInstance.cellSelected.subscribe((selection) => {
+      emitted = selection;
     });
-    expect(missing.hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'SPY, 2026-05-22, Missing' }));
+
+    expect(emitted).toMatchObject({ symbol: 'SPY', cell: { artifactId: null, status: 'missing' } });
   });
 
   it('passes AXE', async () => {

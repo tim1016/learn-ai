@@ -1,0 +1,56 @@
+@if (selection(); as selected) {
+  <div class="inspector">
+    <div>
+      <h2 class="inspector__title" id="lake-session-heading">
+        <app-timestamp-display [value]="selected.cell.tradingDateMs" mode="date-et" />
+      </h2>
+      <p class="inspector__sub">
+        <app-asset-identity [symbol]="selected.symbol" size="sm" />
+        <span>{{ mode() | receiptLabel }}</span>
+      </p>
+    </div>
+
+    <ul class="checks">
+      @for (check of checks(); track check.label) {
+        <li class="checks__item" [attr.data-tone]="check.tone">
+          <span class="checks__mark" aria-hidden="true">
+            @switch (check.tone) {
+              @case ('ok') { ✓ }
+              @case ('bad') { ✕ }
+              @case ('muted') { – }
+            }
+          </span>
+          <span class="checks__label">{{ check.label }}</span>
+          <span class="checks__detail">{{ check.detail }}</span>
+        </li>
+      }
+    </ul>
+
+    @if (verdict(); as answer) {
+      <div class="verdict" [class.verdict--readable]="answer.readable" role="status">
+        <p class="verdict__title">{{ answer.title }}</p>
+        @if (answer.remedy) {
+          <p class="verdict__remedy">{{ answer.remedy }}</p>
+        }
+      </div>
+    }
+
+    <div class="inspector__actions">
+      @if (rebuildRequest(); as request) {
+        <button type="button" class="inspector__button" [disabled]="busy()" (click)="rebuild.emit(request)">
+          Rebuild {{ request.symbol }}
+        </button>
+      }
+      @if (selected.cell.artifactId !== null) {
+        <button type="button" class="inspector__button" (click)="receiptOpened.emit(selected)">
+          View receipt
+        </button>
+      }
+    </div>
+  </div>
+} @else {
+  <div class="inspector">
+    <h2 class="inspector__title" id="lake-session-heading">Session</h2>
+    <p class="inspector__empty">Pick a session in the grid to see what a run finds for it.</p>
+  </div>
+}

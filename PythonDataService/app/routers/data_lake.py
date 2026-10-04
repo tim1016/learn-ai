@@ -1,9 +1,9 @@
 """HTTP routes for the data lake.
 
 POST /api/data-lake/ensure-data — invokes the in-process ensure_data() function.
-GET /api/data-lake/coverage, /artifacts/{id}, /storage-summary — read-only
-projections of the catalog for the Observatory UI (issue #1835). Thin: no new
-state, no writes.
+GET /api/data-lake/coverage, /artifacts/{id}, /storage-summary, /run-readiness
+— read-only projections of the catalog for the Observatory UI (issue #1835).
+Thin: no new state, no writes.
 
 POST /api/data-lake/backfill — submits a backfill as a job (#1836): reuses the
 established job pattern (app.jobs.runner.run_in_thread + app.jobs.progress.
@@ -28,12 +28,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.data_lake import catalog_client, root_identity
+from app.data_lake import catalog_client, path_policy, root_identity
 from app.data_lake.backfill import (
     BackfillDayProgress,
     BackfillResult,
@@ -45,6 +46,12 @@ from app.data_lake.backfill import (
 from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar_lease_status
 from app.data_lake.ensure_data import ensure_data, provider_for_data_type
 from app.data_lake.polygon_fetcher import polygon_history_floor
+from app.data_lake.run_readiness import (
+    coverage_gaps,
+    current_versions,
+    fold_run_readiness,
+    needs_adjustment_record,
+)
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
@@ -59,6 +66,7 @@ from app.data_lake.types import (
     DataType,
     NonSessionRecord,
     PriceAdjustmentMode,
+    RunReadinessResponse,
     StorageSummaryResponse,
     trading_date_at_ms,
     trading_date_to_calendar_anchor_ms,
@@ -71,6 +79,11 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windo
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-lake", tags=["data-lake"])
+
+
+def _provider_history_floor() -> date:
+    """The oldest trading date the provider serves, as of today in ET."""
+    return polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
 
 
 async def _ensure_catalog_pool() -> None:
@@ -216,14 +229,22 @@ async def get_coverage(
             data_root_id=data_root_id,
         )
     }
+    # The catalog calls a session complete once its price file is committed; a
+    # split-adjusted reader also refuses a file without a valid adjustment
+    # record. One stat and one small read per session, off the event loop.
+    gaps = await asyncio.to_thread(
+        coverage_gaps, list(rows_by_date.values()), path_policy.resolve_lake_root(price_adjustment_mode)
+    )
     days = []
     for window in windows:
         row = rows_by_date.get(window.session_date)
+        gap = gaps.get(window.session_date)
         days.append(
             CoverageDay(
                 trading_date_ms=window.open_ms_utc,
-                status=row.status if row is not None else "missing",
+                status="missing" if row is None else "needs_rebuild" if gap is not None else row.status,
                 artifact_id=row.artifact_id if row is not None else None,
+                rebuild_reason=gap,
             )
         )
     return CoverageResponse(
@@ -302,6 +323,50 @@ async def get_storage_summary(
     return StorageSummaryResponse(market=market, data_root_id=data_root_id, kinds=kinds, symbols=symbols)
 
 
+@router.get("/run-readiness", response_model=RunReadinessResponse, dependencies=[Depends(_ensure_catalog_pool)])
+async def get_run_readiness(
+    *,
+    market: Literal["usa"] = "usa",
+    data_type: DataType = "trade",
+    price_adjustment_mode: PriceAdjustmentMode,
+) -> RunReadinessResponse:
+    """Per symbol: the complete minute sessions the lake holds, and how many a run can read.
+
+    ``price_adjustment_mode`` has no default, for the reason ``/coverage``
+    gives: readiness is a property of one mode's tree.
+
+    Counted from the catalog (``app.data_lake.run_readiness``), so the cost is
+    one query and one snapshot read per symbol however many sessions the lake
+    holds. ``/coverage`` is the per-session view that checks the files.
+    """
+    logger.info(
+        "[STEP 1] /api/data-lake/run-readiness requested: market=%s price_adjustment_mode=%s data_type=%s",
+        market,
+        price_adjustment_mode,
+        data_type,
+    )
+    data_root_id = root_identity.active_root_id()
+    counts = await catalog_client.select_symbol_revision_counts(
+        market, price_adjustment_mode, data_type, _provider_history_floor(), data_root_id=data_root_id
+    )
+    versions = (
+        await asyncio.to_thread(
+            current_versions,
+            path_policy.resolve_lake_root(price_adjustment_mode),
+            sorted({count.symbol for count in counts}),
+        )
+        if needs_adjustment_record(price_adjustment_mode)
+        else None
+    )
+    return RunReadinessResponse(
+        market=market,
+        price_adjustment_mode=price_adjustment_mode,
+        data_type=data_type,
+        data_root_id=data_root_id,
+        symbols=fold_run_readiness(counts, versions),
+    )
+
+
 class BackfillDefaults(BaseModel):
     """The parts of a ``DataRunSpec`` only the data plane knows (#1838).
 
@@ -340,15 +405,12 @@ class BackfillDefaults(BaseModel):
 @router.get("/backfill-defaults", response_model=BackfillDefaults)
 async def get_backfill_defaults(market: Literal["usa"] = "usa") -> BackfillDefaults:
     """Spec constants for a backfill form. Reads no catalog state."""
-    today_et = trading_date_at_ms(int(time.time() * 1000))
     return BackfillDefaults(
         market=market,
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST,
         max_trading_range_days=MAX_TRADING_RANGE_DAYS,
         max_symbol_length=MAX_SYMBOL_LENGTH,
-        provider_history_start_ms=trading_date_to_calendar_anchor_ms(
-            polygon_history_floor(today_et)
-        ),
+        provider_history_start_ms=trading_date_to_calendar_anchor_ms(_provider_history_floor()),
     )
 
 
@@ -519,7 +581,7 @@ async def start_backfill_job(req: BackfillJobRequest) -> dict:
     # (#2241). Only this side holds the credential, so only this side can
     # refuse it — and refusing here covers the operator typing a date into
     # the Observatory panel exactly as it covers the picker's gate.
-    floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
+    floor = _provider_history_floor()
     if spec.start_trading_date < floor:
         raise HTTPException(
             status_code=422,
