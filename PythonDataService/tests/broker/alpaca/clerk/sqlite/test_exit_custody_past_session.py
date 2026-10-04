@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.facts import UnknownOutcomeNotice
+from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -118,6 +119,11 @@ HELD_PAST_SESSION = UnknownOutcomeNotice(explanation=HELD_PAST_SESSION_EXPLANATI
 type _Pass = Callable[[], Awaitable[object]]
 
 
+def _shares(expected: float) -> object:
+    """A share quantity, compared at the ledger's own tolerance for one: absolute, with no relative part."""
+    return pytest.approx(expected, abs=POSITION_QTY_EPSILON, rel=0)
+
+
 def test_the_lost_send_leaves_too_late_for_a_second_one_inside_the_session() -> None:
     """What these tests rest on: the order is sent in the session, and its wait ends after the close."""
     assert CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS + WAIT_MS > CLOSE_MS
@@ -153,7 +159,7 @@ def _is_held(repo: ClerkSqliteRepository, exit_id: str) -> None:
     assert _exit_state(repo, exit_id) == "unknown"
     assert repo.active_exit_for_strategy(SID) is not None
     assert _exit_not_flat(repo) is None, "the position was told as released"
-    assert repo.position(SID, "SPY") == 10
+    assert repo.position(SID, "SPY") == _shares(10)
     told = _the_open_notice(repo)
     assert told is not None
     assert (told.explanation, told.next_step) == (HELD_PAST_SESSION_EXPLANATION, SETTLE_NEXT_STEP)
@@ -312,7 +318,7 @@ async def test_a_scheduled_end_sale_that_was_sent_and_lost_is_not_sent_again_at_
 
     assert repo.active_run(SID) is None and end_schedule.stopped == [(SID, RUN_ID)]
     assert [(sent.leg.side, sent.leg.quantity, sent.at_ms) for sent in alpaca.sent] == [
-        ("sell", 10, CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS)
+        ("sell", _shares(10), CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS)
     ]
     (sale,) = _scheduled_end_sales(repo)
     assert _exit_state(repo, sale) == "unknown"
@@ -349,7 +355,7 @@ async def test_a_scheduled_end_sale_never_sent_still_goes_out_at_the_next_open(
     await _passes_across_the_next_open(repo, sweep)
 
     (sold,) = alpaca.sent
-    assert (sold.leg.side, sold.leg.quantity) == ("sell", 10)
+    assert (sold.leg.side, sold.leg.quantity) == ("sell", _shares(10))
     assert NEXT_OPEN_MS <= sold.at_ms < NEXT_OPEN_MS + SWEEP_INTERVAL_MS
     assert end_sales_waiting_for_open(repo) == []
 
@@ -357,7 +363,7 @@ async def test_a_scheduled_end_sale_never_sent_still_goes_out_at_the_next_open(
     await _passes(repo, sweep, 1)
 
     assert _exit_state(repo, sale) == "succeeded"
-    assert repo.position(SID, "SPY") == 0
+    assert repo.position(SID, "SPY") == _shares(0)
     assert len(alpaca.sent) == 1
 
 
@@ -420,14 +426,14 @@ async def test_an_order_that_shows_filled_the_next_morning_is_credited_once_and_
     await _passes(repo, sweep, 1)
 
     assert _exit_state(repo, exit_id) == "succeeded"
-    assert repo.position(SID, "SPY") == 0
+    assert repo.position(SID, "SPY") == _shares(0)
     assert _the_open_notice(repo) is None
     assert repo.active_exit_for_strategy(SID) is None
 
     await _passes(repo, sweep, 3)
 
-    assert repo.position(SID, "SPY") == 0
-    assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == 10.0
+    assert repo.position(SID, "SPY") == _shares(0)
+    assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == _shares(10)
     assert len(alpaca.sent) == 1
 
 
@@ -477,7 +483,7 @@ async def test_no_such_order_settles_the_held_exit_the_next_morning(
     assert _exit_state(repo, exit_id) == "failed"
     assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
     assert _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE) is not None
-    assert repo.position(SID, "SPY") == 10.0
+    assert repo.position(SID, "SPY") == _shares(10)
     assert repo.active_exit_for_order(entry.order_ref) is None
 
 
@@ -504,13 +510,13 @@ async def test_alpaca_shows_it_settles_the_held_exit_the_next_morning(
     assert result.applied is True
     assert len(alpaca.sent) == 1
     assert _exit_state(repo, exit_id) == "succeeded"
-    assert repo.position(SID, "SPY") == 0.0
+    assert repo.position(SID, "SPY") == _shares(0)
     assert _open_episode(repo, ORDER_OUTCOME_UNKNOWN_REASON_CODE) is None
 
     await _passes(repo, _the_sweep(repo, alpaca), 3)
 
-    assert repo.position(SID, "SPY") == 0.0
-    assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == 10.0
+    assert repo.position(SID, "SPY") == _shares(0)
+    assert repo.effective_fill_totals_for_order(closing.order_ref)[0] == _shares(10)
     assert len(alpaca.sent) == 1
 
 
@@ -673,7 +679,7 @@ async def test_an_order_sent_to_a_simulated_port_still_fails_and_releases_past_i
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"), trade=simulation,
     )
-    assert entered.order_ref is not None and repo.position(SID, "SPY") == 10
+    assert entered.order_ref is not None and repo.position(SID, "SPY") == _shares(10)
     accepted = accept_exit(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
         lifecycle_run_id=RUN_ID, entry_order_ref=entered.order_ref,
@@ -738,7 +744,7 @@ async def test_a_store_rebuilt_from_its_mirror_holds_the_same_order_and_tells_th
         assert rebuilt.custody_transitions() == transitions
         assert _the_open_notice(rebuilt) == told
         assert _exit_state(rebuilt, exit_id) == "unknown"
-        assert rebuilt.position(SID, "SPY") == 10
+        assert rebuilt.position(SID, "SPY") == _shares(10)
         assert rebuilt.unknown_exit_orders(SID) == offered
     finally:
         rebuilt.close()
