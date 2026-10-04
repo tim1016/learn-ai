@@ -317,28 +317,37 @@ ledger holds an attestation that did not take effect. For this one state the
 "never out-of-band" consequence above is narrowed: the operator first looks
 at Alpaca, then acts through the Clerk.
 
-A closing order that executed where no read of orders shows it is caught only
-by Alpaca's position, set against the Clerk's records. So "no such order"
-judges every order in the symbol that the Clerk did not place, sent since the
-closing order was created, by its side. One on the other side that filled
-anything refuses: only a trade on the other side can offset the closing
-order's own and leave the position agreeing with the records after it traded.
-One on the closing order's own side that has ended does not refuse, filled or
-not: it is what an operator leaves who closed the position by hand at Alpaca,
-and what it filled can only carry Alpaca's position further from the records,
-so it hides nothing. An order on either side that ended with nothing filled
-does not refuse. Each order taken is recorded on the attestation. A position
-that differs from the Clerk's records is taken only under an open
-`POSITION_DRIFT` that names the symbol, and the operator then writes the
-missing shares off. The Clerk reads the symbol's orders before the positions
-and once more after them, and refuses when the later read shows an order, a
-state or a filled quantity the earlier did not: no fill is taken that the
-position lacks.
+"No such order" is taken on what the Clerk reads directly. The order's exact
+lookup, by its own client order id, finds nothing. The order Alpaca answered
+its send with, if any, was read, has ended and filled nothing. And nothing is
+working on the symbol: no open order of the account is on it, and no order
+sent in it since the closing order was created is working, could not be read
+in full, or was replaced by an order the Clerk did not read. The symbol's
+orders are read last, after the open orders, so no working order falls
+between the two reads.
 
-After "no such order" is taken under a recorded difference, the watchdog
-sends nothing while the position differs. The sale at a bot's scheduled end
-is given the same check by a separate change (#2854 item 8), and this action
-is offered on no operator surface before that change lands.
+Alpaca's position is not part of that rule. The Clerk reads it, shows it to
+the operator beside its own records and every ended order in the symbol it
+did not place, and records all of it on the attestation. None of it refuses,
+and none of it is proof. In an account other things trade in, a position that
+agrees with the Clerk's records cannot show that the order did not trade:
+shares held outside the records before the order was sent, another bot's fill
+not yet folded, a trade made by hand, or an order on the other side resting
+since before the order was sent can each leave the two equal after it traded.
+
+So after "no such order" the position is the operator's, and the Clerk sends
+no order for it by itself. The write that ends the EXIT under `EXIT_NOT_FLAT`
+also opens `EXIT_STUCK` -- the state the watchdog reaches once its re-drives
+have failed -- with no re-drive tried in between, and the watchdog holds from
+that write on. The operator sells the position from the bot's page, by the
+Flatten with its own check that the account covers the sale, or writes it
+off; attributed-flat proof then resolves both episodes, as it resolves any
+stuck exit. A bot that holds nothing ends its EXIT attributed-flat and opens
+neither.
+
+The sale at a bot's scheduled end does not keep to that hold yet. A separate
+change makes it (#2854 item 8), and this action is offered on no operator
+surface before that change lands.
 
 Known gap: an order Alpaca answered under another client order id cannot be
 taken up yet. "No such order" rests on the Clerk's own read of that order.
