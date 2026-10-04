@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = REPOSITORY_ROOT / "PythonDataService"
@@ -46,6 +47,19 @@ def test_python_pr_suite_targets_two_minutes_and_fails_past_three() -> None:
     assert command[marker_index + 1] == "not slow"
     assert command[-4:] == ["--pr-shard-index", "1", "--pr-shard-count", "4"]
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_frontend_shard_job_records_its_start_before_any_other_step() -> None:
+    # The frontend shard's target and limit bind the whole job (#2873). The
+    # test script counts from this variable and, without it, times the test
+    # step alone and says nothing, so the step must exist, stay first and
+    # keep the name the script reads.
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    first_step = workflow["jobs"]["frontend-test-shard"]["steps"][0]
+    script = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
+
+    assert first_step["run"] == 'echo "CI_JOB_STARTED_AT_MS=$(date +%s%3N)" >> "$GITHUB_ENV"'
+    assert 'const JOB_STARTED_AT_ENV = "CI_JOB_STARTED_AT_MS";' in script.read_text(encoding="utf-8")
 
 
 def test_python_pr_shards_balance_by_measured_duration() -> None:
