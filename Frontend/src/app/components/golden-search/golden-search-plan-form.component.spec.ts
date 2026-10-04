@@ -8,8 +8,8 @@ import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.compone
 import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
-import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, protocol as protocolFixture, studyDetail, unavailableCapability } from './testing/fixtures';
+import type { CreateStudyRequest, DefaultsLayout, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
+import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, protocol as protocolFixture, STUDY_POOL, studyDetail, unavailableCapability } from './testing/fixtures';
 
 /** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
 function fourMonthDefaults(): GoldenSearchDefaults {
@@ -28,7 +28,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 interface FakeService {
-  defaults: ReturnType<typeof vi.fn<(strategyKey: string, symbol: string, months?: DefaultsMonths) => Promise<ReturnType<typeof defaults>>>>;
+  defaults: ReturnType<typeof vi.fn<(strategyKey: string, symbol: string, layout?: DefaultsLayout) => Promise<ReturnType<typeof defaults>>>>;
   preflight: ReturnType<typeof vi.fn<(protocol: ProtocolRequest) => Promise<GoldenSearchPreflight>>>;
   createStudy: ReturnType<typeof vi.fn<(request: CreateStudyRequest) => Promise<CommandOutcome>>>;
   command: ReturnType<typeof vi.fn<(studyId: string, request: StudyCommandRequest) => Promise<CommandOutcome>>>;
@@ -36,7 +36,7 @@ interface FakeService {
 
 function fakeService(): FakeService {
   return {
-    defaults: vi.fn(async (_strategyKey: string, _symbol: string, _months?: DefaultsMonths) => defaults()),
+    defaults: vi.fn(async (_strategyKey: string, _symbol: string, _layout?: DefaultsLayout) => defaults()),
     preflight: vi.fn(async (_protocol: ProtocolRequest) => preflightFixture()),
     createStudy: vi.fn(async (_request: CreateStudyRequest) => ({ study: studyDetail('locked'), jobId: null })),
     command: vi.fn(async (_id: string, _request: StudyCommandRequest) => ({ study: studyDetail('locked', { id: 'study-0002-bbbb', parent_study_id: 'study-0001-aaaa' }), jobId: null })),
@@ -46,7 +46,7 @@ function fakeService(): FakeService {
 async function renderForm(service: FakeService, options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number } = {}) {
   const view = await render(GoldenSearchPlanFormComponent, {
     inputs: { capabilities: options.capabilities ?? [emaCapability(), unavailableCapability()], reviseFrom: options.reviseFrom ?? null, preflightDebounceMs: options.debounceMs ?? 0 },
-    providers: [...fakePickerWorld().providers, { provide: GoldenSearchService, useValue: service }],
+    providers: [...fakePickerWorld(STUDY_POOL).providers, { provide: GoldenSearchService, useValue: service }],
   });
   const locked = vi.fn();
   view.fixture.componentInstance.locked.subscribe(locked);
@@ -58,6 +58,32 @@ async function pickSpy(service: FakeService, view: Awaited<ReturnType<typeof ren
   await waitFor(() => expect(screen.getByRole('table', { name: /knobs, in search order/i })).not.toBeNull());
   await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+}
+
+/** The dates the server lays out inside two years ending on the fake lake's last day, with what it left out. */
+const TWO_YEAR_NOTE =
+  'Development starts on 2024-10-19. The 21 sessions from 2024-09-19 to 2024-10-18 are left out: the months before the final test have to split into 6 months of training and whole tests of 2 months.';
+
+function twoYearDefaults(): GoldenSearchDefaults {
+  return defaults({
+    development_start_ms: etMidnightMs('2024-10-19'),
+    development_end_ms: etMidnightMs('2026-06-19'),
+    final_start_ms: etMidnightMs('2026-06-19'),
+    final_end_ms: etMidnightMs('2026-09-19'),
+    range_note: TWO_YEAR_NOTE,
+  });
+}
+
+/** What the picker's 2Y hands over in the fake world: two years ending on the lake's last day, 2026-09-18. */
+const TWO_YEARS = { range_start_ms: etMidnightMs('2024-09-19'), range_end_ms: etMidnightMs('2026-09-19') };
+
+function quickRange(key: string): HTMLElement {
+  return within(screen.getByRole('group', { name: 'Quick ranges' })).getByText(key, { exact: true });
+}
+
+/** The dates the plan ends up with, as the line under the bar tells them. */
+function planDates(container: Element): string[] {
+  return [...container.querySelectorAll('.spans > span')].map((span) => (span.textContent ?? '').replace(/\s+/g, ' ').trim());
 }
 
 function lockButton(): HTMLButtonElement {
@@ -562,7 +588,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     await pickSpy(service, view);
 
     expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('6');
-    const describing = (sent: object | undefined): string[] => Object.keys(sent ?? {}).filter((key) => ['final_months', 'final_sessions_cut', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key));
+    const describing = (sent: object | undefined): string[] => Object.keys(sent ?? {}).filter((key) => ['final_months', 'final_sessions_cut', 'range_note', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key));
     expect(describing(service.preflight.mock.lastCall?.[0])).toEqual([]);
 
     fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
@@ -589,7 +615,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     fireEvent.input(screen.getByLabelText('Training window (months)'), { target: { value: '12' } });
     await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(3));
 
-    expect(screen.getByText('Laying out the dates for these months…')).not.toBeNull();
+    expect(screen.getByText('Laying out the dates…')).not.toBeNull();
     expect(lockButton().disabled).toBe(true);
     newer.resolve(fourMonthDefaults());
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
@@ -602,44 +628,91 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight).toHaveBeenCalledTimes(2);
   });
 
-  it('takes a typed date when its field is left; a half-typed one stays in the field and the plan keeps its date (#2858)', async () => {
+  it('shows the first and last day of the plan it opened with, and offers only the ranges a study can use (#2886)', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
-    const field = screen.getByLabelText('Development from') as HTMLInputElement;
-    const planned = service.preflight.mock.lastCall?.[0].development_start_ms;
 
-    fireEvent.change(field, { target: { value: '2022-11' } });
+    expect((screen.getByRole('textbox', { name: 'Start date' }) as HTMLInputElement).value).toBe('2024-01-01');
+    expect((screen.getByRole('textbox', { name: 'End date' }) as HTMLInputElement).value).toBe('2026-03-31');
+    expect(within(screen.getByRole('group', { name: 'Quick ranges' })).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['6M', '1Y', '2Y', 'Max']);
+    expect(planDates(view.container)).toEqual(['Development 2024-01-01 to 2025-12-31', 'Final test 2026-01-01 to 2026-03-31']);
+    // No range has been picked, so the server was asked for its own layout.
+    expect(service.defaults.mock.lastCall).toEqual(['ema_crossover_signal', 'SPY']);
+  });
+
+  it('a picked range is laid out by the server inside it, and the page says what the plan left out (#2886)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+
+    fireEvent.click(quickRange('2Y'));
+
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    expect(service.defaults.mock.lastCall).toEqual(['ema_crossover_signal', 'SPY', { final_months: 3, training_months: 6, test_months: 2, ...TWO_YEARS }]);
+    const sent = service.preflight.mock.lastCall?.[0];
+    expect([sent?.development_start_ms, sent?.final_start_ms, sent?.final_end_ms]).toEqual([etMidnightMs('2024-10-19'), etMidnightMs('2026-06-19'), etMidnightMs('2026-09-19')]);
+    expect(screen.getByRole('note').textContent).toBe(TWO_YEAR_NOTE);
+    // The picker keeps the range that was picked; the bar shows what the plan uses of it.
+    expect((screen.getByRole('textbox', { name: 'Start date' }) as HTMLInputElement).value).toBe('2024-09-19');
+    expect(quickRange('2Y').getAttribute('aria-pressed')).toBe('true');
+    expect(planDates(view.container)).toEqual(['Development 2024-10-19 to 2026-06-18', 'Final test 2026-06-19 to 2026-09-18']);
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+  });
+
+  it('a month count changed after a range is picked is laid out inside that range (#2886)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    fireEvent.click(quickRange('2Y'));
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+
+    fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '1' } });
+
+    await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(3));
+    expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 1, ...TWO_YEARS });
+  });
+
+  it('holds the plan on a half-typed day: the range is not laid out, and the footer names the range (#2886)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const start = screen.getByRole('textbox', { name: 'Start date' }) as HTMLInputElement;
+
+    fireEvent.change(start, { target: { value: '2024-09' } });
     await view.fixture.whenStable();
 
-    expect(field.value).toBe('2022-11');
-    expect(field.getAttribute('aria-invalid')).toBe('true');
-    expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(planned);
+    expect(start.value).toBe('2024-09');
+    expect(screen.getByText('Study range: Enter a first and a last day.')).not.toBeNull();
     expect(lockButton().disabled).toBe(true);
+    expect(service.defaults).toHaveBeenCalledTimes(1);
+    expect(service.preflight).toHaveBeenCalledTimes(1);
 
-    fireEvent.change(field, { target: { value: '2022-11-01' } });
+    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    fireEvent.change(start, { target: { value: '2024-09-19' } });
 
-    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(etMidnightMs('2022-11-01')));
-    expect(field.getAttribute('aria-invalid')).toBe('false');
+    await waitFor(() => expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-09-19'), range_end_ms: etMidnightMs('2026-04-01') }));
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
   });
 
-  it("shows the server's refusal of a date under the date it names, where the fold rule can be read (#2858)", async () => {
+  it("shows the server's refusal of a date under the range, and the footer's link takes the trader there (#2886)", async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
-    const message = '45 months do not divide into whole folds of 2 months after 6 months of training; nearest valid end dates (inclusive): 2025-09-30, 2025-11-30';
-    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'FOLDS_INVALID', field: 'development_end_ms', message }] }));
+    const message = 'The slowest setting needs 32 decision bars of history before 2024-01-01, and the lake does not hold them for SPY.';
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'RUN_UP_HISTORY_MISSING', field: 'development_start_ms', message }] }));
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '4' } });
 
-    fireEvent.change(screen.getByLabelText('Development from'), { target: { value: '2022-01-01' } });
+    const range = view.container.querySelector<HTMLElement>('[id="gs-plan-range"]');
+    await waitFor(() => expect(within(range as HTMLElement).getByRole('alert').textContent).toBe(message));
+    fireEvent.click(within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: message }));
 
-    const boundary = screen.getByLabelText('Final test from (development ends the day before)');
-    await waitFor(() => expect(boundary.getAttribute('aria-invalid')).toBe('true'));
-    const note = view.container.querySelector(`[id="${boundary.getAttribute('aria-describedby')}"]`);
-    expect(note?.textContent).toContain(message);
-    expect(screen.getByLabelText('Development from').getAttribute('aria-invalid')).toBe('false');
+    expect(document.activeElement).toBe(range);
   });
 
-  it('a date typed by hand while dates are being laid out wins: the late layout is dropped and the month count cleared', async () => {
+  it('a range picked while dates are being laid out for a month count wins: the late layout is dropped', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
@@ -648,17 +721,30 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     fireEvent.input(screen.getByLabelText('Final test (months)'), { target: { value: '4' } });
     await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(2));
-    fireEvent.change(screen.getByLabelText('Final test from (development ends the day before)'), { target: { value: '2025-10-01' } });
+    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    fireEvent.click(quickRange('2Y'));
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
     pending.resolve(fourMonthDefaults());
     await view.fixture.whenStable();
 
-    expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('');
-    expect(screen.queryByText('Laying out the dates for these months…')).toBeNull();
+    expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 4, training_months: 6, test_months: 2, ...TWO_YEARS });
+    expect(screen.queryByText('Laying out the dates…')).toBeNull();
     expect(service.preflight).toHaveBeenCalledTimes(2);
-    const sent = service.preflight.mock.lastCall?.[0];
-    expect(sent?.final_start_ms).toBe(etMidnightMs('2025-10-01'));
-    expect(sent?.development_end_ms).toBe(etMidnightMs('2025-10-01'));
+    expect(service.preflight.mock.lastCall?.[0].final_start_ms).toBe(etMidnightMs('2026-06-19'));
+  });
+
+  it('a range the server cannot lay out shows its reason and keeps the plan from being locked (#2886)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const message = 'The range is too short: 6 months of training, one test of 2 months and a final test of 3 months need development to start by 2025-10-19, and the range starts on 2026-03-19.';
+    service.defaults.mockRejectedValueOnce(new HttpErrorResponse({ status: 400, error: { detail: { code: 'INTERVALS_INVALID', field: 'range_start_ms', message } } }));
+
+    fireEvent.click(quickRange('6M'));
+
+    expect(await screen.findByText(message)).not.toBeNull();
+    expect(lockButton().disabled).toBe(true);
+    expect(service.preflight).toHaveBeenCalledTimes(1);
   });
 
   it('defaults the server refuses show its reason', async () => {
@@ -679,7 +765,7 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
 
-    expect(await screen.findByText(/the dates could not be laid out for these months/i)).not.toBeNull();
+    expect(await screen.findByText(/the dates could not be laid out/i)).not.toBeNull();
     expect(lockButton().disabled).toBe(true);
     expect(service.preflight).toHaveBeenCalledTimes(1);
   });
@@ -695,6 +781,22 @@ describe('GoldenSearchPlanFormComponent', () => {
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
     expect(service.defaults).not.toHaveBeenCalled();
     expect(service.preflight.mock.lastCall?.[0].training_months).toBe(9);
+  });
+
+  it("a revised plan asks for the final test's length before it lays a picked range out (#2886)", async () => {
+    const service = fakeService();
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+
+    fireEvent.click(quickRange('2Y'));
+
+    expect(await screen.findByText("Final test (months): Enter the final test's length in months; the range is laid out from it.")).not.toBeNull();
+    expect(service.defaults).not.toHaveBeenCalled();
+    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    fireEvent.input(screen.getByLabelText('Final test (months)'), { target: { value: '3' } });
+
+    await waitFor(() => expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, ...TWO_YEARS }));
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(etMidnightMs('2024-10-19')));
   });
 
   it('passes axe with the defaults loaded and a refusal shown', async () => {

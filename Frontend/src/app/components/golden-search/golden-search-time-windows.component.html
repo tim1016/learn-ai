@@ -11,21 +11,17 @@
     <label class="field"><span>Test window (months)</span><input #testing pInputText type="number" min="1" step="1" [id]="numberId('test_months')" [value]="p.test_months" [attr.aria-invalid]="numberInvalid('test_months')" (input)="onNumber('test_months', testing.value)" /></label>
     <label class="field"><span>Final test (months)</span><input #finalMonthsInput pInputText type="number" min="1" step="1" placeholder="as dated" [id]="numberId('final_months')" [value]="finalMonths() ?? ''" [attr.aria-invalid]="numberInvalid('final_months')" (input)="onNumber('final_months', finalMonthsInput.value)" /></label>
   </div>
-  <div class="fields">
-    <div class="field">
-      <label [for]="dateId('development_start')">Development from</label>
-      <app-date-field [inputId]="dateId('development_start')" [value]="dates().development_start" [hostProblem]="problemFor('development_start')" (valueChange)="onDate('development_start', $event)" />
-    </div>
-    <div class="field">
-      <label [for]="dateId('final_start')">Final test from (development ends the day before)</label>
-      <app-date-field [inputId]="dateId('final_start')" [value]="dates().final_start" [hostProblem]="problemFor('final_start')" (valueChange)="onDate('final_start', $event)" />
-    </div>
-    <div class="field">
-      <label [for]="dateId('final_end')">Final test through</label>
-      <app-date-field [inputId]="dateId('final_end')" [value]="dates().final_end" [hostProblem]="problemFor('final_end')" (valueChange)="onDate('final_end', $event)" />
-    </div>
+  <div class="range" [id]="rangeId" tabindex="-1">
+    <span class="range__label">Study range</span>
+    <app-date-range-picker label="Study range" [from]="shown().from" [to]="shown().to" [bounds]="bounds()" [gaps]="gaps()" [ranges]="quickRanges" [sessionsOnly]="false" (changed)="onRange($event)" />
+    @for (refusal of rangeRefusals(); track refusal.key) {
+      <p class="refusal" role="alert">{{ refusal.text }}</p>
+    }
   </div>
-  <p class="hint">Dates are New York dates. A date set here replaces the month count. The final-test dates cannot be extended after a result is seen.</p>
+  <p class="hint">Days are New York dates. The final test is the last months of the range, and development is laid out before it. The final-test dates cannot be extended after a result is seen.</p>
+  @if (rangeNote(); as note) {
+    <p class="cut" role="note">{{ note }}</p>
+  }
   @if (finalSessionsCut(); as cut) {
     <p class="cut" role="note">
       The final test ends with the lake's last session on <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /> — {{ cut }} scheduled {{ cut === 1 ? 'session' : 'sessions' }} short of {{ finalMonths() }} whole months. Backfill the instrument and change a month count to lay out the whole months.
@@ -41,10 +37,9 @@
         </div>
         <div class="bar__final"><i class="pi pi-lock" aria-hidden="true"></i> Final test</div>
       </div>
-      <div class="ticks">
-        <span><app-timestamp-display [value]="p.development_start_ms" mode="date-et" /></span>
-        <span class="ticks__final" [style.left.%]="line.finalAt"><app-timestamp-display [value]="p.final_start_ms" mode="date-et" /></span>
-        <span><app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /></span>
+      <div class="spans">
+        <span>Development <app-timestamp-display [value]="p.development_start_ms" mode="date-et" /> to <app-timestamp-display [value]="p.final_start_ms - 1" mode="date-et" /></span>
+        <span>Final test <app-timestamp-display [value]="p.final_start_ms" mode="date-et" /> to <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /></span>
       </div>
     </div>
   }

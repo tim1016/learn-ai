@@ -46,6 +46,18 @@ describe('GoldenSearchService', () => {
     expect(req.request.params.get('final_months')).toBe('4');
     expect(req.request.params.get('training_months')).toBe('9');
     expect(req.request.params.get('test_months')).toBe('3');
+    expect(req.request.params.has('range_start_ms')).toBe(false);
+    req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
+
+    await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });
+  });
+
+  it('sends a picked range with the month counts, as its two ET midnights', async () => {
+    const defaults = service.defaults('ema_crossover_signal', 'SPY', { final_months: 3, training_months: 6, test_months: 2, range_start_ms: 1726718400000, range_end_ms: 1789790400000 });
+    const req = http.expectOne((r) => r.url === `${BASE}/defaults`);
+    expect(req.request.params.get('range_start_ms')).toBe('1726718400000');
+    expect(req.request.params.get('range_end_ms')).toBe('1789790400000');
+    expect(req.request.params.get('final_months')).toBe('3');
     req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
 
     await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });

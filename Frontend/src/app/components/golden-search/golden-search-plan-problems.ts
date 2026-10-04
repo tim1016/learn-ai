@@ -5,7 +5,7 @@
  * name, so the plan footer can take the trader straight to the field.
  */
 
-import { problemField, type KnobNumberField, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
+import { problemField, type KnobNumberField, type ProtocolNumberField } from './golden-search-plan-draft';
 import type { KnobPlan, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
 export interface PlanProblem {
@@ -32,12 +32,6 @@ export const NUMBER_FIELD_LABELS: Readonly<Record<ProtocolNumberField, string>> 
   budget_cap: 'Run cap',
 };
 
-export const DATE_FIELD_LABELS: Readonly<Record<ProtocolDateField, string>> = {
-  development_start: 'Development from',
-  final_start: 'Final test from',
-  final_end: 'Final test through',
-};
-
 const KNOB_FIELD_LABELS: Readonly<Record<KnobNumberField, string>> = {
   low: 'low end',
   high: 'high end',
@@ -57,9 +51,8 @@ export function numberInputId(field: ProtocolNumberField): string {
   return `gs-plan-${field}`;
 }
 
-export function dateInputId(field: ProtocolDateField): string {
-  return `gs-plan-date-${field}`;
-}
+/** The study range picker: every date the plan carries is laid out from it. */
+export const RANGE_INPUT_ID = 'gs-plan-range';
 
 export const FILL_MODE_INPUT_ID = 'gs-plan-fill-mode';
 export const PAIR_AUDITS_INPUT_ID = 'gs-plan-pair-audits';
@@ -80,10 +73,10 @@ export const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
   'execution.commission_per_order': numberInputId('commission_per_order'),
   'execution.slippage_per_share': numberInputId('slippage_per_share'),
   'execution.fill_mode': FILL_MODE_INPUT_ID,
-  development_start_ms: dateInputId('development_start'),
-  development_end_ms: dateInputId('final_start'),
-  final_start_ms: dateInputId('final_start'),
-  final_end_ms: dateInputId('final_end'),
+  development_start_ms: RANGE_INPUT_ID,
+  development_end_ms: RANGE_INPUT_ID,
+  final_start_ms: RANGE_INPUT_ID,
+  final_end_ms: RANGE_INPUT_ID,
   pair_audits: PAIR_AUDITS_INPUT_ID,
 };
 
@@ -124,8 +117,8 @@ export function unreadableProblems(problems: ReadonlyMap<string, string>, capabi
         return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field) };
       case 'number':
         return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field) };
-      case 'date':
-        return { key, text: `${DATE_FIELD_LABELS[named.field]}: ${message}`, target: dateInputId(named.field) };
+      case 'range':
+        return { key, text: `Study range: ${message}`, target: RANGE_INPUT_ID };
       default:
         return { key, text: message, target: null };
     }

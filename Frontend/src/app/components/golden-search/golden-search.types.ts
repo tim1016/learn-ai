@@ -88,14 +88,18 @@ export type GoldenSearchDefaults = Omit<Schemas['GoldenSearchDefaults'], 'seed' 
 };
 
 /**
- * The month counts `GET /defaults` lays the intervals out from: the final
- * test's length and the fold lengths. The server computes the dates (the
- * calendar authority stays in Python); the Plan form re-asks when one changes.
+ * What `GET /defaults` lays the intervals out from: the final test's length,
+ * the fold lengths and, once one is picked, the study range to lay them out
+ * inside (`[range_start_ms, range_end_ms)`, ET midnights). The server computes
+ * the dates (the calendar authority stays in Python); the Plan form re-asks
+ * when one changes.
  */
-export interface DefaultsMonths {
+export interface DefaultsLayout {
   final_months: number;
   training_months: number;
   test_months: number;
+  range_start_ms?: number;
+  range_end_ms?: number;
 }
 
 export type StageEstimate = Schemas['GoldenSearchStageEstimate'];

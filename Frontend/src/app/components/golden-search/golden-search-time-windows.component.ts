@@ -1,12 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, output, untracked } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
 import { etIsoDate } from '../../shared/date/et-midnight';
-import { DateFieldComponent } from '../../shared/date-picker';
+import { DateRangePickerComponent, type DataGaps, type DateBounds, type QuickRangeKey } from '../../shared/date-picker';
+import { DEFAULT_ADJUSTMENT_MODE, HeldGapsService, TickerCatalogService, heldBoundsFor } from '../../shared/ticker-catalog';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
-import { dateProblemKey, numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
-import { dateInputId, numberInputId, type PlanProblem } from './golden-search-plan-problems';
+import { numberProblemKey, type PlanEdit, type ProtocolNumberField, type StudyRange } from './golden-search-plan-draft';
+import { RANGE_INPUT_ID, numberInputId, type PlanProblem } from './golden-search-plan-problems';
 import type { GoldenSearchPreflight, ProtocolRequest } from './golden-search.types';
 
 interface Span {
@@ -22,22 +23,29 @@ function percentAlong(ms: number, start: number, end: number): number {
 }
 
 /**
- * The plan's time windows (#2696): the fold and final-test lengths in months
- * (the server lays the dates out from them), the three dates themselves with
- * the server's refusal of each under its field (#2858), and a bar showing
- * development, the folds' test windows and the
- * sealed final test as the server laid them out, with the final test's
- * exposure and the warmup every run is primed with.
+ * The plan's time windows (#2696): the fold and final-test lengths in months,
+ * the study range the server lays the dates out inside (#2886), with what it
+ * left out of the range and its refusal of a date under the picker, and a
+ * bar showing development, the folds' test windows and the sealed final test
+ * as the server laid them out, with the final test's exposure and the warmup
+ * every run is primed with.
  */
 @Component({
   selector: 'app-golden-search-time-windows',
-  imports: [InputText, TimestampDisplayComponent, DateFieldComponent],
+  imports: [InputText, TimestampDisplayComponent, DateRangePickerComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-time-windows.component.html',
   styleUrls: ['./golden-search-plan-card.scss', './golden-search-time-windows.component.scss'],
 })
 export class GoldenSearchTimeWindowsComponent {
+  private readonly catalog = inject(TickerCatalogService);
+  private readonly heldGaps = inject(HeldGapsService);
+
   readonly protocol = input.required<ProtocolRequest>();
+  /** The study range picked on the form; undefined until one is, and the picker then shows the plan's own first and last day. */
+  readonly range = input<StudyRange | undefined>(undefined);
+  /** Which sessions of the picked range the plan leaves out, in the server's words; null when it uses them all. */
+  readonly rangeNote = input<string | null | undefined>(undefined);
   /** The final test's length in months; undefined while the dates do not follow a month count. */
   readonly finalMonths = input<number | undefined>(undefined);
   /** Trailing sessions the server left out of the final test because the lake has not reached them; undefined with the month count. */
@@ -45,18 +53,30 @@ export class GoldenSearchTimeWindowsComponent {
   /** The server's answer to the current plan: its folds, exposure and run-up; null until checked. */
   readonly preflight = input<GoldenSearchPreflight | null>(null);
   readonly problems = input<ReadonlyMap<string, string>>(new Map());
-  /** The server's refusals of the plan; the ones that name a date are shown under that date. */
+  /** The server's refusals of the plan; the ones that name a date are shown under the range. */
   readonly refusals = input<readonly PlanProblem[]>([]);
   readonly edit = output<PlanEdit>();
 
   protected readonly numberId = numberInputId;
-  protected readonly dateId = dateInputId;
+  protected readonly rangeId = RANGE_INPUT_ID;
+  /** A study is months long, so the day and week ranges are left out. */
+  protected readonly quickRanges: readonly QuickRangeKey[] = ['6M', '1Y', '2Y', 'Max'];
   protected readonly exposureLabels = EXPOSURE_LABELS;
   protected readonly exposureClaims = EXPOSURE_CLAIMS;
-  protected readonly dates = computed(() => {
+  protected readonly shown = computed<StudyRange>(() => {
     const p = this.protocol();
-    return { development_start: etIsoDate(p.development_start_ms), final_start: etIsoDate(p.final_start_ms), final_end: etIsoDate(p.final_end_ms - 1) };
+    return this.range() ?? { from: etIsoDate(p.development_start_ms), to: etIsoDate(p.final_end_ms - 1) };
   });
+  /** The days a study of this instrument can read: what the default tree holds for it. */
+  protected readonly bounds = computed<DateBounds>(() => {
+    const symbol = this.protocol().symbol;
+    // `viewFor` may install a resource effect, which a reactive context forbids.
+    return heldBoundsFor(untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)), symbol);
+  });
+  /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
+  protected readonly gaps = computed<DataGaps | null>(() => this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.protocol().symbol, this.bounds(), 'minute'));
+  /** The server's refusals of a date, in its own words. */
+  protected readonly rangeRefusals = computed(() => this.refusals().filter((refusal) => refusal.target === RANGE_INPUT_ID));
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */
   protected readonly timeline = computed<{ readonly finalAt: number; readonly folds: readonly Span[] } | null>(() => {
@@ -74,24 +94,11 @@ export class GoldenSearchTimeWindowsComponent {
     return this.problems().has(numberProblemKey(field));
   }
 
-  /**
-   * What is wrong with this date that the field cannot see for itself: the
-   * plan cannot read it (a date left empty), or the server refused it, in its
-   * own words. Null when nothing is.
-   */
-  protected problemFor(field: ProtocolDateField): string | null {
-    const unreadable = this.problems().get(dateProblemKey(field));
-    if (unreadable !== undefined) return unreadable;
-    const target = dateInputId(field);
-    const texts = this.refusals().filter((refusal) => refusal.target === target).map((refusal) => refusal.text);
-    return texts.length === 0 ? null : texts.join(' ');
-  }
-
   protected onNumber(field: ProtocolNumberField, raw: string): void {
     this.edit.emit({ kind: 'number', field, raw });
   }
 
-  protected onDate(field: ProtocolDateField, raw: string): void {
-    this.edit.emit({ kind: 'date', field, raw });
+  protected onRange(range: StudyRange): void {
+    this.edit.emit({ kind: 'range', from: range.from, to: range.to });
   }
 }

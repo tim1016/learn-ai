@@ -8,7 +8,7 @@ import type {
   CandidateDetail,
   CandidateKey,
   CreateStudyRequest,
-  DefaultsMonths,
+  DefaultsLayout,
   EvaluationPage,
   EvaluationQuery,
   GoldenSearchDefaults,
@@ -90,14 +90,10 @@ export class GoldenSearchService {
     return firstValueFrom(this.http.get<StrategyCapability[]>(`${this.base}/capabilities`));
   }
 
-  /** The prefilled plan; with `months`, the server lays the development and final-test dates out for those lengths. */
-  async defaults(strategyKey: string, symbol: string, months?: DefaultsMonths): Promise<GoldenSearchDefaults> {
+  /** The prefilled plan; with `layout`, the server lays the development and final-test dates out for those lengths, inside its range when it has one. */
+  async defaults(strategyKey: string, symbol: string, layout?: DefaultsLayout): Promise<GoldenSearchDefaults> {
     const query: Record<string, string> = { strategy_key: strategyKey, symbol };
-    if (months !== undefined) {
-      query['final_months'] = String(months.final_months);
-      query['training_months'] = String(months.training_months);
-      query['test_months'] = String(months.test_months);
-    }
+    for (const [name, value] of Object.entries(layout ?? {})) query[name] = String(value);
     return firstValueFrom(this.http.get<GoldenSearchDefaults>(`${this.base}/defaults`, { params: new HttpParams({ fromObject: query }) }));
   }
 

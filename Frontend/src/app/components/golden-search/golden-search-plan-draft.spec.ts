@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, byImportance, dateProblemKey, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import { etMidnightMs } from '../../shared/date/et-midnight';
+import { applyPlanEdit, byImportance, draftFromDefaults, draftFromProtocol, draftLayout, knobProblemKey, numberProblemKey, RANGE_PROBLEM_KEY, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
 import importanceOrder from '@repo-contracts/fixtures/golden-search-importance-order-v1.json';
 import { defaults, emaCapability, protocol } from './testing/fixtures';
 
@@ -10,33 +10,38 @@ function draft(): PlanDraft {
 }
 
 describe('applyPlanEdit', () => {
-  it('moves the development end with the final-test start, so the two intervals always share one boundary', () => {
-    const next = applyPlanEdit(draft(), { kind: 'date', field: 'final_start', raw: '2025-11-01' }, emaCapability());
+  it('keeps a picked range beside the plan, whose dates wait for the server to lay them out inside it', () => {
+    const counted: PlanDraft = { ...draft(), finalMonths: 3 };
+    const ranged = applyPlanEdit(counted, { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
 
-    expect(next.protocol.final_start_ms).toBe(etMidnightMs('2025-11-01'));
-    expect(next.protocol.development_end_ms).toBe(next.protocol.final_start_ms);
+    expect(ranged.range).toEqual({ from: '2024-09-19', to: '2026-09-18' });
+    expect(ranged.protocol).toEqual(counted.protocol);
+    // The last day is included, so the range ends at the ET midnight after it.
+    expect(draftLayout(ranged)).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-09-19'), range_end_ms: etMidnightMs('2026-09-19') });
   });
 
-  it('stores the inclusive last final-test day as the next ET midnight (exclusive end)', () => {
-    const next = applyPlanEdit(draft(), { kind: 'date', field: 'final_end', raw: '2026-03-31' }, emaCapability());
+  it('holds the plan on a range with a day the picker cannot use: nothing is laid out and the dates stay', () => {
+    const ranged = applyPlanEdit({ ...draft(), finalMonths: 3 }, { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
+    const unusable = applyPlanEdit(ranged, { kind: 'range', from: '', to: '2026-09-18' }, emaCapability());
 
-    expect(next.protocol.final_end_ms).toBe(etMidnightMs('2026-04-01'));
+    expect(unusable.problems.get(RANGE_PROBLEM_KEY)).toBe('Enter a first and a last day.');
+    expect(unusable.range).toEqual(ranged.range);
+    expect(draftLayout(unusable)).toBeNull();
+    // A usable range clears it.
+    const again = applyPlanEdit(unusable, { kind: 'range', from: '2025-09-19', to: '2026-09-18' }, emaCapability());
+    expect(again.problems.has(RANGE_PROBLEM_KEY)).toBe(false);
+    expect(draftLayout(again)?.range_start_ms).toBe(etMidnightMs('2025-09-19'));
   });
 
-  it('does not move a date on a half-typed year: the keys 1 1 0 1 2 0 2 2 end at 2022-11-01 (#2858)', () => {
-    // A date field reports each keystroke of the year as a whole date.
-    const start = draft();
-    const key = dateProblemKey('development_start');
-    let current = start;
-    for (const raw of ['0002-11-01', '0020-11-01', '0202-11-01']) {
-      current = applyPlanEdit(current, { kind: 'date', field: 'development_start', raw }, emaCapability());
-      expect(current.protocol.development_start_ms).toBe(start.protocol.development_start_ms);
-      expect(current.problems.get(key)).toBe('Enter a four-digit year.');
-    }
-    current = applyPlanEdit(current, { kind: 'date', field: 'development_start', raw: '2022-11-01' }, emaCapability());
+  it("asks a revised plan for its final test's length before a picked range is laid out", () => {
+    // A revised plan's frozen dates carry no month count.
+    const ranged = applyPlanEdit(draft(), { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
 
-    expect(etIsoDate(current.protocol.development_start_ms)).toBe('2022-11-01');
-    expect(current.problems.has(key)).toBe(false);
+    expect(ranged.problems.get(numberProblemKey('final_months'))).toBe("Enter the final test's length in months; the range is laid out from it.");
+    expect(draftLayout(ranged)).toBeNull();
+    const counted = applyPlanEdit(ranged, { kind: 'number', field: 'final_months', raw: '3' }, emaCapability());
+    expect(counted.problems.size).toBe(0);
+    expect(draftLayout(counted)).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-09-19'), range_end_ms: etMidnightMs('2026-09-19') });
   });
 
   it('never reads a blank or unreadable number as zero: the protocol keeps its value and a problem is recorded', () => {
@@ -141,17 +146,9 @@ describe('applyPlanEdit', () => {
     const edited = applyPlanEdit(applyPlanEdit(counted, { kind: 'number', field: 'final_months', raw: '4' }, emaCapability()), { kind: 'number', field: 'test_months', raw: '3' }, emaCapability());
 
     expect(edited.finalMonths).toBe(4);
-    expect(draftMonths(edited)).toEqual({ final_months: 4, training_months: 6, test_months: 3 });
+    expect(draftLayout(edited)).toEqual({ final_months: 4, training_months: 6, test_months: 3 });
     expect(applyPlanEdit(edited, { kind: 'number', field: 'final_months', raw: '2.5' }, emaCapability()).problems.get(numberProblemKey('final_months'))).toBe('Enter a whole number.');
-    expect(draftMonths(applyPlanEdit(edited, { kind: 'number', field: 'training_months', raw: '' }, emaCapability()))).toBeNull();
-  });
-
-  it('a date typed by hand drops the month count instead of letting it contradict the dates', () => {
-    const counted: PlanDraft = { ...draft(), finalMonths: 3 };
-    const dated = applyPlanEdit(counted, { kind: 'date', field: 'final_end', raw: '2026-05-31' }, emaCapability());
-
-    expect(dated.finalMonths).toBeUndefined();
-    expect(draftMonths(dated)).toBeNull();
+    expect(draftLayout(applyPlanEdit(edited, { kind: 'number', field: 'training_months', raw: '' }, emaCapability()))).toBeNull();
   });
 
   it('takes only the dates and fold months from the server and keeps every other edit', () => {
@@ -167,14 +164,27 @@ describe('applyPlanEdit', () => {
     expect(merged.protocol.training_months).toBe(6);
     expect(merged.finalMonths).toBe(4);
     expect(merged.finalSessionsCut).toBe(2);
+    expect(merged.rangeNote).toBeNull();
     expect(Object.keys(merged.protocol)).not.toContain('final_sessions_cut');
   });
 
-  it("a date typed by hand drops the server's cut along with the month count", () => {
-    const laidOut: PlanDraft = { ...draft(), finalMonths: 3, finalSessionsCut: 3 };
-    const dated = applyPlanEdit(laidOut, { kind: 'date', field: 'final_end', raw: '2026-03-31' }, emaCapability());
+  it("takes the server's word for what a picked range leaves out, and drops it when the range changes", () => {
+    const ranged = applyPlanEdit({ ...draft(), finalMonths: 3 }, { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
+    const note = 'Development starts on 2024-10-19. The 21 sessions from 2024-09-19 to 2024-10-18 are left out: the months before the final test have to split into 6 months of training and whole tests of 2 months.';
 
-    expect(dated.finalSessionsCut).toBeUndefined();
+    const laidOut = withServerDates(ranged, defaults({ development_start_ms: etMidnightMs('2024-10-19'), range_note: note }));
+
+    expect(laidOut.rangeNote).toBe(note);
+    expect(laidOut.range).toEqual(ranged.range);
+    expect(Object.keys(laidOut.protocol)).not.toContain('range_note');
+    expect(applyPlanEdit(laidOut, { kind: 'range', from: '2025-09-19', to: '2026-09-18' }, emaCapability()).rangeNote).toBeUndefined();
+  });
+
+  it("a picked range drops the cut the server made for the dates it replaces", () => {
+    const laidOut: PlanDraft = { ...draft(), finalMonths: 3, finalSessionsCut: 3 };
+    const ranged = applyPlanEdit(laidOut, { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
+
+    expect(ranged.finalSessionsCut).toBeUndefined();
   });
 
   it("a new final-month count drops the old count's cut until the server lays out the new dates", () => {
@@ -250,11 +260,11 @@ describe('draftFromDefaults', () => {
     const { draft: fresh, incumbentLabel, incumbentSentence } = draftFromDefaults(defaults({ final_months: 6 }));
 
     expect(fresh.finalMonths).toBe(6);
-    expect(draftMonths(fresh)).toEqual({ final_months: 6, training_months: 6, test_months: 2 });
+    expect(draftLayout(fresh)).toEqual({ final_months: 6, training_months: 6, test_months: 2 });
     expect(incumbentLabel).toBe('Registry validated settings');
     expect(incumbentSentence).toBe('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars');
     expect(fresh.finalSessionsCut).toBe(0);
-    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'final_sessions_cut', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key))).toEqual([]);
+    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'final_sessions_cut', 'range_note', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key))).toEqual([]);
     expect(fresh.protocol).toEqual(protocol());
   });
 });
