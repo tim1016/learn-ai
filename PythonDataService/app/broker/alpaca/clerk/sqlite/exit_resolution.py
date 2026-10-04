@@ -51,6 +51,9 @@ positions, and sends only a sale the account covers (``flatten_cover``).
 Otherwise nothing is sent and the EXIT folds as a broker's refusal does. A
 resumed send that finds its own order among those open orders is neither sent
 again nor refused: custody is retained until the order's exact lookup answers.
+A scheduled-end sale whose bot's ``EXIT_STUCK`` episode is open is not sent
+either (#2854): the position is the operator's, and its EXIT folds as an
+uncovered Flatten's does.
 
 A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
@@ -156,6 +159,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     Capability,
     ReductionIntent,
+    automatic_exit_stopped,
     raise_uncertainty,
     require_capability,
     resolve_exit_not_flat_uncertainty,
@@ -1811,6 +1815,9 @@ async def _submit_reducing_order(
                 repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=uncovered
             )
             return None
+        # A scheduled-end sale of a position that is the operator's (#2854).
+        if _end_sale_left_to_the_operator(repo, effect_operation_id=effect_operation_id, reducing=reducing):
+            return None
         # An EXIT with no decision bar is priced by the port before it is sent:
         # a no-submit world binds the price it fills at, or nothing goes out.
         match _exit_intent(_accepted_facts(repo, effect_operation_id)):
@@ -1973,6 +1980,39 @@ def _fold_flatten_uncovered(
         ),
         next_step=refusal.next_step,
     )
+
+
+def _end_sale_left_to_the_operator(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, reducing: OrderResource
+) -> bool:
+    """End, unsent, a scheduled-end sale of a bot the Clerk has stopped exiting by itself (#2854).
+
+    ``scheduled_end`` accepts no such sale; one accepted before that rule and
+    held for the open is not sent either. Folded as a Flatten the account
+    does not cover is (:func:`_fold_flatten_uncovered`): nothing reached the
+    book, so the EXIT fails releasably through ``EXIT_NOT_FLAT``, no EXIT holds
+    the symbol, and the operator's flatten and write-off stay admissible.
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    is_end_sale = _accepted_facts(repo, effect_operation_id).decision_id.startswith(SCHEDULED_END_DECISION_PREFIX)
+    if not is_end_sale or not automatic_exit_stopped(repo, effect.strategy_instance_id):
+        return False
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    held = repo.position(effect.strategy_instance_id, created.symbol)
+    reason = "The Clerk had stopped exiting this bot's position by itself, so the sale at its scheduled end was not sent."
+    logger.warning("a scheduled-end sale was not sent: the Clerk had stopped exiting its bot by itself", extra={
+        "action": "scheduled_end_sale_not_sent_exit_stuck", "account_id": repo.account_id,
+        "effect_operation_id": effect_operation_id, "order_ref": reducing.order_ref, "attributed_qty": held,
+    })
+    _fold_exit_not_flat(
+        repo, effect_operation_id=effect_operation_id, order_ref=reducing.order_ref, symbol=created.symbol,
+        attributed_qty=held, summary_code="SCHEDULED_END_EXIT_STUCK", reason=reason,
+        headline="A bot's scheduled-end sale was not sent; the position is still open",
+        explanation=f"{reason} The Clerk still attributes {held:g} {created.symbol} to this bot.",
+        next_step="Flatten the position or write it off from the bot's page.",
+    )
+    return True
 
 
 def flatten_send_refusal(repo: ClerkSqliteRepository, effect_operation_id: str) -> LegRefusal | None:

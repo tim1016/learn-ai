@@ -5,8 +5,9 @@ the position is the operator's to sell or write off, and the watchdog holds on
 it. The sale at the bot's owner-set end did not: with the episode open, a due
 SELL end accepted and sent a new sale. It now waits -- the end stays pending,
 and the bell and the bot's page say why -- until the operator's sale or
-write-off leaves the bot flat, and then completes with nothing sold. With no
-such episode the end sells exactly as before.
+write-off leaves the bot flat, and then completes with nothing sold. A sale an
+earlier Clerk accepted all the same, still held for the open, is ended unsent.
+With no such episode the end sells exactly as before.
 
 Real code on a real temp SQLite Clerk, pass after pass at the sweep's cadence.
 Only Alpaca is faked: what the account holds, and each order it is sent. Every
@@ -23,13 +24,15 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import scheduled_end
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.ended_run_close import closes_owed_under, drive_close
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.exit_resolution import SCHEDULED_END_DECISION_PREFIX, resolve_exit
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
+from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -52,7 +55,7 @@ from app.broker.contract.models import (
     OrderType,
     TimeInForce,
 )
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.schemas.bot_end import BotEndView, RecordedEnd
 from app.schemas.broker_v2_panel import LaneAttentionItem
 from app.services.bot_end import BOT_END_LEAD_MS, bot_end_view, default_bot_end
@@ -417,6 +420,95 @@ async def test_a_short_bots_end_waits_too_and_is_told_as_a_buy_back(
     [line] = await _end_lines(repo, monkeypatch)
     assert line.headline == f"{SID} reached its end. {told}"
     assert _end_on_the_bots_page(repo).notice == told
+
+
+# ── a sale accepted before the Clerk held it, waiting for the open ───────────
+
+
+async def _a_sale_accepted_after_the_close_meets_the_open(
+    repo: ClerkSqliteRepository, alpaca: _Alpaca, market: _AlpacaOrders,
+) -> tuple[str, list[_Sent]]:
+    """The records an earlier Clerk left: ``EXIT_STUCK`` open, and the bot's end sale accepted
+    after the close all the same, held for the open. Walks to that open; returns the sale and
+    the orders Alpaca had refused."""
+    refused = await _the_clerk_stops_exiting_the_bot(repo, alpaca, market)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID,
+        operator_reason="service_restart_recovery",
+    )
+    _walk_clock_to(repo, _SESSION.close_ms_utc + 3_600_000)
+    [owed] = closes_owed_under(repo, SID, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+    await drive_close(
+        repo, owed, trade=market, intake=ReentrantAsyncLock(), pricing=UNPRICEABLE_RECOVERY, run=run_inline,
+        regular_session_only=True,
+    )
+    [sale] = _end_sales(repo)
+    assert repo.effect_operation(sale).state not in ("succeeded", "failed", "rejected")
+    assert scheduled_end.end_sales_waiting_for_open(repo) == [scheduled_end.EndSaleWaiting(SID, "SPY", 10.0)]
+    await _passes(repo, alpaca, market, 1)
+    assert _sent(market) == refused
+    _walk_clock_to(repo, session_window_for_date(next_trading_day(_WEDNESDAY)).open_ms_utc)
+    return sale, refused
+
+
+async def test_an_end_sale_already_accepted_is_not_sent_at_the_open_and_leaves_the_position_to_the_operator(
+    repo: ClerkSqliteRepository, schedule: _Schedule,
+) -> None:
+    """At the open the sweep used to send the held sale. It is now ended as a Flatten the account
+    does not cover is: not sent, its EXIT failed and custody released, ``EXIT_NOT_FLAT`` standing.
+    So nothing of the Clerk's holds the symbol, and the operator's write-off is admitted."""
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    sale, refused = await _a_sale_accepted_after_the_close_meets_the_open(repo, alpaca, market)
+
+    await _passes(repo, alpaca, market, TEN_MINUTES_OF_PASSES)
+
+    assert _sent(market) == refused, "the sale held for the open was sent for a position handed to the operator"
+    assert repo.effect_operation(sale).state == "failed"
+    assert repo.active_exit_for_strategy(SID) is None, "the unsent sale still holds the bot's symbol"
+    assert _open_reasons(repo) == {EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE}
+    assert scheduled_end.end_sales_waiting_for_open(repo) == []
+    assert repo.position(SID, "SPY") == 10
+    ended = repo.first_effect_transition(effect_operation_id=sale, transition_kind="EXIT_NOT_FLAT")
+    assert ended is not None and ended["summary_code"] == "SCHEDULED_END_EXIT_STUCK"
+
+    alpaca.holds = 0.0
+    await _passes(repo, alpaca, market, 1)
+    await discharge_attributed_residue(
+        repo, read=alpaca, intake=ReentrantAsyncLock(), strategy_instance_id=SID, symbol="SPY",
+        operator_reason="Sold by hand at Alpaca.",
+    )
+    [after] = await _passes(repo, alpaca, market, 1)
+
+    assert repo.position(SID, "SPY") == 0
+    assert after.verdict == "clean" and _open_reasons(repo) == set()
+    assert _sent(market) == refused and _end_sales(repo) == [sale]
+
+
+async def test_a_store_rebuilt_from_its_mirror_holds_the_same_unsent_end_sale(
+    tmp_path: Path, schedule: _Schedule,
+) -> None:
+    """Ending the unsent sale is hash-chained rows like any EXIT's end: a store replayed from
+    its mirror holds the same rows, the same failed sale and the same position."""
+    original = _a_running_bot(tmp_path)
+    alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
+    sale, _refused = await _a_sale_accepted_after_the_close_meets_the_open(original, alpaca, market)
+    await _passes(original, alpaca, market, 2)
+    assert original.effect_operation(sale).state == "failed"
+    transitions, reasons = original.custody_transitions(), _open_reasons(original)
+    db_path = original.db_path
+    original.close()
+    db_path.rename(db_path.with_suffix(".db.corrupt"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=original.clock,
+    )
+    try:
+        assert rebuilt.custody_transitions() == transitions
+        assert rebuilt.effect_operation(sale).state == "failed"
+        assert (rebuilt.position(SID, "SPY"), _open_reasons(rebuilt)) == (10, reasons)
+        assert rebuilt.active_exit_for_strategy(SID) is None
+    finally:
+        rebuilt.close()
 
 
 # ── with no such episode, the end sells as it always has ─────────────────────
