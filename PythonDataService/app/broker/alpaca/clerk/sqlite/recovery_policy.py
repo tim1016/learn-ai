@@ -245,6 +245,10 @@ def _stop_confirmation(ctx: RecoveryPolicyContext) -> RecoveryConfirmation:
     )
 
 
+#: The settle action's name: its descriptor's label, and what every text that
+#: sends the operator to the action quotes (#2854).
+SETTLE_UNKNOWN_EXIT_ORDER_LABEL = "Settle the uncertain order"
+
 _DESCRIPTORS: tuple[_Descriptor, ...] = (
     _Descriptor(
         action_id="recover_exact_execution_evidence",
@@ -331,7 +335,7 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
     ),
     _Descriptor(
         action_id="settle_unknown_exit_order",
-        label="Settle the uncertain order",
+        label=SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
         explanation=(
             "Say what Alpaca shows for a closing order the Clerk could not confirm. "
             "The Clerk reads Alpaca itself first and sends no order."
@@ -808,7 +812,7 @@ _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN = (
 )
 _SETTLE_BEFORE_FLATTEN = (
     "Settle that order first: look at this account's orders at Alpaca, then use "
-    '"Settle the uncertain order".'
+    f'"{SETTLE_UNKNOWN_EXIT_ORDER_LABEL}".'
 )
 
 
@@ -822,7 +826,9 @@ def settle_unavailable_words(reason: str | None, next_step: str | None) -> str:
     for an order Alpaca answered with one that names no client order id.
     """
     return " ".join(
-        part for part in ('"Settle the uncertain order" cannot be used now:', reason, next_step) if part
+        part
+        for part in (f'"{SETTLE_UNKNOWN_EXIT_ORDER_LABEL}" cannot be used now:', reason, next_step)
+        if part
     )
 
 

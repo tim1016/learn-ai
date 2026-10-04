@@ -26,7 +26,10 @@ from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunActivity
-from app.broker.alpaca.clerk.sqlite.recovery_policy import settle_unavailable_words
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
+    settle_unavailable_words,
+)
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
     BotHealthGroupsView,
@@ -332,7 +335,7 @@ _CUSTODY_ENTRIES: dict[str, _CustodyEntry] = {
         "Cancel open orders", "fix", "danger", "Cancel this bot's open orders at Alpaca.", "This bot has no open orders."
     ),
     "settle_unknown_exit_order": _CustodyEntry(
-        "Settle the uncertain order",
+        SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
         "fix",
         "danger",
         "Say what Alpaca shows for a closing order the Clerk could not confirm.",

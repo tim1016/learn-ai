@@ -1184,6 +1184,7 @@ def _past_its_session(
     return session_end_ms is None or now_ms >= session_end_ms
 
 
+# The settle action's label is spelled out here: ``recovery_policy``, which names it, imports this module.
 SETTLE_THE_ORDER_NEXT_STEP = (
     "Look at this account's orders and position at Alpaca, then settle the order from the "
     'bot\'s page ("Settle the uncertain order"). A bot that is still running is stopped first.'
