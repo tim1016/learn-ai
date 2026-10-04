@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import dollars
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunActivity
+from app.broker.alpaca.clerk.sqlite.recovery_policy import settle_unavailable_words
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
     BotHealthGroupsView,
@@ -424,10 +425,30 @@ def _deploy_again_entry(panel: BotPanelView) -> ToolbarActionView:
     return _entry("deploy_again", "Deploy again", "bot", "available", "Deploy a new bot with these settings.")
 
 
-_SETTLE_BEFORE_CLEAR = (
-    "The Clerk holds this bot's position behind a closing order it could not confirm. "
-    f'Use "{_CUSTODY_ENTRIES["settle_unknown_exit_order"].label}" first.'
+_HELD_BEHIND_AN_UNCONFIRMED_ORDER = (
+    "The Clerk holds this bot's position behind a closing order it could not confirm."
 )
+
+
+def _settle_before_clear(settle: PanelAction) -> str:
+    """Clear's reason while a closing order is unconfirmed: settle it, or why it cannot be settled now (#2854).
+
+    Which of the two is the settle action's own availability, as the recovery
+    catalog presented it. Refused, it gives its reason and next step: for an
+    order Alpaca answered with one that names no client order id, say, there
+    is nothing to use first.
+    """
+    if settle.enabled:
+        return (
+            f'{_HELD_BEHIND_AN_UNCONFIRMED_ORDER} Use "{_CUSTODY_ENTRIES["settle_unknown_exit_order"].label}" first.'
+        )
+    blocker = settle.blockers[0] if settle.blockers else None
+    return " ".join((
+        _HELD_BEHIND_AN_UNCONFIRMED_ORDER,
+        settle_unavailable_words(
+            None if blocker is None else blocker.headline, None if blocker is None else blocker.detail
+        ),
+    ))
 
 
 def _clear_entry(panel: BotPanelView) -> ToolbarActionView:
@@ -442,7 +463,7 @@ def _clear_entry(panel: BotPanelView) -> ToolbarActionView:
     if settle is not None and settle.needed:
         # Clear's own refusal says to sell first, and a sale is refused too
         # while a closing order is unconfirmed (#2854): the way on is to settle it.
-        return _entry("archive", "Clear from Home", "bot", "blocked", _SETTLE_BEFORE_CLEAR)
+        return _entry("archive", "Clear from Home", "bot", "blocked", _settle_before_clear(settle))
     reason = archive.blockers[0].headline if archive.blockers else archive.explanation
     return _entry("archive", "Clear from Home", "bot", "blocked", reason)
 

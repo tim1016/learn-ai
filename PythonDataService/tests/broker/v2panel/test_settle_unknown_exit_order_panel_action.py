@@ -490,6 +490,46 @@ def test_sell_and_clear_are_refused_with_the_way_to_settle_while_a_closing_order
     assert by_id[SETTLE].label == "Settle the uncertain order"
 
 
+async def test_clear_gives_the_settle_actions_own_refusal_for_an_order_that_cannot_be_settled(
+    started_bot,
+) -> None:
+    """Clear said to use "Settle the uncertain order" first, for an order that action cannot settle (#2854).
+
+    Alpaca answered the closing order's send with an order that names no
+    client order id, so the settle action is refused, with its reason. Clear
+    is refused behind the same order, and now says that reason and its next
+    step, taken from the settle action as the page presents it. Sell's next
+    step says the same.
+    """
+    repo, _never_receives, _facade = started_bot
+    alpaca = settling._AlpacaAccount(repo, repo.clock, submits=(settling._AnsweredAs(None),))
+    await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+
+    served, toolbar = _bot_page(repo, running=False)
+
+    by_id = {item.action_id: item for item in toolbar}
+    settle_refused = (
+        "Alpaca answered this order's send with an order that names no client order id, so the "
+        "Clerk has no id to read that order by and cannot tell what it did. The Clerk keeps the "
+        "position held. This action cannot settle the order."
+    )
+    what_then = (
+        "Look at this account's orders at Alpaca for the order it answered with. No action of the "
+        "Clerk settles this order yet."
+    )
+    assert (by_id[SETTLE].availability, by_id[SETTLE].reason) == ("blocked", settle_refused)
+    assert (by_id["archive"].availability, by_id["archive"].reason) == (
+        "blocked",
+        "The Clerk holds this bot's position behind a closing order it could not confirm. "
+        f'"Settle the uncertain order" cannot be used now: {settle_refused} {what_then}',
+    )
+    (sell,) = [action for action in served.actions if action.action_id == "prepare_safe_flatten"]
+    assert sell.enabled is False
+    assert sell.blockers[0].detail == (
+        f'"Settle the uncertain order" cannot be used now: {settle_refused} {what_then}'
+    )
+
+
 async def test_the_run_summary_says_a_closing_order_is_unconfirmed_never_that_a_sale_is_queued(
     started_bot,
 ) -> None:

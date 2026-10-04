@@ -405,7 +405,8 @@ above).
 
 Consequences. A position can now stay held overnight, with no bot managing it,
 until an operator settles its order; Clear and Flatten are refused meanwhile
-and name the settle action. Settled as "no such order", the position is still
+and name the settle action, or give that action's own reason while it cannot
+be used for the order. Settled as "no such order", the position is still
 held for the bot, now as a stuck exit the Clerk sends nothing for: Flatten is
 the operator's again, and Clear waits for the sale or the write-off. The
 stopped bot's budget stays committed, and a new Deploy is a new bot and is not

@@ -812,6 +812,20 @@ _SETTLE_BEFORE_FLATTEN = (
 )
 
 
+def settle_unavailable_words(reason: str | None, next_step: str | None) -> str:
+    """Why the settle action cannot be used for the order it is needed for, and what to do meanwhile (#2854).
+
+    The settle capability's own unavailable reason and next step, under the
+    action's name. Said by whatever would otherwise point the operator at
+    settling -- a refused Flatten, a refused Clear, a notice -- while settling
+    is itself refused: for a running bot, inside the wait after a send, or
+    for an order Alpaca answered with one that names no client order id.
+    """
+    return " ".join(
+        part for part in ('"Settle the uncertain order" cannot be used now:', reason, next_step) if part
+    )
+
+
 def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
     non_finite_positions = _non_finite_positions(ctx)
@@ -832,6 +846,9 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     reason_code: str | None = None
     reason: str | None = None
     account_check: AccountCheckEvidence | None = None
+    # What to do about an unconfirmed closing order, by whether the settle
+    # action is available for it (#2854); ``None`` when that is not the refusal.
+    settle_first: str | None = None
     if non_finite_positions:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = (
@@ -845,11 +862,16 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason = "Cancel and prove every working order terminal before preparing reduction."
     elif relevant_uncertainties:
         reason_code = "EXPOSURE_NOT_PROVEN"
-        reason = (
-            _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN
-            if ctx.unknown_exit_orders
-            else "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
-        )
+        settle = _settle_unknown_exit_order_decision(ctx)
+        if settle.needed:
+            reason = _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN
+            settle_first = (
+                _SETTLE_BEFORE_FLATTEN
+                if settle.available
+                else settle_unavailable_words(settle.reason, settle.next_step)
+            )
+        else:
+            reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
     else:
         checked = _account_evidence(ctx, positions, reconciliation_evidence)
         if isinstance(checked, AccountCheckEvidence):
@@ -930,8 +952,8 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             else (
                 "Cancel verified working orders first."
                 if working_orders
-                else _SETTLE_BEFORE_FLATTEN
-                if reason == _UNCONFIRMED_CLOSING_ORDER_REFUSES_FLATTEN
+                else settle_first
+                if settle_first is not None
                 else "Run Reconcile now and refresh the custody snapshot."
             )
         ),
