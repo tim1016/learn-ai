@@ -1656,6 +1656,10 @@ describe('BotPanelShellComponent', () => {
       expect(document.activeElement?.textContent).toContain('The custody state changed.');
       expect(progress()).toContain('Check the position with Alpaca: Failed The custody state changed.');
       expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      // The sequence stops there: Reconcile is not sent again, and the page is
+      // re-read so the next Flatten runs on what the Clerk shows now (#2874).
+      expect(mockService.runBotAction).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2));
     });
   });
 
@@ -2059,6 +2063,32 @@ describe('BotPanelShellComponent', () => {
     // A rejected action refreshes the panel so a superseded "Ready to stop"
     // state doesn't linger (the 2026-08-04 val-nvda-0804-05 409).
     expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the lane’s own refusal of Reconcile now, sends it once, and re-reads the page (#2874)', async () => {
+    const runBotAction = vi.fn().mockRejectedValue(new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          action_id: 'reconcile_now', outcome: 'conflict', receipt_id: null, recorded_at_ms: 1_753_800_000_000,
+          message: 'Custody changed after this action was presented.', why: 'Refresh, then reconcile again.',
+          reason_code: null,
+        },
+      },
+    }));
+    const { fixture, service } = await renderShell({ runBotAction });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const outcome = screen.getByRole('alert', { name: 'Action outcome' }).textContent ?? '';
+    expect(outcome).toContain('Conflict');
+    expect(outcome).toContain('Custody changed after this action was presented.');
+    expect(outcome).toContain('Refresh, then reconcile again.');
+    expect(runBotAction).toHaveBeenCalledTimes(1);
+    // The re-read is what gives the next click the token the Clerk presents now.
+    expect(service.getLiveSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('renders a cleanup-proven activation failure as Failure, distinct from Unknown', async () => {
