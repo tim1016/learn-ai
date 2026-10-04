@@ -271,6 +271,34 @@ def _end_on_the_bots_page(repo: ClerkSqliteRepository) -> BotEndView:
     return panel_data_source.end_with_waiting_sale(words, repo, SID)
 
 
+_SALE_LEFT_TO_THE_OPERATOR = (
+    "The Clerk stopped exiting this bot's position by itself, so the end's sale of 10 SPY was not sent. "
+    "Sell the position or write it off from the bot's page; the end then completes with no sale."
+)
+
+
+async def _the_end_is_told_as_waiting_for_the_operator(
+    repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bell's line and the bot's page while the long bot's end waits for the operator."""
+    [line] = await _end_lines(repo, monkeypatch)
+    assert (line.condition_id, line.reason_code) == (f"end-sale-waits:{SID}", "SCHEDULED_END_WAITS_FOR_OPERATOR")
+    assert (line.kind, line.severity, line.symbol, line.action.destination) == ("exit", "warning", "SPY", "bot")
+    assert (line.strategy_instance_id, line.headline) == (
+        SID, f"{SID} reached its end. {_SALE_LEFT_TO_THE_OPERATOR}",
+    )
+    page = _end_on_the_bots_page(repo)
+    assert (page.status, page.notice, page.waits_for_operator) == ("ending", _SALE_LEFT_TO_THE_OPERATOR, True)
+    assert page.headline == "End reached Wed Sep 30, 11:30 ET · no order sent", "the headline still says the end sells"
+    assert page.explanation == (
+        "Its end has come and the bot is stopped. "
+        "At its end the Clerk sent no order for the position the bot holds."
+    ), "the page still says the Clerk sells the shares on its next pass"
+    assert page.edit_refusal == "This bot's end has come; it completes once the bot holds no position.", (
+        "the page still says the Clerk is carrying the end out"
+    )
+
+
 # ── the Clerk has stopped exiting the bot by itself ──────────────────────────
 
 
@@ -291,23 +319,7 @@ async def test_the_end_sale_waits_while_the_clerk_has_stopped_exiting_the_bot_by
     assert repo.active_run(SID) is None, "the end still stops the bot"
     assert schedule.carried_out == [] and schedule.ends[SID] == _the_end(), "the end is no longer pending"
     assert repo.position(SID, "SPY") == 10
-    told = (
-        "The Clerk stopped exiting this bot's position by itself, so the end's sale of 10 SPY was not sent. "
-        "Sell the position or write it off from the bot's page; the end then completes with no sale."
-    )
-    [line] = await _end_lines(repo, monkeypatch)
-    assert (line.condition_id, line.reason_code) == (f"end-sale-waits:{SID}", "SCHEDULED_END_WAITS_FOR_OPERATOR")
-    assert (line.kind, line.severity, line.symbol, line.action.destination) == ("exit", "warning", "SPY", "bot")
-    assert (line.strategy_instance_id, line.headline) == (SID, f"{SID} reached its end. {told}")
-    page = _end_on_the_bots_page(repo)
-    assert (page.status, page.notice, page.waits_for_operator) == ("ending", told, True)
-    assert page.explanation == (
-        "Its end has come and the bot is stopped. "
-        "At its end the Clerk sent no order for the position the bot holds."
-    ), "the page still says the Clerk sells the shares on its next pass"
-    assert page.edit_refusal == "This bot's end has come; it completes once the bot holds no position.", (
-        "the page still says the Clerk is carrying the end out"
-    )
+    await _the_end_is_told_as_waiting_for_the_operator(repo, monkeypatch)
     waited = [row for row in repo.custody_transitions() if row["transition_kind"] == "EXIT_MARKET_HOLD"]
     assert waited == [], "the wait is read from the records, never written pass after pass"
 
@@ -344,7 +356,9 @@ async def test_the_operators_sale_completes_the_end_with_no_sale_of_its_own(
     tmp_path: Path, schedule: _Schedule, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The operator flattens the stuck position from the bot's page, through the Clerk's own
-    facade. That sale leaves the bot flat, and its end is carried out with no sale of its own."""
+    facade. While that sale works the end still waits for the operator: the bell and the page
+    used to drop the wait and say the Clerk sells the shares on its next pass. The sale leaves
+    the bot flat, and its end is carried out with no sale of its own."""
     repo = _a_running_bot(tmp_path, exit_terms=DEPLOY_EXIT_TERMS)
     try:
         alpaca, market = _Alpaca(holds=10.0), _AlpacaOrders()
@@ -360,6 +374,8 @@ async def test_the_operators_sale_completes_the_end_with_no_sale_of_its_own(
         assert flatten.applied is True and _sent(market) == [*refused, _THE_SALE]
         await _passes(repo, alpaca, market, 1)
         assert schedule.carried_out == [] and _end_sales(repo) == [], "the end waits for the operator's sale to finish"
+        assert repo.active_exit_for_strategy(SID) is not None, "the operator's sale is no longer working"
+        await _the_end_is_told_as_waiting_for_the_operator(repo, monkeypatch)
         [operators_sale] = market.sent
         await market.fill(repo, operators_sale)
         alpaca.holds = 0.0

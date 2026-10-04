@@ -282,13 +282,17 @@ def _sales_owed(
     same minute cancels it (Stop keeps the shares), and an edit replaces it.
     Nothing either while the Clerk has stopped exiting the bot by itself
     (#2854): those sales are the operator's, and ``left_to_operator`` asks
-    for exactly them instead.
+    for exactly them instead -- every holding the end's own sale has not
+    taken, the operator's Flatten working on it or not.
     """
     sid = end.strategy_instance_id
     if repo.active_run(sid) is not None or end not in schedule.pending_ends([sid]):
         return []
     if automatic_exit_stopped(repo, sid) != left_to_operator:
         return []
+    if left_to_operator:
+        holdings = bot_holdings(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
+        return [holding.close for holding in holdings if holding.state != "closing"]
     return closes_owed_under(repo, sid, decision_prefix=SCHEDULED_END_DECISION_PREFIX)
 
 
