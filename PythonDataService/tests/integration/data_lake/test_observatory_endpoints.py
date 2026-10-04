@@ -13,8 +13,10 @@ database — the doubles are pinned to the real functions' keyword signatures
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 from datetime import date, datetime, timedelta
+from pathlib import PurePosixPath
 from urllib.parse import quote
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -25,8 +27,10 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
-from app.data_lake import catalog_client
-from app.data_lake.catalog_client import ArtifactCoverageRow
+from app.data_lake import catalog_client, path_policy
+from app.data_lake.adjustment_versions import adjustment_companion, current_snapshot_path
+from app.data_lake.catalog_client import ArtifactCoverageRow, SymbolRevisionCount
+from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
     MAX_TRADING_RANGE_DAYS,
@@ -455,8 +459,8 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
         data_root_id: UUID | None = None,
     ) -> list[ArtifactCoverageRow]:
         return [
-            ArtifactCoverageRow(trading_date=date(2024, 5, 20), status="complete", artifact_id=101),
-            ArtifactCoverageRow(trading_date=date(2024, 5, 22), status="failed", artifact_id=102),
+            ArtifactCoverageRow(date(2024, 5, 20), "complete", 101, "equity/usa/minute/spy/20240520_trade.zip", "b" * 64),
+            ArtifactCoverageRow(date(2024, 5, 22), "failed", 102, "equity/usa/minute/spy/20240522_trade.zip", None),
         ]
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _mixed_coverage)
@@ -479,6 +483,119 @@ async def test_coverage_reflects_catalog_status_per_day(monkeypatch: pytest.Monk
     assert failed_day["artifact_id"] == 102
     assert still_missing_day["status"] == "missing"
     assert still_missing_day["artifact_id"] is None
+
+
+def _write_lake_file(root, relative: str, payload: bytes) -> None:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+
+
+async def test_coverage_reports_a_complete_session_a_run_cannot_read_as_needs_rebuild(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    """A split-adjusted file without a valid adjustment record is on disk and unreadable (GLD, 2026-10-04).
+
+    The catalog calls both sessions complete. Only the one whose record binds
+    the symbol's current version is; the other is what a backfill rebuilds.
+    """
+    root = path_policy.resolve_lake_root("polygon_split_adjusted")
+    snapshot = b"gld corporate actions"
+    _write_lake_file(root, str(current_snapshot_path("GLD")), snapshot)
+    readable = "equity/usa/minute/gld/20241030_trade.zip"
+    no_record = "equity/usa/minute/gld/20241031_trade.zip"
+    _write_lake_file(root, readable, b"wednesday")
+    _write_lake_file(root, no_record, b"thursday")
+    record_path, record = adjustment_companion(
+        PurePosixPath(readable), b"wednesday", hashlib.sha256(snapshot).hexdigest()
+    )
+    _write_lake_file(root, str(record_path), record)
+
+    async def _complete_rows(
+        market: str,
+        symbol: str,
+        data_type: str,
+        provider: str,
+        price_adjustment_mode: str,
+        start_trading_date: date,
+        end_trading_date: date,
+        data_root_id: UUID | None = None,
+    ) -> list[ArtifactCoverageRow]:
+        return [
+            ArtifactCoverageRow(date(2024, 10, 30), "complete", 7, readable, hashlib.sha256(b"wednesday").hexdigest()),
+            ArtifactCoverageRow(date(2024, 10, 31), "complete", 8, no_record, hashlib.sha256(b"thursday").hexdigest()),
+        ]
+
+    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _complete_rows)
+    app = make_data_lake_app(include_data_lake=True)
+    window = _window(date(2024, 10, 30), date(2024, 10, 31))
+
+    status_code, body = await _get(
+        app, f"/api/data-lake/coverage?symbol=GLD&price_adjustment_mode=polygon_split_adjusted&{window}"
+    )
+
+    assert status_code == 200
+    assert [(day["status"], day["rebuild_reason"], day["artifact_id"]) for day in body["days"]] == [
+        ("complete", None, 7),
+        ("needs_rebuild", "adjustment_record_missing", 8),
+    ]
+
+    # Raw prices carry no adjustment record, so the same rows read as the catalog states them.
+    status_code, body = await _get(app, f"/api/data-lake/coverage?symbol=GLD&price_adjustment_mode=raw&{window}")
+    assert status_code == 200
+    assert [(day["status"], day["rebuild_reason"]) for day in body["days"]] == [("complete", None), ("complete", None)]
+
+
+async def test_run_readiness_counts_the_sessions_a_run_can_read_per_symbol(
+    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+):
+    root = path_policy.resolve_lake_root("polygon_split_adjusted")
+    snapshot = b"spy corporate actions"
+    _write_lake_file(root, str(current_snapshot_path("SPY")), snapshot)
+    current = hashlib.sha256(snapshot).hexdigest()
+    seen: dict[str, object] = {}
+
+    async def _counts(
+        market: str,
+        price_adjustment_mode: str,
+        data_type: str,
+        rebuild_floor: date,
+        data_root_id: UUID | None = None,
+    ) -> list[SymbolRevisionCount]:
+        seen.update(mode=price_adjustment_mode, data_type=data_type, floor=rebuild_floor)
+        return [
+            SymbolRevisionCount("GLD", None, False, 532, date(2024, 8, 6), date(2026, 9, 18)),
+            SymbolRevisionCount("SPY", current, False, 1252, date(2021, 10, 7), date(2026, 9, 18)),
+        ]
+
+    monkeypatch.setattr(catalog_client, "select_symbol_revision_counts", _counts)
+    app = make_data_lake_app(include_data_lake=True)
+
+    status_code, body = await _get(app, "/api/data-lake/run-readiness?price_adjustment_mode=polygon_split_adjusted")
+
+    assert status_code == 200
+    today_et = trading_date_at_ms(int(datetime.now(_ET).timestamp() * 1000))
+    assert seen == {"mode": "polygon_split_adjusted", "data_type": "trade", "floor": polygon_history_floor(today_et)}
+    gld, spy = body["symbols"]
+    # GLD has no adjusted capture yet: every session is on disk and none is readable.
+    assert (gld["symbol"], gld["session_count"], gld["run_ready_count"]) == ("GLD", 532, 0)
+    assert gld["rebuild_first_trading_date_ms"] == session_open_ms_utc(date(2024, 8, 6))
+    assert gld["rebuild_last_trading_date_ms"] == session_open_ms_utc(date(2026, 9, 18))
+    assert (spy["symbol"], spy["session_count"], spy["run_ready_count"]) == ("SPY", 1252, 1252)
+    assert spy["rebuild_first_trading_date_ms"] is None
+
+    # A raw run needs no adjustment record: every complete session is readable.
+    status_code, body = await _get(app, "/api/data-lake/run-readiness?price_adjustment_mode=raw&data_type=quote")
+    assert status_code == 200
+    assert seen["data_type"] == "quote"
+    assert [row["run_ready_count"] for row in body["symbols"]] == [532, 1252]
+
+
+async def test_run_readiness_422_when_price_adjustment_mode_omitted(make_data_lake_app):
+    """Readiness is a property of one mode's tree; an unqualified answer would be about neither."""
+    app = make_data_lake_app(include_data_lake=True)
+    status_code, _ = await _get(app, "/api/data-lake/run-readiness")
+    assert status_code == 422
 
 
 @pytest.mark.parametrize(

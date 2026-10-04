@@ -75,6 +75,12 @@ DataType = Literal["trade", "quote"]
 # synthesizes it for a calendar session with no matching catalog row.
 ArtifactStatus = Literal["fetching", "complete", "stale", "failed"]
 
+#: What a reader refuses about a split-adjusted file the catalog calls complete.
+#: ``adjustment_record_rejected`` is a record that exists and fails
+#: verification: written against an older corporate-action version, bound to
+#: other bytes, or malformed.
+AdjustedFileGap = Literal["price_file_missing", "adjustment_record_missing", "adjustment_record_rejected"]
+
 
 def polygon_mode_for(adjusted: bool) -> Literal["raw", "polygon_split_adjusted"]:
     """The lake adjustment mode a Polygon run's ``adjusted`` flag selects.
@@ -437,11 +443,17 @@ class CoverageDay(BaseModel):
     no matching catalog row report ``status="missing"``; this is never
     emitted for a non-session date, since the router only iterates the
     canonical calendar's sessions in the first place.
+
+    ``status="needs_rebuild"`` is synthesized the same way: a complete row
+    whose split-adjusted file a run would refuse (``app.data_lake.run_readiness``).
     """
 
     trading_date_ms: int
-    status: ArtifactStatus | Literal["missing"]
+    status: ArtifactStatus | Literal["missing", "needs_rebuild"]
     artifact_id: int | None = None
+    #: Set only with ``status="needs_rebuild"``: the catalog row is complete,
+    #: a run cannot read the session, and this names the evidence it refuses.
+    rebuild_reason: AdjustedFileGap | None = None
 
 
 class CoverageResponse(BaseModel):
@@ -517,3 +529,31 @@ class StorageSummaryResponse(BaseModel):
     data_root_id: UUID = Field(default_factory=active_root_id)
     kinds: list[StorageKindTotal] = []
     symbols: list[SymbolCoverageSpan] = []
+
+
+class SymbolRunReadiness(BaseModel):
+    """One symbol's complete minute sessions under one adjustment mode, and how many a run can read.
+
+    Every ``*_trading_date_ms`` is the session's 09:30 ET open.
+    ``rebuild_*`` bound the sessions a backfill can rebuild: unreadable, and
+    not older than the provider's history. Both are ``None`` when there are
+    none. ``unrebuildable_count`` is the unreadable sessions older than that
+    history, which no backfill can fetch again.
+    """
+
+    symbol: str
+    first_trading_date_ms: int
+    last_trading_date_ms: int
+    session_count: int
+    run_ready_count: int
+    unrebuildable_count: int
+    rebuild_first_trading_date_ms: int | None = None
+    rebuild_last_trading_date_ms: int | None = None
+
+
+class RunReadinessResponse(BaseModel):
+    market: str
+    price_adjustment_mode: str
+    data_type: str
+    data_root_id: UUID = Field(default_factory=active_root_id)
+    symbols: list[SymbolRunReadiness] = []
