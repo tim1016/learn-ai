@@ -265,19 +265,16 @@ and the end accepts no sale for it either. The end still stops the run and
 stays pending, and the bell and the bot page's End card say so until the bot
 is flat, while the operator's own flatten is working included. Once the
 operator's flatten or write-off leaves the bot flat, the end is recorded
-carried out with nothing sold. A sale accepted before this rule is not sent.
-One that has sent nothing ends on the first pass that drives it, held for the
-open or not, and whatever the account then holds. One already sent, its answer
-lost, is held as any unconfirmed order is -- through its absence wait and,
-outside the regular session, for the open -- and ends on the pass that would
-send it again, with no second send. Either way its EXIT then fails
-through `EXIT_NOT_FLAT`, as a Flatten the account does not cover does: from
-then no EXIT holds the symbol, and the operator's flatten and write-off are
-admissible. An accepted sale never completes the end while the episode is
-open: the end stays pending while that sale's outcome is unknown, and waits
-for the operator once it has ended. With no such episode a sale that ended
-failed still completes the end as before, and the watchdog sends it again. A
-`sim:` authority is unchanged.
+carried out with nothing sold. A sale of the end's own that ended failed does
+not complete an end still pending while the episode is open: its send was
+lost and an operator settled it as "no such order", which ends it as not sent
+and opens the episode in one write. That holding is the operator's like any
+other, and no second end sale is accepted for it. An end sale accepted before
+the episode opened and still in progress is sent as accepted; a store this
+code wrote holds none, since the episode never opens while an EXIT of the bot
+is in progress. With no such episode a sale that ended failed still completes
+the end as before, and the watchdog sends it again. A `sim:` authority is
+unchanged.
 
 Shadow cancellation records `untouched` when eligible later bars existed and
 `no_evidence` when they did not. Twin reconciliation maps the latter on a reducing

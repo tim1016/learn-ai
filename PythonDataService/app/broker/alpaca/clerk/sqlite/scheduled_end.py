@@ -47,9 +47,12 @@ attention bell lists it (:func:`end_sales_waiting_for_open`) until it is sent.
 No sale is accepted while the Clerk has stopped exiting the bot's position by
 itself (``EXIT_STUCK``, #2854): the end stays pending, the bell and the bot's
 page say why (:func:`end_sales_waiting_for_operator`), and once the bot is
-flat the end is recorded carried out with nothing sold. A sale accepted
-before then does not complete the end either: once it has ended failed, its
-holding is left to the operator with the rest.
+flat the end is recorded carried out with nothing sold. A sale of the end's
+own that ended failed does not complete an end still pending either: its send
+was lost and an operator settled it as not sent, which opens that episode
+(``unknown_order_attestation``), and its holding is left to the operator with
+the rest. A sale accepted before the episode opened and still in progress is
+sent as accepted; a store this code wrote holds none.
 """
 
 from __future__ import annotations
