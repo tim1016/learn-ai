@@ -142,7 +142,8 @@ async function renderObservatory(
   defaults: DataLakeRead<BackfillDefaults> = { kind: 'ok', value: DEFAULTS },
 ) {
   const lake = {
-    runReadiness: vi.fn().mockResolvedValue(readiness(symbols)),
+    // A fresh answer per read, as the wire gives: nothing downstream may lean on object identity.
+    runReadiness: vi.fn(async () => readiness(symbols)),
     storageSummary: vi.fn().mockResolvedValue({ kind: 'ok', value: EMPTY_STORAGE }),
     backfillDefaults: vi.fn().mockResolvedValue(defaults),
     coverage: vi.fn().mockResolvedValue(GLD_COVERAGE),
@@ -177,9 +178,10 @@ async function renderObservatory(
     ],
   });
   await screen.findByRole('button', { name: 'Show GLD sessions' });
+  // Delivered as the stream delivers it, with no change detection forced
+  // in between: what follows a frame must not depend on a render landing first.
   const endJob = (jobId: string, type: 'job.completed' | 'job.failed'): void => {
     handlers.get(jobId)?.({ type, code: 'io_error', message: 'disk full' });
-    view.detectChanges();
   };
   return { view, lake, startJob, endJob };
 }
@@ -223,7 +225,7 @@ describe('DataLakeObservatoryComponent', () => {
   });
 
   it('rebuilds every symbol over its own window, one after another', async () => {
-    const { startJob, endJob } = await renderObservatory([GLD, AMZN]);
+    const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
     await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
@@ -240,6 +242,8 @@ describe('DataLakeObservatoryComponent', () => {
 
     endJob('job-1', 'job.completed');
     await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(2));
+    // The table and banner follow each finished symbol, not only the last.
+    await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenCalledTimes(2));
     expect(specOf(startJob, 1)).toMatchObject({
       symbols: ['GLD'],
       start_trading_date_ms: Date.UTC(2026, 4, 18, 12),
@@ -318,13 +322,21 @@ describe('DataLakeObservatoryComponent', () => {
     const { lake, startJob, endJob } = await renderObservatory();
     fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
     await screen.findByText("A run can't read this session");
+    // Every later coverage read stays pending, so a grid it blanked would stay blank.
+    lake.coverage.mockImplementation(() => new Promise<never>(() => undefined));
+    // The readiness re-read changes SPY, so the test can see it land.
+    lake.runReadiness.mockImplementation(async () =>
+      readiness([GLD, { ...SPY, session_count: 3, run_ready_count: 3 }]),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild GLD only' }));
     await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
     endJob('job-1', 'job.completed');
 
-    await vi.waitFor(() => expect(lake.coverage).toHaveBeenCalledTimes(2));
-    expect(screen.queryByText('Walking the calendar…')).toBeNull();
+    const spy = screen.getByRole('button', { name: 'Show SPY sessions' }).closest('tr') as HTMLElement;
+    await vi.waitFor(() => expect(within(spy).getAllByText('3')).toHaveLength(2));
+    expect(lake.coverage).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' })).toBeTruthy();
     expect(screen.getByText("A run can't read this session")).toBeTruthy();
   });
 

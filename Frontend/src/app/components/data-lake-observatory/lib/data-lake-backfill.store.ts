@@ -122,6 +122,12 @@ export class DataLakeBackfillStore {
       const run = await this.runner.start(spec, {
         onDomainEvent: (event) => this.ingestEvent(event),
       });
+      // The panel went away while the submission was in flight. The job runs
+      // on; nothing here will watch it, and `onDestroy` has already passed.
+      if (this.destroyRef.destroyed) {
+        run.detach();
+        return;
+      }
       this.openStream(run);
     } catch (error) {
       if (!(error instanceof BackfillSubmissionError)) throw error;
@@ -138,11 +144,15 @@ export class DataLakeBackfillStore {
     this.jobIdState.set(this.runState()?.jobId ?? null);
   }
 
-  /** Start a run and resolve once it ends; a refused submission ends it as `failed`. */
+  /**
+   * Start a run and resolve once it ends. A refused submission ends it as
+   * `failed`; a store destroyed before the job was accepted, as `detached`.
+   */
   async run(spec: DataRunSpec): Promise<BackfillRunEnd> {
     await this.start(spec);
     const run = this.runState();
-    return run === null ? 'failed' : (await run.terminal).kind;
+    if (run !== null) return (await run.terminal).kind;
+    return this.destroyRef.destroyed ? 'detached' : 'failed';
   }
 
   /**

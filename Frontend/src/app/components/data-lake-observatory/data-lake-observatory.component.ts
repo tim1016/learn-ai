@@ -288,7 +288,12 @@ export class DataLakeObservatoryComponent {
           position: index + 1,
           total: requests.length,
         });
-        if ((await panel.rebuild(request)) !== 'completed') return;
+        const end = await panel.rebuild(request);
+        if (end === null) return;
+        // The panel signals a finished run only once it goes idle, and between
+        // two symbols of a list it never does.
+        this.onRunFinished();
+        if (end !== 'completed') return;
       }
     } finally {
       this.rebuildProgress.set(null);

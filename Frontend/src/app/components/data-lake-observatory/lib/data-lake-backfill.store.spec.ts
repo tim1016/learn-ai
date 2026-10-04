@@ -407,6 +407,20 @@ describe('DataLakeBackfillStore', () => {
     expect(await store.run(SPEC)).toBe('failed');
   });
 
+  it('does not adopt a run whose submission lands after the panel is gone', async () => {
+    // A caller running several one after another must see this run as over,
+    // or it keeps submitting from a page nobody is looking at.
+    let accept: (jobId: string) => void = () => undefined;
+    const startJob = vi.fn(() => new Promise<string>((resolve) => (accept = resolve)));
+    const store = makeStore({ startJob } as unknown as Partial<JobsService>);
+
+    const ended = store.run(SPEC);
+    TestBed.resetTestingModule();
+    accept('job-1');
+
+    expect(await ended).toBe('detached');
+  });
+
   it('unsubscribes once a terminal event is folded', async () => {
     let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
     const unsubscribe = vi.fn();
