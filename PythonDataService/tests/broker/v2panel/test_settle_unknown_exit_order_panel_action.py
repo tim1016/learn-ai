@@ -35,8 +35,9 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import _catalog_row_actio
 from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
-from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
-from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import WAIT_MS
+from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of, _flatten
 
 SETTLE = "settle_unknown_exit_order"
 
@@ -235,6 +236,69 @@ async def test_a_settlement_the_process_died_after_is_answered_with_its_receipt_
 
     assert repo.custody_transitions() == ledger and alpaca.reads == []
     assert len(alpaca.sent) == 1
+
+
+async def test_a_settlement_the_process_died_after_is_still_answered_once_the_bot_has_settled_another_order(
+    lost_closing_order, tmp_path: Path
+) -> None:
+    """The regression (#2854 review): the bot settled a second order before the first one's key was posted again.
+
+    The Clerk recorded the first settlement and the process stopped before
+    the panel's receipt ledger did. The operator then flattened the bot,
+    that closing order's submit was lost too, and they settled it under a
+    key of its own. The first request posted again -- its key, its token,
+    its attestation -- was looked for only in the bot's latest settlement,
+    which is the second order's, and was answered 409, "previously failed".
+
+    It is found among the bot's settlements by its own token now, and
+    answered with the first settlement's record. The second key still
+    replays its own. Nothing is read at Alpaca and nothing is written.
+    """
+    repo, alpaca, facade = lost_closing_order
+    receipts = tmp_path / "panel_action_receipts.json"
+    absent = UnknownOrderAttestationRequest(kind="absent")
+    current_context = _context_of(repo, settling.SID)
+    presented_first = next(
+        action for action in build_recovery_catalog(await current_context()) if action.action_id == SETTLE
+    )
+    with pytest.raises(_ProcessDied):
+        await _run_from_the_panel(
+            repo, facade, _DiesBeforeItWritesTheReceipt(receipts, wait_timeout_s=0),
+            attestation=absent, idempotency_key="settle-first",
+        )
+    (first_settlement,) = [
+        row for row in repo.custody_transitions() if row["transition_kind"] == "ORDER_OUTCOME_ATTESTED"
+    ]
+
+    alpaca.loses_its_next_submit()
+    assert (await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")).verdict == "clean"
+    await _flatten(facade, current_context)
+    (flatten_order,) = repo.unknown_exit_orders(settling.SID)
+    assert flatten_order.order_ref != first_settlement["order_ref"] and len(alpaca.sent) == 2
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    second = await _run_from_the_panel(
+        repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
+        attestation=absent, idempotency_key="settle-second",
+    )
+    ledger = repo.custody_transitions()
+    alpaca.reads.clear()
+
+    after_a_restart = DurableIdempotencyStore(receipts, wait_timeout_s=0)
+    first_again = await _run_from_the_panel(
+        repo, facade, after_a_restart, attestation=absent, idempotency_key="settle-first",
+        posted_again_with_token=presented_first.concurrency_token,
+    )
+    second_again = await _run_from_the_panel(
+        repo, facade, after_a_restart, attestation=absent, idempotency_key="settle-second",
+    )
+
+    assert first_again is not None and second is not None and second_again is not None
+    assert (first_again.applied, first_again.receipt_id) == (False, f"transition:{first_settlement['sequence']}")
+    assert first_again.recorded_at_ms == first_settlement["recorded_at_ms"]
+    assert second.applied is True and second.receipt_id != first_again.receipt_id
+    assert (second_again.applied, second_again.receipt_id) == (False, second.receipt_id)
+    assert repo.custody_transitions() == ledger and alpaca.reads == []
+    assert len(alpaca.sent) == 2, "settling sends nothing"
 
 
 async def test_a_settle_posted_without_saying_what_alpaca_shows_is_refused_and_writes_nothing(

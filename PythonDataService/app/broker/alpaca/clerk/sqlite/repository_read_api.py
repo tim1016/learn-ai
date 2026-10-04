@@ -238,6 +238,18 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return None if row is None else writes.row_to_payload(row)
 
+    def latest_strategy_transitions(
+        self: ClerkSqliteRepository, *, strategy_instance_id: str, transition_kind: str, limit: int,
+    ) -> list[dict]:
+        """One instance's latest observations of one kind, newest first, at most ``limit`` of them."""
+        with self._write_lock:
+            rows = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                "WHERE strategy_instance_id = ? AND transition_kind = ? ORDER BY sequence DESC LIMIT ?",
+                (strategy_instance_id, transition_kind, limit),
+            ).fetchall()
+            return [writes.row_to_payload(row) for row in rows]
+
     def transitions_for_order(self: ClerkSqliteRepository, order_ref: str) -> list[dict]:
         """Return every transition for one order in sequence order."""
         with self._write_lock:

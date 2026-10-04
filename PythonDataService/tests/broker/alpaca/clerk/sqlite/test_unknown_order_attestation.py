@@ -228,6 +228,10 @@ class _AlpacaAccount(_Alpaca):
         working = order.status not in {"filled", "canceled", "expired", "rejected", "replaced"}
         (self.open_orders if working else self.ended_orders).append(order)
 
+    def loses_its_next_submit(self) -> None:
+        """The next order sent times out and never reaches Alpaca."""
+        self._fates.insert(0, "never_arrives")
+
     def _alpaca_order_id(self, client_order_id: str) -> str:
         return str(uuid5(_ALPACA_ORDER_IDS, client_order_id))
 

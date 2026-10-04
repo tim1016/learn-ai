@@ -98,7 +98,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -169,6 +169,16 @@ round reads up to 2,000 orders in the closing order's own symbol since it was
 created: far more than an account sends in one symbol while an exit is
 unsettled, and a bound all the same, because the reads are made while the
 EXIT is claimed.
+"""
+
+
+MAX_SETTLEMENTS_READ_FOR_A_REPLAY = 50
+"""How many of a bot's settlements, newest first, a replay that names no order is looked for among.
+
+Each one is an operator's attestation of one closing order the Clerk could
+not confirm, so a bot has few. A request asked again after its bot settled
+this many other orders is not found, and is answered as one with no
+settlement on the ledger.
 """
 
 
@@ -1489,42 +1499,44 @@ def recorded_settlement(
     )
 
 
-def last_settled_order(
+def settled_orders(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str
-) -> SettleTokenOrder | None:
-    """The order this bot's latest settlement settled, as the settle action's token named it.
+) -> Iterator[SettleTokenOrder]:
+    """The orders this bot's settlements settled, newest first, each as the settle action's token named it.
 
     For a request that names no order -- a bot's page sends only the token
-    it was presented -- so its settlement can be found by that token. What
-    the token named is all on the ledger: the attestation's own row, and the
-    answer of the send it names, read as the catalog read it
-    (``unknown_exit_orders``). ``None`` for a bot no order of which was
-    settled.
+    it was presented -- so its settlement can be found by that token among
+    them. Not in the latest one alone: the bot may have settled another
+    order since. What a token named is all on the ledger: the attestation's
+    own row, and the answer of the send it names, read as the catalog read
+    it (``unknown_exit_orders``). At most
+    :data:`MAX_SETTLEMENTS_READ_FOR_A_REPLAY` of them; none for a bot no
+    order of which was settled.
     """
-    row = repo.last_strategy_transition(
-        strategy_instance_id=strategy_instance_id, transition_kind=ORDER_OUTCOME_ATTESTED
-    )
-    if row is None:
-        return None
-    facts = OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
-    answer = repo.first_order_transition(
-        order_ref=row["order_ref"],
-        transition_kind="ORDER_SUBMIT_UNCERTAIN",
-        after_sequence=facts.latest_send_sequence,
-    )
-    return SettleTokenOrder(
-        effect_operation_id=row["effect_operation_id"],
-        order_ref=row["order_ref"],
-        latest_send_sequence=facts.latest_send_sequence,
-        answered_as_client_order_id=(
-            None
-            if answer is None
-            else OrderSubmitUncertainFacts.from_facts_json(
-                answer["facts_json"]
-            ).answered_as_client_order_id
-        ),
-        uncertainty_id=facts.uncertainty_id,
-    )
+    for row in repo.latest_strategy_transitions(
+        strategy_instance_id=strategy_instance_id,
+        transition_kind=ORDER_OUTCOME_ATTESTED,
+        limit=MAX_SETTLEMENTS_READ_FOR_A_REPLAY,
+    ):
+        facts = OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
+        answer = repo.first_order_transition(
+            order_ref=row["order_ref"],
+            transition_kind="ORDER_SUBMIT_UNCERTAIN",
+            after_sequence=facts.latest_send_sequence,
+        )
+        yield SettleTokenOrder(
+            effect_operation_id=row["effect_operation_id"],
+            order_ref=row["order_ref"],
+            latest_send_sequence=facts.latest_send_sequence,
+            answered_as_client_order_id=(
+                None
+                if answer is None
+                else OrderSubmitUncertainFacts.from_facts_json(
+                    answer["facts_json"]
+                ).answered_as_client_order_id
+            ),
+            uncertainty_id=facts.uncertainty_id,
+        )
 
 
 __all__ = [
@@ -1534,7 +1546,7 @@ __all__ = [
     "UnknownOrderSettlementReceipt",
     "UnknownOrderSettlementRefused",
     "check_unknown_exit_order",
-    "last_settled_order",
     "recorded_settlement",
     "settle_unknown_exit_order",
+    "settled_orders",
 ]
