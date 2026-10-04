@@ -130,7 +130,8 @@ export class SettleOrderTicketComponent {
 
   protected readonly checking = signal(false);
   protected readonly settling = signal(false);
-  protected readonly confirming = signal(false);
+  /** The confirmation is of what the Clerk found for the action as presented: presented again, it closes. */
+  protected readonly confirming = linkedSignal({ source: this.action, computation: () => false });
   protected readonly busy = computed(() => this.checking() || this.settling() || this.locked());
 
   /** A ticket presented again is about the order as it stands now: nothing said before carries over. */

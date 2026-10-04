@@ -359,6 +359,20 @@ describe('SettleOrderTicketComponent (#2854)', () => {
     expect(checkButton().disabled).toBe(true);
   });
 
+  it('closes an open confirmation when the action is presented again', async () => {
+    const { settle, user, rerender } = await renderTicket();
+    await user.click(screen.getByRole('radio', { name: /^Alpaca has no such order/ }));
+    await user.click(checkButton());
+    await user.click(await within(ticket()).findByRole('button', { name: 'Settle the order…' }));
+    expect(screen.getByRole('dialog', { name: 'Settle the uncertain order?' })).toBeTruthy();
+
+    // The Clerk sent the order again: what the confirmation asked about was found for the older send.
+    await rerender({ inputs: { action: settleAction({ concurrency_token: 'sent-again' }) }, partialUpdate: true });
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(settle).not.toHaveBeenCalled();
+  });
+
   it('closes on Close, having asked and settled nothing', async () => {
     const { check, settle, closed, user } = await renderTicket();
 
