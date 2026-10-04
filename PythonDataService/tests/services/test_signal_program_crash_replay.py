@@ -370,7 +370,7 @@ async def _reference_traces(key: str, symbol: str, resolution_minutes: int) -> l
     recovered = await replay_warmup_bars(
         runtime, context, _StaticWarmupFeed(minute_bars), binding, captured_decisions=None
     )
-    assert recovered is None, f"reference pass for '{key}' unexpectedly flagged a crash candidate"
+    assert recovered == [], f"reference pass for '{key}' unexpectedly flagged a crash candidate"
     assert runtime.program is not None
     traces = runtime.program.session.traces
     _assert_decision_clock_is_contiguous(
@@ -422,8 +422,8 @@ async def test_replay_warmup_bars_is_deterministic_across_two_fresh_instances(ke
         runtime_b, context_b, _StaticWarmupFeed(bars), binding, captured_decisions=None
     )
 
-    assert recovered_a is None
-    assert recovered_b is None
+    assert recovered_a == []
+    assert recovered_b == []
     assert runtime_a.program is not None
     assert runtime_b.program is not None
     traces_a = runtime_a.program.session.traces
@@ -491,10 +491,15 @@ async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate
         context,
         _StaticWarmupFeed(replay_bars),
         binding,
-        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
+        captured_decisions=CapturedDecisions(
+            outcomes=captured,
+            rotated_out_before_ms=None,
+            run_first_closes_ms=frozenset(),
+            ran_before=False,
+        ),
     )
 
-    assert recovered is None, f"'{key}' re-flagged an already-captured (blocked) candidate as a crash window"
+    assert recovered == [], f"'{key}' re-flagged an already-captured (blocked) candidate as a crash window"
     contacts = _broker_contacts(executor, context)
     assert contacts == [], (
         f"'{key}' contacted an execution boundary while replaying an already-captured, "
@@ -549,9 +554,14 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
         context,
         _StaticWarmupFeed(warmup_bars),
         binding,
-        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
+        captured_decisions=CapturedDecisions(
+            outcomes=captured,
+            rotated_out_before_ms=None,
+            run_first_closes_ms=frozenset(),
+            ran_before=False,
+        ),
     )
-    assert recovered is None, f"'{key}' flagged a crash candidate in a fully-captured warmup window"
+    assert recovered == [], f"'{key}' flagged a crash candidate in a fully-captured warmup window"
     assert runtime.program is not None
     session = runtime.program.session
 
@@ -626,23 +636,28 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
     replay_bars = _minute_bars_for_closes(symbol, resolution_minutes, _RANDOM_WALK_CLOSES)
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
-    recovered: tuple[MarketDataBar, EvaluationStage] | None = await replay_warmup_bars(
+    recovered: list[tuple[MarketDataBar, EvaluationStage]] = await replay_warmup_bars(
         runtime,
         context,
         _StaticWarmupFeed(replay_bars),
         binding,
-        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
+        captured_decisions=CapturedDecisions(
+            outcomes=captured,
+            rotated_out_before_ms=None,
+            run_first_closes_ms=frozenset(),
+            ran_before=False,
+        ),
     )
 
-    assert recovered is not None, (
-        f"'{key}' silently dropped a staged candidate with no known disposition instead of "
-        "naming it as the FR-016 crash window"
+    assert len(recovered) == 1, (
+        f"'{key}' did not name exactly the one staged candidate with no known disposition as "
+        f"the FR-016 crash window: {recovered}"
     )
     # The first tuple element is the MINUTE bar that completed the staged
     # bucket (`bot_trade_strategy._drain_bar` fires a bucket on the bar that
     # closes it), so it is not itself asserted on here; the decision bucket's
     # identity is `candidate_stage.trace`.
-    _triggering_minute_bar, candidate_stage = recovered
+    [(_triggering_minute_bar, candidate_stage)] = recovered
     assert not isinstance(candidate_stage, StageQuarantine)
     assert candidate_stage.trace.evaluation_id == target_trace.evaluation_id
     assert candidate_stage.trace.bar_close_ms == target_trace.bar_close_ms
@@ -696,11 +711,14 @@ async def test_replay_warmup_bars_does_not_flag_a_bucket_that_closed_before_the_
         _StaticWarmupFeed(replay_bars),
         binding,
         captured_decisions=CapturedDecisions(
-            outcomes=captured, rotated_out_before_ms=retained[0].bar_close_ms
+            outcomes=captured,
+            rotated_out_before_ms=retained[0].bar_close_ms,
+            run_first_closes_ms=frozenset(),
+            ran_before=False,
         ),
     )
 
-    assert recovered is None, (
+    assert recovered == [], (
         f"'{key}' flagged a crash candidate whose receipt had rotated out of the retained window"
     )
     assert _broker_contacts(executor, context) == []
@@ -737,11 +755,14 @@ async def test_replay_warmup_bars_still_flags_a_bucket_that_closed_at_the_rotati
         _StaticWarmupFeed(replay_bars),
         binding,
         captured_decisions=CapturedDecisions(
-            outcomes=captured, rotated_out_before_ms=target_trace.bar_close_ms
+            outcomes=captured,
+            rotated_out_before_ms=target_trace.bar_close_ms,
+            run_first_closes_ms=frozenset(),
+            ran_before=False,
         ),
     )
 
-    assert recovered is not None, (
+    assert len(recovered) == 1, (
         f"'{key}' exempted a bucket that closed exactly at the rotation boundary"
     )
-    assert recovered[1].trace.evaluation_id == target_trace.evaluation_id
+    assert recovered[0][1].trace.evaluation_id == target_trace.evaluation_id
