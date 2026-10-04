@@ -31,6 +31,7 @@ import { etIsoDate } from '../../../shared/date/et-midnight';
 import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
 import { parseSymbols } from '../lib/coverage-board';
+import type { RebuildRequest } from '../lib/lake-readiness';
 import {
   BackfillDefaults,
   DataLakeDataType,
@@ -82,8 +83,11 @@ export class LakeBackfillPanelComponent implements OnInit {
    */
   readonly priceAdjustmentMode = input<PriceAdjustmentMode>('raw');
 
-  /** Fired once a run reaches any terminal phase, so the caller can re-read coverage. */
-  readonly runFinished = output();
+  /** Fired once a run reaches any terminal phase, with that phase, so the caller can re-read the lake. */
+  readonly runFinished = output<BackfillPhase>();
+
+  /** True while a run is being submitted or is running. */
+  readonly busy = computed(() => this.store.running());
 
   /**
    * The symbols the operator has picked. The seeds apply exactly once, in
@@ -163,6 +167,11 @@ export class LakeBackfillPanelComponent implements OnInit {
   }
 
   protected readonly digest = computed(() => this.defaults()?.lean_image_digest ?? null);
+
+  /** Only a split-adjusted run writes an adjustment record beside each price file. */
+  protected readonly writesAdjustmentRecord = computed(
+    () => this.priceAdjustmentMode() === 'polygon_split_adjusted',
+  );
 
   /**
    * The requested view as a mode the fetch pipeline can actually write, or
@@ -259,7 +268,7 @@ export class LakeBackfillPanelComponent implements OnInit {
       const phase = this.store.phase();
       const previous = this.lastSeenPhase;
       this.lastSeenPhase = phase;
-      if (phase !== previous && TERMINAL_REREAD_PHASES.has(phase)) this.runFinished.emit();
+      if (phase !== previous && TERMINAL_REREAD_PHASES.has(phase)) this.runFinished.emit(phase);
     });
 
     // Clearing the delisted toggle is a statement about the universe, so
@@ -305,6 +314,21 @@ export class LakeBackfillPanelComponent implements OnInit {
 
   protected onIncludeDelisted(event: Event): void {
     this.includeDelisted.set((event.target as HTMLInputElement).checked);
+  }
+
+  /**
+   * Fill the form with one symbol's rebuild window and run it.
+   *
+   * Resolves false when the form refuses the run; `blockedReason` then says
+   * why in the panel, the same as for a hand-filled form.
+   */
+  async rebuild(request: RebuildRequest): Promise<boolean> {
+    this.pickedSymbols.set([request.symbol]);
+    this.startTradingDate.set(request.from);
+    this.endTradingDate.set(request.to);
+    if (!this.canSubmit()) return false;
+    await this.submit();
+    return true;
   }
 
   protected async submit(): Promise<void> {

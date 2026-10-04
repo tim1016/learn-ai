@@ -53,6 +53,22 @@ describe('DataLakeService', () => {
     http.verify();
   });
 
+  it('asks for run readiness in the view the caller names, for trade bars unless told otherwise', async () => {
+    const pending = service.runReadiness('polygon_split_adjusted');
+
+    const request = http.expectOne((candidate) => candidate.url === `${BASE}/run-readiness`);
+    expect(request.request.params.get('price_adjustment_mode')).toBe('polygon_split_adjusted');
+    expect(request.request.params.get('data_type')).toBe('trade');
+    expect(request.request.params.get('market')).toBe('usa');
+    request.flush({
+      market: 'usa',
+      price_adjustment_mode: 'polygon_split_adjusted',
+      data_type: 'trade',
+      symbols: [],
+    });
+    expect((await pending).kind).toBe('ok');
+  });
+
   it('reports an untyped 404 as unavailable, not as a typed rejection', async () => {
     const pending = service.storageSummary();
 

@@ -1,0 +1,39 @@
+:host {
+  display: block;
+}
+
+.storage {
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+
+  &[open] &__summary {
+    margin-bottom: var(--space-4);
+  }
+
+  &__summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 2px;
+    }
+  }
+
+  &__title {
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--text-primary);
+  }
+
+  &__hint,
+  &__state {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+  }
+}

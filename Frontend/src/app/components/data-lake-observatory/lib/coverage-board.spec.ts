@@ -59,6 +59,7 @@ describe('buildCoverageBoard', () => {
     expect(board.rows).toHaveLength(1);
     expect(board.rows[0].counts).toEqual({
       complete: 1,
+      needs_rebuild: 0,
       fetching: 0,
       stale: 0,
       failed: 1,

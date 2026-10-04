@@ -4,62 +4,90 @@
   gap: var(--space-5);
 }
 
-.lake {
-  &__lead {
-    max-width: 64ch;
-    margin: 0;
-    font-size: var(--fs-sm);
-    color: var(--text-secondary);
-  }
+.lake__intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
 
-  &__dark {
-    margin: 0;
-    padding: var(--space-4);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-light);
-    border-radius: var(--radius-md);
-    font-size: var(--fs-sm);
-    color: var(--text-secondary);
-  }
+.lake__lead {
+  max-width: 64ch;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
 
-  &__flag {
-    font-family: var(--font-mono);
-    color: var(--text-primary);
+// The page's one layout: twelve equal columns. Every child spans twelve,
+// eight or four of them, and stacks to full width on a narrow screen.
+.lake-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-5);
+  align-items: stretch;
+}
+
+.span-12 {
+  grid-column: span 12;
+}
+
+.span-8 {
+  grid-column: span 8;
+}
+
+.span-4 {
+  grid-column: span 4;
+}
+
+@media (max-width: 60rem) {
+  .lake-grid > * {
+    grid-column: 1 / -1;
   }
 }
 
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+// Which tree the whole page reads: a pressed button per view.
+.mode {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 
-  &__title {
-    margin: 0;
-    font-size: var(--fs-md);
-    font-weight: var(--fw-semi);
-    color: var(--text-primary);
-  }
-
-  &__state {
-    margin: 0;
+  &__option {
+    padding: var(--space-2) var(--space-4);
     font-size: var(--fs-sm);
+    background: var(--bg-surface);
+    border: none;
     color: var(--text-secondary);
-  }
+    cursor: pointer;
 
-  &__problem {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    margin: 0;
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: -2px;
+    }
+
+    &--on {
+      font-weight: var(--fw-semi);
+      background: var(--accent);
+      color: var(--text-on-accent);
+    }
+  }
+}
+
+.bars {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-subtle);
+
+  &__select {
+    padding: var(--space-1) var(--space-2);
     font-size: var(--fs-sm);
-    color: var(--bear);
-  }
-
-  &__reason {
-    font-weight: var(--fw-semi);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    color: var(--text-primary);
   }
 }

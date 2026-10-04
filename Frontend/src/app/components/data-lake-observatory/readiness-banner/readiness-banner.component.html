@@ -1,0 +1,43 @@
+<section class="banner" aria-labelledby="lake-banner-title">
+  <div class="banner__body">
+    <i class="pi pi-exclamation-triangle banner__icon" aria-hidden="true"></i>
+    <div class="banner__copy">
+      <h2 class="banner__title" id="lake-banner-title">{{ title() }}</h2>
+      <p>
+        Their split-adjusted price files are on disk, but a run refuses them: each one needs a
+        current adjustment record beside it.
+      </p>
+      <p>
+        <strong class="banner__fix">A backfill fixes this.</strong>
+        It rebuilds each session and writes the adjustment record beside it. You never create these
+        files by hand.
+      </p>
+      @if (progress(); as running) {
+        <p class="banner__note" role="status">
+          Rebuilding {{ running.symbol }} ({{ running.position }} of {{ running.total }}). Keep this
+          page open: the symbols run one after another.
+        </p>
+      } @else {
+        <p class="banner__note">
+          Rebuilding all {{ totals().rebuildSymbolCount }} downloads
+          {{ totals().rebuildSessionCount | number }} sessions from the provider again.
+        </p>
+      }
+    </div>
+  </div>
+  <div class="banner__actions">
+    <button type="button" class="banner__primary" [disabled]="busy()" (click)="rebuildAll.emit()">
+      Rebuild all {{ totals().rebuildSymbolCount }} symbols
+    </button>
+    @if (selected(); as request) {
+      <button
+        type="button"
+        class="banner__secondary"
+        [disabled]="busy()"
+        (click)="rebuildSelected.emit(request)"
+      >
+        Rebuild {{ request.symbol }} only
+      </button>
+    }
+  </div>
+</section>

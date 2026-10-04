@@ -1,10 +1,17 @@
-import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake';
+import type {
+  CoverageResponse,
+  CoverageStatus,
+  DataLakeRead,
+  RebuildReason,
+} from '../../../shared/data-lake';
 
 export interface CoverageCell {
   /** Date-anchored session open, int64 ms UTC. Render in `date-et`. */
   readonly tradingDateMs: number;
   readonly status: CoverageStatus;
   readonly artifactId: number | null;
+  /** Set only on a `needs_rebuild` cell. */
+  readonly rebuildReason: RebuildReason | null;
 }
 
 export interface CoverageRow {
@@ -30,12 +37,14 @@ export interface CoverageBoard {
 }
 
 /**
- * The four artifact states plus the synthesized `missing`, in the order the
- * legend and the per-row tallies present them. Ordering is deliberate:
- * healthy first, then in-flight, then the two that need an operator.
+ * The four artifact states plus the synthesized `needs_rebuild` and
+ * `missing`, in the order the legend presents them. Ordering is deliberate:
+ * readable first, then the state a run refuses while the catalog says
+ * complete, then in-flight, then the ones that need an operator.
  */
 export const COVERAGE_STATUSES: readonly CoverageStatus[] = [
   'complete',
+  'needs_rebuild',
   'fetching',
   'stale',
   'failed',
@@ -49,6 +58,7 @@ export const COVERAGE_STATUSES: readonly CoverageStatus[] = [
  */
 const STATUS_GLYPHS: Readonly<Record<CoverageStatus, string>> = {
   complete: '✓',
+  needs_rebuild: '!',
   fetching: '◐',
   stale: '~',
   failed: '✕',
@@ -60,7 +70,7 @@ export function coverageGlyph(status: CoverageStatus): string {
 }
 
 function emptyCounts(): Record<CoverageStatus, number> {
-  return { complete: 0, fetching: 0, stale: 0, failed: 0, missing: 0 };
+  return { complete: 0, needs_rebuild: 0, fetching: 0, stale: 0, failed: 0, missing: 0 };
 }
 
 function toRow(response: CoverageResponse): CoverageRow {
@@ -71,6 +81,7 @@ function toRow(response: CoverageResponse): CoverageRow {
       tradingDateMs: day.trading_date_ms,
       status: day.status,
       artifactId: day.artifact_id ?? null,
+      rebuildReason: day.rebuild_reason ?? null,
     };
   });
   return { symbol: response.symbol, cells, counts };

@@ -3988,6 +3988,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data-lake/run-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Readiness
+         * @description Per symbol: the complete minute sessions the lake holds, and how many a run can read.
+         *
+         *     ``price_adjustment_mode`` has no default, for the reason ``/coverage``
+         *     gives: readiness is a property of one mode's tree.
+         *
+         *     Counted from the catalog (``app.data_lake.run_readiness``), so the cost is
+         *     one query and one snapshot read per symbol however many sessions the lake
+         *     holds. ``/coverage`` is the per-session view that checks the files.
+         */
+        get: operations["get_run_readiness_api_data_lake_run_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/data-lake/storage-summary": {
         parameters: {
             query?: never;
@@ -10339,12 +10366,17 @@ export interface components {
          *     no matching catalog row report ``status="missing"``; this is never
          *     emitted for a non-session date, since the router only iterates the
          *     canonical calendar's sessions in the first place.
+         *
+         *     ``status="needs_rebuild"`` is synthesized the same way: a complete row
+         *     whose split-adjusted file a run would refuse (``app.data_lake.run_readiness``).
          */
         CoverageDay: {
             /** Artifact Id */
             artifact_id?: number | null;
+            /** Rebuild Reason */
+            rebuild_reason?: ("price_file_missing" | "adjustment_record_missing" | "adjustment_record_rejected") | null;
             /** Status */
-            status: ("fetching" | "complete" | "stale" | "failed") | "missing";
+            status: ("fetching" | "complete" | "stale" | "failed") | ("missing" | "needs_rebuild");
             /** Trading Date Ms */
             trading_date_ms: number;
         };
@@ -21544,6 +21576,25 @@ export interface components {
             /** Winning Trades */
             winning_trades: number;
         };
+        /** RunReadinessResponse */
+        RunReadinessResponse: {
+            /**
+             * Data Root Id
+             * Format: uuid
+             */
+            data_root_id?: string;
+            /** Data Type */
+            data_type: string;
+            /** Market */
+            market: string;
+            /** Price Adjustment Mode */
+            price_adjustment_mode: string;
+            /**
+             * Symbols
+             * @default []
+             */
+            symbols?: components["schemas"]["SymbolRunReadiness"][];
+        };
         /**
          * RunSummaryFacts
          * @description The run facts the summary line is written from; the same facts give the same line.
@@ -23659,6 +23710,34 @@ export interface components {
             trade_timestamp_ms?: number | null;
             /** Valid Until Ms */
             valid_until_ms?: number | null;
+        };
+        /**
+         * SymbolRunReadiness
+         * @description One symbol's complete minute sessions under one adjustment mode, and how many a run can read.
+         *
+         *     Every ``*_trading_date_ms`` is the session's 09:30 ET open.
+         *     ``rebuild_*`` bound the sessions a backfill can rebuild: unreadable, and
+         *     not older than the provider's history. Both are ``None`` when there are
+         *     none. ``unrebuildable_count`` is the unreadable sessions older than that
+         *     history, which no backfill can fetch again.
+         */
+        SymbolRunReadiness: {
+            /** First Trading Date Ms */
+            first_trading_date_ms: number;
+            /** Last Trading Date Ms */
+            last_trading_date_ms: number;
+            /** Rebuild First Trading Date Ms */
+            rebuild_first_trading_date_ms?: number | null;
+            /** Rebuild Last Trading Date Ms */
+            rebuild_last_trading_date_ms?: number | null;
+            /** Run Ready Count */
+            run_ready_count: number;
+            /** Session Count */
+            session_count: number;
+            /** Symbol */
+            symbol: string;
+            /** Unrebuildable Count */
+            unrebuildable_count: number;
         };
         /**
          * SymbolTradingStatusEvidence
@@ -32544,6 +32623,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataAvailabilityResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_readiness_api_data_lake_run_readiness_get: {
+        parameters: {
+            query: {
+                market?: "usa";
+                data_type?: "trade" | "quote";
+                price_adjustment_mode: "raw" | "polygon_split_adjusted" | "lean_adjusted";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunReadinessResponse"];
                 };
             };
             /** @description Validation Error */

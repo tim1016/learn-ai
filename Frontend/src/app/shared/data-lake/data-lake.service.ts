@@ -12,6 +12,7 @@ import type {
   DataLakeFailure,
   DataLakeRead,
   PriceAdjustmentMode,
+  RunReadinessResponse,
   StorageSummaryResponse,
 } from './data-lake.types';
 
@@ -117,6 +118,25 @@ export class DataLakeService {
     return this.read(() =>
       firstValueFrom(
         this.http.get<StorageSummaryResponse>(`${this.base}/storage-summary`, { params }),
+      ),
+    );
+  }
+
+  /**
+   * Per symbol, the sessions a run on `priceAdjustmentMode` can read. The
+   * mode is required for the reason `coverage()` gives: readiness is a
+   * property of one mode's tree.
+   */
+  async runReadiness(
+    priceAdjustmentMode: PriceAdjustmentMode,
+    dataType: DataLakeDataType = 'trade',
+    market = 'usa',
+  ): Promise<DataLakeRead<RunReadinessResponse>> {
+    return this.read(() =>
+      firstValueFrom(
+        this.http.get<RunReadinessResponse>(`${this.base}/run-readiness`, {
+          params: { market, data_type: dataType, price_adjustment_mode: priceAdjustmentMode },
+        }),
       ),
     );
   }

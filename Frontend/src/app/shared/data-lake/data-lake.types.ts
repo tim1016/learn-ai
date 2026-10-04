@@ -14,9 +14,19 @@
  * and must be rendered in `date-et` mode, never viewer-local.
  */
 
-/** Catalog `Status` column plus the coverage endpoint's synthesized `missing`. */
+/**
+ * Catalog `Status` column plus the two states the coverage endpoint
+ * synthesizes: `missing` (no catalog row) and `needs_rebuild` (the row is
+ * complete, and a run still refuses the file).
+ */
 export type ArtifactStatus = 'fetching' | 'complete' | 'stale' | 'failed';
-export type CoverageStatus = ArtifactStatus | 'missing';
+export type CoverageStatus = ArtifactStatus | 'missing' | 'needs_rebuild';
+
+/** What a reader refuses about a split-adjusted file the catalog calls complete. */
+export type RebuildReason =
+  | 'price_file_missing'
+  | 'adjustment_record_missing'
+  | 'adjustment_record_rejected';
 
 export type DataLakeDataType = 'trade' | 'quote';
 export type PriceAdjustmentMode = 'raw' | 'polygon_split_adjusted' | 'lean_adjusted';
@@ -26,6 +36,8 @@ export interface CoverageDay {
   readonly trading_date_ms: number;
   readonly status: CoverageStatus;
   readonly artifact_id: number | null;
+  /** Set only with `needs_rebuild`. */
+  readonly rebuild_reason?: RebuildReason | null;
 }
 
 export interface CoverageResponse {
@@ -83,6 +95,30 @@ export interface StorageSummaryResponse {
   readonly market: string;
   readonly kinds: readonly StorageKindTotal[];
   readonly symbols: readonly SymbolCoverageSpan[];
+}
+
+/**
+ * One symbol's complete minute sessions under one adjustment mode, and how
+ * many a run can read. `rebuild_*` bound the sessions a backfill can rebuild;
+ * `unrebuildable_count` is the unreadable sessions older than the provider's
+ * history, which no backfill can fetch again.
+ */
+export interface SymbolRunReadiness {
+  readonly symbol: string;
+  readonly first_trading_date_ms: number;
+  readonly last_trading_date_ms: number;
+  readonly session_count: number;
+  readonly run_ready_count: number;
+  readonly unrebuildable_count: number;
+  readonly rebuild_first_trading_date_ms: number | null;
+  readonly rebuild_last_trading_date_ms: number | null;
+}
+
+export interface RunReadinessResponse {
+  readonly market: string;
+  readonly price_adjustment_mode: string;
+  readonly data_type: string;
+  readonly symbols: readonly SymbolRunReadiness[];
 }
 
 export interface BackfillDefaults {

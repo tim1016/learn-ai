@@ -360,29 +360,74 @@ describe('LakeBackfillPanelComponent', () => {
     expect(screen.getByText('plan does not include this feed')).toBeTruthy();
   });
 
-  it.each(['job.completed', 'job.failed', 'job.cancelled'])(
-    'tells the page to re-read coverage after %s',
-    async (terminalEvent) => {
-      // `run_backfill` writes session by session, so a run that died — or
-      // that the operator stopped — between per-day writes still left
-      // completed artifacts on disk. Every terminal phase leaves the
-      // heatmap stale, not just the successful one.
-      const { store, fixture, detectChanges, emitJobEvent } = await renderPanel();
-      const finished = vi.fn();
-      fixture.componentInstance.runFinished.subscribe(finished);
+  it.each([
+    ['job.completed', 'completed'],
+    ['job.failed', 'failed'],
+    ['job.cancelled', 'cancelled'],
+  ])('tells the page to re-read coverage after %s, and how the run ended', async (terminalEvent, phase) => {
+    // `run_backfill` writes session by session, so a run that died — or
+    // that the operator stopped — between per-day writes still left
+    // completed artifacts on disk. Every terminal phase leaves the
+    // heatmap stale, not just the successful one.
+    const { store, fixture, detectChanges, emitJobEvent } = await renderPanel();
+    const finished = vi.fn();
+    fixture.componentInstance.runFinished.subscribe(finished);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
-      await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
-      emitJobEvent({
-        type: terminalEvent,
-        code: 'io_error',
-        message: 'disk full',
-      });
-      detectChanges();
+    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
+    await vi.waitFor(() => expect(store.jobId()).toBe('job-77'));
+    emitJobEvent({
+      type: terminalEvent,
+      code: 'io_error',
+      message: 'disk full',
+    });
+    detectChanges();
 
-      expect(finished).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(finished).toHaveBeenCalledTimes(1);
+    expect(finished).toHaveBeenCalledWith(phase);
+  });
+
+  it("rebuilds one symbol over its own window, in the page's view", async () => {
+    const { startJob, fixture } = await renderPanel({ priceAdjustmentMode: 'polygon_split_adjusted' });
+
+    const started = await fixture.componentInstance.rebuild({
+      symbol: 'QQQ',
+      from: '2024-08-06',
+      to: '2026-09-18',
+    });
+
+    expect(started).toBe(true);
+    const [, payload] = startJob.mock.calls[0] as [string, { spec: Record<string, unknown> }];
+    expect(payload.spec).toMatchObject({
+      symbols: ['QQQ'],
+      start_trading_date_ms: Date.UTC(2024, 7, 6, 12, 0),
+      end_trading_date_ms: Date.UTC(2026, 8, 18, 12, 0),
+      price_adjustment_mode: 'polygon_split_adjusted',
+    });
+  });
+
+  it('refuses a rebuild the form cannot run, and starts no job', async () => {
+    const { startJob, fixture, detectChanges } = await renderPanel({ defaults: null });
+
+    const started = await fixture.componentInstance.rebuild({
+      symbol: 'QQQ',
+      from: '2024-08-06',
+      to: '2026-09-18',
+    });
+    detectChanges();
+
+    expect(started).toBe(false);
+    expect(startJob).not.toHaveBeenCalled();
+    expect(screen.getByText('Backfill is unavailable until the data plane answers.')).toBeTruthy();
+  });
+
+  it.each([
+    ['polygon_split_adjusted', true],
+    ['raw', false],
+  ] as const)('says whether a %s run writes an adjustment record', async (mode, writesRecord) => {
+    await renderPanel({ priceAdjustmentMode: mode });
+
+    expect(screen.queryByText('Adjustment record') !== null).toBe(writesRecord);
+  });
 
   it('refuses to submit without a pinned LEAN image digest', async () => {
     const { startJob } = await renderPanel({
