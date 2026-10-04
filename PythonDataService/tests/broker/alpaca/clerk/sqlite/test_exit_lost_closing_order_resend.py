@@ -224,6 +224,22 @@ class _Alpaca(_Account):
         self.while_awaited.get(len(self.sent), lambda: None)()
         raise BrokerUnavailable("the submit timed out")
 
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+        symbols: tuple[str, ...] | None = None,
+        until_ms: int | None = None,
+    ) -> list[BrokerOrder]:
+        """Its open orders. Asked for every order since a time, as a settlement asks, it lists the same.
+
+        No order ends at this Alpaca where a read shows it: one that filled
+        unseen is listed nowhere, which is what "no read shows it" means.
+        """
+        return await super().list_orders(status=status, limit=limit, after_ms=after_ms)
+
     async def list_positions(self) -> list[BrokerPosition]:
         meanwhile, self.while_positions_are_read = self.while_positions_are_read, None
         if meanwhile is not None:
