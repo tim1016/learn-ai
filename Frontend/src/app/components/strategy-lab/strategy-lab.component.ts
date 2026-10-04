@@ -114,11 +114,15 @@ export class StrategyLabComponent {
     });
 
     effect(() => {
-      if (this.loadedRunId() === null) return;
-      // The run id is the whole tracked dependency. Everything adoption does
-      // — reading and clearing `justProducedRunId`, collapsing the rail,
-      // rewriting the configuration — writes signals this effect must not
-      // also depend on, or it would retrigger itself.
+      // A saved run named in the link wins over the link's launch parameters
+      // (#2872): its restore waits until they have settled, so they are never
+      // applied over it, whichever of the run and the strategy list answers
+      // first.
+      if (this.loadedRunId() === null || !this.config.launchParamsSettled()) return;
+      // The run id and that gate are the whole tracked dependency. Everything
+      // adoption does — reading and clearing `justProducedRunId`, collapsing
+      // the rail, rewriting the configuration — writes signals this effect
+      // must not also depend on, or it would retrigger itself.
       untracked(() => void this.adoptRun(strategiesReady));
     });
   }
