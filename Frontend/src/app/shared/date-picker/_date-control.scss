@@ -63,6 +63,25 @@
     }
   }
 
+  // A small button under a control that sets its dates: a quick range, an offered date.
+  &__choice {
+    height: 28px;
+    padding: 0 10px;
+    background: transparent;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+    transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+  }
+
   &__retry {
     all: unset;
     cursor: pointer;

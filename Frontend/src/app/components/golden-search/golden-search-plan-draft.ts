@@ -5,7 +5,7 @@
  * whether the plan is acceptable is the server preflight's answer.
  */
 
-import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
+import { etDayEndMs, etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
 import { usesTradeFrequency } from './golden-search-display';
 import type { DefaultsMonths, GoldenSearchDefaults, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
@@ -292,6 +292,11 @@ function setDate(protocol: ProtocolRequest, field: ProtocolDateField, isoDate: s
     case 'final_end':
       return { ...protocol, final_end_ms: etDayEndMs(isoDate) };
   }
+}
+
+/** The date `field` shows for an instant the protocol holds: what `setDate` reads back. */
+export function shownDate(field: ProtocolDateField, ms: number): string {
+  return etIsoDate(field === 'final_end' ? ms - 1 : ms);
 }
 
 /** The draft after one edit. Unreadable input leaves the protocol as it was and records a problem instead. */

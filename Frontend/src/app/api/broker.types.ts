@@ -15132,6 +15132,11 @@ export interface components {
             field: string | null;
             /** Message */
             message: string;
+            /**
+             * Nearest Valid Ms
+             * @description The nearest instants `field` would accept instead, when the server can name them; empty otherwise.
+             */
+            nearest_valid_ms?: number[];
         };
         /**
          * GoldenSearchProtocolRequest

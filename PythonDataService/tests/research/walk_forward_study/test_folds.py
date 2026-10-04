@@ -56,11 +56,33 @@ def test_a_trailing_tail_is_refused_and_the_nearest_valid_ends_are_named() -> No
     assert "2025-09-30" in str(excinfo.value) and "2025-12-31" in str(excinfo.value)
 
 
-def test_a_range_that_is_not_whole_months_is_refused_naming_the_neighbours() -> None:
+def test_a_range_that_is_not_whole_months_is_refused_naming_ends_that_divide_into_whole_folds() -> None:
     with pytest.raises(FoldPlanError) as excinfo:
         plan_folds(start=date(2024, 1, 1), end_exclusive=date(2025, 12, 15), training_months=6, test_months=3)
 
-    assert excinfo.value.nearest_valid_ends == (date(2025, 12, 1), date(2026, 1, 1))
+    # 2025-12-01 is the whole month below, but 23 months leave a tail: the planner would refuse it next.
+    assert excinfo.value.nearest_valid_ends == (date(2025, 10, 1), date(2026, 1, 1))
+    assert excinfo.value.reason == "the range must be a whole number of months from 2024-01-01"
+    assert str(excinfo.value) == f"{excinfo.value.reason}; nearest valid end dates (inclusive): 2025-09-30, 2025-12-31"
+
+
+@pytest.mark.parametrize(
+    ("start", "end_exclusive", "training_months", "test_months"),
+    [
+        (date(2024, 10, 4), date(2026, 7, 3), 6, 2),  # not whole months, and the month above leaves a tail
+        (date(2024, 10, 4), date(2026, 7, 4), 6, 2),  # 21 whole months that do not divide
+        (date(2024, 1, 31), date(2025, 3, 10), 6, 3),  # a start whose day most months lack
+        (date(2024, 1, 1), date(2024, 3, 20), 6, 3),  # shorter than one fold
+        (date(2024, 1, 1), date(2024, 7, 1), 6, 3),  # whole months with no room for a fold
+    ],
+)
+def test_every_end_a_refusal_names_is_one_the_planner_accepts(start: date, end_exclusive: date, training_months: int, test_months: int) -> None:
+    with pytest.raises(FoldPlanError) as excinfo:
+        plan_folds(start=start, end_exclusive=end_exclusive, training_months=training_months, test_months=test_months)
+
+    assert excinfo.value.nearest_valid_ends
+    for end in excinfo.value.nearest_valid_ends:
+        assert plan_folds(start=start, end_exclusive=end, training_months=training_months, test_months=test_months)
 
 
 def test_training_plus_test_exceeding_the_range_is_refused_before_execution() -> None:

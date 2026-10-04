@@ -14,15 +14,15 @@
   <div class="fields">
     <div class="field">
       <label [for]="dateId('development_start')">Development from</label>
-      <app-date-field [inputId]="dateId('development_start')" [value]="dates().development_start" [hostProblem]="problemFor('development_start')" (valueChange)="onDate('development_start', $event)" />
+      <app-date-field [inputId]="dateId('development_start')" [value]="dates().development_start" [hostProblem]="notes().development_start.problem" [hostOffers]="notes().development_start.offers" (valueChange)="onDate('development_start', $event)" />
     </div>
     <div class="field">
       <label [for]="dateId('final_start')">Final test from (development ends the day before)</label>
-      <app-date-field [inputId]="dateId('final_start')" [value]="dates().final_start" [hostProblem]="problemFor('final_start')" (valueChange)="onDate('final_start', $event)" />
+      <app-date-field [inputId]="dateId('final_start')" [value]="dates().final_start" [hostProblem]="notes().final_start.problem" [hostOffers]="notes().final_start.offers" (valueChange)="onDate('final_start', $event)" />
     </div>
     <div class="field">
       <label [for]="dateId('final_end')">Final test through</label>
-      <app-date-field [inputId]="dateId('final_end')" [value]="dates().final_end" [hostProblem]="problemFor('final_end')" (valueChange)="onDate('final_end', $event)" />
+      <app-date-field [inputId]="dateId('final_end')" [value]="dates().final_end" [hostProblem]="notes().final_end.problem" [hostOffers]="notes().final_end.offers" (valueChange)="onDate('final_end', $event)" />
     </div>
   </div>
   <p class="hint">Dates are New York dates. A date set here replaces the month count. The final-test dates cannot be extended after a result is seen.</p>

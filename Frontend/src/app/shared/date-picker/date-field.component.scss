@@ -14,6 +14,22 @@
   gap: 6px;
 }
 
+// The dates the host would take instead: the way out of its refusal, so they carry the accent.
+.date-field__offers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.date-field__offer {
+  border-color: var(--accent);
+  color: var(--accent-text);
+
+  &:hover {
+    background: var(--accent-soft);
+  }
+}
+
 // The calendar opened in place, under the field.
 .date-field__inline {
   align-self: start;
