@@ -951,7 +951,7 @@ export class BotPanelShellComponent {
     attestation: SqliteUnknownOrderAttestation,
   ): Promise<SettlementCheck> {
     try {
-      return await this.brokers.checkSqliteSafeFlatten(
+      return await this.brokers.checkSqliteRecoveryActionInFull(
         target.clerkId,
         this.requiredAccountId(target),
         { action_id: 'settle_unknown_exit_order', concurrency_token: action.concurrency_token, attestation },
@@ -1037,7 +1037,7 @@ export class BotPanelShellComponent {
       const outcome = await runFlattenSequence({
         readPanel: () => this.panelSvc.getPanel(target, sid),
         runAction: (action) => this.panelSvc.runBotAction(this.commandTarget(target), sid, action),
-        checkPlan: (prepare) => this.brokers.checkSqliteSafeFlatten(
+        checkPlan: (prepare) => this.brokers.checkSqliteRecoveryActionInFull(
           target.clerkId,
           this.requiredAccountId(target),
           { action_id: 'prepare_safe_flatten', concurrency_token: prepare.concurrency_token },
@@ -1152,7 +1152,7 @@ export class BotPanelShellComponent {
     this.flattenQuoteInFlight = true;
     this.flattenQuoteRun = (async () => {
       try {
-        const check = await this.brokers.checkSqliteSafeFlatten(
+        const check = await this.brokers.checkSqliteRecoveryActionInFull(
           prepared.target.clerkId,
           this.requiredAccountId(prepared.target),
           {

@@ -387,7 +387,7 @@ export class BrokersService {
     action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'>,
     strategyInstanceId: string | null = null,
   ): Promise<SqliteRecoveryAction> {
-    return (await this.checkSqliteSafeFlatten(clerkId, accountId, action, strategyInstanceId))
+    return (await this.checkSqliteRecoveryActionInFull(clerkId, accountId, action, strategyInstanceId))
       .capability;
   }
 
@@ -400,7 +400,7 @@ export class BrokersService {
    * at Alpaca for it now, in its own sentences. Nothing is settled, and a
    * refusal is an answer: findings that would not settle.
    */
-  checkSqliteSafeFlatten(
+  checkSqliteRecoveryActionInFull(
     clerkId: string,
     accountId: string,
     action: components['schemas']['RecoveryActionCheckRequest'],

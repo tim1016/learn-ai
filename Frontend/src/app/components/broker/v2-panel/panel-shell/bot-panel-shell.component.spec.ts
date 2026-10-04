@@ -640,7 +640,7 @@ const mockService = {
 };
 
 const brokersMock = {
-  checkSqliteSafeFlatten: vi.fn().mockResolvedValue({
+  checkSqliteRecoveryActionInFull: vi.fn().mockResolvedValue({
     capability: SAFE_FLATTEN_CAPABILITY,
     reduction_pricing: { kind: 'regular_session' },
   } satisfies SqliteRecoveryActionCheck),
@@ -979,7 +979,7 @@ describe('BotPanelShellComponent', () => {
 
       await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell 2.5 QQQ'));
       expect(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).toBeTruthy();
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
       expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
 
@@ -993,7 +993,7 @@ describe('BotPanelShellComponent', () => {
         'Flatten is offered for a stopped bot holding one position, from the warning at the top of its page.',
       );
       expect(screen.queryByRole('region', { name: 'Prepared safe-flatten reduction plan' })).toBeNull();
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
       expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
 
@@ -1133,7 +1133,7 @@ describe('BotPanelShellComponent', () => {
 
   it('discards a flatten’s checked plan after route identity changes', async () => {
     const pendingCapability = deferred<SqliteRecoveryActionCheck>();
-    brokersMock.checkSqliteSafeFlatten.mockReturnValueOnce(pendingCapability.promise);
+    brokersMock.checkSqliteRecoveryActionInFull.mockReturnValueOnce(pendingCapability.promise);
     const getPanel = vi.fn()
       .mockResolvedValueOnce(strandedPanel())
       .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
@@ -1154,7 +1154,7 @@ describe('BotPanelShellComponent', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
     await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
-    await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenCalledTimes(1));
 
     fixture.componentRef.setInput('sid', 'sid-002');
     fixture.detectChanges();
@@ -1277,7 +1277,7 @@ describe('BotPanelShellComponent', () => {
       // spec reads the defaults.
       mockService.getLiveSnapshot.mockReset().mockResolvedValue(liveSnapshot());
       mockService.getPanel.mockReset().mockResolvedValue(PANEL);
-      brokersMock.checkSqliteSafeFlatten.mockReset().mockResolvedValue({
+      brokersMock.checkSqliteRecoveryActionInFull.mockReset().mockResolvedValue({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: { kind: 'regular_session' },
       });
@@ -1302,7 +1302,7 @@ describe('BotPanelShellComponent', () => {
       fixture.detectChanges();
       await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
       await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
-      await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenCalledTimes(1));
       await settle(fixture);
       return fixture;
     }
@@ -1340,7 +1340,7 @@ describe('BotPanelShellComponent', () => {
     it('shows the live IBKR quote and sends the confirmed limit through the custody route', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'extended_limit',
@@ -1365,7 +1365,7 @@ describe('BotPanelShellComponent', () => {
       } satisfies SqliteRecoveryActionCheck);
       // Review asks the Clerk to read the operator's price; its answer is what
       // the confirm pane shows and what Send sends.
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'extended_limit',
@@ -1407,7 +1407,7 @@ describe('BotPanelShellComponent', () => {
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
       await settle(fixture);
       expect(within(ticket).getByText(/at limit \$479\.13/)).toBeTruthy();
-      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenLastCalledWith(
+      expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenLastCalledWith(
         expect.anything(),
         expect.anything(),
         expect.objectContaining({ proposed_limit_price: 479.13 }),
@@ -1436,7 +1436,7 @@ describe('BotPanelShellComponent', () => {
     it('fails the Sell step when the limit order is refused', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       mockService.executeExtendedSafeFlatten.mockRejectedValueOnce(new HttpErrorResponse({
         status: 409,
         error: { detail: { reason: 'stale_action_token', message: 'The flatten changed before it was sent.' } },
@@ -1456,9 +1456,9 @@ describe('BotPanelShellComponent', () => {
 
     it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(EXTENDED_CHECK_WITH_READING(Date.now()));
       const fixture = await prepareFlatten();
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: {
           ...SAFE_FLATTEN_CAPABILITY,
           available: false,
@@ -1486,7 +1486,7 @@ describe('BotPanelShellComponent', () => {
     it('takes the execute token from a live panel read while the live projection is stalled (#2353)', async () => {
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       const fixture = await prepareFlatten();
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
       fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
@@ -1533,7 +1533,7 @@ describe('BotPanelShellComponent', () => {
       // outage itself (Codex review 2026-09-19).
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
       mockService.executeExtendedSafeFlatten.mockResolvedValueOnce({
         action_id: 'execute_safe_flatten',
         outcome: 'success',
@@ -1574,15 +1574,15 @@ describe('BotPanelShellComponent', () => {
           spread_warning_bps: 50, proposal: null,
         },
       } satisfies SqliteRecoveryActionCheck;
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
       const fixture = await prepareFlatten();
-      brokersMock.checkSqliteSafeFlatten.mockRejectedValueOnce(
+      brokersMock.checkSqliteRecoveryActionInFull.mockRejectedValueOnce(
         new HttpErrorResponse({
           status: 409,
           error: { detail: { reason: 'stale_action_token', message: 'The plan changed.' } },
         }),
       );
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce(extendedCheck);
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
 
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
       fireEvent.click(within(ticket).getByRole('button', { name: 'Refresh quote' }));
@@ -1590,8 +1590,8 @@ describe('BotPanelShellComponent', () => {
 
       // Prepare, the refused refresh, then the retry — each with whatever
       // token the panel presented at the time.
-      expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(3);
-      const tokens = brokersMock.checkSqliteSafeFlatten.mock.calls.map(
+      expect(brokersMock.checkSqliteRecoveryActionInFull).toHaveBeenCalledTimes(3);
+      const tokens = brokersMock.checkSqliteRecoveryActionInFull.mock.calls.map(
         (call: unknown[]) => (call[2] as { concurrency_token: string }).concurrency_token,
       );
       // Each call carries the token the panel presented at the time. The
@@ -1610,7 +1610,7 @@ describe('BotPanelShellComponent', () => {
       ['SIMULATED_RECOVERY_PRICE_UNAVAILABLE', null, 'Simulated Recovery Price Unavailable'],
     ] as const)('names a refused sale’s code (%s) and when the next session opens, instead of a ticket', async (code, opensAt, label) => {
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'refused',
@@ -1661,7 +1661,7 @@ describe('BotPanelShellComponent', () => {
       expect(document.activeElement?.textContent).toContain('Stale Action Token');
       expect(document.activeElement?.textContent).toContain('The custody state changed.');
       expect(progress()).toContain('Check the position with Alpaca: Failed The custody state changed.');
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
     });
   });
 
@@ -2326,8 +2326,8 @@ describe('BotPanelShellComponent', () => {
 
   describe('the one view (#2563)', () => {
     beforeEach(() => {
-      brokersMock.checkSqliteSafeFlatten.mockReset();
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
+      brokersMock.checkSqliteRecoveryActionInFull.mockReset();
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValue({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: { kind: 'regular_session' },
       });
@@ -2471,7 +2471,7 @@ describe('BotPanelShellComponent', () => {
       expect(runBotAction.mock.calls.map(([, , action]) => action.action_id))
         .toEqual(['reconcile_now', 'execute_safe_flatten']);
       expect(runBotAction.mock.calls[1][2].concurrency_token).toBe('execute-token-18');
-      const check = brokersMock.checkSqliteSafeFlatten;
+      const check = brokersMock.checkSqliteRecoveryActionInFull;
       expect(check).toHaveBeenCalledWith(
         'clrk_spec', 'DUM284968',
         { action_id: 'prepare_safe_flatten', concurrency_token: 'plan-token-17' },
@@ -2496,7 +2496,7 @@ describe('BotPanelShellComponent', () => {
         .mockResolvedValueOnce(strandedPanel())
         .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
       const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled.' }));
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValueOnce({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce({
         capability: {
           ...SAFE_FLATTEN_CAPABILITY,
           reduction_plan: { ...SAFE_FLATTEN_PLAN, legs: [{ ...SAFE_FLATTEN_PLAN.legs[0], quantity: 3 }] },
@@ -2519,7 +2519,7 @@ describe('BotPanelShellComponent', () => {
         .mockResolvedValueOnce(strandedPanel())
         .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }));
       const runBotAction = vi.fn().mockResolvedValue(fakeActionResult({ action_id: 'reconcile_now', message: 'Reconciled.' }));
-      brokersMock.checkSqliteSafeFlatten.mockResolvedValue({
+      brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValue({
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
           kind: 'extended_limit', phase: 'PRE', symbol: 'QQQ', side: 'sell',
@@ -2571,7 +2571,7 @@ describe('BotPanelShellComponent', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
       await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Flatten…'));
-      expect(brokersMock.checkSqliteSafeFlatten).not.toHaveBeenCalled();
+      expect(brokersMock.checkSqliteRecoveryActionInFull).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -2635,7 +2635,7 @@ describe('BotPanelShellComponent', () => {
         providers: [
           provideRouter([]),
           { provide: BrokerV2PanelService, useValue: { ...mockService, getLiveSnapshot, runBotAction } },
-          { provide: BrokersService, useValue: { ...brokersMock, checkSqliteSafeFlatten: checkSettlement } },
+          { provide: BrokersService, useValue: { ...brokersMock, checkSqliteRecoveryActionInFull: checkSettlement } },
           { provide: MessageService, useValue: messageService },
         ],
       });
