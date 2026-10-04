@@ -949,19 +949,34 @@ def exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
     )
 
 
+def _settle_capability(projection: ClerkProjection) -> RecoveryCapability | None:
+    """The settle action of this bot's cut while it has a closing order to settle, else ``None`` (#2854).
+
+    The recovery catalog authors it from the one read of such orders
+    (``unknown_exit_orders``): a closing order that was sent, that the bot's
+    open unknown-outcome episode names, and that Alpaca never acknowledged or
+    filled. The bell reads the same.
+    """
+    return next(
+        (
+            capability
+            for capability in projection.recovery_actions
+            if capability.action_id == "settle_unknown_exit_order" and capability.needed
+        ),
+        None,
+    )
+
+
 def exit_unconfirmed(projection: ClerkProjection, sid: str) -> bool:
     """An exit whose closing order the Clerk sent and could not confirm (#2854).
 
-    The EXIT is ``unknown`` and has its closing order. The Clerk holds the
-    position and sends no other order for the bot, so no sale is queued.
+    The bot has a closing order to settle (:func:`_settle_capability`): the
+    Clerk holds the position and starts no other closing order for the bot,
+    so no sale is queued. An EXIT that is ``unknown`` for another reason is
+    not this: an order Alpaca acknowledged whose lookup failed is still being
+    worked, and its sale is still queued.
     """
-    return any(
-        operation.kind == "EXIT"
-        and operation.state == "unknown"
-        and any(order.role == "REDUCING" for order in operation.orders)
-        for operation in projection.operations
-        if operation.strategy_instance_id == sid
-    )
+    return projection.strategy_instance_id == sid and _settle_capability(projection) is not None
 
 
 # Every fix it names is on the bot's own page (hurdle H29): it never sends

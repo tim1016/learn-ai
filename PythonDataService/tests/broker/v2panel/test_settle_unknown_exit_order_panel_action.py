@@ -21,13 +21,16 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import OrderOutcomeAttestedFacts
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.errors import BrokerUnavailable
 from app.schemas.alpaca_clerk_sqlite import NOT_AN_ALPACA_ORDER_ID, UnknownOrderAttestationRequest
 from app.schemas.bot_page import ToolbarActionView
 from app.schemas.broker_v2_panel import (
@@ -375,6 +378,23 @@ def _bot_page(repo: ClerkSqliteRepository, *, running: bool) -> tuple[BotPanelVi
     return served, toolbar_actions(served, status=status)
 
 
+def _run_summary(repo: ClerkSqliteRepository) -> tuple[bool, bool, str]:
+    """A stopped bot's run summary from this ledger: whether its exit is unconfirmed, whether queued, and the line."""
+    projection = _projection(repo)
+    served, _toolbar = _bot_page(repo, running=False)
+    facts = run_summary_facts(
+        served,
+        run_facts(
+            None, run_fills=[], activity=None, budget=None,
+            exit_in_progress=exit_in_progress(projection, settling.SID),
+            exit_unconfirmed=exit_unconfirmed(projection, settling.SID),
+        ),
+        now_ms=repo.clock(),
+    )
+    text = run_summary_text(facts.model_copy(update={"ending": "stopped", "started_at_ms": FIXTURE_RTH_MS}))
+    return facts.exit_unconfirmed, facts.exit_queued, text
+
+
 def _settle_on_the_page(repo: ClerkSqliteRepository, *, running: bool) -> tuple[str, str, dict | None]:
     """How the page's toolbar offers settling, why, and the settlement its action carries on the wire."""
     served, toolbar = _bot_page(repo, running=running)
@@ -482,22 +502,7 @@ async def test_the_run_summary_says_a_closing_order_is_unconfirmed_never_that_a_
     repo, alpaca, facade = started_bot
     await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
 
-    def summary() -> tuple[bool, bool, str]:
-        projection = _projection(repo)
-        served, _toolbar = _bot_page(repo, running=False)
-        facts = run_summary_facts(
-            served,
-            run_facts(
-                None, run_fills=[], activity=None, budget=None,
-                exit_in_progress=exit_in_progress(projection, settling.SID),
-                exit_unconfirmed=exit_unconfirmed(projection, settling.SID),
-            ),
-            now_ms=repo.clock(),
-        )
-        text = run_summary_text(facts.model_copy(update={"ending": "stopped", "started_at_ms": FIXTURE_RTH_MS}))
-        return facts.exit_unconfirmed, facts.exit_queued, text
-
-    unconfirmed, queued, text = summary()
+    unconfirmed, queued, text = _run_summary(repo)
     assert (unconfirmed, queued) == (True, False)
     assert text.endswith("holds 10 SPY · a closing order is unconfirmed.")
     assert "a sale is queued" not in text
@@ -507,9 +512,43 @@ async def test_the_run_summary_says_a_closing_order_is_unconfirmed_never_that_a_
         attestation=UnknownOrderAttestationRequest(kind="absent"), idempotency_key="settle-1",
     )
     assert settled is not None and settled.applied is True
-    unconfirmed, queued, text = summary()
+    unconfirmed, queued, text = _run_summary(repo)
     assert (unconfirmed, queued) == (False, False)
     assert text.endswith("holds 10 SPY.")
+
+
+async def test_an_acknowledged_closing_order_whose_lookup_failed_is_still_a_sale_that_is_queued(
+    started_bot,
+) -> None:
+    """Alpaca acknowledged the closing order, and one later lookup of it failed: nothing is unconfirmed (#2854).
+
+    The EXIT is ``unknown`` until a lookup answers. The summary read "a
+    closing order is unconfirmed" for any ``unknown`` EXIT with a closing
+    order, though this one is at Alpaca under an id the Clerk holds: the
+    settle action is not offered for it and the bell does not name it. The
+    summary now reads what they read, so the sale is still queued.
+    """
+    repo, _never_receives, _facade = started_bot
+    alpaca = settling._AlpacaAccount(repo, repo.clock)
+    exit_id = await settling._the_runner_sends_the_exit(repo, alpaca)
+    (closing,) = [order for order in repo.orders_for_strategy(settling.SID) if order.role == "REDUCING"]
+    assert closing.broker_order_id is not None
+    submit_stop_run(
+        repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
+        lifecycle_run_id=settling.RUN_ID, operator_reason="operator_stop",
+    )
+    alpaca.fails["lookup"] = BrokerUnavailable("alpaca timed out")
+    await resolve_exit(
+        repo, effect_operation_id=exit_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY, read=None
+    )
+
+    effect = repo.effect_operation(exit_id)
+    assert effect is not None and effect.state == "unknown"
+    assert repo.unknown_exit_orders(settling.SID) == ()
+    assert _settle_on_the_page(repo, running=False)[0] == "not_needed"
+    unconfirmed, queued, text = _run_summary(repo)
+    assert (unconfirmed, queued) == (False, True)
+    assert text.endswith("holds 10 SPY · a sale is queued.")
 
 
 async def test_the_bot_page_offers_settling_only_while_the_clerks_catalog_does(started_bot) -> None:
