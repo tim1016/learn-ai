@@ -81,6 +81,32 @@ describe('DateRangePickerComponent', () => {
     expect(host.from()).toBe('2026-09-14');
   });
 
+
+  it('shows the selected range again when its quick range is tapped in the same task as a typed date (#2866)', async () => {
+    const { view, host, start, quick } = await renderPicker();
+
+    // A touch tap: the field's change and the click arrive with no render between them.
+    await userEvent.clear(start);
+    await userEvent.type(start, '2026-09-14');
+    start.dispatchEvent(new Event('change'));
+    quick('1M').click();
+    await view.fixture.whenStable();
+
+    expect(start.value).toBe('2026-08-19');
+    expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
+  });
+
+  it('leaves an end date still being typed alone when its host moves the start', async () => {
+    const { view, host, start, end } = await renderPicker();
+    await userEvent.clear(end);
+    await userEvent.type(end, '2026-09');
+
+    host.from.set('2026-08-20');
+    await view.fixture.whenStable();
+
+    expect([start.value, end.value]).toEqual(['2026-08-20', '2026-09']);
+  });
+
   it('keeps a half-typed date in the field, says why, and hands the host an empty date until it is whole', async () => {
     const { host, start, retype } = await renderPicker();
 

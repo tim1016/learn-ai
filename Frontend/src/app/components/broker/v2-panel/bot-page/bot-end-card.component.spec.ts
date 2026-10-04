@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -118,6 +119,22 @@ describe('BotEndCardComponent (#2607)', () => {
 
     const [hour, minute] = wall.clock.split(':').map(Number);
     await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: new Date(2026, 11, 1, hour, minute).getTime(), end_action: 'SELL' }));
+  });
+
+  it('shows the bot’s end again when Change end is tapped in the same task as a typed date, and saves that end (#2866)', async () => {
+    const { save, fixture } = await renderCard(SCHEDULED);
+    const fields = await openEditor(fixture);
+    const date = within(fields).getByLabelText<HTMLInputElement>('End date');
+
+    // A touch tap: the field's change and the click arrive with no render between them.
+    await userEvent.clear(date);
+    await userEvent.type(date, '2026-12-01');
+    date.dispatchEvent(new Event('change'));
+    await openEditor(fixture);
+
+    expect(date.value).toBe(localWallClock(END_AT).date);
+    fireEvent.click(within(fields).getByRole('button', { name: 'Save end' }));
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: END_AT, end_action: 'SELL' }));
   });
 
   it('opens the end date’s calendar inside the fields, where the page’s top layer cannot cover it; it offers today onward and takes a picked day (#2858)', async () => {

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, model, output, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, model, output, untracked, viewChild } from '@angular/core';
 import { Popover } from 'primeng/popover';
 import { Tooltip } from 'primeng/tooltip';
 
@@ -6,7 +6,7 @@ import { etIsoDate } from '../date/et-midnight';
 import type { IsoDate } from '../date/iso-date';
 import { UNBOUNDED, type DataGaps, type DateBounds } from './date-bounds';
 import { DateCalendarComponent } from './date-calendar.component';
-import { checkRange, fieldText } from './date-check';
+import { checkRange, fieldText, showFieldText } from './date-check';
 import { QUICK_RANGES, activeQuickRange, offerQuickRanges, type DateRange, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
 import { TradingCalendarService } from './trading-calendar.service';
 
@@ -67,6 +67,8 @@ export class DateRangePickerComponent {
 
   protected readonly fromText = fieldText(this.from, () => this.emitted.from);
   protected readonly toText = fieldText(this.to, () => this.emitted.to);
+  private readonly fromInput = viewChild.required<ElementRef<HTMLInputElement>>('fromInput');
+  private readonly toInput = viewChild.required<ElementRef<HTMLInputElement>>('toInput');
 
   protected readonly sessions = computed(() => (this.sessionsOnly() ? this.calendar.sessions() : null));
   /** Why the calendar could not be read, wherever this picker needs it: to check sessions, or to offer quick ranges. */
@@ -116,6 +118,8 @@ export class DateRangePickerComponent {
       this.to();
       untracked(() => this.handOver());
     });
+    showFieldText(this.fromInput, this.fromText);
+    showFieldText(this.toInput, this.toText);
   }
 
   /**

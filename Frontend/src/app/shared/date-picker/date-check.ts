@@ -1,4 +1,4 @@
-import { linkedSignal, type Signal, type WritableSignal } from '@angular/core';
+import { afterRenderEffect, linkedSignal, type ElementRef, type Signal, type WritableSignal } from '@angular/core';
 
 import { isWeekend, parseIsoDate, type IsoDate } from '../date/iso-date';
 import type { DateBounds } from './date-bounds';
@@ -69,5 +69,21 @@ export function fieldText(hostDate: Signal<string>, lastHanded: () => string | n
   return linkedSignal<string, string>({
     source: hostDate,
     computation: (date, previous) => (previous !== undefined && date === lastHanded() ? previous.value : date),
+  });
+}
+
+/**
+ * Keeps a date field's input showing its text (#2866). A template binding
+ * writes the input only when the text differs from what the binding last
+ * wrote, and what a person types never passes through it: text that changes
+ * and is put back within one task would leave their typing on screen.
+ */
+export function showFieldText(input: Signal<ElementRef<HTMLInputElement>>, text: Signal<string>): void {
+  afterRenderEffect({
+    write: () => {
+      const shown = text();
+      const element = input().nativeElement;
+      if (element.value !== shown) element.value = shown;
+    },
   });
 }
