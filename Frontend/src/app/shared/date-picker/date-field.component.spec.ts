@@ -94,6 +94,18 @@ describe('DateFieldComponent', () => {
     expect(host.value()).toBe('2022-10-01');
   });
 
+  it('takes a character typed into the date it holds, so a date is edited in place', async () => {
+    const { view, host, field } = await renderField();
+
+    // The caret before the year's last digit: the new digit is typed, then the old one deleted.
+    await userEvent.type(field, '3{Delete}', { initialSelectionStart: 3, initialSelectionEnd: 3 });
+    await userEvent.tab();
+    await view.fixture.whenStable();
+
+    expect(field.value).toBe('2023-11-01');
+    expect(host.value()).toBe('2023-11-01');
+  });
+
   it('keeps an unusable entry in the field with its reason and hands the host an empty date', async () => {
     const { host, field, retype } = await renderField();
 

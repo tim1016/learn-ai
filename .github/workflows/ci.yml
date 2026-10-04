@@ -133,6 +133,10 @@ jobs:
   frontend-test-shard:
     name: Frontend Test Shard ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
+    # The test step fails the job at three minutes and says why (#2873). This
+    # stops a job whose checkout, Node setup or `npm ci` hangs before that step
+    # runs. It is a minute later so the test step's own message is the one seen.
+    timeout-minutes: 4
     strategy:
       fail-fast: false
       matrix:
@@ -145,6 +149,14 @@ jobs:
       TEST_SHARD_COUNT: "6"
       TEST_SHARD_INDEX: ${{ matrix.shard }}
     steps:
+      # The two-minute target and the three-minute limit bind the whole job,
+      # not only its test step (#2873). This must stay the first step: the
+      # test step counts from it, so checkout, Node setup and `npm ci` spend
+      # the same allowance the tests do. Frontend/ does not exist before
+      # checkout, so the step runs from the workspace root.
+      - name: Record when the job started
+        working-directory: ${{ github.workspace }}
+        run: echo "CI_JOB_STARTED_AT_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
