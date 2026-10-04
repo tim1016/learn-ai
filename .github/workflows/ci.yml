@@ -133,6 +133,10 @@ jobs:
   frontend-test-shard:
     name: Frontend Test Shard ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
+    # The test step fails the job at three minutes and says why (#2873). This
+    # stops a job whose checkout, Node setup or `npm ci` hangs before that step
+    # runs. It is a minute later so the test step's own message is the one seen.
+    timeout-minutes: 4
     strategy:
       fail-fast: false
       matrix:

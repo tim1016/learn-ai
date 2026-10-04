@@ -62,6 +62,17 @@ def test_frontend_shard_job_records_its_start_before_any_other_step() -> None:
     assert 'const JOB_STARTED_AT_ENV = "CI_JOB_STARTED_AT_MS";' in script.read_text(encoding="utf-8")
 
 
+def test_frontend_shard_job_stops_a_setup_step_that_hangs() -> None:
+    # The test script enforces the three-minute limit, but only once it runs
+    # (#2873). The job's own timeout bounds the steps before it, and sits past
+    # the script's limit so the script's message is the one a slow run shows.
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    script = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
+
+    assert "const TEST_LIMIT_MS = 180_000;" in script.read_text(encoding="utf-8")
+    assert workflow["jobs"]["frontend-test-shard"]["timeout-minutes"] == 4
+
+
 def test_python_pr_shards_balance_by_measured_duration() -> None:
     from scripts.pytest_shard import assign_shards, hash_shard
 
