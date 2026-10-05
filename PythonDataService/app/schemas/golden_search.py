@@ -363,12 +363,25 @@ class GoldenSearchDefaults(GoldenSearchProtocol):
     exposure: GoldenSearchExposure
 
 
+class GoldenSearchBackfillRemedy(_Wire):
+    """The lake backfill that fetches a refusal's missing sessions; a client adds only what a `DataRunSpec` needs besides."""
+
+    symbol: str
+    price_adjustment_mode: Literal["raw", "polygon_split_adjusted"]
+    start_trading_date_ms: InstantMs = Field(description="The first missing session the provider still serves, calendar-anchored as a `DataRunSpec` bound is.")
+    end_trading_date_ms: InstantMs = Field(description="The last such session, anchored the same way; inclusive.")
+
+
 class GoldenSearchProtocolRefusal(_Wire):
     code: str
     field: str | None
     message: str
     nearest_valid_ms: list[InstantMs] = Field(
         default_factory=list, description="The nearest instants `field` would accept instead, when the server can name them; empty otherwise."
+    )
+    backfill: GoldenSearchBackfillRemedy | None = Field(
+        default=None,
+        description="The backfill that fetches the sessions the refusal names as missing; null when it names none, or the provider no longer serves them.",
     )
 
 

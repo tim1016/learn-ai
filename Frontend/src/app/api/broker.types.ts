@@ -13478,6 +13478,29 @@ export interface components {
             /** Year Sessions */
             year_sessions: number;
         };
+        /**
+         * GoldenSearchBackfillRemedy
+         * @description The lake backfill that fetches a refusal's missing sessions; a client adds only what a `DataRunSpec` needs besides.
+         */
+        GoldenSearchBackfillRemedy: {
+            /**
+             * End Trading Date Ms
+             * @description The last such session, anchored the same way; inclusive.
+             */
+            end_trading_date_ms: number;
+            /**
+             * Price Adjustment Mode
+             * @enum {string}
+             */
+            price_adjustment_mode: "raw" | "polygon_split_adjusted";
+            /**
+             * Start Trading Date Ms
+             * @description The first missing session the provider still serves, calendar-anchored as a `DataRunSpec` bound is.
+             */
+            start_trading_date_ms: number;
+            /** Symbol */
+            symbol: string;
+        };
         /** GoldenSearchBestMonth */
         GoldenSearchBestMonth: {
             /**
@@ -15131,6 +15154,8 @@ export interface components {
         };
         /** GoldenSearchProtocolRefusal */
         GoldenSearchProtocolRefusal: {
+            /** @description The backfill that fetches the sessions the refusal names as missing; null when it names none, or the provider no longer serves them. */
+            backfill?: components["schemas"]["GoldenSearchBackfillRemedy"] | null;
             /** Code */
             code: string;
             /** Field */

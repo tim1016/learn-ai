@@ -11,9 +11,33 @@
   @if (refusals().length > 0) {
     <ul class="problems" aria-label="Why this plan cannot be locked">
       @for (problem of refusals(); track problem.key) {
-        <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
+        <li>
+          @if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }
+          @if (problem.backfill; as remedy) {
+            <button pButton type="button" size="small" severity="secondary" [outlined]="true" class="fill" [disabled]="running() !== null" (click)="fill.emit(remedy)">
+              <i class="pi pi-download" aria-hidden="true"></i><span>Backfill {{ remedy.symbol }}</span>
+            </button>
+          }
+        </li>
       }
     </ul>
+  }
+  @if (running(); as run) {
+    <p class="backfill" role="status">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      The backfill is running@if (run.progress; as tick) {: {{ tick.current | number }} of {{ tick.total | number }} {{ tick.unit }}}. The plan is checked again when it ends.
+    </p>
+  }
+  @if (ended(); as end) {
+    <p class="backfill problem" role="alert">
+      @if (end.kind === 'failed') {
+        The backfill did not finish: {{ end.message }}
+      } @else {
+        The backfill finished, and the lake still does not hold every session this plan reads.
+        @if (end.failure; as failure) { {{ failure.detail ?? (failure.reason | receiptLabel) }} }
+      }
+      Pick a study range the lake holds, or run the backfill again.
+    </p>
   }
   @if (lockMessage(); as message) { <p class="problem" role="alert">{{ message }}</p> }
 
