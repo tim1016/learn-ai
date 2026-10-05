@@ -11,40 +11,49 @@
     <label class="field"><span>Test window (months)</span><input #testing pInputText type="number" min="1" step="1" [id]="numberId('test_months')" [value]="p.test_months" [attr.aria-invalid]="numberInvalid('test_months')" (input)="onNumber('test_months', testing.value)" /></label>
     <label class="field"><span>Final test (months)</span><input #finalMonthsInput pInputText type="number" min="1" step="1" placeholder="as dated" [id]="numberId('final_months')" [value]="finalMonths() ?? ''" [attr.aria-invalid]="numberInvalid('final_months')" (input)="onNumber('final_months', finalMonthsInput.value)" /></label>
   </div>
-  <div class="fields">
-    <div class="field">
-      <label [for]="dateId('development_start')">Development from</label>
-      <app-date-field [inputId]="dateId('development_start')" [value]="dates().development_start" [hostProblem]="notes().development_start.problem" [hostOffers]="notes().development_start.offers" (valueChange)="onDate('development_start', $event)" />
-    </div>
-    <div class="field">
-      <label [for]="dateId('final_start')">Final test from (development ends the day before)</label>
-      <app-date-field [inputId]="dateId('final_start')" [value]="dates().final_start" [hostProblem]="notes().final_start.problem" [hostOffers]="notes().final_start.offers" (valueChange)="onDate('final_start', $event)" />
-    </div>
-    <div class="field">
-      <label [for]="dateId('final_end')">Final test through</label>
-      <app-date-field [inputId]="dateId('final_end')" [value]="dates().final_end" [hostProblem]="notes().final_end.problem" [hostOffers]="notes().final_end.offers" (valueChange)="onDate('final_end', $event)" />
-    </div>
+  <div #block class="range" role="group" aria-labelledby="gs-plan-range-label" [id]="rangeId" tabindex="-1">
+    <span class="range__label" id="gs-plan-range-label">Study range</span>
+    <app-date-range-picker label="Study range dates" [from]="shown().from" [to]="shown().to" [bounds]="bounds()" [hostDays]="planDays()" [gaps]="gaps()" [ranges]="quickRanges" [sessionsOnly]="false" (changed)="onRange($event)" />
+    @if (layoutProblem(); as problem) {
+      <p class="refusal" role="alert">{{ problem }}</p>
+    }
+    @for (refusal of rangeRefusals(); track refusal.key) {
+      <p class="refusal" role="alert">{{ refusal.text }}</p>
+      @if (refusal.offers.length > 0) {
+        <div class="range__offers" role="group" aria-label="Days the range can start on">
+          @for (day of refusal.offers; track day) {
+            <button pButton type="button" size="small" [outlined]="true" (click)="startOn(day, block)"><span>Start the range on {{ day }}</span></button>
+          }
+        </div>
+      }
+    }
+    @if (rangeRefusals().length > 0 && finalMonths() === undefined) {
+      <p class="hint">These are the revised study's own dates. Pick a range, or enter the final test's length in months, and the dates are laid out again.</p>
+    }
   </div>
-  <p class="hint">Dates are New York dates. A date set here replaces the month count. The final-test dates cannot be extended after a result is seen.</p>
-  @if (finalSessionsCut(); as cut) {
+  <p class="hint">Days are New York dates. The final test is the last months of the range, and development is laid out before it. The final-test dates cannot be extended after a result is seen.</p>
+  @if (current() ? rangeNote() : null; as note) {
+    <p class="cut" role="note">{{ note }}</p>
+  }
+  @if (current() ? finalSessionsCut() : null; as cut) {
     <p class="cut" role="note">
       The final test ends with the lake's last session on <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /> — {{ cut }} scheduled {{ cut === 1 ? 'session' : 'sessions' }} short of {{ finalMonths() }} whole months. Backfill the instrument and change a month count to lay out the whole months.
     </p>
   }
 
-  @if (timeline(); as line) {
+  @if (current() ? timeline() : null; as line) {
+    @let folds = preflight()?.folds?.length ?? 0;
     <div class="timeline" role="img" aria-label="Development, its test-over-time folds, then the sealed final test">
       <div class="bar">
         <div class="bar__dev" [style.width.%]="line.finalAt">
-          <span>Development · {{ preflight()?.folds?.length ?? 0 }} test-over-time folds</span>
+          <span>Development · {{ folds }} test-over-time {{ folds === 1 ? 'fold' : 'folds' }}</span>
           @for (fold of line.folds; track fold.key) { <span class="bar__fold" [style.left.%]="fold.left" [style.width.%]="fold.width"></span> }
         </div>
         <div class="bar__final"><i class="pi pi-lock" aria-hidden="true"></i> Final test</div>
       </div>
-      <div class="ticks">
-        <span><app-timestamp-display [value]="p.development_start_ms" mode="date-et" /></span>
-        <span class="ticks__final" [style.left.%]="line.finalAt"><app-timestamp-display [value]="p.final_start_ms" mode="date-et" /></span>
-        <span><app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /></span>
+      <div class="spans">
+        <span>Development <app-timestamp-display [value]="p.development_start_ms" mode="date-et" /> to <app-timestamp-display [value]="p.final_start_ms - 1" mode="date-et" /></span>
+        <span>Final test <app-timestamp-display [value]="p.final_start_ms" mode="date-et" /> to <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /></span>
       </div>
     </div>
   }

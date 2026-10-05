@@ -20,8 +20,7 @@ let nextNoteId = 0;
  * in is the host's to say: a trading date is an ET date, a bot's end date is
  * the viewer's own. What makes a date wrong for the host is the host's to
  * say too, through {@link hostProblem}: both hosts have a server that judges
- * the date in its own words. A host whose server also names the dates it
- * would take hands them over as {@link hostOffers}, one click each.
+ * the date in its own words.
  *
  * It is a signal-forms control: a host binds it with ``[formField]`` and it
  * takes the field's disabled state and reports when it has been left.
@@ -43,8 +42,6 @@ export class DateFieldComponent implements FormValueControl<string> {
   readonly inputId = input<string | null>(null);
   /** A problem the host found with this date, such as a server refusal; shown as the field's own. */
   readonly hostProblem = input<string | null>(null);
-  /** Dates the host would take instead, such as the ones its server named with a refusal; each is offered as a button. */
-  readonly hostOffers = input<readonly IsoDate[]>([]);
   /** ``filled`` among a form's filled fields; ``outlined`` everywhere else. */
   readonly appearance = input<'outlined' | 'filled'>('outlined');
   /**
@@ -73,8 +70,6 @@ export class DateFieldComponent implements FormValueControl<string> {
   protected readonly entry = computed(() => checkDate(this.text(), { bounds: UNBOUNDED, sessions: null }));
   protected readonly calendarBounds = computed<DateBounds>(() => ({ ...UNBOUNDED, min: this.pickFrom() }));
   protected readonly problem = computed(() => (this.disabled() ? null : (this.entry().problem ?? this.hostProblem())));
-  /** The host's offers the field can still take: none while disabled, and never the date it already holds. */
-  protected readonly offers = computed(() => (this.disabled() ? [] : this.hostOffers().filter((date) => date !== this.entry().date)));
 
   constructor() {
     // A host that puts back a date this field has refused is answered with
@@ -105,12 +100,6 @@ export class DateFieldComponent implements FormValueControl<string> {
   protected apply(text: string): void {
     this.text.set(text.trim());
     this.handOver();
-  }
-
-  /** Takes a date the host offered. The keyboard moves to the field, because the button goes once the host accepts the date. */
-  protected takeOffer(date: IsoDate): void {
-    this.apply(date);
-    this.focus();
   }
 
   protected toggleCalendar(event: Event, anchor: HTMLElement): void {

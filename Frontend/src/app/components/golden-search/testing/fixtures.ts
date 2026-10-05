@@ -159,11 +159,15 @@ export function tradeActivity(overrides: Partial<TradeActivity> = {}): TradeActi
   };
 }
 
+/** A lake that holds SPY for the whole fixture plan (its development starts on 2024-01-01), so the range picker accepts the plan's dates. */
+export const STUDY_POOL = [{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2023-01-03', lastHeld: '2026-09-18' }] as const;
+
 export function defaults(overrides: Partial<GoldenSearchDefaults> = {}): GoldenSearchDefaults {
   return {
     ...protocol(),
     seed: { ...INCUMBENT_PARAMS },
     final_sessions_cut: 0,
+    range_note: null,
     incumbent_label: 'Registry validated settings',
     incumbent_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
     exposure: exposure(),

@@ -165,6 +165,22 @@ async def test_refused_defaults_are_a_400_carrying_the_code_and_field(client: ht
     assert response.json()["detail"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("picked", "code", "field"),
+    [
+        ({"range_start_ms": et_midnight_ms(date(2024, 10, 3))}, "INTERVALS_INVALID", "range_end_ms"),
+        ({"range_start_ms": et_midnight_ms(date(2024, 10, 3)) + 1, "range_end_ms": et_midnight_ms(date(2026, 10, 3))}, "INTERVAL_NOT_ET_MIDNIGHT", "range_start_ms"),
+        ({"range_start_ms": et_midnight_ms(date(2026, 10, 3)), "range_end_ms": et_midnight_ms(date(2024, 10, 3))}, "INTERVALS_INVALID", "range_end_ms"),
+    ],
+)
+async def test_defaults_refuse_a_range_that_is_not_two_et_midnights_in_order(client: httpx.AsyncClient, picked: dict, code: str, field: str) -> None:
+    response = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": "SPY", **picked})
+
+    assert response.status_code == 400, response.text
+    assert (response.json()["detail"]["code"], response.json()["detail"]["field"]) == (code, field)
+    assert response.json()["detail"]["message"]
+
+
 async def test_defaults_refuse_a_month_count_below_one_at_the_schema(client: httpx.AsyncClient) -> None:
     response = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": "SPY", "final_months": 0})
 
@@ -602,6 +618,32 @@ async def test_preflight_of_a_lockable_plan_reports_its_estimate_folds_exposure_
     assert body["run_up"]["data_start_ms"] < plan["development_start_ms"]
 
 
+async def test_defaults_lay_the_plan_out_inside_a_picked_range_and_say_what_it_left_out(client: httpx.AsyncClient, harness: Harness, symbol: str) -> None:
+    # Two years ending on Friday 2026-10-02: 21 months before the final test hold 20 months of whole folds.
+    picked = {"range_start_ms": et_midnight_ms(date(2024, 10, 3)), "range_end_ms": et_midnight_ms(date(2026, 10, 3))}
+
+    response = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": symbol, **picked})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [body[key] for key in ("development_start_ms", "development_end_ms", "final_start_ms", "final_end_ms")] == [
+        et_midnight_ms(day) for day in (date(2024, 11, 3), date(2026, 7, 3), date(2026, 7, 3), date(2026, 10, 3))
+    ]
+    assert (body["final_months"], body["final_sessions_cut"]) == (3, 0)
+    assert body["range_note"].startswith("Development starts on 2024-11-03. The 22 sessions from 2024-10-03 to 2024-11-01 are left out")
+    # No range: the default layout, which leaves nothing of a range out.
+    plain = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": symbol})
+    assert plain.json()["range_note"] is None
+    # A range with no room for one fold is refused in words, on the range.
+    short = await client.get(
+        f"{BASE}/defaults",
+        params={"strategy_key": "ema_crossover_signal", "symbol": symbol, "range_start_ms": et_midnight_ms(date(2026, 1, 3)), "range_end_ms": picked["range_end_ms"]},
+    )
+    assert short.status_code == 400, short.text
+    assert (short.json()["detail"]["code"], short.json()["detail"]["field"]) == ("INTERVALS_INVALID", "range_start_ms")
+    assert short.json()["detail"]["message"].startswith("The range is too short:")
+
+
 async def test_defaults_are_a_plan_the_client_can_send_straight_back(client: httpx.AsyncClient, harness: Harness, symbol: str) -> None:
     three = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": symbol.lower()})
     one = await client.get(f"{BASE}/defaults", params={"strategy_key": "ema_crossover_signal", "symbol": symbol, "final_months": 1})
@@ -614,6 +656,6 @@ async def test_defaults_are_a_plan_the_client_can_send_straight_back(client: htt
     assert one.json()["final_end_ms"] == defaults["final_end_ms"] and one.json()["final_start_ms"] > defaults["final_start_ms"]
     assert (defaults["final_months"], one.json()["final_months"]) == (3, 1)
     assert defaults["incumbent_sentence"] == "Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars"
-    plan = {key: value for key, value in defaults.items() if key not in ("final_months", "final_sessions_cut", "incumbent_label", "incumbent_sentence", "exposure")}
+    plan = {key: value for key, value in defaults.items() if key not in ("final_months", "final_sessions_cut", "range_note", "incumbent_label", "incumbent_sentence", "exposure")}
     reviewed = await client.post(f"{BASE}/preflight", json=plan)
     assert reviewed.status_code == 200, reviewed.text

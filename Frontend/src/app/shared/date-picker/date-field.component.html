@@ -32,13 +32,6 @@
 @if (problem(); as message) {
   <p class="date-control__note date-control__note--problem" [id]="noteId" role="alert">{{ message }}</p>
 }
-@if (offers().length > 0) {
-  <div class="date-field__offers" role="group" aria-label="Dates that fit">
-    @for (date of offers(); track date) {
-      <button type="button" class="date-control__choice date-field__offer mono" (click)="takeOffer(date)">Use {{ date }}</button>
-    }
-  </div>
-}
 @if (calendar() === 'inline') {
   @if (open()) {
     <div class="date-field__inline" role="group" aria-label="Calendar" (keydown.escape)="dismissCalendar()">

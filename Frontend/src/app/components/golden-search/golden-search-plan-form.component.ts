@@ -9,7 +9,7 @@ import { GoldenSearchCostControlsComponent } from './golden-search-cost-controls
 import { incumbentLabel, pointDifferences } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
 import { GoldenSearchMethodChoiceComponent, METHOD_HINTS } from './golden-search-method-choice.component';
-import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, isRanked, MONTH_FIELDS, wireProtocol, withImportance, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
+import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftLayout, isRanked, MONTH_FIELDS, wireProtocol, withImportance, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
 import { GoldenSearchPlanFooterComponent } from './golden-search-plan-footer.component';
 import { GoldenSearchProcessComponent } from './golden-search-process.component';
 import { refusalProblems, unreadableProblems } from './golden-search-plan-problems';
@@ -17,8 +17,10 @@ import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-
 import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
 import { GoldenSearchTimeWindowsComponent } from './golden-search-time-windows.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
-import type { DefaultsMonths, GoldenSearchMethod, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyDetail } from './golden-search.types';
+import type { DefaultsLayout, GoldenSearchMethod, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
+
+const RANGE_NOT_LAID_OUT = 'The data plane did not lay the dates out inside this range: it is older than this page. Restart the data plane, then pick the range again.';
 
 /**
  * The Plan step (#2696): choose a strategy with a Golden Search declaration
@@ -28,9 +30,9 @@ import { IdempotencyKeys } from './idempotency-keys';
  * dropped, so Lock always describes what the form shows. The plan is sent as
  * `wireProtocol` shapes it: a knob searched from a value to itself is held
  * there, and a pair audit waits until both its knobs vary. Changing the
- * final-test or fold months asks `/defaults` to lay the dates out again (the
- * calendar authority stays in Python) and keeps every other edit; the plan
- * is not checked until the new dates arrive. With `reviseFrom` the form
+ * study range or the final-test or fold months asks `/defaults` to lay the
+ * dates out again (the calendar authority stays in Python) and keeps every
+ * other edit; the plan is not checked until the new dates arrive. With `reviseFrom` the form
  * starts from a study's frozen plan and locks a new linked study. The footer
  * stays in view with the run bound, every problem linked to its field, and Lock.
  */
@@ -80,7 +82,7 @@ export class GoldenSearchPlanFormComponent {
   readonly locking = signal(false);
   readonly lockRefusal = signal<GridSearchRefusal | null>(null);
   readonly lockError = signal<string | null>(null);
-  /** The server is laying the dates out for new month counts; the plan waits for them. */
+  /** The server is laying the dates out for a new range or new month counts; the plan waits for them. */
   readonly layingDates = signal(false);
   readonly datesError = signal<string | null>(null);
 
@@ -95,7 +97,7 @@ export class GoldenSearchPlanFormComponent {
   });
   protected readonly blocked = computed(() => {
     if ((this.draft()?.problems.size ?? 0) > 0) return 'Some values cannot be read yet. Fix them and the plan is checked again.';
-    if (this.layingDates()) return 'Laying out the dates for these months…';
+    if (this.layingDates()) return 'Laying out the dates…';
     return this.datesError();
   });
   /** The server accepted the plan the form shows. Every edit drops the last answer, so a stale one never counts. */
@@ -127,7 +129,7 @@ export class GoldenSearchPlanFormComponent {
   /** Generation of the latest strategy/instrument choice; older defaults are ignored. */
   private defaultsGeneration = 0;
   private debounce: ReturnType<typeof setTimeout> | null = null;
-  /** Generation of the latest month counts; dates laid out for older counts are ignored. */
+  /** Generation of the latest range and month counts; dates laid out for older ones are ignored. */
   private datesGeneration = 0;
   private datesDebounce: ReturnType<typeof setTimeout> | null = null;
   private appliedRevision: StudyDetail | null = null;
@@ -178,13 +180,17 @@ export class GoldenSearchPlanFormComponent {
   onEdit(edit: PlanEdit): void {
     const draft = this.draft();
     if (draft === null) return;
-    // A date typed by hand wins over dates still being laid out for a month count.
-    if (edit.kind === 'date') this.cancelDates();
     const next = applyPlanEdit(draft, edit, this.capability());
     this.draft.set(next);
-    const months = edit.kind === 'number' && MONTH_FIELDS.has(edit.field) ? draftMonths(next) : null;
-    if (months !== null) this.scheduleDates(months);
-    else this.scheduleCheck();
+    const relays = edit.kind === 'range' || (edit.kind === 'number' && MONTH_FIELDS.has(edit.field));
+    const layout = relays ? draftLayout(next) : null;
+    if (layout !== null) {
+      this.scheduleDates(layout);
+      return;
+    }
+    // A range that cannot be laid out yet must not be overtaken by dates still on their way for the last one.
+    if (edit.kind === 'range') this.cancelDates();
+    this.scheduleCheck();
   }
 
   resetKnobs(): void {
@@ -289,31 +295,37 @@ export class GoldenSearchPlanFormComponent {
     }
   }
 
-  /** New month counts: after the debounce, the server lays the dates out for them. */
-  private scheduleDates(months: DefaultsMonths): void {
+  /** A new range or new month counts: after the debounce, the server lays the dates out for them. */
+  private scheduleDates(layout: DefaultsLayout): void {
     const generation = ++this.datesGeneration;
     this.clearDatesDebounce();
     this.datesError.set(null);
     this.layingDates.set(true);
     this.invalidateCheck();
-    this.datesDebounce = setTimeout(() => void this.layOutDates(months, generation), this.preflightDebounceMs());
+    this.datesDebounce = setTimeout(() => void this.layOutDates(layout, generation), this.preflightDebounceMs());
   }
 
-  private async layOutDates(months: DefaultsMonths, generation: number): Promise<void> {
+  private async layOutDates(layout: DefaultsLayout, generation: number): Promise<void> {
     const strategyKey = this.strategyKey();
     const symbol = this.symbol();
     if (strategyKey === null || symbol === '') return;
     try {
-      const laidOut = await this.service.defaults(strategyKey, symbol, months);
+      const laidOut = await this.service.defaults(strategyKey, symbol, layout);
       const draft = this.draft();
       if (generation !== this.datesGeneration || draft === null) return;
       this.layingDates.set(false);
+      // A final test ends where its range does. A data plane older than this page ignores the range and answers with its default dates.
+      if (layout.range_end_ms !== undefined && laidOut.final_end_ms !== layout.range_end_ms) {
+        this.datesError.set(RANGE_NOT_LAID_OUT);
+        this.invalidateCheck();
+        return;
+      }
       this.draft.set(withServerDates(draft, laidOut));
       this.scheduleCheck();
     } catch (error) {
       if (generation !== this.datesGeneration) return;
       this.layingDates.set(false);
-      this.datesError.set(extractServerMessage(error, 'The dates could not be laid out for these months. Change a month count to try again.'));
+      this.datesError.set(extractServerMessage(error, 'The dates could not be laid out. Change the range or a month count to try again.'));
       this.invalidateCheck();
     }
   }

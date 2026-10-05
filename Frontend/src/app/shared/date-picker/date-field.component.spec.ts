@@ -15,7 +15,6 @@ import { DateFieldComponent } from './date-field.component';
     <app-date-field
       [(value)]="value"
       [hostProblem]="hostProblem()"
-      [hostOffers]="hostOffers()"
       [pickFrom]="pickFrom()"
       [calendar]="calendar()"
       [disabled]="disabled()"
@@ -27,7 +26,6 @@ import { DateFieldComponent } from './date-field.component';
 class HostComponent {
   readonly value = signal('2022-11-01');
   readonly hostProblem = signal<string | null>(null);
-  readonly hostOffers = signal<readonly string[]>([]);
   readonly pickFrom = signal<string | null>(null);
   readonly calendar = signal<'popup' | 'inline'>('popup');
   readonly disabled = signal(false);
@@ -140,33 +138,6 @@ describe('DateFieldComponent', () => {
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByRole('alert').textContent).toBe('45 months do not divide into whole folds of 2 months.');
     expect(host.value()).toBe('2022-11-01');
-  });
-
-  it('offers the dates its host would take instead: a click takes one and leaves the keyboard in the field', async () => {
-    const { view, host, field } = await renderField();
-    host.hostProblem.set('45 months do not divide into whole folds of 2 months.');
-    host.hostOffers.set(['2022-09-01', '2022-11-01', '2023-01-01']);
-    await view.fixture.whenStable();
-
-    // The date the field already holds is no way out of the refusal.
-    expect(screen.getAllByRole('button', { name: /^Use / }).map((button) => button.textContent.trim())).toEqual(['Use 2022-09-01', 'Use 2023-01-01']);
-
-    await userEvent.click(screen.getByRole('button', { name: 'Use 2023-01-01' }));
-    await view.fixture.whenStable();
-
-    expect(host.value()).toBe('2023-01-01');
-    expect(field.value).toBe('2023-01-01');
-    expect(document.activeElement).toBe(field);
-    expect(screen.queryByRole('button', { name: 'Use 2023-01-01' })).toBeNull();
-  });
-
-  it('offers nothing while disabled', async () => {
-    const { view, host } = await renderField();
-    host.hostOffers.set(['2022-09-01']);
-    host.disabled.set(true);
-    await view.fixture.whenStable();
-
-    expect(screen.queryByRole('button', { name: 'Use 2022-09-01' })).toBeNull();
   });
 
   it('picks a day from a calendar over the page, which offers no day before the first its host names; an earlier date can still be typed', async () => {
@@ -312,7 +283,6 @@ describe('DateFieldComponent', () => {
   it('has no accessibility violations', async () => {
     const { view, host } = await renderField();
     host.hostProblem.set('45 months do not divide into whole folds of 2 months.');
-    host.hostOffers.set(['2022-09-01']);
     await view.fixture.whenStable();
 
     const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });

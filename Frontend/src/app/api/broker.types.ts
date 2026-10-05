@@ -5024,7 +5024,7 @@ export interface paths {
         };
         /**
          * Get Defaults
-         * @description A complete starting plan whose intervals the server computes from the calendar and the lake.
+         * @description A complete starting plan whose intervals the server computes from the calendar and the lake, inside a picked range when one is given.
          */
         get: operations["get_defaults_api_research_golden_search_defaults_get"];
         put?: never;
@@ -13893,6 +13893,11 @@ export interface components {
                 string
             ][];
             policy: components["schemas"]["GoldenSearchSelectionPolicy"];
+            /**
+             * Range Note
+             * @description Laid out inside a picked range: which of its sessions the plan leaves out and why, and a final test that starts before its whole months. Null when neither, or when no range was given.
+             */
+            range_note?: string | null;
             /** Recent Window */
             recent_window: boolean;
             /** Seed */
@@ -34135,6 +34140,10 @@ export interface operations {
                 final_months?: number;
                 training_months?: number;
                 test_months?: number;
+                /** @description The first day of a picked study range, as its ET midnight. */
+                range_start_ms?: number | null;
+                /** @description The ET midnight after the picked range's last day. */
+                range_end_ms?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

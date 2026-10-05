@@ -9,6 +9,11 @@ export interface DateCheckContext {
   readonly bounds: DateBounds;
   /** The calendar, when the date must be a trading session; null leaves the day unchecked. */
   readonly sessions: TradingSessions | null;
+  /**
+   * Days the host itself holds, such as a plan its server laid out. They are
+   * usable whatever the bounds and the calendar say: the host judges them.
+   */
+  readonly hostDays?: readonly IsoDate[];
 }
 
 /** The date a field's text stands for, or why it stands for none. Empty text is empty, not a problem. */
@@ -37,6 +42,7 @@ export function checkDate(text: string, context: DateCheckContext): DateCheck {
   if (text === '') return { date: '', problem: null };
   const date = parseIsoDate(text);
   if (date === null) return REFUSED('Enter a date as YYYY-MM-DD.');
+  if (context.hostDays?.includes(date)) return USABLE(date);
   const { bounds, sessions } = context;
   if (bounds.min !== null && date < bounds.min) return REFUSED(bounds.minReason ?? `The first day is ${bounds.min}.`);
   if (bounds.max !== null && date > bounds.max) return REFUSED(bounds.maxReason ?? `The last day is ${bounds.max}.`);

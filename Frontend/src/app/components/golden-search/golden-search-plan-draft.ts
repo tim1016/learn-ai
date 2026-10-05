@@ -5,10 +5,10 @@
  * whether the plan is acceptable is the server preflight's answer.
  */
 
-import { etDayEndMs, etIsoDate, etMidnightMs } from '../../shared/date/et-midnight';
+import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
 import { usesTradeFrequency } from './golden-search-display';
-import type { DefaultsMonths, GoldenSearchDefaults, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
+import type { DefaultsLayout, GoldenSearchDefaults, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
 const KNOB_NUMBER_FIELDS = ['low', 'high', 'fixed_value', 'step'] as const;
 export type KnobNumberField = (typeof KNOB_NUMBER_FIELDS)[number];
@@ -45,9 +45,11 @@ const WHOLE_NUMBER_FIELDS: ReadonlySet<ProtocolNumberField> = new Set([
   'budget_cap',
 ]);
 
-/** `final_start` is also the development end: the two intervals share one boundary. `final_end` is the inclusive last day. */
-const PROTOCOL_DATE_FIELDS = ['development_start', 'final_start', 'final_end'] as const;
-export type ProtocolDateField = (typeof PROTOCOL_DATE_FIELDS)[number];
+/** The study range the trader picked: its first and last ET day (`YYYY-MM-DD`), both included. */
+export interface StudyRange {
+  readonly from: string;
+  readonly to: string;
+}
 export type ProtocolFlag = 'require_positive_net' | 'recent_window' | 'neighbor_audit';
 
 export type PlanEdit =
@@ -59,7 +61,8 @@ export type PlanEdit =
   | { readonly kind: 'objective'; readonly objective: RankingMeasure }
   | { readonly kind: 'fill-mode'; readonly fillMode: FillModeName }
   | { readonly kind: 'number'; readonly field: ProtocolNumberField; readonly raw: string }
-  | { readonly kind: 'date'; readonly field: ProtocolDateField; readonly raw: string }
+  /** The range picker's two days; an empty one means its field holds no usable date. */
+  | { readonly kind: 'range'; readonly from: string; readonly to: string }
   | { readonly kind: 'flag'; readonly field: ProtocolFlag; readonly value: boolean }
   | { readonly kind: 'pair'; readonly pair: KnobPair; readonly included: boolean };
 
@@ -82,6 +85,19 @@ export interface PlanDraft {
    * the lake has not reached them yet. Absent with `finalMonths`.
    */
   readonly finalSessionsCut?: number;
+  /**
+   * The study range picked on the form, inside which the server lays the
+   * dates out. Absent until one is picked: the plan keeps the dates it has.
+   */
+  readonly range?: StudyRange;
+  /** Which sessions of the picked range the server's layout left out, and why; null when it used them all. */
+  readonly rangeNote?: string | null;
+  /**
+   * The range the plan's dates were laid out inside. It is not `range` while a
+   * newly picked range waits for its layout, nor after the server refused it:
+   * the plan then still holds the dates of the range before.
+   */
+  readonly laidOutRange?: StudyRange;
 }
 
 /** A draft of `protocol` as it stands, with nothing unreadable; its knob table is what a reset restores. */
@@ -96,7 +112,7 @@ export function draftFromProtocol(protocol: ProtocolRequest): PlanDraft {
  * the server refuses them in a plan, so they never reach the protocol.
  */
 export function draftFromDefaults(defaults: GoldenSearchDefaults): { readonly draft: PlanDraft; readonly incumbentLabel: string; readonly incumbentSentence: string } {
-  const { incumbent_label, incumbent_sentence, exposure: _exposure, final_months, final_sessions_cut, ...protocol } = defaults;
+  const { incumbent_label, incumbent_sentence, exposure: _exposure, final_months, final_sessions_cut, range_note: _note, ...protocol } = defaults;
   return {
     draft: { ...draftFromProtocol(protocol), finalMonths: final_months, finalSessionsCut: final_sessions_cut },
     incumbentLabel: incumbent_label,
@@ -129,16 +145,28 @@ export function wireProtocol(protocol: ProtocolRequest): ProtocolRequest {
 /** Month counts that, once changed, have the server lay the development and final-test dates out again. */
 export const MONTH_FIELDS: ReadonlySet<ProtocolNumberField> = new Set(['final_months', 'training_months', 'test_months']);
 
-/** The month counts to ask `/defaults` for, or null while one is unknown or unreadable. */
-export function draftMonths(draft: PlanDraft): DefaultsMonths | null {
-  if (draft.finalMonths === undefined || [...MONTH_FIELDS].some((field) => draft.problems.has(numberProblemKey(field)))) return null;
-  return { final_months: draft.finalMonths, training_months: draft.protocol.training_months, test_months: draft.protocol.test_months };
+/** The problem key of a study range with a day the picker cannot use. */
+export const RANGE_PROBLEM_KEY = 'range';
+
+/** A revised plan's frozen dates carry no final-test length, and a range is laid out from one. */
+const NEEDS_FINAL_MONTHS = "Enter the final test's length in months; the dates are laid out from it.";
+
+/**
+ * What to ask `/defaults` to lay the dates out from: the three month counts,
+ * and the picked range once there is one. Null while a count is unknown or
+ * unreadable, or the range holds a day the picker cannot use.
+ */
+export function draftLayout(draft: PlanDraft): DefaultsLayout | null {
+  if (draft.finalMonths === undefined || draft.problems.has(RANGE_PROBLEM_KEY) || [...MONTH_FIELDS].some((field) => draft.problems.has(numberProblemKey(field)))) return null;
+  const months = { final_months: draft.finalMonths, training_months: draft.protocol.training_months, test_months: draft.protocol.test_months };
+  // The range's last day is included, so it ends at the ET midnight after it.
+  return draft.range === undefined ? months : { ...months, range_start_ms: etMidnightMs(draft.range.from), range_end_ms: etDayEndMs(draft.range.to) };
 }
 
-/** The draft with the dates the server laid out for its month counts; every other edit, the counts included, is kept. */
+/** The draft with the dates the server laid out, and what it left out of a picked range; every other edit, the counts and the range included, is kept. */
 export function withServerDates(draft: PlanDraft, laidOut: GoldenSearchDefaults): PlanDraft {
-  const { development_start_ms, development_end_ms, final_start_ms, final_end_ms, final_sessions_cut } = laidOut;
-  return { ...draft, protocol: { ...draft.protocol, development_start_ms, development_end_ms, final_start_ms, final_end_ms }, finalSessionsCut: final_sessions_cut };
+  const { development_start_ms, development_end_ms, final_start_ms, final_end_ms, final_sessions_cut, range_note } = laidOut;
+  return { ...draft, protocol: { ...draft.protocol, development_start_ms, development_end_ms, final_start_ms, final_end_ms }, finalSessionsCut: final_sessions_cut, rangeNote: range_note ?? null, laidOutRange: draft.range };
 }
 
 export function knobProblemKey(name: string, field: KnobNumberField): string {
@@ -149,22 +177,18 @@ export function numberProblemKey(field: ProtocolNumberField): string {
   return `number:${field}`;
 }
 
-export function dateProblemKey(field: ProtocolDateField): string {
-  return `date:${field}`;
-}
-
 /** The field a problem key names. */
 export type ProblemField =
   | { readonly kind: 'knob'; readonly name: string; readonly field: KnobNumberField }
   | { readonly kind: 'number'; readonly field: ProtocolNumberField }
-  | { readonly kind: 'date'; readonly field: ProtocolDateField };
+  | { readonly kind: 'range' };
 
-/** The inverse of `knobProblemKey`, `numberProblemKey` and `dateProblemKey`; null for a key they did not make. */
+/** The inverse of `knobProblemKey` and `numberProblemKey`, and the range's own key; null for a key they did not make. */
 export function problemField(key: string): ProblemField | null {
   const [kind, first, second] = key.split(':');
   if (kind === 'knob' && first !== undefined && isOneOf(KNOB_NUMBER_FIELDS, second)) return { kind, name: first, field: second };
   if (kind === 'number' && isOneOf(PROTOCOL_NUMBER_FIELDS, first)) return { kind, field: first };
-  if (kind === 'date' && isOneOf(PROTOCOL_DATE_FIELDS, first)) return { kind, field: first };
+  if (key === RANGE_PROBLEM_KEY) return { kind: 'range' };
   return null;
 }
 
@@ -281,24 +305,6 @@ function setNumber(protocol: ProtocolRequest, field: Exclude<ProtocolNumberField
   }
 }
 
-function setDate(protocol: ProtocolRequest, field: ProtocolDateField, isoDate: string): ProtocolRequest {
-  switch (field) {
-    case 'development_start':
-      return { ...protocol, development_start_ms: etMidnightMs(isoDate) };
-    case 'final_start': {
-      const boundary = etMidnightMs(isoDate);
-      return { ...protocol, development_end_ms: boundary, final_start_ms: boundary };
-    }
-    case 'final_end':
-      return { ...protocol, final_end_ms: etDayEndMs(isoDate) };
-  }
-}
-
-/** The date `field` shows for an instant the protocol holds: what `setDate` reads back. */
-export function shownDate(field: ProtocolDateField, ms: number): string {
-  return etIsoDate(field === 'final_end' ? ms - 1 : ms);
-}
-
 /** The draft after one edit. Unreadable input leaves the protocol as it was and records a problem instead. */
 export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: StrategyCapability | null): PlanDraft {
   const { protocol, problems } = draft;
@@ -347,14 +353,14 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
       }
       return { ...draft, protocol: setNumber(protocol, edit.field, value), problems: withProblem(problems, key, null) };
     }
-    case 'date': {
-      const key = dateProblemKey(edit.field);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(edit.raw)) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a date as YYYY-MM-DD.') };
-      // A date field reports each keystroke of the year as a whole date (0002, 0020, 0202, then 2022); moving the plan's date on those would rewrite the field mid-typing.
-      if (edit.raw < '1000') return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a four-digit year.') };
-      // Dates typed by hand no longer follow a month count, so the count (and the server's cut) is dropped rather than left to contradict them.
-      const { finalMonths: _dated, finalSessionsCut: _cut, ...rest } = draft;
-      return { ...rest, protocol: setDate(protocol, edit.field, edit.raw), problems: withProblem(problems, key, null) };
+    case 'range': {
+      // The picker says under itself why a day is unusable; the plan keeps its dates and waits.
+      if (edit.from === '' || edit.to === '') return { ...draft, problems: withProblem(problems, RANGE_PROBLEM_KEY, 'Enter a first and a last day.') };
+      // What the server said about the last range, and its cut, belong to the dates being replaced.
+      const { finalSessionsCut: _cut, rangeNote: _note, ...rest } = draft;
+      const ranged = withProblem(problems, RANGE_PROBLEM_KEY, null);
+      const counted = draft.finalMonths === undefined ? withProblem(ranged, numberProblemKey('final_months'), NEEDS_FINAL_MONTHS) : ranged;
+      return { ...rest, range: { from: edit.from, to: edit.to }, problems: counted };
     }
     case 'flag':
       if (edit.field === 'require_positive_net') return { ...draft, protocol: { ...protocol, policy: { ...protocol.policy, require_positive_net: edit.value } }, problems };

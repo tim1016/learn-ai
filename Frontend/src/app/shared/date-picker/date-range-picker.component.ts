@@ -55,6 +55,12 @@ export class DateRangePickerComponent {
   readonly hostOffers = input<readonly QuickRangeOffer[] | null>(null);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
+  /**
+   * Days the host's own dates stand on, such as a plan its server laid out.
+   * Typed or shown, they are not refused for the bounds or the calendar: the
+   * host's server judges them. The quick ranges and the calendar keep to the bounds.
+   */
+  readonly hostDays = input<readonly IsoDate[]>([]);
   /** The group's accessible name. */
   readonly label = input('Date range');
   /** Both dates after any change, in one event, for a host that keeps them in one value. */
@@ -74,7 +80,7 @@ export class DateRangePickerComponent {
   protected readonly sessions = computed(() => (this.sessionsOnly() ? this.calendar.sessions() : null));
   /** Why the calendar could not be read, wherever this picker needs it: to check sessions, or to offer quick ranges. */
   protected readonly calendarProblem = computed(() => (this.sessionsOnly() || this.ranges().length > 0 ? this.calendar.problem() : null));
-  protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions() }));
+  protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions(), hostDays: this.hostDays() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
   protected readonly offers = computed(
     () => this.hostOffers() ?? offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), this.sessionsOnly()),

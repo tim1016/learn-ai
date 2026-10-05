@@ -19507,6 +19507,18 @@
           "policy": {
             "$ref": "#/components/schemas/GoldenSearchSelectionPolicy"
           },
+          "range_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Laid out inside a picked range: which of its sessions the plan leaves out and why, and a final test that starts before its whole months. Null when neither, or when no range was given.",
+            "title": "Range Note"
+          },
           "recent_window": {
             "title": "Recent Window",
             "type": "boolean"
@@ -66357,7 +66369,7 @@
     },
     "/api/research/golden-search/defaults": {
       "get": {
-        "description": "A complete starting plan whose intervals the server computes from the calendar and the lake.",
+        "description": "A complete starting plan whose intervals the server computes from the calendar and the lake, inside a picked range when one is given.",
         "operationId": "get_defaults_api_research_golden_search_defaults_get",
         "parameters": [
           {
@@ -66416,6 +66428,46 @@
               "minimum": 1,
               "title": "Test Months",
               "type": "integer"
+            }
+          },
+          {
+            "description": "The first day of a picked study range, as its ET midnight.",
+            "in": "query",
+            "name": "range_start_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The first day of a picked study range, as its ET midnight.",
+              "title": "Range Start Ms"
+            }
+          },
+          {
+            "description": "The ET midnight after the picked range's last day.",
+            "in": "query",
+            "name": "range_end_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ET midnight after the picked range's last day.",
+              "title": "Range End Ms"
             }
           },
           {
