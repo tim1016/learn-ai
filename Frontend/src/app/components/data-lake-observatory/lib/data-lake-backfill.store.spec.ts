@@ -382,6 +382,45 @@ describe('DataLakeBackfillStore', () => {
     expect(store.progress()).toMatchObject({ current: 1, total: 2 });
   });
 
+  it('resolves a run with how it ended, so a caller can run one after another', async () => {
+    let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
+    const startJob = vi.fn().mockResolvedValue('job-1');
+    const onEvent = vi.fn((_jobId: string, h: typeof handler) => {
+      handler = h;
+      return vi.fn();
+    });
+    const store = makeStore({ startJob, onEvent } as unknown as Partial<JobsService>);
+
+    const ended = store.run(SPEC);
+    await vi.waitFor(() => expect(handler).toBeDefined());
+    handler?.({ type: 'job.cancelled' });
+
+    expect(await ended).toBe('cancelled');
+  });
+
+  it('ends a run whose submission was refused as failed, without waiting on a job that never started', async () => {
+    const startJob = vi
+      .fn()
+      .mockRejectedValue(new HttpErrorResponse({ status: 404, statusText: 'Not Found' }));
+    const store = makeStore({ startJob } as unknown as Partial<JobsService>);
+
+    expect(await store.run(SPEC)).toBe('failed');
+  });
+
+  it('does not adopt a run whose submission lands after the panel is gone', async () => {
+    // A caller running several one after another must see this run as over,
+    // or it keeps submitting from a page nobody is looking at.
+    let accept: (jobId: string) => void = () => undefined;
+    const startJob = vi.fn(() => new Promise<string>((resolve) => (accept = resolve)));
+    const store = makeStore({ startJob } as unknown as Partial<JobsService>);
+
+    const ended = store.run(SPEC);
+    TestBed.resetTestingModule();
+    accept('job-1');
+
+    expect(await ended).toBe('detached');
+  });
+
   it('unsubscribes once a terminal event is folded', async () => {
     let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
     const unsubscribe = vi.fn();

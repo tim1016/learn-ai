@@ -1,18 +1,27 @@
 import { signal } from '@angular/core';
-import { fireEvent, render, screen, type RenderResult } from '@testing-library/angular';
-import { By } from '@angular/platform-browser';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { JobsService } from '../../services/jobs.service';
+import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
 import { DataLakeObservatoryComponent } from './data-lake-observatory.component';
-import { ArtifactDetail, BackfillDefaults, CoverageResponse, CoverageStatus, DataLakeRead, DataLakeService, StorageSummaryResponse } from '../../shared/data-lake';
-import { MultiInstrumentCardComponent } from '../../shared/multi-ticker-range-picker/multi-instrument-card.component';
+import {
+  ArtifactDetail,
+  BackfillDefaults,
+  CoverageDay,
+  CoverageResponse,
+  DataLakeRead,
+  DataLakeService,
+  RunReadinessResponse,
+  StorageSummaryResponse,
+  SymbolRunReadiness,
+} from '../../shared/data-lake';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import type { VendorSymbolEntry } from '../../shared/symbol-catalog/vendor-catalog.service';
 
-/** 09:30 America/New_York on the given May 2026 date, as int64 ms UTC. */
-function sessionOpenMs(day: number): number {
-  return Date.UTC(2026, 4, day, 13, 30);
+/** 09:30 America/New_York on an EDT date, as int64 ms UTC. */
+function sessionOpenMs(year: number, month: number, day: number): number {
+  return Date.UTC(year, month - 1, day, 13, 30);
 }
 
 const DEFAULTS: BackfillDefaults = {
@@ -20,201 +29,374 @@ const DEFAULTS: BackfillDefaults = {
   lean_image_digest: 'sha256:pinned',
   max_trading_range_days: 1830,
   max_symbol_length: 20,
-  // 2021-09-23, calendar-anchored — the oldest day the provider plan serves.
-  provider_history_start_ms: 1632398400000,
+  // 2021-10-05, calendar-anchored — the oldest day the provider plan serves.
+  provider_history_start_ms: Date.UTC(2021, 9, 5, 12),
 };
 
 const EMPTY_STORAGE: StorageSummaryResponse = { market: 'usa', kinds: [], symbols: [] };
 
-const POPULATED_STORAGE: StorageSummaryResponse = {
-  market: 'usa',
-  kinds: [
-    { artifact_kind: 'minute_trade', resolution: 'minute', artifact_count: 2, total_bytes: 4096 },
-  ],
-  symbols: [
-    {
-      symbol: 'SPY',
-      first_trading_date_ms: sessionOpenMs(18),
-      last_trading_date_ms: sessionOpenMs(20),
-      artifact_count: 2,
-    },
-  ],
-};
+function readinessEntry(overrides: Partial<SymbolRunReadiness> & { symbol: string }): SymbolRunReadiness {
+  return {
+    first_trading_date_ms: sessionOpenMs(2026, 5, 18),
+    last_trading_date_ms: sessionOpenMs(2026, 5, 19),
+    session_count: 2,
+    run_ready_count: 2,
+    unrebuildable_count: 0,
+    rebuild_first_trading_date_ms: null,
+    rebuild_last_trading_date_ms: null,
+    ...overrides,
+  };
+}
 
-function coverage(
-  days: readonly { day: number; status: CoverageStatus; artifactId?: number }[],
-): DataLakeRead<CoverageResponse> {
+/** On disk since before the lake kept adjustment records: nothing of it is readable. */
+const GLD = readinessEntry({
+  symbol: 'GLD',
+  run_ready_count: 0,
+  rebuild_first_trading_date_ms: sessionOpenMs(2026, 5, 18),
+  rebuild_last_trading_date_ms: sessionOpenMs(2026, 5, 19),
+});
+const SPY = readinessEntry({ symbol: 'SPY' });
+/** Its oldest sessions predate the provider's history, so its rebuild window starts later than its span. */
+const AMZN = readinessEntry({
+  symbol: 'AMZN',
+  first_trading_date_ms: sessionOpenMs(2021, 9, 22),
+  last_trading_date_ms: sessionOpenMs(2026, 5, 19),
+  session_count: 1254,
+  run_ready_count: 0,
+  unrebuildable_count: 9,
+  rebuild_first_trading_date_ms: sessionOpenMs(2021, 10, 5),
+  rebuild_last_trading_date_ms: sessionOpenMs(2026, 5, 19),
+});
+
+function readiness(symbols: readonly SymbolRunReadiness[]): DataLakeRead<RunReadinessResponse> {
+  return {
+    kind: 'ok',
+    value: { market: 'usa', price_adjustment_mode: 'polygon_split_adjusted', data_type: 'trade', symbols },
+  };
+}
+
+function coverage(symbol: string, days: readonly CoverageDay[]): DataLakeRead<CoverageResponse> {
   return {
     kind: 'ok',
     value: {
       market: 'usa',
-      symbol: 'SPY',
+      symbol,
       data_type: 'trade',
       resolution: 'minute',
       provider: 'polygon',
-      price_adjustment_mode: 'raw',
-      days: days.map((entry) => ({
-        trading_date_ms: sessionOpenMs(entry.day),
-        status: entry.status,
-        artifact_id: entry.artifactId ?? null,
-      })),
+      price_adjustment_mode: 'polygon_split_adjusted',
+      days,
     },
   };
 }
+
+const GLD_COVERAGE = coverage('GLD', [
+  {
+    trading_date_ms: sessionOpenMs(2026, 5, 18),
+    status: 'needs_rebuild',
+    artifact_id: 11,
+    rebuild_reason: 'adjustment_record_missing',
+  },
+  {
+    trading_date_ms: sessionOpenMs(2026, 5, 19),
+    status: 'needs_rebuild',
+    artifact_id: 12,
+    rebuild_reason: 'adjustment_record_missing',
+  },
+]);
 
 const ARTIFACT: ArtifactDetail = {
   id: 11,
   artifact_kind: 'minute_trade',
   market: 'usa',
-  symbol: 'SPY',
-  trading_date_ms: sessionOpenMs(18),
+  symbol: 'GLD',
+  trading_date_ms: sessionOpenMs(2026, 5, 18),
   resolution: 'minute',
   data_type: 'trade',
   provider: 'polygon',
-  provider_params: { adjusted: false },
-  price_adjustment_mode: 'raw',
+  provider_params: { adjusted: true },
+  price_adjustment_mode: 'polygon_split_adjusted',
   data_contract_hash: 'dch-1234',
   content_hash: 'sha256-abcd',
-  file_path: '/lake/usa/minute/spy/20260518_trade.zip',
+  file_path: 'equity/usa/minute/gld/20260518_trade.zip',
   file_size_bytes: 1024,
   status: 'complete',
   row_count: 390,
-  first_bar_start_ms: sessionOpenMs(18),
-  last_bar_start_ms: sessionOpenMs(18),
-  fetched_at_ms: sessionOpenMs(18) + 1_000,
-  completed_at_ms: sessionOpenMs(18) + 2_000,
+  first_bar_start_ms: sessionOpenMs(2026, 5, 18),
+  last_bar_start_ms: sessionOpenMs(2026, 5, 18),
+  fetched_at_ms: sessionOpenMs(2026, 5, 18) + 1_000,
+  completed_at_ms: sessionOpenMs(2026, 5, 18) + 2_000,
   attempt_count: 1,
   last_error: null,
   error_message: null,
 };
 
-let originalEventSource: typeof EventSource;
-
-interface LakeStubs {
-  storage?: DataLakeRead<StorageSummaryResponse>;
-  defaults?: DataLakeRead<BackfillDefaults>;
-  coverage?: DataLakeRead<CoverageResponse>;
-  artifact?: DataLakeRead<ArtifactDetail>;
+function vendorEntry(symbol: string): VendorSymbolEntry {
+  return { symbol, name: symbol, asset_class: 'us_equity', exchange: 'ARCA', status: 'active' };
 }
 
-async function renderObservatory(stubs: LakeStubs = {}) {
+const DARK: DataLakeRead<BackfillDefaults> = { kind: 'unavailable', message: 'The data plane did not respond.' };
+
+async function renderObservatory(
+  symbols: readonly SymbolRunReadiness[] = [GLD, SPY],
+  defaults: DataLakeRead<BackfillDefaults> = { kind: 'ok', value: DEFAULTS },
+) {
   const lake = {
-    storageSummary: vi.fn().mockResolvedValue(stubs.storage ?? { kind: 'ok', value: EMPTY_STORAGE }),
-    backfillDefaults: vi.fn().mockResolvedValue(stubs.defaults ?? { kind: 'ok', value: DEFAULTS }),
-    coverage: vi
-      .fn()
-      .mockResolvedValue(stubs.coverage ?? coverage([{ day: 18, status: 'complete', artifactId: 11 }])),
-    artifact: vi.fn().mockResolvedValue(stubs.artifact ?? { kind: 'ok', value: ARTIFACT }),
+    // A fresh answer per read, as the wire gives: nothing downstream may lean on object identity.
+    runReadiness: vi.fn(async () => readiness(symbols)),
+    storageSummary: vi.fn().mockResolvedValue({ kind: 'ok', value: EMPTY_STORAGE }),
+    backfillDefaults: vi.fn().mockResolvedValue(defaults),
+    coverage: vi.fn().mockResolvedValue(GLD_COVERAGE),
+    artifact: vi.fn().mockResolvedValue({ kind: 'ok', value: ARTIFACT }),
   };
+  // Each backfill is its own job; the stream handler is kept per job so a
+  // test can end one run and watch whether the next begins.
+  const handlers = new Map<string, (event: JobStreamEvent) => void>();
+  let started = 0;
+  const startJob = vi.fn(async () => `job-${++started}`);
+  const onEvent = vi.fn((jobId: string, handler: (event: JobStreamEvent) => void) => {
+    handlers.set(jobId, handler);
+    return vi.fn();
+  });
   const view = await render(DataLakeObservatoryComponent, {
     providers: [
       { provide: DataLakeService, useValue: lake },
       {
         provide: JobsService,
-        // `jobs` backs the backfill panel's reattach effect. Nothing is live
-        // in these tests, so that panel stays idle.
-        useValue: { startJob: vi.fn(), cancelJob: vi.fn(), jobs: signal([]) },
+        useValue: {
+          startJob,
+          cancelJob: vi.fn(),
+          onEvent,
+          jobs: signal([]),
+          historyTrimmed: signal(new Set<string>()),
+        },
       },
-      // The query bar and backfill panel pick symbols through the shared
-      // multi card; keep its catalog world fake.
-      ...fakePickerWorld().providers,
+      ...fakePickerWorld(
+        [],
+        symbols.map((entry) => vendorEntry(entry.symbol)),
+      ).providers,
     ],
   });
-  return { view, lake };
+  await screen.findByRole('button', { name: 'Show GLD sessions' });
+  // Delivered as the stream delivers it, with no change detection forced
+  // in between: what follows a frame must not depend on a render landing first.
+  const endJob = (jobId: string, type: 'job.completed' | 'job.failed'): void => {
+    handlers.get(jobId)?.({ type, code: 'io_error', message: 'disk full' });
+  };
+  return { view, lake, startJob, endJob };
 }
 
-/**
- * Press the query bar's chips into place and load coverage. Chips are the
- * editable form of the query's symbols now (ADR 0066): setting the multi
- * card's model drives the same symbolsChange the card itself emits.
- */
-async function loadSymbols(view: RenderResult<DataLakeObservatoryComponent>, symbols = 'SPY'): Promise<void> {
-  const chips = symbols
-    .split(',')
-    .map((symbol) => symbol.trim().toUpperCase())
-    .filter((symbol) => symbol.length > 0);
-  const card = view.fixture.debugElement.query(
-    By.directive(MultiInstrumentCardComponent),
-  ).componentInstance as MultiInstrumentCardComponent;
-  card.symbols.set(chips);
-  view.fixture.detectChanges();
-  fireEvent.click(screen.getByRole('button', { name: 'Load coverage' }));
+function specOf(startJob: ReturnType<typeof vi.fn>, call: number): Record<string, unknown> {
+  return (startJob.mock.calls[call] as [string, { spec: Record<string, unknown> }])[1].spec;
 }
 
 describe('DataLakeObservatoryComponent', () => {
-  beforeEach(() => {
-    originalEventSource = globalThis.EventSource;
-    class StubEventSource {
-      onmessage: ((event: MessageEvent<string>) => void) | null = null;
-      onerror: (() => void) | null = null;
-      close(): void {}
-    }
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-      StubEventSource as unknown as typeof EventSource;
+  it('says up front that symbols on disk cannot be read, and that a backfill writes what is missing', async () => {
+    const { lake } = await renderObservatory();
+
+    expect(lake.runReadiness).toHaveBeenCalledWith('polygon_split_adjusted', 'trade');
+    expect(
+      screen.getByRole('heading', { name: '1 of 2 symbols needs a rebuild before a run can read it' }),
+    ).toBeTruthy();
+    expect(screen.getByText('A backfill fixes this.')).toBeTruthy();
+
+    const gld = screen.getByRole('button', { name: 'Show GLD sessions' }).closest('tr') as HTMLElement;
+    expect(within(gld).getByText('No · needs rebuild')).toBeTruthy();
+    const spy = screen.getByRole('button', { name: 'Show SPY sessions' }).closest('tr') as HTMLElement;
+    expect(within(spy).getByText('Yes')).toBeTruthy();
+    expect(within(spy).queryByRole('button', { name: 'Rebuild SPY' })).toBeNull();
   });
 
-  afterEach(() => {
-    (globalThis as unknown as { EventSource: typeof EventSource }).EventSource =
-      originalEventSource;
-  });
+  it('shows what a run finds for a picked session, and opens its receipt', async () => {
+    const { lake } = await renderObservatory();
 
-  it('reads coverage for each symbol the operator names', async () => {
-    const { view, lake } = await renderObservatory();
-    await screen.findByText(/The catalog holds no artifacts yet/);
+    fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
 
-    await loadSymbols(view, 'spy, aapl');
+    // The inspector's own check row, not the explainer card or the backfill panel's list.
+    const record = (
+      await screen.findByText('Adjustment record', { selector: '.checks__label' })
+    ).closest('li') as HTMLElement;
+    expect(within(record).getByText('Missing')).toBeTruthy();
+    expect(screen.getByText("A run can't read this session")).toBeTruthy();
 
-    await vi.waitFor(() => expect(lake.coverage).toHaveBeenCalledTimes(2));
-    expect(lake.coverage.mock.calls.map(([query]) => (query as { symbol: string }).symbol)).toEqual([
-      'SPY',
-      'AAPL',
-    ]);
-  });
-
-  it('opens the inspector on a clicked cell', async () => {
-    const { view, lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
-    await loadSymbols(view);
-
-    const cell = await screen.findByRole('button', {
-      name: 'SPY, 2026-05-18, Complete, open artifact receipt',
-    });
-    fireEvent.click(cell);
-
+    fireEvent.click(screen.getByRole('button', { name: 'View receipt' }));
     await vi.waitFor(() => expect(lake.artifact).toHaveBeenCalledWith(11));
     expect(await screen.findByText('dch-1234')).toBeTruthy();
-    expect(screen.getByText('/lake/usa/minute/spy/20260518_trade.zip')).toBeTruthy();
   });
 
-  it('stops the backfill form offering to fill a view it cannot write', async () => {
-    // The heatmap can query any view; the fetch pipeline can produce raw and
-    // polygon_split_adjusted, but nothing derives lean_adjusted. A backfill
-    // submitted from that view would succeed and leave it unchanged, so the
-    // panel refuses it — and this pins the wiring, not just the panel's rule.
-    const { view, lake } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
-    await screen.findByRole('heading', { name: 'Coverage' });
+  it('rebuilds every symbol over its own window, one after another', async () => {
+    const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
 
-    fireEvent.change(screen.getByLabelText('Price adjustment'), {
-      target: { value: 'lean_adjusted' },
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+
+    // AMZN starts at the oldest session the provider still serves, not at its
+    // first held one: a window reaching past that floor aborts the whole run.
+    expect(specOf(startJob, 0)).toMatchObject({
+      symbols: ['AMZN'],
+      start_trading_date_ms: Date.UTC(2021, 9, 5, 12),
+      end_trading_date_ms: Date.UTC(2026, 4, 19, 12),
+      price_adjustment_mode: 'polygon_split_adjusted',
     });
-    await loadSymbols(view);
+    expect(screen.getByText(/Rebuilding AMZN \(1 of 2\)/)).toBeTruthy();
 
+    endJob('job-1', 'job.completed');
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(2));
+    // The table and banner follow each finished symbol, not only the last.
+    await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenCalledTimes(2));
+    expect(specOf(startJob, 1)).toMatchObject({
+      symbols: ['GLD'],
+      start_trading_date_ms: Date.UTC(2026, 4, 18, 12),
+      end_trading_date_ms: Date.UTC(2026, 4, 19, 12),
+    });
+  });
+
+  it('flags symbols with sessions missing between their first and last, and fills each over its own gap', async () => {
+    // Every held session of both is readable, and neither is whole. GLD keeps the rebuild banner on screen beside theirs.
+    const qqq = readinessEntry({
+      symbol: 'QQQ',
+      gap_session_count: 724,
+      gap_count: 1,
+      unfillable_gap_session_count: 10,
+      fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+    });
+    const iwm = readinessEntry({
+      symbol: 'IWM',
+      gap_session_count: 2,
+      gap_count: 2,
+      fill_first_trading_date_ms: sessionOpenMs(2025, 6, 2),
+      fill_last_trading_date_ms: sessionOpenMs(2025, 7, 1),
+    });
+    const { startJob, endJob } = await renderObservatory([GLD, qqq, iwm]);
+
+    const banner = screen
+      .getByRole('heading', { name: '2 symbols have sessions missing between their first and last' })
+      .closest('section') as HTMLElement;
+    expect(banner.textContent.replace(/\s+/g, ' ')).toContain('714 sessions, 2021-11-01 to 2024-09-03');
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Fill the gaps in all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+
+    expect(specOf(startJob, 0)).toMatchObject({
+      symbols: ['IWM'],
+      start_trading_date_ms: Date.UTC(2025, 5, 2, 12),
+      end_trading_date_ms: Date.UTC(2025, 6, 1, 12),
+    });
+    // The list is narrated by the banner that started it, not by the rebuild banner beside it.
+    expect(within(banner).getByText(/Filling IWM \(1 of 2\)/)).toBeTruthy();
+    expect(screen.queryByText(/Rebuilding IWM/)).toBeNull();
+
+    endJob('job-1', 'job.completed');
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(2));
+    expect(specOf(startJob, 1)).toMatchObject({
+      symbols: ['QQQ'],
+      start_trading_date_ms: Date.UTC(2021, 10, 1, 12),
+      end_trading_date_ms: Date.UTC(2024, 8, 3, 12),
+    });
+  });
+
+  it('stops a rebuild of every symbol when one run fails, and re-reads the lake', async () => {
+    const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    endJob('job-1', 'job.failed');
+
+    await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(screen.queryByText(/\(\d of 2\)/)).toBeNull());
+    expect(startJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends a rebuild of every symbol when the operator moves to another view', async () => {
+    // The backfill panel writes the view on screen. Left running, the rest of
+    // the list would be fetched into raw over windows composed for
+    // split-adjusted, and the sessions it set out to rebuild would stay unreadable.
+    const { startJob, endJob } = await renderObservatory([GLD, AMZN]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Raw' }));
+    endJob('job-1', 'job.completed');
+
+    await vi.waitFor(() => expect(screen.queryByText(/\(\d of 2\)/)).toBeNull());
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(specOf(startJob, 0)).toMatchObject({ price_adjustment_mode: 'polygon_split_adjusted' });
+  });
+
+  it('starts nothing when the backfill form cannot run, and says why', async () => {
+    const { startJob } = await renderObservatory([GLD, AMZN], DARK);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild all 2 symbols' }));
+
+    expect(await screen.findByText('Backfill is unavailable until the data plane answers.')).toBeTruthy();
+    await vi.waitFor(() => expect(screen.queryByText(/\(\d of 2\)/)).toBeNull());
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it('reads and rebuilds the bars the operator picks', async () => {
+    const { lake, startJob } = await renderObservatory();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
     await vi.waitFor(() =>
-      expect(lake.coverage).toHaveBeenCalledWith(
-        expect.objectContaining({ priceAdjustmentMode: 'lean_adjusted' }),
-      ),
+      expect(lake.runReadiness).toHaveBeenLastCalledWith('polygon_split_adjusted', 'quote'),
     );
-    expect(await screen.findByText(/Nothing derives/)).toBeTruthy();
-    expect(
-      (screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    await vi.waitFor(() =>
+      expect(lake.coverage).toHaveBeenLastCalledWith(expect.objectContaining({ dataType: 'quote' })),
+    );
+
+    // A backfill derives quote bars only alongside trade, so the rebuild asks for both.
+    fireEvent.click(await screen.findByRole('button', { name: 'Rebuild GLD' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    expect(specOf(startJob, 0)).toMatchObject({ symbols: ['GLD'], data_types: ['trade', 'quote'] });
   });
 
-  it('passes AXE with a populated catalog', async () => {
-    const { view } = await renderObservatory({ storage: { kind: 'ok', value: POPULATED_STORAGE } });
-    await loadSymbols(view);
-    await screen.findByRole('button', {
-      name: 'SPY, 2026-05-18, Complete, open artifact receipt',
+  it('reads the view the operator switches to, and refuses to backfill one nothing derives', async () => {
+    const { lake } = await renderObservatory();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lean Adjusted' }));
+
+    await vi.waitFor(() => expect(lake.runReadiness).toHaveBeenLastCalledWith('lean_adjusted', 'trade'));
+    expect(await screen.findByText(/Nothing derives/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Run backfill' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps the grid and the picked session on screen while the lake is read again', async () => {
+    // Every finished run re-reads readiness; that alone must not blank a grid
+    // whose symbol, window and view have not changed.
+    const { lake, startJob, endJob } = await renderObservatory();
+    fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
+    await screen.findByText("A run can't read this session");
+    // Every later coverage read stays pending, so a grid it blanked would stay blank.
+    lake.coverage.mockImplementation(() => new Promise<never>(() => undefined));
+    // The readiness re-read changes SPY, so the test can see it land.
+    lake.runReadiness.mockImplementation(async () =>
+      readiness([GLD, { ...SPY, session_count: 3, run_ready_count: 3 }]),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild GLD only' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+    endJob('job-1', 'job.completed');
+
+    const spy = screen.getByRole('button', { name: 'Show SPY sessions' }).closest('tr') as HTMLElement;
+    await vi.waitFor(() => expect(within(spy).getAllByText('3')).toHaveLength(2));
+    expect(lake.coverage).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' })).toBeTruthy();
+    expect(screen.getByText("A run can't read this session")).toBeTruthy();
+  });
+
+  it('passes AXE with a symbol that needs a rebuild, one with a gap, and a picked session', async () => {
+    const gapped = readinessEntry({
+      symbol: 'QQQ',
+      gap_session_count: 724,
+      gap_count: 1,
+      fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
     });
+    await renderObservatory([GLD, SPY, gapped]);
+    fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
+    await screen.findByText("A run can't read this session");
+    expect(screen.getByRole('button', { name: 'Fill the gap in QQQ' })).toBeTruthy();
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },

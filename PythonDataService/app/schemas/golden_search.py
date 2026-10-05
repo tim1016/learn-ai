@@ -367,6 +367,9 @@ class GoldenSearchProtocolRefusal(_Wire):
     code: str
     field: str | None
     message: str
+    nearest_valid_ms: list[InstantMs] = Field(
+        default_factory=list, description="The nearest instants `field` would accept instead, when the server can name them; empty otherwise."
+    )
 
 
 class GoldenSearchStageEstimate(_Wire):

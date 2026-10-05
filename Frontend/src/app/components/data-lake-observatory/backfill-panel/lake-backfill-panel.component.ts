@@ -7,7 +7,6 @@ import {
   inject,
   input,
   linkedSignal,
-  OnInit,
   output,
   signal,
   untracked,
@@ -28,9 +27,13 @@ import {
 } from '../../../shared/symbol-catalog/vendor-catalog.service';
 import { toBackfillableMode } from '../../../shared/symbol-catalog/ensure-coverage.service';
 import { etIsoDate } from '../../../shared/date/et-midnight';
-import { DataLakeBackfillStore, type BackfillPhase } from '../lib/data-lake-backfill.store';
+import {
+  DataLakeBackfillStore,
+  type BackfillPhase,
+  type BackfillRunEnd,
+} from '../lib/data-lake-backfill.store';
 import { BACKFILL_JOB_TYPE } from '../../../shared/data-lake/backfill-job-type';
-import { parseSymbols } from '../lib/coverage-board';
+import { needsAdjustmentRecord, type RebuildRequest } from '../lib/lake-readiness';
 import {
   BackfillDefaults,
   DataLakeDataType,
@@ -44,9 +47,8 @@ import {
 /**
  * Submits a backfill and narrates it to completion.
  *
- * The form seeds itself from the window the heatmap is showing, so the
- * common move — "this stretch is missing, fetch it" — needs no retyping.
- * Symbols are picked from the shared picker family, over the joined
+ * The form starts on the window the page hands it; a rebuild fills in one
+ * symbol's own window and runs it. Symbols are picked from the shared picker family, over the joined
  * catalog: the vendor's listing universe with the lake's coverage on each
  * row, so a dark vendor degrades to lake holdings under a banner instead
  * of an empty form. Delisted symbols sit behind an explicit toggle so a
@@ -63,7 +65,7 @@ import {
   imports: [ReceiptLabelPipe, BackfillRunLogComponent, MultiInstrumentCardComponent, DateRangePickerComponent],
   providers: [DataLakeBackfillStore],
 })
-export class LakeBackfillPanelComponent implements OnInit {
+export class LakeBackfillPanelComponent {
   protected readonly store = inject(DataLakeBackfillStore);
   private readonly jobs = inject(JobsService);
   private readonly vendor = inject(VendorCatalogService);
@@ -71,37 +73,23 @@ export class LakeBackfillPanelComponent implements OnInit {
 
   /** Null while the defaults read is in flight or the lake is dark. */
   readonly defaults = input<BackfillDefaults | null>(null);
-  readonly seedSymbols = input<string>('');
   readonly seedStartTradingDate = input.required<string>();
   readonly seedEndTradingDate = input.required<string>();
   /**
-   * The adjustment mode the heatmap is showing. The fetch pipeline only
-   * ever writes `raw` rows (`DataRunSpec.price_adjustment_mode` is
-   * `Literal["raw"]`), so a backfill run while an adjusted view is selected
-   * would succeed and leave that view exactly as empty as it started.
+   * The view the page is showing, which is the tree this panel's run writes.
+   * `lean_adjusted` has no producer, so the panel refuses it rather than
+   * leave that view exactly as empty as it started.
    */
   readonly priceAdjustmentMode = input<PriceAdjustmentMode>('raw');
 
-  /** Fired once a run reaches any terminal phase, so the caller can re-read coverage. */
+  /** Fired once a run reaches any terminal phase, so the caller can re-read the lake. */
   readonly runFinished = output();
 
-  /**
-   * The symbols the operator has picked. The seeds apply exactly once, in
-   * `ngOnInit` (the first point where the required inputs are guaranteed
-   * bound): the host rebinds `seedSymbols` and the seed dates from the URL
-   * query, so anything reactive here would wipe the operator's picks every
-   * time the heatmap's window moved. Seed invalidation is a deliberate
-   * operator action (reload), not a side effect of navigation.
-   */
-  protected readonly pickedSymbols = signal<string[]>([]);
+  /** True while a run is being submitted or is running. */
+  readonly busy = computed(() => this.store.running());
 
-  ngOnInit(): void {
-    // Coverage-board seeds always name storable symbols; the length bound
-    // is the same one the removed free-text input enforced.
-    this.pickedSymbols.set([
-      ...parseSymbols(this.seedSymbols(), this.defaults()?.max_symbol_length ?? 20).symbols,
-    ]);
-  }
+  /** The symbols the operator has picked, or the one a rebuild filled in. */
+  protected readonly pickedSymbols = signal<string[]>([]);
   protected readonly startTradingDate = linkedSignal(() => this.seedStartTradingDate());
   protected readonly endTradingDate = linkedSignal(() => this.seedEndTradingDate());
   protected readonly includeQuotes = signal(false);
@@ -140,13 +128,13 @@ export class LakeBackfillPanelComponent implements OnInit {
   });
 
   /**
-   * Selected symbols the catalog cannot vouch for — a coverage-board seed
-   * that is a typo, crypto, or delisted with the toggle off. Seeds are
-   * lake-held names, but lake membership alone has never made something
-   * backfillable; when the vendor has answered, an unvouched pick blocks
-   * submission by name instead of shipping a spec the pipeline refuses.
-   * When the vendor is dark no verdict is possible, so nothing blocks —
-   * an outage may not silently disable the Observatory's primary flow.
+   * Selected symbols the catalog cannot vouch for — delisted with the
+   * toggle off, or a rebuild of a symbol the vendor no longer lists. Lake
+   * membership alone has never made something backfillable; when the vendor
+   * has answered, an unvouched pick blocks submission by name instead of
+   * shipping a spec the pipeline refuses. When the vendor is dark no verdict
+   * is possible, so nothing blocks — an outage may not silently disable the
+   * Observatory's primary flow.
    */
   protected readonly ineligibleSelections = computed<readonly string[]>(() => {
     if (this.vendor.entries() === null) return [];
@@ -163,6 +151,10 @@ export class LakeBackfillPanelComponent implements OnInit {
   }
 
   protected readonly digest = computed(() => this.defaults()?.lean_image_digest ?? null);
+
+  protected readonly writesAdjustmentRecord = computed(() =>
+    needsAdjustmentRecord(this.priceAdjustmentMode()),
+  );
 
   /**
    * The requested view as a mode the fetch pipeline can actually write, or
@@ -307,7 +299,29 @@ export class LakeBackfillPanelComponent implements OnInit {
     this.includeDelisted.set((event.target as HTMLInputElement).checked);
   }
 
+  /**
+   * Fill the form with one symbol's rebuild window, run it, and resolve with
+   * how the run ended.
+   *
+   * Resolves null when the form refuses the run; `blockedReason` then says
+   * why in the panel, the same as for a hand-filled form.
+   */
+  async rebuild(request: RebuildRequest): Promise<BackfillRunEnd | null> {
+    this.pickedSymbols.set([request.symbol]);
+    this.startTradingDate.set(request.from);
+    this.endTradingDate.set(request.to);
+    this.includeQuotes.set(request.includeQuotes);
+    const spec = this.composeSpec();
+    return spec === null ? null : this.store.run(spec);
+  }
+
   protected async submit(): Promise<void> {
+    const spec = this.composeSpec();
+    if (spec !== null) await this.store.start(spec);
+  }
+
+  /** The spec the form describes, or null while the form cannot be submitted. */
+  private composeSpec(): DataRunSpec | null {
     const digest = this.digest();
     const defaults = this.defaults();
     const mode = this.backfillableMode();
@@ -325,11 +339,11 @@ export class LakeBackfillPanelComponent implements OnInit {
       endMs === null ||
       !this.canSubmit()
     ) {
-      return;
+      return null;
     }
 
     const dataTypes: DataLakeDataType[] = this.includeQuotes() ? ['trade', 'quote'] : ['trade'];
-    const spec: DataRunSpec = {
+    return {
       // `canSubmit()` already proved `randomUUID` exists — see blockedReason.
       request_id: globalThis.crypto.randomUUID(),
       run_type: 'python_lab',
@@ -343,7 +357,6 @@ export class LakeBackfillPanelComponent implements OnInit {
       // already refused every mode the fetch pipeline cannot produce.
       price_adjustment_mode: mode,
     };
-    await this.store.start(spec);
   }
 
   protected async cancel(): Promise<void> {

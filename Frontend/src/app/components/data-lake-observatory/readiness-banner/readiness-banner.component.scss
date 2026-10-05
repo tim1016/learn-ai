@@ -1,0 +1,103 @@
+:host {
+  display: block;
+}
+
+// The banner sits on the page's 12 columns: copy on eight, actions on four.
+.banner {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-5);
+  align-items: center;
+  padding: var(--space-5);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-lg);
+
+  &__body {
+    grid-column: span 8;
+    display: flex;
+    gap: var(--space-4);
+  }
+
+  &__icon {
+    flex: none;
+    margin-top: 2px;
+    font-size: 1.5rem;
+    color: var(--warn);
+  }
+
+  &__copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+
+    p {
+      max-width: 72ch;
+      margin: 0;
+    }
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+  }
+
+  &__fix {
+    font-weight: var(--fw-semi);
+    color: var(--warn);
+  }
+
+  &__note {
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+  }
+
+  &__actions {
+    grid-column: span 4;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  &__primary,
+  &__secondary {
+    min-height: 2.5rem;
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    border-radius: var(--radius);
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+
+  &__primary {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--text-on-accent);
+  }
+
+  &__secondary {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text-primary);
+  }
+}
+
+@media (max-width: 60rem) {
+  .banner__body,
+  .banner__actions {
+    grid-column: 1 / -1;
+  }
+}

@@ -697,18 +697,29 @@ describe('GoldenSearchPlanFormComponent', () => {
     await waitFor(() => expect(lockButton().disabled).toBe(false));
   });
 
-  it("shows the server's refusal of a date under the range, and the footer's link takes the trader there (#2886)", async () => {
+  it("shows the server's refusal of a date under the range, with the day the range can start on one click away (#2886)", async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
-    const message = 'The slowest setting needs 32 decision bars of history before 2024-01-01, and the lake does not hold them for SPY.';
-    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'RUN_UP_HISTORY_MISSING', field: 'development_start_ms', message }] }));
+    const message = 'The slowest setting needs 32 decision bars of history before 2024-01-01, and the lake does not hold them for SPY. The earliest start the lake can serve with whole folds is 2024-11-01.';
+    service.preflight.mockResolvedValueOnce(
+      preflightFixture({ refusals: [{ code: 'RUN_UP_HISTORY_MISSING', field: 'development_start_ms', message, nearest_valid_ms: [etMidnightMs('2024-11-01')] }] }),
+    );
     fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '4' } });
 
     const range = view.container.querySelector<HTMLElement>('[id="gs-plan-range"]');
     await waitFor(() => expect(within(range as HTMLElement).getByRole('alert').textContent).toBe(message));
     fireEvent.click(within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: message }));
+    expect(document.activeElement).toBe(range);
 
+    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    fireEvent.click(screen.getByRole('button', { name: 'Start the range on 2024-11-01' }));
+
+    // The offered day becomes the range's first and its last day stays; the server lays the plan out inside it.
+    await waitFor(() =>
+      expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-11-01'), range_end_ms: etMidnightMs('2026-04-01') }),
+    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull());
     expect(document.activeElement).toBe(range);
   });
 

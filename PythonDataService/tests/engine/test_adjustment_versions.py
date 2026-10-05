@@ -150,6 +150,30 @@ async def test_retry_rebuilds_previously_published_days_after_a_failed_refresh(c
     assert [b.close for b in (await asyncio.to_thread(lambda: list(LeanMinuteDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))] == [10, 10]
 
 
+@pytest.mark.parametrize("refresh_already_failed", [False, True])
+@pytest.mark.asyncio
+async def test_stale_day_older_than_the_providers_history_is_left_out_not_refetched(
+    capture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, refresh_already_failed: bool,
+) -> None:
+    first = await pipeline.ensure_data(spec(BEFORE))
+    root = Path(first.lean_data_root_path)
+    capture.split = True
+    capture.unavailable = True
+    if refresh_already_failed:
+        await pipeline.ensure_data(spec(AFTER))
+    # #2892: the provider's rolling window has moved past BEFORE, so a fetch of it can only be refused.
+    monkeypatch.setattr(pipeline, "polygon_history_floor", lambda today: AFTER)
+    capture.fetches.clear()
+
+    latest = await pipeline.ensure_data(spec(AFTER))
+
+    assert BEFORE not in {day for day, _ in capture.fetches}
+    assert not [f for f in latest.failures if f.artifact_kind == "time_series_bars"]
+    assert [b.close for b in (await asyncio.to_thread(lambda: list(LeanDailyDataReader(root).iter_bars("NVDA", BEFORE, AFTER))))] == [10]
+    with pytest.raises((LakeAdmissionError, AdjustmentVersionError), match=r"committed|corporate-action version"):
+        (await asyncio.to_thread(lambda: LeanMinuteDataReader(root).read_day("NVDA", BEFORE)))
+
+
 @pytest.mark.asyncio
 async def test_reader_never_switches_version_mid_run(capture: SimpleNamespace) -> None:
     first = await pipeline.ensure_data(spec(BEFORE))

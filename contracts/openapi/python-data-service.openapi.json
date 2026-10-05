@@ -10999,7 +10999,7 @@
         "type": "object"
       },
       "CoverageDay": {
-        "description": "One calendar session's artifact status for a symbol/data-type window.\n\n``trading_date_ms`` is the session's 09:30 ET open, expressed as\nint64 ms UTC \u2014 the canonical anchor for a date-only value. Sessions with\nno matching catalog row report ``status=\"missing\"``; this is never\nemitted for a non-session date, since the router only iterates the\ncanonical calendar's sessions in the first place.",
+        "description": "One calendar session's artifact status for a symbol/data-type window.\n\n``trading_date_ms`` is the session's 09:30 ET open, expressed as\nint64 ms UTC \u2014 the canonical anchor for a date-only value. Sessions with\nno matching catalog row report ``status=\"missing\"``; this is never\nemitted for a non-session date, since the router only iterates the\ncanonical calendar's sessions in the first place.\n\n``status=\"needs_rebuild\"`` is synthesized the same way: a complete row\nwhose split-adjusted file a run would refuse (``app.data_lake.run_readiness``).",
         "properties": {
           "artifact_id": {
             "anyOf": [
@@ -11011,6 +11011,22 @@
               }
             ],
             "title": "Artifact Id"
+          },
+          "rebuild_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "price_file_missing",
+                  "adjustment_record_missing",
+                  "adjustment_record_rejected"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebuild Reason"
           },
           "status": {
             "anyOf": [
@@ -11024,7 +11040,11 @@
                 "type": "string"
               },
               {
-                "const": "missing"
+                "enum": [
+                  "missing",
+                  "needs_rebuild"
+                ],
+                "type": "string"
               }
             ],
             "title": "Status"
@@ -22978,6 +22998,16 @@
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "nearest_valid_ms": {
+            "description": "The nearest instants `field` would accept instead, when the server can name them; empty otherwise.",
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Nearest Valid Ms",
+            "type": "array"
           }
         },
         "required": [
@@ -39054,6 +39084,42 @@
         "title": "RunMetrics",
         "type": "object"
       },
+      "RunReadinessResponse": {
+        "properties": {
+          "data_root_id": {
+            "format": "uuid",
+            "title": "Data Root Id",
+            "type": "string"
+          },
+          "data_type": {
+            "title": "Data Type",
+            "type": "string"
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "price_adjustment_mode": {
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "symbols": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SymbolRunReadiness"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "market",
+          "price_adjustment_mode",
+          "data_type"
+        ],
+        "title": "RunReadinessResponse",
+        "type": "object"
+      },
       "RunSummaryFacts": {
         "additionalProperties": false,
         "description": "The run facts the summary line is written from; the same facts give the same line.",
@@ -44409,6 +44475,104 @@
           "reason"
         ],
         "title": "SymbolMarketDataEvidence",
+        "type": "object"
+      },
+      "SymbolRunReadiness": {
+        "description": "One symbol's complete minute sessions under one adjustment mode, and how many a run can read.\n\nEvery ``*_trading_date_ms`` is the session's 09:30 ET open.\n``rebuild_*`` bound the sessions a backfill can rebuild: unreadable, and\nnot older than the provider's history. Both are ``None`` when there are\nnone. ``unrebuildable_count`` is the unreadable sessions older than that\nhistory, which no backfill can fetch again.\n\n``gap_*`` describe the sessions the calendar schedules between the first\nand the last held one that the lake does not hold: ``gap_session_count``\nof them, in ``gap_count`` unbroken stretches. ``fill_first_trading_date_ms``\nand ``fill_last_trading_date_ms`` bound the ones a backfill can fetch, and\nare ``None`` when there are none; ``unfillable_gap_session_count`` is the\nones older than the provider's history.",
+        "properties": {
+          "fill_first_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill First Trading Date Ms"
+          },
+          "fill_last_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill Last Trading Date Ms"
+          },
+          "first_trading_date_ms": {
+            "title": "First Trading Date Ms",
+            "type": "integer"
+          },
+          "gap_count": {
+            "default": 0,
+            "title": "Gap Count",
+            "type": "integer"
+          },
+          "gap_session_count": {
+            "default": 0,
+            "title": "Gap Session Count",
+            "type": "integer"
+          },
+          "last_trading_date_ms": {
+            "title": "Last Trading Date Ms",
+            "type": "integer"
+          },
+          "rebuild_first_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebuild First Trading Date Ms"
+          },
+          "rebuild_last_trading_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebuild Last Trading Date Ms"
+          },
+          "run_ready_count": {
+            "title": "Run Ready Count",
+            "type": "integer"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "unfillable_gap_session_count": {
+            "default": 0,
+            "title": "Unfillable Gap Session Count",
+            "type": "integer"
+          },
+          "unrebuildable_count": {
+            "title": "Unrebuildable Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "symbol",
+          "first_trading_date_ms",
+          "last_trading_date_ms",
+          "session_count",
+          "run_ready_count",
+          "unrebuildable_count"
+        ],
+        "title": "SymbolRunReadiness",
         "type": "object"
       },
       "SymbolTradingStatusEvidence": {
@@ -63822,6 +63986,94 @@
           }
         },
         "summary": "Post Ensure Data",
+        "tags": [
+          "data-lake"
+        ]
+      }
+    },
+    "/api/data-lake/run-readiness": {
+      "get": {
+        "description": "Per symbol: the complete minute sessions the lake holds, and how many a run can read.\n\n``price_adjustment_mode`` has no default, for the reason ``/coverage``\ngives: readiness is a property of one mode's tree.\n\nCounted from the catalog (``app.data_lake.run_readiness``), so the cost is\none query and one snapshot read per symbol however many sessions the lake\nholds. ``/coverage`` is the per-session view that checks the files.",
+        "operationId": "get_run_readiness_api_data_lake_run_readiness_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "const": "usa",
+              "default": "usa",
+              "title": "Market"
+            }
+          },
+          {
+            "in": "query",
+            "name": "data_type",
+            "required": false,
+            "schema": {
+              "default": "trade",
+              "enum": [
+                "trade",
+                "quote"
+              ],
+              "title": "Data Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "price_adjustment_mode",
+            "required": true,
+            "schema": {
+              "enum": [
+                "raw",
+                "polygon_split_adjusted",
+                "lean_adjusted"
+              ],
+              "title": "Price Adjustment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run Readiness",
         "tags": [
           "data-lake"
         ]

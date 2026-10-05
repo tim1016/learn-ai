@@ -5,6 +5,7 @@
  * name, so the plan footer can take the trader straight to the field.
  */
 
+import { etIsoDate } from '../../shared/date/et-midnight';
 import { problemField, type KnobNumberField, type ProtocolNumberField } from './golden-search-plan-draft';
 import type { KnobPlan, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
@@ -13,6 +14,8 @@ export interface PlanProblem {
   readonly text: string;
   /** The id of the input to fix, or null when no single input owns the problem. */
   readonly target: string | null;
+  /** The first days the study range would be taken from instead; empty when the server named none. */
+  readonly offers: readonly string[];
 }
 
 export const NUMBER_FIELD_LABELS: Readonly<Record<ProtocolNumberField, string>> = {
@@ -114,13 +117,13 @@ export function unreadableProblems(problems: ReadonlyMap<string, string>, capabi
     const named = problemField(key);
     switch (named?.kind) {
       case 'knob':
-        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field) };
+        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field), offers: [] };
       case 'number':
-        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field) };
+        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field), offers: [] };
       case 'range':
-        return { key, text: `Study range: ${message}`, target: RANGE_INPUT_ID };
+        return { key, text: `Study range: ${message}`, target: RANGE_INPUT_ID, offers: [] };
       default:
-        return { key, text: message, target: null };
+        return { key, text: message, target: null, offers: [] };
     }
   });
 }
@@ -131,5 +134,16 @@ export function refusalProblems(refusals: readonly ProtocolRefusal[], knobs: rea
     key: `${refusal.code}:${refusal.field ?? ''}:${refusal.message}`,
     text: refusal.message,
     target: refusalTarget(refusal.field, knobs),
+    offers: offeredStarts(refusal),
   }));
+}
+
+/**
+ * The first days of a study range the server would take instead of the one
+ * it refused. It names later development starts, and development starts
+ * where the range does; a refusal of another date names nothing a range can take.
+ */
+function offeredStarts(refusal: ProtocolRefusal): string[] {
+  // A data plane older than this page names no dates.
+  return refusal.field === 'development_start_ms' ? (refusal.nearest_valid_ms ?? []).map(etIsoDate) : [];
 }

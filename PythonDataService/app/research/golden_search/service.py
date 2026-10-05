@@ -28,6 +28,7 @@ from typing import Any
 import asyncpg
 import redis
 
+from app.engine.data.availability import unbroken_run_start
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import (
@@ -86,7 +87,6 @@ from app.research.persistence import lifecycle
 from app.research.persistence.db import connection, with_connection
 from app.research.sweep.identity import CodeIdentity
 from app.schemas.grid_search import SYMBOL_PATTERN
-from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -234,22 +234,26 @@ async def resolve_incumbent(
 
 @dataclass(frozen=True)
 class LakeSessions:
-    """The first and last complete minute sessions the adjusted lake holds for a symbol."""
+    """The unbroken run of complete minute sessions that reaches the adjusted lake's last one for a symbol."""
 
     first: date
     last: date
 
 
 async def lake_sessions(symbol: str) -> LakeSessions | None:
-    """The symbol's first and last complete minute sessions in the adjusted lake, or ``None`` when the catalog cannot say."""
+    """The symbol's latest unbroken run of complete minute sessions in the adjusted lake, or ``None`` when the catalog cannot say.
+
+    Not its held span: a symbol held in two stretches has a hole between them,
+    and a plan laid over the hole is refused.
+    """
     from app.data_lake import catalog_client
     from app.data_lake.types import polygon_mode_for
     from app.research.grid_search.service import SWEEP_DATA_POLICY
 
     try:
         await catalog_client.init_pool()
-        spans = await catalog_client.select_symbol_coverage_spans(
-            "usa", price_adjustment_mode=polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"]), data_type="trade"
+        rows = await catalog_client.select_coverage_minute_bars(
+            "usa", symbol, "trade", None, None, price_adjustment_mode=polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
         )
     except Exception:
         logger.warning(
@@ -258,10 +262,9 @@ async def lake_sessions(symbol: str) -> LakeSessions | None:
             exc_info=True,
         )
         return None
-    for span in spans:
-        if span.symbol.upper() == symbol and span.first_trading_date_ms is not None and span.last_trading_date_ms is not None:
-            return LakeSessions(first=et_date_at_ms(span.first_trading_date_ms), last=et_date_at_ms(span.last_trading_date_ms))
-    return None
+    held = {row.trading_date for row in rows if row.trading_date is not None}
+    first = unbroken_run_start(held, max(held)) if held else None
+    return None if first is None else LakeSessions(first=first, last=max(held))
 
 
 async def defaults(

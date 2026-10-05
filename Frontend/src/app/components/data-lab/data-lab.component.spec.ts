@@ -352,6 +352,25 @@ describe('DataLabComponent (shell)', () => {
     expect(store.committedWindow()).toEqual({ startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc });
   });
 
+  it('shows the active quick range again when it is tapped in the task that typed a date (#2883)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    const held = { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc };
+    store.patchDraft({ ticker: 'SPY', window: held });
+    await fixture.whenStable();
+    const start = screen.getByRole<HTMLInputElement>('textbox', { name: 'Start date' });
+    const shown = start.value;
+
+    // One task, as a touch tap delivers them: the field's change, then the click, with no render between.
+    start.value = '2026-08-03';
+    start.dispatchEvent(new Event('change'));
+    screen.getByRole<HTMLButtonElement>('button', { name: '6M' }).click();
+
+    await waitFor(() => expect(store.committedWindow()).toEqual(held));
+    await fixture.whenStable();
+    expect(start.value).toBe(shown);
+    expect(store.draft().window).toEqual(held);
+  });
+
   it('applies a preset verbatim: server window committed, chart refresh requested', async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({ ticker: 'SPY' });

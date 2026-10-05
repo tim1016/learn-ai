@@ -1,0 +1,40 @@
+<section class="needs" aria-labelledby="lake-needs-title">
+  <div class="needs__head">
+    <h2 class="needs__title" id="lake-needs-title">What a session needs before a run can read it</h2>
+    <p class="needs__lead">A backfill writes every one of these for each session it fetches.</p>
+  </div>
+  <ol class="needs__cards">
+    <li class="card">
+      <div class="card__head">
+        <h3 class="card__title">1 · Price file</h3>
+        <span class="card__tag">Written by backfill</span>
+      </div>
+      <code class="card__file">20260102_trade.zip</code>
+      <p class="card__text">One session of minute bars.</p>
+    </li>
+    <li class="card" [class.card--loud]="missing() !== null">
+      <div class="card__head">
+        <h3 class="card__title">2 · Adjustment record</h3>
+        <span class="card__tag">Written by backfill</span>
+      </div>
+      <code class="card__file">20260102_trade.zip.adjustment.json</code>
+      <p class="card__text">
+        Says which splits and dividends the prices were adjusted for, and proves the price file has
+        not changed since. Split-adjusted prices only.
+      </p>
+      @if (missing(); as note) {
+        <p class="card__missing">{{ note }}</p>
+      } @else if (!needsRecord()) {
+        <p class="card__muted">Not needed in this view.</p>
+      }
+    </li>
+    <li class="card">
+      <div class="card__head">
+        <h3 class="card__title">3 · Catalog entry</h3>
+        <span class="card__tag">Written by backfill</span>
+      </div>
+      <code class="card__file">one row per session</code>
+      <p class="card__text">The lake's own receipt that the session was saved whole.</p>
+    </li>
+  </ol>
+</section>

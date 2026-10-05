@@ -7,8 +7,10 @@ past the seed (clipped to the domain), in every combination the declared constra
 allow — by the real program (``app.research.sweep.warmup``). The canonical
 planner (``plan_run_up``) turns it into whole sessions before the
 development start; a plan whose run-up would have to be carved from the
-scored range is refused (``RUN_UP_HISTORY_MISSING``), because a carved start
-would shift the development interval. Every evaluation window then reads
+scored range is refused, because a carved start would shift the development
+interval: ``RUN_UP_HISTORY_MISSING`` when the lake does not hold those
+sessions, ``DATA_UNREADABLE`` when it holds them and a run cannot read
+them. Every evaluation window then reads
 the same number of sessions before its start, widened to the deepest
 window's need so a window behind an early close is still fully primed.
 
@@ -20,16 +22,17 @@ follow it before that boundary, the interval ends after that session
 instead; a lake further behind keeps the whole months, so the availability
 check refuses the plan and names the backfill. Development is the longest whole-month range
 ending at the final start that (a) plans whole walk-forward folds, (b)
-leaves at least one calendar month of lake history before it for the
-run-up (24 months when the lake's first session is unknown), and (c) keeps
+leaves at least one calendar month of unbroken lake history before it for
+the run-up (24 months when the lake's sessions are unknown), and (c) keeps
 the default plan's conservative evaluation bound within its budget.
 
 Formula (a picked range): the final interval is the ``final_months`` months
 ending where the range ends. Development ends where it starts, and starts
 on the earliest day ``training_months + k·test_months`` whole months before
-it (``k ≥ 1``) that falls inside the range and leaves the lake's run-up
-month before it. Scheduled sessions between the range's first day and that
-start are left out and reported; a range that holds no fold is refused.
+it (``k ≥ 1``) that falls inside the range and leaves the first month of
+the lake's unbroken history before it for the run-up. Scheduled sessions
+between the range's first day and that start are left out and reported; a
+range that holds no fold is refused.
 The run cap does not shorten a picked range: the plan check judges it.
 
 Formula (default ranges): a knob's range is its declared default range
@@ -54,7 +57,7 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
-from app.engine.data.availability import MissingSessionsError, check_availability
+from app.engine.data.availability import MissingSessionsError, check_availability, unbroken_run_start
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_start_for_bar_count
@@ -254,12 +257,46 @@ def _sessions_needed(window_start_ms: int, required_samples: int, bar_span_ms: i
     return len(expected_sessions(earliest, first - timedelta(days=1)))
 
 
+def _deepest_run_up_sessions(protocol: GoldenSearchProtocol, probe: WarmupProbe) -> int:
+    """The run-up sessions the plan's most demanding window needs: one behind an early close needs more."""
+    return max(_sessions_needed(start, probe.required_samples, probe.bar_span_ms) for start in window_starts(protocol))
+
+
 def window_starts(protocol: GoldenSearchProtocol) -> list[int]:
     """Every evaluation window start the protocol can produce."""
     starts = {protocol.development_start_ms, protocol.final_start_ms, recent_window_ms(protocol)[0]}
     for fold in fold_windows(protocol):
         starts |= {fold.train_start_ms, fold.test_start_ms}
     return sorted(starts)
+
+
+def _servable_start_ms(protocol: GoldenSearchProtocol, probe: WarmupProbe, roots: Sequence[Path]) -> int | None:
+    """The earliest later development start the lake can serve, or ``None`` when no later start helps.
+
+    Later starts keep the development end and drop whole folds from the front,
+    so the plan still divides. One is servable when the lake holds its run-up
+    and every session after it, without a gap, through the final test. The
+    lake is read from the refused start only, so a run-up longer than a test
+    fold lands on a later start than the lake strictly needs.
+    """
+    boundary = et_date_at_ms(protocol.development_end_ms)
+    report = check_availability(
+        roots, protocol.symbol, et_date_at_ms(protocol.development_start_ms), et_date_at_ms(protocol.final_end_ms - 1)
+    )
+    held = {day for days in report.sources.values() for day in days}
+    readable_from = unbroken_run_start(held, report.end)
+    if readable_from is None:
+        return None
+    for folds in range(len(fold_windows(protocol)) - 1, 0, -1):
+        months = protocol.training_months + folds * protocol.test_months
+        start = add_months(boundary, -months)
+        # A start whose day its month lacks does not add back to the same end; the fold planner would refuse it.
+        if start < readable_from or add_months(start, months) != boundary:
+            continue
+        later = replace(protocol, development_start_ms=et_midnight_ms(start))
+        if warmup_session(later.development_start_ms, _deepest_run_up_sessions(later, probe)) >= readable_from:
+            return later.development_start_ms
+    return None
 
 
 def plan_study_run_up(protocol: GoldenSearchProtocol, declaration: SearchDeclaration, *, roots: Sequence[Path]) -> StudyRunUp:
@@ -278,24 +315,41 @@ def plan_study_run_up(protocol: GoldenSearchProtocol, declaration: SearchDeclara
         )
     except RunUpExceedsRangeError as exc:
         raise GoldenSearchRefusal(str(exc), code="RUN_UP_EXCEEDS_RANGE") from exc
-    missing = GoldenSearchRefusal(
-        f"The slowest setting needs {probe.required_samples} decision bars of history before "
-        f"{start_day.isoformat()}, and the lake does not hold them for {protocol.symbol}. Backfill earlier "
-        "history or start the development interval later; the run-up is never carved from the scored range.",
-        code="RUN_UP_HISTORY_MISSING",
-    )
+
+    deepest = _deepest_run_up_sessions(protocol, probe)
+
+    def refused() -> GoldenSearchRefusal:
+        """Why the run-up cannot be read: the lake holds it and a run cannot read it, or the lake does not hold it."""
+        later = _servable_start_ms(protocol, probe, roots)
+        named = "" if later is None else f" The earliest start the lake can serve with whole folds is {et_date_at_ms(later).isoformat()}."
+        held = check_availability(
+            roots, protocol.symbol, warmup_session(protocol.development_start_ms, deepest), start_day - timedelta(days=1)
+        )
+        if held.unreadable_files:
+            unreadable = data_missing_refusal(MissingSessionsError(held))
+            why, code = f"a run cannot read them: {unreadable}.", unreadable.code
+        else:
+            why, code = (
+                f"the lake does not hold them for {protocol.symbol}. Backfill earlier history or start the development "
+                "interval later; the run-up is never carved from the scored range.",
+                "RUN_UP_HISTORY_MISSING",
+            )
+        return GoldenSearchRefusal(
+            f"The slowest setting needs {probe.required_samples} decision bars of history before {start_day.isoformat()}, and {why}{named}",
+            code=code,
+            field="development_start_ms",
+            nearest_valid_ms=() if later is None else (later,),
+        )
+
     if plan.carved_from_range:
-        raise missing
-    sessions = max(
-        plan.run_up_sessions,
-        *(_sessions_needed(start, probe.required_samples, probe.bar_span_ms) for start in window_starts(protocol)),
-    )
+        raise refused()
+    sessions = max(plan.run_up_sessions, deepest)
     data_start = plan.data_start
     if sessions > plan.run_up_sessions:
         data_start = warmup_session(protocol.development_start_ms, sessions)
         prior = check_availability(roots, protocol.symbol, data_start, plan.data_start - timedelta(days=1))
         if not prior.is_complete:
-            raise missing
+            raise refused()
     return StudyRunUp(
         required_samples=probe.required_samples,
         bar_span_ms=probe.bar_span_ms,
@@ -325,7 +379,7 @@ class PlanReview:
 
 
 def _as_refusal(exc: GoldenSearchRefusal) -> ProtocolRefusal:
-    return ProtocolRefusal(code=exc.code, field=exc.field, message=str(exc))
+    return ProtocolRefusal(code=exc.code, field=exc.field, message=str(exc), nearest_valid_ms=exc.nearest_valid_ms)
 
 
 def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None = None, check_data: bool = True) -> PlanReview:
@@ -551,7 +605,10 @@ def _month_start(day: date) -> date:
 
 
 def _earliest_development_start(earliest_session: date) -> date:
-    """The first month start leaving at least one whole calendar month of lake history for the run-up."""
+    """The first month start leaving at least one whole calendar month of lake history for the run-up.
+
+    ``earliest_session`` starts the lake's latest unbroken run, not its held span: nothing is read across a hole.
+    """
     month = _month_start(earliest_session)
     first_session = _first_session_on_or_after(month)
     return add_months(month, 1 if earliest_session <= first_session else 2)
@@ -604,7 +661,7 @@ class RangeFit:
     final_start: date
     final_end: date
     unused_sessions: tuple[date, ...]
-    #: The lake's run-up month put the development start later than the folds alone would.
+    #: The run-up month of the lake's unbroken history put the development start later than the folds alone would.
     held_back_for_run_up: bool
 
 
@@ -633,8 +690,9 @@ def fit_range(
     """The longest whole-fold plan inside ``study_range`` whose final test ends where the range ends.
 
     Development may start no earlier than the range's first day, nor before
-    the lake's first session leaves a calendar month for the run-up. A range
-    that holds no fold is refused with the start the plan needs.
+    the lake's latest unbroken run of sessions leaves a calendar month for the
+    run-up: nothing is read across a hole. A range that holds no fold is
+    refused with the start the plan needs.
     """
     if min(final_months, training_months, test_months) < 1:
         raise GoldenSearchRefusal("Interval lengths must be at least one month.", code="INTERVALS_INVALID")
@@ -658,7 +716,7 @@ def fit_range(
         why = (
             f"the range starts on {floor.isoformat()}"
             if floor == study_range.start
-            else f"the lake's first month is kept for the run-up, so development cannot start before {floor.isoformat()}"
+            else f"the first month of the lake's unbroken history is kept for the run-up, so development cannot start before {floor.isoformat()}"
         )
         raise GoldenSearchRefusal(
             f"The range is too short: {_months(training_months)} of training, one test of {_months(test_months)} and a "
@@ -685,7 +743,7 @@ def range_fit_sentence(fit: RangeFit, *, training_months: int, test_months: int)
     left_out = f"The session on {first} is" if count == 1 else f"The {count} sessions from {first} to {last} are"
     split = f"split into {_months(training_months)} of training and whole tests of {_months(test_months)}"
     why = (
-        f"the lake's first month is kept for the run-up, and the rest has to {split}"
+        f"the first month of the lake's unbroken history is kept for the run-up, and the rest has to {split}"
         if fit.held_back_for_run_up
         else f"the months before the final test have to {split}"
     )

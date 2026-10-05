@@ -65,8 +65,7 @@ Targets Angular 22.
 - A symbol-only host binds `app-symbol-picker` (`[(symbol)]`, `adjustmentMode`) instead of
   projecting a `TickerRange` by hand; a multi-symbol host whose runs read the lake passes
   the multi card an `adjustmentMode` so unheld picks are gated, while a host that owns its
-  membership outright (the backfill panel; the Observatory's read-only coverage query)
-  leaves the mode unset and the list closed.
+  membership outright (the backfill panel) leaves the mode unset and the list closed.
 
 ## Date picking (ADR 0075)
 

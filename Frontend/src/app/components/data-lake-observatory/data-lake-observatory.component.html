@@ -1,66 +1,95 @@
 <app-page-header title="Data Lake Observatory" icon="pi-database" />
 
-<p class="lake__lead">
-  What the data lake owns, session by session: every artifact's state, its receipt, and a backfill
-  for whatever is missing.
-</p>
+<div class="lake__intro">
+  <p class="lake__lead">Which symbols a run can read today, what is missing, and a backfill to fix it.</p>
+  <div class="lake__views">
+    <app-lake-toggle label="Bars" [options]="barTypeOptions" [value]="bars()" (picked)="bars.set($event)" />
+    <app-lake-toggle
+      label="Price adjustment"
+      [options]="modeOptions"
+      [value]="mode()"
+      (picked)="mode.set($event)"
+    />
+  </div>
+</div>
 
-<app-coverage-query-bar
-  [initial]="query()"
-  [maxSymbolLength]="maxSymbolLength()"
-  [maxTradingRangeDays]="maxTradingRangeDays()"
-  [busy]="coverage.isLoading()"
-  (applied)="apply($event)"
-/>
-
-<section class="panel" aria-labelledby="lake-storage-heading">
-  <h2 class="panel__title" id="lake-storage-heading">Storage</h2>
-  @if (storageSummary(); as summary) {
-    <app-lake-storage-summary [summary]="summary" />
-  } @else if (storageProblem(); as issue) {
-    <p class="panel__problem" role="alert">
-      <span class="panel__reason">{{ issue.reason | receiptLabel }}</span>
-      <span>{{ issue.message }}</span>
-    </p>
-  } @else {
-    <p class="panel__state" aria-live="polite" aria-busy="true">Reading the catalog…</p>
-  }
-</section>
-
-<section class="panel" aria-labelledby="lake-coverage-heading">
-  <h2 class="panel__title" id="lake-coverage-heading">Coverage</h2>
-  @for (issue of board().problems; track issue.symbol) {
-    <p class="panel__problem" role="alert">
-      <span class="panel__reason">{{ issue.symbol }} · {{ issue.reason | receiptLabel }}</span>
-      <span>{{ issue.message }}</span>
-    </p>
-  }
-  @if (coverage.isLoading()) {
-    <p class="panel__state" aria-live="polite" aria-busy="true">Walking the calendar…</p>
-  } @else if (!hasSymbols()) {
-    <p class="panel__state">Name a symbol above to see which sessions are on disk.</p>
-  } @else if (board().rows.length === 0) {
-    <p class="panel__state">No coverage rows came back for this window.</p>
-  } @else if (board().sessionCount === 0) {
-    <p class="panel__state">The exchange calendar has no sessions in this window.</p>
-  } @else {
-    <app-coverage-heatmap
-      [board]="board()"
-      [selectedArtifactId]="selection()?.cell?.artifactId ?? null"
-      (cellSelected)="openInspector($event)"
+<!-- Twelve columns: full-width rows, then a main panel on eight beside its companion on four. -->
+<div class="lake-grid">
+  @if (totals().rebuildSymbolCount > 0) {
+    <app-readiness-banner
+      class="span-12"
+      [totals]="totals()"
+      [selected]="selectedRow()?.rebuild ?? null"
+      [busy]="backfillBusy()"
+      [progress]="queueProgress()"
+      (rebuildAll)="rebuildAll()"
+      (rebuildSelected)="rebuild([$event])"
     />
   }
-</section>
 
-<section class="panel" aria-labelledby="lake-backfill-heading">
-  <h2 class="panel__title" id="lake-backfill-heading">Backfill</h2>
-  <app-lake-backfill-panel
-    [defaults]="backfillDefaults()"
-    [seedSymbols]="query().symbolsText"
-    [seedStartTradingDate]="query().startTradingDate"
-    [seedEndTradingDate]="query().endTradingDate"
-    [priceAdjustmentMode]="query().priceAdjustmentMode"
-    (runFinished)="onRunFinished()"
-  />
-</section>
-<app-artifact-inspector-drawer [selection]="selection()" (closed)="closeInspector()" />
+  @if (gapRows().length > 0) {
+    <app-gap-banner
+      class="span-12"
+      [rows]="gapRows()"
+      [busy]="backfillBusy()"
+      [progress]="fillProgress()"
+      (fill)="rebuild($event, 'fill')"
+    />
+  }
+
+  <app-session-needs class="span-12" [mode]="mode()" [missingSymbolCount]="totals().rebuildSymbolCount" />
+
+  <app-lake-panel
+    class="span-8"
+    heading="Symbols"
+    headingId="lake-symbols-heading"
+    [problem]="readinessProblem()"
+    [pending]="symbolsPending()"
+  >
+    <app-symbol-readiness-table
+      [rows]="rows()"
+      [selectedSymbol]="selectedSymbol()"
+      [busy]="backfillBusy()"
+      (symbolSelected)="selectedSymbol.set($event)"
+      (rebuild)="rebuild([$event])"
+    />
+  </app-lake-panel>
+
+  <app-lake-panel class="span-4" heading="Backfill" headingId="lake-backfill-heading">
+    <app-lake-backfill-panel
+      [defaults]="backfillDefaults()"
+      [seedStartTradingDate]="seedStart"
+      [seedEndTradingDate]="seedEnd"
+      [priceAdjustmentMode]="mode()"
+      (runFinished)="onRunFinished()"
+    />
+  </app-lake-panel>
+
+  <app-lake-panel
+    class="span-8"
+    heading="Sessions"
+    headingId="lake-sessions-heading"
+    [problem]="sessionsProblem()"
+    [pending]="sessionsPending()"
+  >
+    @if (selectedSymbol(); as symbol) {
+      <app-asset-identity slot="head" [symbol]="symbol" size="sm" />
+    }
+    <app-coverage-heatmap [board]="board()" [selected]="selection()" (cellSelected)="selectSession($event)" />
+  </app-lake-panel>
+
+  <app-lake-panel class="span-4" headingId="lake-session-heading">
+    <app-session-inspector
+      [selection]="selection()"
+      [mode]="mode()"
+      [rebuildRequest]="selectedRow()?.rebuild ?? null"
+      [busy]="backfillBusy()"
+      (rebuild)="rebuild([$event])"
+      (receiptOpened)="receipt.set($event)"
+    />
+  </app-lake-panel>
+
+  <app-lake-storage-fold class="span-12" [summary]="storageSummary()" [problem]="storageProblem()" />
+</div>
+
+<app-artifact-inspector-drawer [selection]="receipt()" (closed)="receipt.set(null)" />

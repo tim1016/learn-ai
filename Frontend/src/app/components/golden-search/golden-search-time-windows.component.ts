@@ -25,8 +25,8 @@ function percentAlong(ms: number, start: number, end: number): number {
 /**
  * The plan's time windows (#2696): the fold and final-test lengths in months,
  * the study range the server lays the dates out inside (#2886), with what it
- * left out of the range and its refusal of a date under the picker, and a
- * bar showing development, the folds' test windows and the sealed final test
+ * left out of the range and, under the picker, its refusal of a date and the
+ * first day it would take instead, and a bar showing development, the folds' test windows and the sealed final test
  * as the server laid them out, with the final test's exposure and the warmup
  * every run is primed with.
  */
@@ -75,8 +75,13 @@ export class GoldenSearchTimeWindowsComponent {
   });
   /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
   protected readonly gaps = computed<DataGaps | null>(() => this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.protocol().symbol, this.bounds(), 'minute'));
-  /** The server's refusals of a date, in its own words. */
-  protected readonly rangeRefusals = computed(() => this.refusals().filter((refusal) => refusal.target === RANGE_INPUT_ID));
+  /** The server's refusals of a date, in its own words, each with the first days it would take instead of the range's. */
+  protected readonly rangeRefusals = computed(() => {
+    const from = this.shown().from;
+    return this.refusals()
+      .filter((refusal) => refusal.target === RANGE_INPUT_ID)
+      .map((refusal) => ({ ...refusal, offers: refusal.offers.filter((day) => day !== from) }));
+  });
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */
   protected readonly timeline = computed<{ readonly finalAt: number; readonly folds: readonly Span[] } | null>(() => {
@@ -100,5 +105,11 @@ export class GoldenSearchTimeWindowsComponent {
 
   protected onRange(range: StudyRange): void {
     this.edit.emit({ kind: 'range', from: range.from, to: range.to });
+  }
+
+  /** Starts the range on a day the server offered. The keyboard moves to the range, because the button goes once the plan is laid out. */
+  protected startOn(day: string, block: HTMLElement): void {
+    this.edit.emit({ kind: 'range', from: day, to: this.shown().to });
+    block.focus();
   }
 }

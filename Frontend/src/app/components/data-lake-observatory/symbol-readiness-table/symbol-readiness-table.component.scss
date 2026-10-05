@@ -1,0 +1,166 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+
+  &__chip {
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--fs-sm);
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--text-secondary);
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 2px;
+    }
+
+    &--on {
+      font-weight: var(--fw-semi);
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+  }
+}
+
+.empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+// A long lake scrolls inside its panel instead of pushing the session grid off the page.
+.scroll {
+  max-height: 26rem;
+  overflow: auto;
+}
+
+.symbols {
+  width: 100%;
+  min-width: 40rem;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+
+  th,
+  td {
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--border);
+  }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-medium);
+    background: var(--bg-surface);
+    color: var(--text-subtle);
+  }
+
+  .numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+
+    &--short {
+      color: var(--warn);
+    }
+  }
+
+  &__row--selected {
+    background: var(--accent-faint);
+  }
+
+  &__select {
+    padding: var(--space-1);
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    color: inherit;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--bg-hover);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 2px;
+    }
+  }
+
+  &__note {
+    display: block;
+    margin-top: var(--space-1);
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+
+    &--gap {
+      color: var(--warn);
+    }
+  }
+
+  &__action {
+    text-align: right;
+  }
+
+  &__rebuild {
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--fs-sm);
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  font-size: var(--fs-xs);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+
+  &[data-state='ready'] {
+    background: var(--bull-soft);
+    border-color: var(--bull);
+    color: var(--bull);
+  }
+
+  &[data-state='partial'],
+  &[data-state='unreadable'] {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+}

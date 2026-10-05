@@ -93,6 +93,20 @@ async def test_preflight_returns_every_problem_of_a_well_formed_plan_as_data_in_
     assert body["run_up"] is None and body["exposure"] is None
 
 
+async def test_preflight_names_the_instant_a_refused_development_end_can_move_to(client: httpx.AsyncClient) -> None:
+    # 2025-01-01 to 2025-03-15 is not whole months; one-month folds fit an end on 03-01 or 04-01, and the sealed final test ends 03-15.
+    boundary = et_midnight_ms(date(2025, 3, 15))
+    plan = _sealed_plan(development_end_ms=boundary, final_start_ms=boundary)
+
+    response = await client.post(f"{BASE}/preflight", json=plan)
+
+    assert response.status_code == 200, response.text
+    [folds] = [refusal for refusal in response.json()["refusals"] if refusal["code"] == "FOLDS_INVALID"]
+    assert folds["field"] == "development_end_ms"
+    assert folds["message"].endswith("; the final test can start on 2025-03-01 or 2025-04-01")
+    assert folds["nearest_valid_ms"] == [et_midnight_ms(date(2025, 3, 1))]
+
+
 async def test_preflight_for_a_strategy_without_a_declaration_is_a_refusal_not_an_error(client: httpx.AsyncClient) -> None:
     response = await client.post(f"{BASE}/preflight", json=_sealed_plan(strategy_key="sma_crossover"))
 

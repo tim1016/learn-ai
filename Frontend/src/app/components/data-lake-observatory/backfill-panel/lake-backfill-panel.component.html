@@ -34,6 +34,21 @@
     </div>
   </div>
 
+  <div class="writes">
+    <p class="writes__title">For each session it fetches, this run writes</p>
+    <ul class="writes__list">
+      <li>Price file</li>
+      @if (writesAdjustmentRecord()) {
+        <li class="writes__loud">Adjustment record</li>
+      }
+      <li>Catalog entry</li>
+    </ul>
+    <p class="writes__note">
+      A session that already has {{ writesAdjustmentRecord() ? 'all three' : 'both' }} is reused,
+      not downloaded again.
+    </p>
+  </div>
+
   @if (blockedReason(); as reason) {
     <p class="backfill__note" role="status">{{ reason }}</p>
   }

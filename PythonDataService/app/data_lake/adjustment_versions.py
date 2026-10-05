@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
-from app.data_lake.types import trading_date_to_calendar_anchor_ms
+from app.data_lake.types import AdjustedFileGap, trading_date_to_calendar_anchor_ms
 from app.engine.live.identity import confine_path_to_root
 from app.utils.advisory_lock import try_advisory_file_lock
 
@@ -114,6 +114,26 @@ def verify_adjustment_receipt(
             "rebuild adjusted data before running"
         )
     return version
+
+
+def adjusted_file_gap(path: Path, file_sha256: str, symbol: str) -> AdjustedFileGap | None:
+    """Name the evidence one adjusted file lacks, or ``None`` when its receipt holds.
+
+    The check a writer makes before it reuses a file: the record against the
+    digest the catalog holds (:func:`verify_adjustment_receipt`). A reader
+    hashes the bytes it opens instead, so a file altered after its commit
+    passes here and is still refused by a run. A file outside an adjusted
+    root needs no receipt.
+    """
+    if adjusted_root_for(path) is None:
+        return None
+    if not path.is_file():
+        return "price_file_missing"
+    try:
+        verify_adjustment_receipt(path, file_sha256, symbol)
+    except AdjustmentVersionError:
+        return "adjustment_record_rejected" if companion_path(path).is_file() else "adjustment_record_missing"
+    return None
 
 
 def verify_adjusted_payload(

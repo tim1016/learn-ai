@@ -1,0 +1,30 @@
+:host {
+  display: inline-block;
+}
+
+.toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+
+  &__option {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--fs-sm);
+    background: var(--bg-surface);
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-text);
+      outline-offset: -2px;
+    }
+
+    &--on {
+      font-weight: var(--fw-semi);
+      background: var(--accent);
+      color: var(--text-on-accent);
+    }
+  }
+}

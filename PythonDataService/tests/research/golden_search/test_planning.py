@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
+from app.data_lake.adjustment_versions import companion_path
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search.budget import estimate
 from app.research.golden_search.budget import review_protocol as review
 from app.research.golden_search.declarations import declaration_for
@@ -30,10 +32,12 @@ from app.research.golden_search.planning import (
     slowest_requirement,
 )
 from app.research.golden_search.protocol import GoldenSearchProtocol, IncumbentRef, KnobPlan, by_importance
+from app.research.grid_search import service as grid_service
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.golden_search_study import (
     DEVELOPMENT,
+    LAKE_FROM,
     frequency_plan_request,
     plan_request,
     seed_lake,
@@ -190,6 +194,66 @@ def test_a_run_up_the_lake_cannot_supply_before_development_is_refused_never_car
     assert [refusal.code for refusal in plan.refusals] == ["RUN_UP_HISTORY_MISSING"] and plan.run_up is None
 
 
+@pytest.mark.parametrize(
+    ("lake_from", "servable"),
+    [
+        # 2024-09-01 keeps whole folds too, but it starts before the lake does.
+        (date(2024, 9, 4), date(2024, 10, 1)),
+        # 2024-10-01 starts inside the lake, but its run-up would reach before the lake's first session.
+        (date(2024, 9, 30), date(2024, 11, 1)),
+    ],
+)
+def test_a_development_start_inside_a_hole_in_the_lake_is_refused_naming_the_earliest_start_it_can_serve(
+    tmp_path: Path, lake_from: date, servable: date
+) -> None:
+    symbol = unique_symbol()
+    # Development is asked from 2024-06-01, ten whole months before its end and months before the lake holds the symbol.
+    seed_lake(tmp_path, symbol, start=lake_from)
+    asked = protocol_from_request(plan_request(symbol, development_start_ms=et_midnight_ms(date(2024, 6, 1))))
+
+    [refusal] = review_plan(asked, roots=[tmp_path]).refusals
+
+    assert (refusal.code, refusal.field) == ("RUN_UP_HISTORY_MISSING", "development_start_ms")
+    assert refusal.nearest_valid_ms == (et_midnight_ms(servable),)
+    assert refusal.message.endswith(f" The earliest start the lake can serve with whole folds is {servable.isoformat()}.")
+    moved = review_plan(replace(asked, development_start_ms=refusal.nearest_valid_ms[0]), roots=[tmp_path])
+    assert moved.refusals == () and moved.run_up is not None
+
+
+def test_a_run_up_refusal_names_no_start_when_no_later_one_keeps_a_fold(tmp_path: Path) -> None:
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol, start=DEVELOPMENT[0])
+    # Two months of training and one of test fill the three development months: one fold, none to drop.
+    plan = review_plan(protocol_from_request(plan_request(symbol, training_months=2)), roots=[tmp_path])
+
+    [refusal] = plan.refusals
+
+    assert refusal.code == "RUN_UP_HISTORY_MISSING" and refusal.nearest_valid_ms == ()
+    assert refusal.message.endswith("the run-up is never carved from the scored range.")
+
+
+def test_a_run_up_the_lake_holds_but_cannot_read_is_refused_as_unreadable_not_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """History on disk without its adjustment record is not history the lake lacks: a backfill rebuilds it (#2887)."""
+    # The remedy depends on what the provider still serves, so the day is pinned.
+    monkeypatch.setattr(grid_service, "now_ms_utc", lambda: et_midnight_ms(date(2025, 6, 2)))
+    root = tmp_path / "polygon_split_adjusted"
+    symbol = unique_symbol()
+    seed_lake(root, symbol)
+    for day in expected_sessions(LAKE_FROM, DEVELOPMENT[0] - timedelta(days=1)):
+        companion_path(root / "equity" / "usa" / "minute" / symbol.lower() / f"{day:%Y%m%d}_trade.zip").unlink()
+
+    [refusal] = review_plan(protocol_from_request(plan_request(symbol)), roots=[root]).refusals
+
+    assert (refusal.code, refusal.field) == ("DATA_UNREADABLE", "development_start_ms")
+    assert "is on disk but cannot be read" in refusal.message and "does not hold them" not in refusal.message
+    assert f"backfill {symbol} in polygon_split_adjusted mode to rebuild the unreadable files" in refusal.message
+    # The readable sessions start with development, so a start one fold later has its run-up.
+    assert refusal.nearest_valid_ms == (et_midnight_ms(date(2025, 2, 1)),)
+    assert refusal.message.endswith(" The earliest start the lake can serve with whole folds is 2025-02-01.")
+
+
 def test_missing_sessions_are_a_refusal_in_the_preflight_not_an_error(tmp_path: Path) -> None:
     symbol = unique_symbol()
     seed_lake(tmp_path, symbol, end=date(2025, 4, 20))
@@ -331,7 +395,7 @@ def test_a_range_from_the_lakes_first_session_keeps_its_first_month_for_the_run_
     assert fit.development_start == date(2025, 1, 3) and fit.held_back_for_run_up
     assert range_fit_sentence(fit, training_months=6, test_months=2) == (
         "Development starts on 2025-01-03. The 63 sessions from 2024-10-03 to 2025-01-02 are left out: "
-        "the lake's first month is kept for the run-up, and the rest has to split into 6 months of training and whole tests of 2 months."
+        "the first month of the lake's unbroken history is kept for the run-up, and the rest has to split into 6 months of training and whole tests of 2 months."
     )
     # A range that starts after that month is not held back.
     assert not _fit(earliest_session=date(2023, 1, 3)).held_back_for_run_up
@@ -357,7 +421,7 @@ def test_a_range_too_short_for_one_fold_is_refused_with_what_the_plan_needs() ->
         "The range is too short: 6 months of training, one test of 2 months and a final test of 3 months "
         "need development to start by 2025-11-03, and the range starts on 2026-01-03."
     )
-    with pytest.raises(GoldenSearchRefusal, match="the lake's first month is kept for the run-up, so development cannot start before 2026-03-01"):
+    with pytest.raises(GoldenSearchRefusal, match="the first month of the lake's unbroken history is kept for the run-up, so development cannot start before 2026-03-01"):
         _fit(StudyRange(date(2025, 11, 3), date(2026, 10, 3)), earliest_session=date(2026, 1, 5))
 
 

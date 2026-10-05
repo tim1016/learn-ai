@@ -27,30 +27,20 @@
   </ul>
 
   @for (row of rows(); track row.symbol) {
-    <section class="heatmap__row">
-      <h3 class="heatmap__symbol" [id]="'lake-row-' + row.symbol">{{ row.symbol }}</h3>
-      <div class="heatmap__strip" role="group" [attr.aria-labelledby]="'lake-row-' + row.symbol">
-        @for (cell of row.cells; track cell.tradingDateMs) {
-          <button
-            type="button"
-            class="swatch cell"
-            [class.cell--selected]="cell.artifactId !== null && cell.artifactId === selectedArtifactId()"
-            [disabled]="cell.artifactId === null"
-            [attr.aria-label]="cellLabel(row, cell)"
-            [attr.data-status]="cell.status"
-            (click)="select(row, cell)"
-          >
-            <span aria-hidden="true">{{ glyph(cell.status) }}</span>
-          </button>
-        }
-      </div>
-      <p class="heatmap__tally">
-        @for (entry of legend(); track entry.status) {
-          <span class="heatmap__tally-item">
-            {{ entry.status | receiptLabel }} {{ row.counts[entry.status] }}
-          </span>
-        }
-      </p>
-    </section>
+    <div class="heatmap__strip" role="group" [attr.aria-label]="row.symbol + ' sessions'">
+      @for (cell of row.cells; track cell.tradingDateMs) {
+        <button
+          type="button"
+          class="swatch cell"
+          [class.cell--selected]="isSelected(row, cell)"
+          [attr.aria-pressed]="isSelected(row, cell)"
+          [attr.aria-label]="cellLabel(row, cell)"
+          [attr.data-status]="cell.status"
+          (click)="select(row, cell)"
+        >
+          <span aria-hidden="true">{{ glyph(cell.status) }}</span>
+        </button>
+      }
+    </div>
   }
 </div>

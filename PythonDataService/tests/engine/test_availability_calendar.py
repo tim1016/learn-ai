@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.data.availability import MissingSessionsError, check_availability
+from app.engine.data.availability import MissingSessionsError, check_availability, unbroken_run_start
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import expected_sessions
 from tests._helpers.lean_store import seed_pre_market_day, seed_store_day
@@ -334,3 +334,24 @@ def test_gaps_past_the_shown_limit_are_counted_not_listed(tmp_path: Path) -> Non
     assert f"(+{len(report.missing_spans) - 10} more gaps)" in message
     assert report.missing_spans[9][0].isoformat() in message
     assert report.missing_spans[10][0].isoformat() not in message
+
+
+def test_the_unbroken_run_starts_after_the_last_hole_not_at_the_first_held_day() -> None:
+    # Held in two stretches, as a symbol backfilled twice is: a few sessions long ago, then a run to the present.
+    stray = expected_sessions(date(2021, 10, 5), date(2021, 10, 15))
+    recent = expected_sessions(date(2024, 9, 4), date(2025, 1, 31))
+
+    start = unbroken_run_start({*stray, *recent}, date(2025, 1, 31))
+
+    # Weekends and closures (Thanksgiving, Christmas, New Year's Day, MLK Day) lie inside the run without breaking it.
+    assert start == date(2024, 9, 4)
+
+
+def test_the_unbroken_run_is_none_when_the_last_session_is_not_held() -> None:
+    held = expected_sessions(date(2025, 1, 2), date(2025, 1, 30))
+
+    # 2025-02-01 is a Saturday: the last session on or before it is Friday 01-31, which is not held.
+    assert unbroken_run_start(set(held), date(2025, 2, 1)) is None
+    assert unbroken_run_start(set(), date(2025, 2, 1)) is None
+    # An end before anything is held reaches no held session either.
+    assert unbroken_run_start(set(held), date(2024, 12, 31)) is None

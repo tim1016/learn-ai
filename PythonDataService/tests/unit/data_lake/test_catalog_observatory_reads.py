@@ -392,3 +392,57 @@ async def test_coverage_spans_scoped_to_trade_omit_a_quote_only_symbol(clean_art
 
     tradable = await catalog_client.select_symbol_coverage_spans("usa", data_type="trade")
     assert [s.symbol for s in tradable] == ["SPY"]
+
+
+async def _complete_minute_bar(day: date, *, symbol: str, version: str | None) -> None:
+    artifact_id = await catalog_client.claim_minute_bar(
+        identity=_minute_identity(day, symbol=symbol, price_adjustment_mode="polygon_split_adjusted"),
+        worker_id="w-1",
+        lease_ttl_ms=300_000,
+        data_contract_hash="a" * 64,
+        file_path=f"equity/usa/minute/{symbol.lower()}/{day:%Y%m%d}_trade.zip",
+    )
+    assert isinstance(artifact_id, int)
+    await catalog_client.complete_artifact(
+        artifact_id,
+        row_count=390,
+        first_bar_start_ms=1716196200000,
+        last_bar_start_ms=1716219540000,
+        file_size_bytes=123456,
+        file_sha256="b" * 64,
+        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
+        corporate_action_version=version,
+    )
+
+
+async def test_revision_counts_group_sessions_by_version_and_rebuild_floor(clean_artifacts, pool):
+    """The run-readiness read: complete sessions per symbol, version and side of the rebuild floor."""
+    await _complete_minute_bar(date(2024, 5, 20), symbol="SPY", version=None)
+    await _complete_minute_bar(date(2024, 5, 21), symbol="SPY", version="v" * 64)
+    await _complete_minute_bar(date(2024, 5, 22), symbol="SPY", version="v" * 64)
+    await _complete_minute_bar(date(2024, 5, 22), symbol="GLD", version=None)
+
+    counts = await catalog_client.select_symbol_revision_counts(
+        "usa", "polygon_split_adjusted", "trade", rebuild_floor=date(2024, 5, 22)
+    )
+
+    assert {(c.symbol, c.revision, c.before_floor): (c.session_count, c.first_trading_date, c.last_trading_date) for c in counts} == {
+        ("GLD", None, False): (1, date(2024, 5, 22), date(2024, 5, 22)),
+        ("SPY", None, True): (1, date(2024, 5, 20), date(2024, 5, 20)),
+        ("SPY", "v" * 64, True): (1, date(2024, 5, 21), date(2024, 5, 21)),
+        ("SPY", "v" * 64, False): (1, date(2024, 5, 22), date(2024, 5, 22)),
+    }
+    # The other mode's tree holds none of these sessions.
+    assert await catalog_client.select_symbol_revision_counts("usa", "raw", "trade", rebuild_floor=date(2024, 5, 22)) == []
+
+    # Coverage rows carry what the file check needs: where the file is and the digest the catalog recorded.
+    (row,) = await catalog_client.select_artifact_coverage(
+        market="usa",
+        symbol="GLD",
+        data_type="trade",
+        provider="polygon",
+        price_adjustment_mode="polygon_split_adjusted",
+        start_trading_date=date(2024, 5, 22),
+        end_trading_date=date(2024, 5, 22),
+    )
+    assert (row.symbol, row.file_path, row.file_sha256) == ("GLD", "equity/usa/minute/gld/20240522_trade.zip", "b" * 64)

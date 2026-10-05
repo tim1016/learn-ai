@@ -1,0 +1,98 @@
+<div class="filters" role="group" aria-label="Filter symbols">
+  @for (chip of chips(); track chip.key) {
+    <button
+      type="button"
+      class="filters__chip"
+      [class.filters__chip--on]="chip.key === filter()"
+      [attr.aria-pressed]="chip.key === filter()"
+      (click)="filter.set(chip.key)"
+    >
+      {{ chip.label }} {{ chip.count }}
+    </button>
+  }
+</div>
+
+@if (rows().length === 0) {
+  <p class="empty">The lake holds no sessions in this view yet. Run a backfill to put the first one on disk.</p>
+} @else if (visible().length === 0) {
+  <p class="empty">No symbol matches this filter.</p>
+} @else {
+  <div class="scroll">
+    <table class="symbols">
+      <thead>
+        <tr>
+          <th scope="col">Symbol</th>
+          <th scope="col">Can a run read it?</th>
+          <th scope="col" class="numeric">Sessions on disk</th>
+          <th scope="col" class="numeric">A run can read</th>
+          <th scope="col">First session</th>
+          <th scope="col"><span class="sr-only">Backfill</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of visible(); track row.symbol) {
+          <tr [class.symbols__row--selected]="row.symbol === selectedSymbol()">
+            <th scope="row">
+              <button
+                type="button"
+                class="symbols__select"
+                [attr.aria-pressed]="row.symbol === selectedSymbol()"
+                [attr.aria-label]="'Show ' + row.symbol + ' sessions'"
+                (click)="symbolSelected.emit(row.symbol)"
+              >
+                <app-asset-identity [symbol]="row.symbol" size="sm" />
+              </button>
+            </th>
+            <td>
+              <span class="pill" [attr.data-state]="pillState(row)">{{ verdict(row) }}</span>
+              @if (row.unrebuildableCount > 0) {
+                <span class="symbols__note">
+                  {{ row.unrebuildableCount | number }} older than the provider's history
+                </span>
+              }
+              @if (row.gapSessionCount > 0) {
+                <span class="symbols__note symbols__note--gap">
+                  {{ row.gapSessionCount | number }}
+                  {{ row.gapSessionCount === 1 ? 'session' : 'sessions' }} missing between its first
+                  and last
+                  @if (row.unfillableGapCount > 0) {
+                    · {{ row.unfillableGapCount | number }} too old to fetch
+                  }
+                </span>
+              }
+            </td>
+            <td class="numeric">{{ row.sessionCount | number }}</td>
+            <td class="numeric" [class.numeric--short]="row.state !== 'ready'">
+              {{ row.runReadyCount | number }}
+            </td>
+            <td><app-timestamp-display [value]="row.firstTradingDateMs" mode="date-et" /></td>
+            <td class="symbols__action">
+              @if (row.rebuild; as request) {
+                <button
+                  type="button"
+                  class="symbols__rebuild"
+                  [disabled]="busy()"
+                  [attr.aria-label]="'Rebuild ' + row.symbol"
+                  (click)="rebuild.emit(request)"
+                >
+                  Rebuild
+                </button>
+              }
+              @if (row.fill; as request) {
+                <button
+                  type="button"
+                  class="symbols__rebuild"
+                  [disabled]="busy()"
+                  [attr.aria-label]="'Fill gap in ' + row.symbol"
+                  (click)="rebuild.emit(request)"
+                >
+                  Fill gap
+                </button>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

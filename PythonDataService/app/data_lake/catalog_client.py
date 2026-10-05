@@ -1675,6 +1675,11 @@ class ArtifactCoverageRow:
     trading_date: date
     status: str
     artifact_id: int
+    #: The catalog's own spelling of the symbol the row was queried by.
+    symbol: str
+    file_path: str
+    #: Null until the row reaches 'complete'.
+    file_sha256: str | None
 
 
 async def select_artifact_coverage(
@@ -1699,7 +1704,8 @@ async def select_artifact_coverage(
     """
     root_id = _resolve_data_root_id(data_root_id)
     query = """
-        SELECT "TradingDate" AS trading_date, "Status" AS status, "Id" AS artifact_id
+        SELECT "TradingDate" AS trading_date, "Status" AS status, "Id" AS artifact_id,
+               "Symbol" AS symbol, "FilePath" AS file_path, "FileSha256" AS file_sha256
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = 'minute'
@@ -1882,3 +1888,58 @@ async def select_symbol_coverage_spans(
         )
         for r in rows
     ]
+
+
+@dataclass(frozen=True)
+class SymbolRevisionCount:
+    """Complete minute sessions of one symbol that share an adjustment version and a side of the rebuild floor."""
+
+    symbol: str
+    revision: str | None
+    before_floor: bool
+    session_count: int
+    first_trading_date: date
+    last_trading_date: date
+
+
+async def select_symbol_revision_counts(
+    market: str,
+    price_adjustment_mode: PriceAdjustmentMode,
+    data_type: DataType,
+    rebuild_floor: date,
+    data_root_id: UUID | None = None,
+) -> list[SymbolRevisionCount]:
+    """Complete minute sessions per symbol, grouped by the adjustment version each was written against.
+
+    ``CorpActionRevision`` is the version the writer recorded beside the
+    file's adjustment record, so comparing it with a symbol's current version
+    counts the sessions a run can read without opening a file per session.
+    Each group is split at ``rebuild_floor``: a session before it is older
+    than the provider's history and cannot be fetched again.
+
+    ``data_root_id`` defaults to the service's configured active root (#1876).
+    """
+    root_id = _resolve_data_root_id(data_root_id)
+    query = """
+        SELECT "Symbol" AS symbol,
+               "CorpActionRevision" AS revision,
+               ("TradingDate" < $5) AS before_floor,
+               COUNT(*) AS session_count,
+               MIN("TradingDate") AS first_trading_date,
+               MAX("TradingDate") AS last_trading_date
+          FROM "DataLakeArtifacts"
+         WHERE "Market" = $1
+           AND "ArtifactKind" = 'time_series_bars'
+           AND "Resolution" = 'minute'
+           AND "Status" = 'complete'
+           AND "Symbol" IS NOT NULL
+           AND "TradingDate" IS NOT NULL
+           AND "DataRootId" = $2
+           AND "PriceAdjustmentMode" = $3
+           AND "DataType" = $4
+         GROUP BY "Symbol", "CorpActionRevision", ("TradingDate" < $5)
+         ORDER BY "Symbol"
+    """
+    async with connection() as conn:
+        rows = await conn.fetch(query, market, root_id, price_adjustment_mode, data_type, rebuild_floor)
+    return [SymbolRevisionCount(**dict(r)) for r in rows]

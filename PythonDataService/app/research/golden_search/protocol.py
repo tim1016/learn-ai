@@ -368,9 +368,11 @@ class ProtocolRefusal:
     code: str
     field: str | None
     message: str
+    #: The nearest instants ``field`` would accept instead, when the check can name them.
+    nearest_valid_ms: tuple[int, ...] = ()
 
-    def as_dict(self) -> dict[str, str | None]:
-        return {"code": self.code, "field": self.field, "message": self.message}
+    def as_dict(self) -> dict[str, Any]:
+        return {"code": self.code, "field": self.field, "message": self.message, "nearest_valid_ms": list(self.nearest_valid_ms)}
 
 
 class _Refusals:
@@ -379,8 +381,8 @@ class _Refusals:
     def __init__(self) -> None:
         self.items: list[ProtocolRefusal] = []
 
-    def add(self, code: str, field_name: str | None, message: str) -> None:
-        self.items.append(ProtocolRefusal(code=code, field=field_name, message=message))
+    def add(self, code: str, field_name: str | None, message: str, nearest_valid_ms: tuple[int, ...] = ()) -> None:
+        self.items.append(ProtocolRefusal(code=code, field=field_name, message=message, nearest_valid_ms=nearest_valid_ms))
 
     def any_for(self, field_prefix: str) -> bool:
         return any((refusal.field or "").startswith(field_prefix) for refusal in self.items)
@@ -619,6 +621,16 @@ def _is_et_midnight(ms: int) -> bool:
     return et_midnight_ms(et_date_at_ms(ms)) == ms
 
 
+def _final_start_message(exc: FoldPlanError) -> str:
+    """The fold planner's refusal as this plan's form reads it: development's exclusive end is the day the final test starts."""
+    starts = [day.isoformat() for day in exc.nearest_valid_ends]
+    if not starts:
+        return exc.reason
+    if len(starts) == 1:
+        return f"{exc.reason}; the earliest the final test can start is {starts[0]}"
+    return f"{exc.reason}; the final test can start on {' or '.join(starts)}"
+
+
 def _validate_intervals(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
     bounds = {
         "development_start_ms": p.development_start_ms,
@@ -648,7 +660,9 @@ def _validate_intervals(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
         try:
             development_folds(p)
         except FoldPlanError as exc:
-            refusals.add("FOLDS_INVALID", "development_end_ms", str(exc))
+            # A start at or after the final test's end would be refused next: the message names it, the refusal does not offer it.
+            valid_ends = tuple(ms for ms in map(et_midnight_ms, exc.nearest_valid_ends) if ms < p.final_end_ms)
+            refusals.add("FOLDS_INVALID", "development_end_ms", _final_start_message(exc), valid_ends)
         except ValueError:
             # The planner's month arithmetic left the calendar (a date past year 9999).
             refusals.add("FOLDS_INVALID", "training_months", "The training and test lengths reach past the calendar; shorten them.")

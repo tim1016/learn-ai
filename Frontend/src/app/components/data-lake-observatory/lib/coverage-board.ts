@@ -1,10 +1,17 @@
-import type { CoverageResponse, CoverageStatus, DataLakeRead } from '../../../shared/data-lake';
+import type {
+  CoverageResponse,
+  CoverageStatus,
+  DataLakeRead,
+  RebuildReason,
+} from '../../../shared/data-lake';
 
 export interface CoverageCell {
   /** Date-anchored session open, int64 ms UTC. Render in `date-et`. */
   readonly tradingDateMs: number;
   readonly status: CoverageStatus;
   readonly artifactId: number | null;
+  /** Set only on a `needs_rebuild` cell. */
+  readonly rebuildReason: RebuildReason | null;
 }
 
 export interface CoverageRow {
@@ -30,12 +37,14 @@ export interface CoverageBoard {
 }
 
 /**
- * The four artifact states plus the synthesized `missing`, in the order the
- * legend and the per-row tallies present them. Ordering is deliberate:
- * healthy first, then in-flight, then the two that need an operator.
+ * The four artifact states plus the synthesized `needs_rebuild` and
+ * `missing`, in the order the legend presents them. Ordering is deliberate:
+ * readable first, then the state a run refuses while the catalog says
+ * complete, then in-flight, then the ones that need an operator.
  */
 export const COVERAGE_STATUSES: readonly CoverageStatus[] = [
   'complete',
+  'needs_rebuild',
   'fetching',
   'stale',
   'failed',
@@ -49,6 +58,7 @@ export const COVERAGE_STATUSES: readonly CoverageStatus[] = [
  */
 const STATUS_GLYPHS: Readonly<Record<CoverageStatus, string>> = {
   complete: '✓',
+  needs_rebuild: '!',
   fetching: '◐',
   stale: '~',
   failed: '✕',
@@ -60,7 +70,7 @@ export function coverageGlyph(status: CoverageStatus): string {
 }
 
 function emptyCounts(): Record<CoverageStatus, number> {
-  return { complete: 0, fetching: 0, stale: 0, failed: 0, missing: 0 };
+  return { complete: 0, needs_rebuild: 0, fetching: 0, stale: 0, failed: 0, missing: 0 };
 }
 
 function toRow(response: CoverageResponse): CoverageRow {
@@ -71,6 +81,7 @@ function toRow(response: CoverageResponse): CoverageRow {
       tradingDateMs: day.trading_date_ms,
       status: day.status,
       artifactId: day.artifact_id ?? null,
+      rebuildReason: day.rebuild_reason ?? null,
     };
   });
   return { symbol: response.symbol, cells, counts };
@@ -115,45 +126,4 @@ export function buildCoverageBoard(
     firstSessionMs: axis.length > 0 ? axis[0].tradingDateMs : null,
     lastSessionMs: axis.length > 0 ? axis[axis.length - 1].tradingDateMs : null,
   };
-}
-
-/**
- * Mirrors `SYMBOL_RE` in `PythonDataService/app/data_lake/types.py`.
- *
- * Exported so `coverage-board.spec.ts` can pin its source against the
- * backend pattern character for character. A duplicated grammar that
- * drifted would start rejecting symbols the catalog accepts, or waving
- * through ones it cannot store — the parity test makes that a failure
- * rather than a silent divergence.
- */
-export const SYMBOL_PATTERN = /^[A-Z][A-Z0-9.]*$/;
-
-export interface ParsedSymbols {
-  readonly symbols: readonly string[];
-  readonly invalid: readonly string[];
-}
-
-/**
- * Splits an operator's comma- or space-separated symbol list.
- *
- * Upper-cases and de-duplicates, then partitions against the catalog's own
- * symbol grammar and length cap so an unusable entry is named in the form
- * rather than spent on a 422 round trip.
- */
-export function parseSymbols(raw: string, maxLength: number): ParsedSymbols {
-  const seen = new Set<string>();
-  const symbols: string[] = [];
-  const invalid: string[] = [];
-  for (const token of raw.split(/[\s,]+/)) {
-    if (token === '') continue;
-    const candidate = token.toUpperCase();
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
-    if (SYMBOL_PATTERN.test(candidate) && candidate.length <= maxLength) {
-      symbols.push(candidate);
-    } else {
-      invalid.push(token);
-    }
-  }
-  return { symbols, invalid };
 }
