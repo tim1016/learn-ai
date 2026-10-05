@@ -29,6 +29,7 @@ from app.research.golden_search.planning import (
     slowest_requirement,
 )
 from app.research.golden_search.protocol import IncumbentRef, KnobPlan, by_importance
+from app.research.grid_search import service as grid_service
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.golden_search_study import (
@@ -228,8 +229,12 @@ def test_a_run_up_refusal_names_no_start_when_no_later_one_keeps_a_fold(tmp_path
     assert refusal.message.endswith("the run-up is never carved from the scored range.")
 
 
-def test_a_run_up_the_lake_holds_but_cannot_read_is_refused_as_unreadable_not_as_missing(tmp_path: Path) -> None:
-    """History on disk without its adjustment record is not history the lake lacks (#2887)."""
+def test_a_run_up_the_lake_holds_but_cannot_read_is_refused_as_unreadable_not_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """History on disk without its adjustment record is not history the lake lacks: a backfill rebuilds it (#2887)."""
+    # The remedy depends on what the provider still serves, so the day is pinned.
+    monkeypatch.setattr(grid_service, "now_ms_utc", lambda: et_midnight_ms(date(2025, 6, 2)))
     root = tmp_path / "polygon_split_adjusted"
     symbol = unique_symbol()
     seed_lake(root, symbol)
@@ -240,6 +245,7 @@ def test_a_run_up_the_lake_holds_but_cannot_read_is_refused_as_unreadable_not_as
 
     assert (refusal.code, refusal.field) == ("DATA_UNREADABLE", "development_start_ms")
     assert "is on disk but cannot be read" in refusal.message and "does not hold them" not in refusal.message
+    assert f"backfill {symbol} in polygon_split_adjusted mode to rebuild the unreadable files" in refusal.message
     # The readable sessions start with development, so a start one fold later has its run-up.
     assert refusal.nearest_valid_ms == (et_midnight_ms(date(2025, 2, 1)),)
     assert refusal.message.endswith(" The earliest start the lake can serve with whole folds is 2025-02-01.")

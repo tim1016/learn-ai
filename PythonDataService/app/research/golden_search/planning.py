@@ -313,25 +313,23 @@ def plan_study_run_up(protocol: GoldenSearchProtocol, declaration: SearchDeclara
         """Why the run-up cannot be read: the lake holds it and a run cannot read it, or the lake does not hold it."""
         later = _servable_start_ms(protocol, probe, roots)
         named = "" if later is None else f" The earliest start the lake can serve with whole folds is {et_date_at_ms(later).isoformat()}."
-        offered = () if later is None else (later,)
         held = check_availability(
             roots, protocol.symbol, warmup_session(protocol.development_start_ms, deepest), start_day - timedelta(days=1)
         )
-        need = f"The slowest setting needs {probe.required_samples} decision bars of history before {start_day.isoformat()}"
         if held.unreadable_files:
             unreadable = data_missing_refusal(MissingSessionsError(held))
-            return GoldenSearchRefusal(
-                f"{need}, and a run cannot read them: {unreadable}.{named}",
-                code=unreadable.code,
-                field="development_start_ms",
-                nearest_valid_ms=offered,
+            why, code = f"a run cannot read them: {unreadable}.", unreadable.code
+        else:
+            why, code = (
+                f"the lake does not hold them for {protocol.symbol}. Backfill earlier history or start the development "
+                "interval later; the run-up is never carved from the scored range.",
+                "RUN_UP_HISTORY_MISSING",
             )
         return GoldenSearchRefusal(
-            f"{need}, and the lake does not hold them for {protocol.symbol}. Backfill earlier "
-            f"history or start the development interval later; the run-up is never carved from the scored range.{named}",
-            code="RUN_UP_HISTORY_MISSING",
+            f"The slowest setting needs {probe.required_samples} decision bars of history before {start_day.isoformat()}, and {why}{named}",
+            code=code,
             field="development_start_ms",
-            nearest_valid_ms=offered,
+            nearest_valid_ms=() if later is None else (later,),
         )
 
     if plan.carved_from_range:
