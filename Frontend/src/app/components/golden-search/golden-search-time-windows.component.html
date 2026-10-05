@@ -20,9 +20,9 @@
     @for (refusal of rangeRefusals(); track refusal.key) {
       <p class="refusal" role="alert">{{ refusal.text }}</p>
       @if (refusal.offers.length > 0) {
-        <div class="range__offers" role="group" aria-label="Days the range can start on">
-          @for (day of refusal.offers; track day) {
-            <button pButton type="button" size="small" [outlined]="true" (click)="startOn(day, block)"><span>Start the range on {{ day }}</span></button>
+        <div class="range__offers" role="group" aria-label="Days the range can start or end on">
+          @for (offer of refusal.offers; track offer.edge + offer.day) {
+            <button pButton type="button" size="small" [outlined]="true" (click)="take(offer, block)"><span>{{ offer.edge === 'start' ? 'Start' : 'End' }} the range on {{ offer.day }}</span></button>
           }
         </div>
       }

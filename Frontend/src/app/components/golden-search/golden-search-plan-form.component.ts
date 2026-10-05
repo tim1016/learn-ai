@@ -10,6 +10,7 @@ import { incumbentLabel, pointDifferences } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
 import { GoldenSearchMethodChoiceComponent, METHOD_HINTS } from './golden-search-method-choice.component';
 import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftLayout, isRanked, MONTH_FIELDS, wireProtocol, withImportance, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
+import { GoldenSearchPlanBackfill } from './golden-search-plan-backfill';
 import { GoldenSearchPlanFooterComponent } from './golden-search-plan-footer.component';
 import { GoldenSearchProcessComponent } from './golden-search-process.component';
 import { refusalProblems, unreadableProblems } from './golden-search-plan-problems';
@@ -17,7 +18,7 @@ import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-
 import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
 import { GoldenSearchTimeWindowsComponent } from './golden-search-time-windows.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
-import type { DefaultsLayout, GoldenSearchMethod, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyDetail } from './golden-search.types';
+import type { BackfillRemedy, DefaultsLayout, GoldenSearchMethod, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
 
 const RANGE_NOT_LAID_OUT = 'The data plane did not lay the dates out inside this range: it is older than this page. Restart the data plane, then pick the range again.';
@@ -35,6 +36,8 @@ const RANGE_NOT_LAID_OUT = 'The data plane did not lay the dates out inside this
  * other edit; the plan is not checked until the new dates arrive. With `reviseFrom` the form
  * starts from a study's frozen plan and locks a new linked study. The footer
  * stays in view with the run bound, every problem linked to its field, and Lock.
+ * A refusal for sessions the lake lacks carries the backfill that fetches
+ * them: the footer runs it and the plan is checked again when it ends.
  */
 @Component({
   selector: 'app-golden-search-plan-form',
@@ -51,12 +54,14 @@ const RANGE_NOT_LAID_OUT = 'The data plane did not lay the dates out inside this
     ReceiptLabelPipe,
     SymbolPickerComponent,
   ],
+  providers: [GoldenSearchPlanBackfill],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-plan-form.component.html',
   styleUrls: ['./golden-search-plan-card.scss', './golden-search-plan-form.component.scss'],
 })
 export class GoldenSearchPlanFormComponent {
   private readonly service = inject(GoldenSearchService);
+  protected readonly backfill = inject(GoldenSearchPlanBackfill);
   private readonly destroyRef = inject(DestroyRef);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
@@ -121,7 +126,7 @@ export class GoldenSearchPlanFormComponent {
   /** A qualification's benchmark, whose searches start from the registry settings rather than its own values. */
   protected readonly qualifiedBenchmark = computed(() => this.draft()?.protocol.incumbent.source === 'qualification');
   protected readonly unreadable = computed(() => unreadableProblems(this.draft()?.problems ?? new Map(), this.capability()));
-  protected readonly refusalList = computed(() => refusalProblems(this.refusals(), this.draft()?.protocol.knobs ?? []));
+  protected readonly refusalList = computed(() => refusalProblems(this.refusals(), this.draft()?.protocol.knobs ?? [], (remedy) => this.backfill.tried(remedy)));
   protected readonly lockMessage = computed(() => this.lockRefusal()?.message ?? this.lockError());
 
   /** Generation of the latest edit; a preflight that answers an older one is ignored. */
@@ -195,6 +200,11 @@ export class GoldenSearchPlanFormComponent {
 
   resetKnobs(): void {
     this.onEdit({ kind: 'knobs-reset' });
+  }
+
+  /** Fetches the sessions a refusal names as missing, then checks the plan again: the lake it reads has changed. */
+  async fill(remedy: BackfillRemedy): Promise<void> {
+    if (await this.backfill.fill(remedy)) this.scheduleCheck();
   }
 
   /** Brings the input a problem belongs to into view, unfolding its section, and focuses it. */

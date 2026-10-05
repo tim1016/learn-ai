@@ -7,16 +7,27 @@
 
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { problemField, type KnobNumberField, type ProtocolNumberField } from './golden-search-plan-draft';
-import type { KnobPlan, ProtocolRefusal, StrategyCapability } from './golden-search.types';
+import type { BackfillRemedy, KnobPlan, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
 export interface PlanProblem {
   readonly key: string;
   readonly text: string;
   /** The id of the input to fix, or null when no single input owns the problem. */
   readonly target: string | null;
-  /** The first days the study range would be taken from instead; empty when the server named none. */
-  readonly offers: readonly string[];
+  /** The days the study range could start or end on instead; empty when the server named none. */
+  readonly offers: readonly RangeOffer[];
+  /** The backfill that fetches the sessions the problem names as missing; null when none does. */
+  readonly backfill: BackfillRemedy | null;
 }
+
+/** A day (`YYYY-MM-DD`) the server would take for one end of the study range. */
+export interface RangeOffer {
+  readonly edge: 'start' | 'end';
+  readonly day: string;
+}
+
+/** What only a server refusal carries. */
+const UNREFUSED = { offers: [], backfill: null } as const;
 
 export const NUMBER_FIELD_LABELS: Readonly<Record<ProtocolNumberField, string>> = {
   min_trades: 'Min completed trades',
@@ -117,33 +128,54 @@ export function unreadableProblems(problems: ReadonlyMap<string, string>, capabi
     const named = problemField(key);
     switch (named?.kind) {
       case 'knob':
-        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field), offers: [] };
+        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field), ...UNREFUSED };
       case 'number':
-        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field), offers: [] };
+        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field), ...UNREFUSED };
       case 'range':
-        return { key, text: `Study range: ${message}`, target: RANGE_INPUT_ID, offers: [] };
+        return { key, text: `Study range: ${message}`, target: RANGE_INPUT_ID, ...UNREFUSED };
       default:
-        return { key, text: message, target: null, offers: [] };
+        return { key, text: message, target: null, ...UNREFUSED };
     }
   });
 }
 
-/** The server's refusals, each pointing at its input when one owns it. */
-export function refusalProblems(refusals: readonly ProtocolRefusal[], knobs: readonly KnobPlan[]): PlanProblem[] {
-  return refusals.map((refusal) => ({
-    key: `${refusal.code}:${refusal.field ?? ''}:${refusal.message}`,
-    text: refusal.message,
-    target: refusalTarget(refusal.field, knobs),
-    offers: offeredStarts(refusal),
-  }));
+/**
+ * The server's refusals, each pointing at its input when one owns it.
+ *
+ * A refusal that names a backfill offers its days only once `backfilled`
+ * says that backfill was tried: the backfill is the remedy the refusal
+ * names, and another range is what is left when it did not fetch the sessions.
+ */
+export function refusalProblems(
+  refusals: readonly ProtocolRefusal[],
+  knobs: readonly KnobPlan[],
+  backfilled: (remedy: BackfillRemedy) => boolean,
+): PlanProblem[] {
+  return refusals.map((refusal) => {
+    // A data plane older than this page names no backfill.
+    const backfill = refusal.backfill ?? null;
+    return {
+      key: `${refusal.code}:${refusal.field ?? ''}:${refusal.message}`,
+      text: refusal.message,
+      target: refusalTarget(refusal.field, knobs),
+      offers: backfill === null || backfilled(backfill) ? offeredDays(refusal) : [],
+      backfill,
+    };
+  });
 }
 
 /**
- * The first days of a study range the server would take instead of the one
- * it refused. It names later development starts, and development starts
- * where the range does; a refusal of another date names nothing a range can take.
+ * The days a study range could start or end on instead of the one the server
+ * refused. A later development start is a later first day, because
+ * development starts where the range does; an earlier final-test end is an
+ * earlier last day, because the final test ends where the range does. A
+ * refusal of another date names nothing a range can take.
  */
-function offeredStarts(refusal: ProtocolRefusal): string[] {
+function offeredDays(refusal: ProtocolRefusal): RangeOffer[] {
   // A data plane older than this page names no dates.
-  return refusal.field === 'development_start_ms' ? (refusal.nearest_valid_ms ?? []).map(etIsoDate) : [];
+  const named = refusal.nearest_valid_ms ?? [];
+  if (refusal.field === 'development_start_ms') return named.map((ms) => ({ edge: 'start', day: etIsoDate(ms) }));
+  // The final test's end is the midnight after its last day.
+  if (refusal.field === 'final_end_ms') return named.map((ms) => ({ edge: 'end', day: etIsoDate(ms - 1) }));
+  return [];
 }

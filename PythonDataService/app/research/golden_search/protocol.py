@@ -364,15 +364,40 @@ def recent_window_ms(protocol: GoldenSearchProtocol) -> tuple[int, int]:
 
 
 @dataclass(frozen=True)
+class BackfillRemedy:
+    """The lake backfill that fetches a refused plan's missing sessions: one symbol, one lake tree, one window.
+
+    The window's two instants are calendar-anchored, as a backfill's own
+    ``DataRunSpec`` bounds are, so a client hands them over unconverted.
+    """
+
+    symbol: str
+    price_adjustment_mode: str
+    start_trading_date_ms: int
+    end_trading_date_ms: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass(frozen=True)
 class ProtocolRefusal:
     code: str
     field: str | None
     message: str
     #: The nearest instants ``field`` would accept instead, when the check can name them.
     nearest_valid_ms: tuple[int, ...] = ()
+    #: The backfill that fetches the sessions the refusal names as missing, when the provider still serves any.
+    backfill: BackfillRemedy | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"code": self.code, "field": self.field, "message": self.message, "nearest_valid_ms": list(self.nearest_valid_ms)}
+        return {
+            "code": self.code,
+            "field": self.field,
+            "message": self.message,
+            "nearest_valid_ms": list(self.nearest_valid_ms),
+            "backfill": None if self.backfill is None else self.backfill.as_dict(),
+        }
 
 
 class _Refusals:

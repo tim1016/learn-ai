@@ -1,8 +1,11 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { signal, type Provider } from '@angular/core';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
+import { DataLakeService, type BackfillDefaults, type DataLakeRead, type DataRunSpec } from '../../shared/data-lake';
+import { BackfillJobRunner, type BackfillJobRun, type BackfillRunHooks, type BackfillRunState, type BackfillTerminalEvent } from '../../shared/data-lake/backfill-job-runner';
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
 import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
@@ -45,11 +48,11 @@ function fakeService(): FakeService {
 
 async function renderForm(
   service: FakeService,
-  options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number; pool?: Parameters<typeof fakePickerWorld>[0] } = {},
+  options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number; pool?: Parameters<typeof fakePickerWorld>[0]; providers?: Provider[] } = {},
 ) {
   const view = await render(GoldenSearchPlanFormComponent, {
     inputs: { capabilities: options.capabilities ?? [emaCapability(), unavailableCapability()], reviseFrom: options.reviseFrom ?? null, preflightDebounceMs: options.debounceMs ?? 0 },
-    providers: [...fakePickerWorld(options.pool ?? STUDY_POOL).providers, { provide: GoldenSearchService, useValue: service }],
+    providers: [...fakePickerWorld(options.pool ?? STUDY_POOL).providers, { provide: GoldenSearchService, useValue: service }, ...(options.providers ?? [])],
   });
   const locked = vi.fn();
   view.fixture.componentInstance.locked.subscribe(locked);
@@ -82,6 +85,53 @@ const TWO_YEARS = { range_start_ms: etMidnightMs('2024-09-19'), range_end_ms: et
 
 function quickRange(key: string): HTMLElement {
   return within(screen.getByRole('group', { name: 'Quick ranges' })).getByText(key, { exact: true });
+}
+
+/** The lake stops on 2026-03-20; the default plan's final test runs through 2026-03-31. */
+const LAGGING_POOL = [{ ...STUDY_POOL[0], lastHeld: '2026-03-20' }];
+const MISSING_SESSIONS =
+  'missing data: SPY has no minute bars for 7 of 564 trading sessions in 2023-12-28..2026-03-31 — missing 2026-03-23..2026-03-31 (read from the polygon_split_adjusted lake); backfill SPY in polygon_split_adjusted mode and launch again';
+/** A backfill's window is calendar-anchored: noon UTC of each day. */
+const MISSING_WINDOW = { start_trading_date_ms: Date.UTC(2026, 2, 23, 12), end_trading_date_ms: Date.UTC(2026, 2, 31, 12) };
+
+/** The plan check's refusal for those sessions: the backfill that fetches them, and the last day the lake serves instead. */
+function missingSessions(remedy = true): GoldenSearchPreflight {
+  const backfill = remedy ? { symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted' as const, ...MISSING_WINDOW } : null;
+  return preflightFixture({ refusals: [{ code: 'DATA_MISSING', field: 'final_end_ms', message: MISSING_SESSIONS, nearest_valid_ms: [etMidnightMs('2026-03-21')], backfill }] });
+}
+
+const BACKFILL_DEFAULTS: DataLakeRead<BackfillDefaults> = {
+  kind: 'ok',
+  value: { market: 'usa', lean_image_digest: 'sha256:lean', max_trading_range_days: 1830, max_symbol_length: 16, provider_history_start_ms: 0 },
+};
+
+/** The lake's backfill job, which a spec reports on and ends by hand. */
+function fakeBackfill(defaultsRead: DataLakeRead<BackfillDefaults> = BACKFILL_DEFAULTS) {
+  const terminal = deferred<BackfillTerminalEvent>();
+  const state = signal<BackfillRunState>({ kind: 'running', started: true, progress: null });
+  let hooks: BackfillRunHooks | undefined;
+  // Stopping to watch a job ends this form's wait for it, as the real runner's detach does.
+  const detach = vi.fn(() => terminal.resolve({ kind: 'detached' }));
+  const cancel = vi.fn(async () => undefined);
+  const start = vi.fn(async (_spec: DataRunSpec, given?: BackfillRunHooks): Promise<BackfillJobRun> => {
+    hooks = given;
+    return { jobId: 'job-1', state: state.asReadonly(), terminal: terminal.promise, detach, cancel };
+  });
+  return {
+    providers: [{ provide: BackfillJobRunner, useValue: { start } }, { provide: DataLakeService, useValue: { backfillDefaults: async () => defaultsRead } }] satisfies Provider[],
+    start,
+    detach,
+    cancel,
+    progress: (current: number, total: number) => state.set({ kind: 'running', started: true, progress: { current, total, unit: 'days', message: null } }),
+    /** One day of the run that fetched nothing, with the provider's reason. */
+    dayFailed: (detail: string) =>
+      hooks?.onDomainEvent({ type: 'data_lake.backfill_day', trading_date_ms: MISSING_WINDOW.start_trading_date_ms, day_index: 1, total_days: 7, failures: [{ artifact_kind: 'time_series_bars', symbol: 'SPY', reason: 'provider_no_data', detail }] }),
+    end: (event: BackfillTerminalEvent) => terminal.resolve(event),
+  };
+}
+
+function backfillButton(): HTMLButtonElement {
+  return within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: 'Backfill SPY' }) as HTMLButtonElement;
 }
 
 /** The dates the plan ends up with, as the line under the bar tells them. */
@@ -895,6 +945,205 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     await waitFor(() => expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, ...TWO_YEARS }));
     await waitFor(() => expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(etMidnightMs('2024-10-19')));
+  });
+
+  it('runs the backfill a refusal for missing sessions names, and the refusal goes once the lake holds them', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValueOnce(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    // The backfill is the remedy the refusal names: no other day is offered before it has been tried.
+    expect(screen.queryByRole('button', { name: /^End the range on/ })).toBeNull();
+
+    fireEvent.click(backfillButton());
+
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+    expect(lake.start.mock.lastCall?.[0]).toMatchObject({ symbols: ['SPY'], price_adjustment_mode: 'polygon_split_adjusted', ...MISSING_WINDOW, data_types: ['trade'], lean_image_digest: 'sha256:lean' });
+    lake.progress(3, 7);
+    expect(await screen.findByText(/The backfill is running: 3 of 7 days\./)).not.toBeNull();
+    expect(backfillButton().disabled).toBe(true);
+    expect(service.preflight).toHaveBeenCalledTimes(1);
+
+    lake.end({ kind: 'completed' });
+
+    // The lake changed under the plan, so it is checked again; this time nothing is missing.
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+    expect(service.preflight).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Backfill SPY' })).toBeNull();
+    expect(screen.queryByText(/The backfill/)).toBeNull();
+  });
+
+  it('says why sessions are still missing after the backfill, and the range then offers the last day the lake serves', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+
+    lake.dayFailed('Polygon returned no bars for SPY on 2026-03-23.');
+    lake.end({ kind: 'completed' });
+
+    const said = await screen.findByText(/The backfill finished, and the lake still does not hold every session this plan reads\./);
+    expect(said.textContent).toContain('Polygon returned no bars for SPY on 2026-03-23.');
+    expect(screen.getByText('Pick a study range the lake holds, or run the backfill again.')).not.toBeNull();
+    expect(backfillButton().disabled).toBe(false);
+
+    service.defaults.mockResolvedValueOnce(defaults({ final_start_ms: etMidnightMs('2025-12-21'), development_end_ms: etMidnightMs('2025-12-21'), final_end_ms: etMidnightMs('2026-03-21') }));
+    service.preflight.mockResolvedValue(preflightFixture());
+    fireEvent.click(screen.getByRole('button', { name: 'End the range on 2026-03-20' }));
+
+    // The offered day becomes the range's last and its first day stays; the server lays the plan out inside it.
+    await waitFor(() =>
+      expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-01-01'), range_end_ms: etMidnightMs('2026-03-21') }),
+    );
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+    expect(screen.queryByText(/The backfill/)).toBeNull();
+  });
+
+  it('says why a backfill did not run to its end, and lets it be tried again', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+
+    lake.end({ kind: 'failed', code: 'provider_entitlement_error', message: 'The provider refused the request.' });
+
+    expect(await screen.findByText(/The backfill did not finish: The provider refused the request\./)).not.toBeNull();
+    expect(backfillButton().disabled).toBe(false);
+  });
+
+  it('keeps what one backfill found to the sessions it ran over: a refusal for other sessions starts from its own backfill', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+    lake.dayFailed('Polygon returned no bars for SPY on 2026-03-23.');
+    lake.end({ kind: 'completed' });
+    await screen.findByText(/The backfill finished/);
+
+    // The plan changes onto a hole the backfill was never asked for.
+    const hole = 'missing data: SPY has no minute bars for 3 of 564 trading sessions in 2023-12-28..2026-03-20 — missing 2025-01-13..2025-01-15';
+    const elsewhere = { symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted' as const, start_trading_date_ms: Date.UTC(2025, 0, 13, 12), end_trading_date_ms: Date.UTC(2025, 0, 15, 12) };
+    service.preflight.mockResolvedValue(
+      preflightFixture({ refusals: [{ code: 'DATA_MISSING', field: 'development_start_ms', message: hole, nearest_valid_ms: [etMidnightMs('2025-03-01')], backfill: elsewhere }] }),
+    );
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '4' } });
+
+    await waitFor(() => expect(within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: hole })).not.toBeNull());
+    expect(screen.queryByText(/The backfill finished/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull();
+    expect(backfillButton().disabled).toBe(false);
+  });
+
+  it('cancels a running backfill: the footer lets go of it at once, the server is told to stop, and the plan is checked again', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    const cancel = (await screen.findByRole('button', { name: 'Cancel backfill' })) as HTMLButtonElement;
+    await waitFor(() => expect(cancel.disabled).toBe(false));
+
+    fireEvent.click(cancel);
+
+    // A job whose end never arrives cannot hold the footer: nothing ended this one but the cancel.
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    expect(lake.cancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/The backfill/)).toBeNull();
+    // A cancelled backfill was not tried: the range offers nothing in its place yet.
+    expect(screen.queryByRole('button', { name: /^End the range on/ })).toBeNull();
+  });
+
+  it('says so when the server could not be told to stop a cancelled backfill', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    lake.cancel.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, statusText: 'Service Unavailable' }));
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    const cancel = (await screen.findByRole('button', { name: 'Cancel backfill' })) as HTMLButtonElement;
+    await waitFor(() => expect(cancel.disabled).toBe(false));
+
+    fireEvent.click(cancel);
+
+    // The plan is checked again all the same, and the footer still says what the cancel could not do.
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    expect(screen.getByText(/The backfill did not finish: it was cancelled here, but the server could not be told to stop it, so it may still be running\./)).not.toBeNull();
+  });
+
+  it('stops watching a running backfill when the form goes, and checks nothing again', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+    await screen.findByRole('button', { name: 'Cancel backfill' });
+
+    view.fixture.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lake.detach).toHaveBeenCalledTimes(1);
+    // The job keeps running on the server: leaving the page does not cancel it.
+    expect(lake.cancel).not.toHaveBeenCalled();
+    expect(service.preflight).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why when the backfill cannot be started', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill({ kind: 'unavailable', message: 'The data lake service is not reachable.' });
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+
+    fireEvent.click(backfillButton());
+
+    expect(await screen.findByText(/The backfill did not finish: The data lake service is not reachable\./)).not.toBeNull();
+    expect(lake.start).not.toHaveBeenCalled();
+  });
+
+  it('offers the last day the lake serves at once when no backfill can fetch the missing sessions', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValueOnce(missingSessions(false));
+    const { view } = await renderForm(service, { pool: LAGGING_POOL });
+
+    pickSymbol(view.fixture, 'SPY');
+
+    expect(await screen.findByRole('button', { name: 'End the range on 2026-03-20' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Backfill SPY' })).toBeNull();
+  });
+
+  it('offers a revised plan no last day: its frozen dates carry no final-test length to lay the range out from', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValueOnce(missingSessions(false));
+
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+
+    expect(await screen.findByText(/Pick a range, or enter the final test's length in months, and the dates are laid out again\./)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /^End the range on/ })).toBeNull();
   });
 
   it('passes axe with the defaults loaded and a refusal shown', async () => {

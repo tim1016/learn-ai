@@ -79,12 +79,15 @@
       [unreadable]="unreadable()"
       [refusals]="refusalList()"
       [lockMessage]="lockMessage()"
+      [backfill]="backfill.state()"
       [ready]="ready()"
       [canLock]="canLock()"
       [revising]="revising()"
       (lock)="lock(false)"
       (run)="lock(true)"
       (jump)="jumpTo($event)"
+      (fill)="fill($event)"
+      (cancelFill)="backfill.cancel()"
     />
   } @else if (loadingDefaults()) {
     <p class="hint" role="status">Loading the study defaults…</p>

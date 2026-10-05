@@ -2,15 +2,18 @@ import { DecimalPipe } from '@angular/common';
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, input, output, signal, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
+import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { durationRangeText } from './golden-search-display';
+import { covers, type PlanBackfillState } from './golden-search-plan-backfill';
 import type { PlanProblem } from './golden-search-plan-problems';
-import type { GoldenSearchPreflight } from './golden-search.types';
+import type { BackfillRemedy, GoldenSearchPreflight } from './golden-search.types';
 
 /**
  * The Plan step's footer (#2696), kept in view while the form scrolls: the
  * server's run bound against the cap and its time estimate, whether the plan
- * is ready, every problem in plain words linking to its field, Lock, and on
+ * is ready, every problem in plain words linking to its field, the backfill
+ * that fetches the sessions a problem names as missing, Lock, and on
  * request the workload by stage and the fold plan. It is fixed to the window
  * rather than sticky, because the shell's `main` scrolls horizontally and so
  * would hold a sticky footer in place; a spacer of the footer's measured
@@ -18,7 +21,7 @@ import type { GoldenSearchPreflight } from './golden-search.types';
  */
 @Component({
   selector: 'app-golden-search-plan-footer',
-  imports: [ButtonModule, DecimalPipe, TimestampDisplayComponent],
+  imports: [ButtonModule, DecimalPipe, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-plan-footer.component.html',
   styleUrl: './golden-search-plan-footer.component.scss',
@@ -36,6 +39,8 @@ export class GoldenSearchPlanFooterComponent {
   readonly refusals = input<readonly PlanProblem[]>([]);
   /** Why the last Lock did not lock. */
   readonly lockMessage = input<string | null>(null);
+  /** The backfill of a problem's missing sessions: running, or how the last one ended; null when none was started. */
+  readonly backfill = input<PlanBackfillState | null>(null);
   /** The server accepted the plan the form shows. */
   readonly ready = input(false);
   readonly canLock = input(false);
@@ -46,6 +51,10 @@ export class GoldenSearchPlanFooterComponent {
   readonly run = output();
   /** The id of the input a problem belongs to. */
   readonly jump = output<string>();
+  /** Fetch the sessions a problem names as missing. */
+  readonly fill = output<BackfillRemedy>();
+  /** Stop the backfill that is running. */
+  readonly cancelFill = output();
 
   protected readonly detailsOpen = signal(false);
   /** The fixed panel's height, reserved at the end of the form. */
@@ -61,6 +70,17 @@ export class GoldenSearchPlanFooterComponent {
       destroyRef.onDestroy(() => observer.disconnect());
     });
   }
+  /** The backfill while it runs. */
+  protected readonly running = computed(() => {
+    const state = this.backfill();
+    return state?.kind === 'running' ? state : null;
+  });
+  /** How the last backfill ended, while the plan is still refused for sessions it was to fetch; null once it misses none of them. */
+  protected readonly ended = computed(() => {
+    const state = this.backfill();
+    if (state === null || state.kind === 'running') return null;
+    return this.refusals().some((problem) => problem.backfill !== null && covers(state.remedy, problem.backfill)) ? state : null;
+  });
   protected readonly estimate = computed(() => this.preflight()?.estimate ?? null);
   protected readonly duration = computed(() => {
     const estimate = this.estimate();

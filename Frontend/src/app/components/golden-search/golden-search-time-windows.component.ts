@@ -8,7 +8,7 @@ import { DEFAULT_ADJUSTMENT_MODE, HeldGapsService, TickerCatalogService, heldBou
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
 import { numberProblemKey, type PlanEdit, type ProtocolNumberField, type StudyRange } from './golden-search-plan-draft';
-import { RANGE_INPUT_ID, numberInputId, type PlanProblem } from './golden-search-plan-problems';
+import { RANGE_INPUT_ID, numberInputId, type PlanProblem, type RangeOffer } from './golden-search-plan-problems';
 import type { GoldenSearchPreflight, ProtocolRequest } from './golden-search.types';
 
 interface Span {
@@ -27,7 +27,7 @@ function percentAlong(ms: number, start: number, end: number): number {
  * The plan's time windows (#2696): the fold and final-test lengths in months,
  * the study range the server lays the dates out inside (#2886), with what it
  * left out of the range and, under the picker, its refusal of a date and the
- * first day it would take instead, and a bar showing development, the folds' test windows and the sealed final test
+ * first or last day it would take instead, and a bar showing development, the folds' test windows and the sealed final test
  * as the server laid them out, with the final test's exposure and the warmup
  * every run is primed with.
  */
@@ -106,18 +106,26 @@ export class GoldenSearchTimeWindowsComponent {
    * months the lake holds. A final test cut short, one past the lake, and a
    * revised plan's frozen dates would all be laid out again from another day.
    */
-  private readonly offersApply = computed(() => {
+  private readonly startsApply = computed(() => {
     if (this.range() !== undefined) return this.rangeLaidOut();
     const last = this.bounds().max;
     return this.finalMonths() !== undefined && !this.finalSessionsCut() && (last === null || this.shown().to <= last);
   });
-  /** The server's refusals of a date, in its own words, each with the first days it would take instead of the range's. */
+  /**
+   * Whether a last day the server offers can be taken: the final test ends
+   * where the range does, so it lands there whenever the dates can be laid
+   * out again. A revised plan's frozen dates carry no final-test length to
+   * lay them out from.
+   */
+  private readonly endsApply = computed(() => (this.range() !== undefined ? this.rangeLaidOut() : this.finalMonths() !== undefined));
+  /** The server's refusals of a date, in its own words, each with the first or last days it would take instead of the range's. */
   protected readonly rangeRefusals = computed(() => {
-    const from = this.shown().from;
-    const apply = this.offersApply();
+    const { from, to } = this.shown();
+    const applies = { start: this.startsApply(), end: this.endsApply() };
+    const shown = { start: from, end: to };
     return this.refusals()
       .filter((refusal) => refusal.target === RANGE_INPUT_ID)
-      .map((refusal) => ({ ...refusal, offers: apply ? refusal.offers.filter((day) => day !== from) : [] }));
+      .map((refusal) => ({ ...refusal, offers: refusal.offers.filter((offer) => applies[offer.edge] && offer.day !== shown[offer.edge]) }));
   });
 
   /**
@@ -152,9 +160,10 @@ export class GoldenSearchTimeWindowsComponent {
     this.edit.emit({ kind: 'range', from: range.from, to: range.to });
   }
 
-  /** Starts the range on a day the server offered. The keyboard moves to the range, because the button goes once the plan is laid out. */
-  protected startOn(day: string, block: HTMLElement): void {
-    this.edit.emit({ kind: 'range', from: day, to: this.shown().to });
+  /** Starts or ends the range on a day the server offered. The keyboard moves to the range, because the button goes once the plan is laid out. */
+  protected take(offer: RangeOffer, block: HTMLElement): void {
+    const { from, to } = this.shown();
+    this.edit.emit(offer.edge === 'start' ? { kind: 'range', from: offer.day, to } : { kind: 'range', from, to: offer.day });
     block.focus();
   }
 }

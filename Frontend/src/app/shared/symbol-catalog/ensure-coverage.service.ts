@@ -16,10 +16,11 @@ import {
 import {
   rootFailureOf,
   toBackfillDayEvent,
+  tradeBackfillSpec,
   tradingDateToMs,
   tradingRangeRejection,
 } from '../data-lake';
-import type { BackfillFailure, DataRunSpec, PriceAdjustmentMode } from '../data-lake';
+import type { BackfillFailure, PriceAdjustmentMode } from '../data-lake';
 import { isRunnableSpan } from '../ticker-catalog';
 import { TickerCatalogService } from '../ticker-catalog';
 import { etIsoDate } from '../date/et-midnight';
@@ -341,17 +342,10 @@ export class EnsureCoverageService {
       );
     }
 
-    const spec: DataRunSpec = {
-      request_id: globalThis.crypto.randomUUID(),
-      run_type: 'python_lab',
-      market: 'usa',
-      symbols: [symbol],
-      start_trading_date_ms: startMs,
-      end_trading_date_ms: endMs,
-      data_types: ['trade'],
-      lean_image_digest: digest,
-      price_adjustment_mode: mode,
-    };
+    const spec = tradeBackfillSpec(
+      { symbol, price_adjustment_mode: mode, start_trading_date_ms: startMs, end_trading_date_ms: endMs },
+      digest,
+    );
 
     let jobRun: BackfillJobRun;
     try {

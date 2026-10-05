@@ -61,7 +61,13 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
-from app.engine.data.availability import MissingSessionsError, check_availability, unbroken_run_start
+from app.data_lake.types import trading_date_to_calendar_anchor_ms
+from app.engine.data.availability import (
+    AvailabilityReport,
+    MissingSessionsError,
+    check_availability,
+    unbroken_run_start,
+)
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_start_for_bar_count
@@ -84,6 +90,7 @@ from app.research.golden_search.models import GoldenSearchRefusal, NewStudy
 from app.research.golden_search.procedure_history import fold_windows
 from app.research.golden_search.protocol import (
     DEFAULT_IMPORTANCE,
+    BackfillRemedy,
     GoldenSearchProtocol,
     IncumbentRef,
     KnobPlan,
@@ -261,7 +268,7 @@ def _sessions_needed(window_start_ms: int, required_samples: int, bar_span_ms: i
     return len(expected_sessions(earliest, first - timedelta(days=1)))
 
 
-def _deepest_run_up_sessions(protocol: GoldenSearchProtocol, probe: WarmupProbe) -> int:
+def _deepest_run_up_sessions(protocol: GoldenSearchProtocol, probe: WarmupProbe | StudyRunUp) -> int:
     """The run-up sessions the plan's most demanding window needs: one behind an early close needs more."""
     return max(_sessions_needed(start, probe.required_samples, probe.bar_span_ms) for start in window_starts(protocol))
 
@@ -274,7 +281,7 @@ def window_starts(protocol: GoldenSearchProtocol) -> list[int]:
     return sorted(starts)
 
 
-def _servable_start_ms(protocol: GoldenSearchProtocol, probe: WarmupProbe, roots: Sequence[Path]) -> int | None:
+def _servable_start_ms(protocol: GoldenSearchProtocol, probe: WarmupProbe | StudyRunUp, roots: Sequence[Path]) -> int | None:
     """The earliest later development start the lake can serve, or ``None`` when no later start helps.
 
     Later starts keep the development end and drop whole folds from the front,
@@ -386,6 +393,47 @@ def _as_refusal(exc: GoldenSearchRefusal) -> ProtocolRefusal:
     return ProtocolRefusal(code=exc.code, field=exc.field, message=str(exc), nearest_valid_ms=exc.nearest_valid_ms)
 
 
+def _servable_date(
+    protocol: GoldenSearchProtocol, run_up: StudyRunUp, roots: Sequence[Path], report: AvailabilityReport
+) -> tuple[str | None, tuple[int, ...]]:
+    """The one date whose change leaves the plan reading only sessions the lake holds, and its field; no field when none does.
+
+    Every session before the first missing one is held. While that leaves
+    the final test a session, the final test can end after the last of
+    them. Otherwise the first hole is in development or the run-up: a later
+    development start passes it when every session after it is held
+    (:func:`_servable_start_ms`).
+    """
+    first_missing = report.missing_days[0]
+    before = [day for days in report.sources.values() for day in days if day < first_missing]
+    if before and max(before) >= et_date_at_ms(protocol.final_start_ms):
+        return "final_end_ms", (et_midnight_ms(max(before) + timedelta(days=1)),)
+    later = _servable_start_ms(protocol, run_up, roots)
+    return (None, ()) if later is None else ("development_start_ms", (later,))
+
+
+def _unread_sessions_refusal(
+    protocol: GoldenSearchProtocol, run_up: StudyRunUp, roots: Sequence[Path], report: AvailabilityReport
+) -> ProtocolRefusal:
+    """Sessions the plan reads that the lake cannot supply: why, and for missing ones the backfill and the date that serve it."""
+    refused = data_missing_refusal(MissingSessionsError(report))
+    if refused.code != "DATA_MISSING":
+        return ProtocolRefusal(code=refused.code, field=None, message=str(refused))
+    field, nearest = _servable_date(protocol, run_up, roots, report)
+    fill = refused.backfill
+    backfill = (
+        None
+        if fill is None
+        else BackfillRemedy(
+            symbol=fill.symbol,
+            price_adjustment_mode=fill.mode,
+            start_trading_date_ms=trading_date_to_calendar_anchor_ms(fill.first),
+            end_trading_date_ms=trading_date_to_calendar_anchor_ms(fill.last),
+        )
+    )
+    return ProtocolRefusal(code=refused.code, field=field, message=str(refused), nearest_valid_ms=nearest, backfill=backfill)
+
+
 def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None = None, check_data: bool = True) -> PlanReview:
     """Validate, size and plan the run-up (and, with ``check_data``, confirm every session it reads is in the lake)."""
     declaration = declaration_for(protocol.strategy_key)
@@ -417,8 +465,8 @@ def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None 
     if check_data:
         availability = check_availability(resolved, protocol.symbol, run_up.data_start, et_date_at_ms(protocol.final_end_ms - 1))
         if not availability.is_complete:
-            refusal = _refusal(data_missing_refusal(MissingSessionsError(availability)))
-            return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(refusal),), run_up=run_up, activity=activity)
+            refusal = _unread_sessions_refusal(protocol, run_up, resolved, availability)
+            return PlanReview(protocol=protocol, review=review, refusals=(refusal,), run_up=run_up, activity=activity)
     return PlanReview(protocol=protocol, review=review, refusals=(), run_up=run_up, activity=activity)
 
 

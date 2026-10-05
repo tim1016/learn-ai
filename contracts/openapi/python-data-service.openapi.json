@@ -18548,6 +18548,46 @@
         "title": "GoldenSearchActivityYear",
         "type": "object"
       },
+      "GoldenSearchBackfillRemedy": {
+        "additionalProperties": false,
+        "description": "The lake backfill that fetches a refusal's missing sessions; a client adds only what a `DataRunSpec` needs besides.",
+        "properties": {
+          "end_trading_date_ms": {
+            "description": "The last such session, anchored the same way; inclusive.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Trading Date Ms",
+            "type": "integer"
+          },
+          "price_adjustment_mode": {
+            "enum": [
+              "raw",
+              "polygon_split_adjusted"
+            ],
+            "title": "Price Adjustment Mode",
+            "type": "string"
+          },
+          "start_trading_date_ms": {
+            "description": "The first missing session the provider still serves, calendar-anchored as a `DataRunSpec` bound is.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Trading Date Ms",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "price_adjustment_mode",
+          "start_trading_date_ms",
+          "end_trading_date_ms"
+        ],
+        "title": "GoldenSearchBackfillRemedy",
+        "type": "object"
+      },
       "GoldenSearchBestMonth": {
         "additionalProperties": false,
         "properties": {
@@ -22980,6 +23020,17 @@
       "GoldenSearchProtocolRefusal": {
         "additionalProperties": false,
         "properties": {
+          "backfill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchBackfillRemedy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The backfill that fetches the sessions the refusal names as missing; null when it names none, or the provider no longer serves them."
+          },
           "code": {
             "title": "Code",
             "type": "string"
