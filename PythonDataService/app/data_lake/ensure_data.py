@@ -28,6 +28,7 @@ from app.data_lake import catalog_client
 from app.data_lake.adjustment_versions import (
     AdjustmentVersionError,
     CorporateActionSnapshot,
+    adjusted_file_gap,
     adjustment_companion,
     capture_lock,
     current_snapshot_path,
@@ -80,6 +81,7 @@ from app.data_lake.polygon_fetcher import (
     PolygonRateLimitedError,
     PolygonUnknownSymbolError,
     fetch_minute_trade_aggregates,
+    polygon_history_floor,
     volume_may_be_fractional,
 )
 from app.data_lake.polygon_ticker_events import fetch_ticker_events
@@ -94,6 +96,7 @@ from app.data_lake.types import (
     NonSessionRecord,
     PriceAdjustmentMode,
     classify_overall_status,
+    trading_date_at_ms,
 )
 from app.engine.live.identity import confine_path_to_root
 
@@ -1560,12 +1563,44 @@ async def _process_minute_quote_artifact(
     )
 
 
+async def _daily_trade_sources(
+    identity: ArtifactIdentity,
+    lake_root: Path,
+    adjustment_version: str | None,
+    history_floor: date | None,
+) -> list[ArtifactRecord]:
+    """The complete minute-trade sessions the symbol's daily rollup is built from.
+
+    Every one the catalog holds for the symbol, whatever window the caller
+    asked for. An adjusted rollup holds one corporate-action version, so it
+    leaves out a session older than ``history_floor`` whose file is not on
+    the current one: the provider no longer serves that day, so it cannot be
+    rebuilt. ``history_floor`` is ``None`` where no day is too old to fetch.
+    """
+    sources = await catalog_client.select_coverage_minute_bars(
+        identity.market,  # type: ignore[arg-type]
+        identity.symbol,  # type: ignore[arg-type]
+        "trade",
+        None,
+        None,
+        price_adjustment_mode=identity.price_adjustment_mode,  # type: ignore[arg-type]
+    )
+    if adjustment_version is None or history_floor is None:
+        return sources
+    return [
+        source for source in sources
+        if (source.trading_date is not None and source.trading_date >= history_floor)
+        or adjusted_file_gap(lake_root / source.file_path, source.file_sha256, identity.symbol or "") is None
+    ]
+
+
 async def _process_daily_trade_artifact(
     identity: ArtifactIdentity,
     source_trade_records: list[ArtifactRecord],
     spec: DataRunSpec,
     lake_root: Path,
     adjustment_version: str | None = None,
+    history_floor: date | None = None,
 ) -> tuple[ArtifactRecord | None, ArtifactFailure | None, Literal["fetched", "reused", "refreshed"]]:
     """Derive daily-trade bytes from all complete minute-trade artifacts for the symbol.
 
@@ -1653,18 +1688,8 @@ async def _process_daily_trade_artifact(
             # the sources as they are now: an older, narrower build returns
             # lease_timeout and publishes nothing over the sibling's wider
             # zip; the caller's retry rebuilds from the current sources.
-            async def _current_sources() -> list[ArtifactRecord]:
-                return await catalog_client.select_coverage_minute_bars(
-                    identity.market,  # type: ignore[arg-type]
-                    identity.symbol,  # type: ignore[arg-type]
-                    "trade",
-                    None,
-                    None,
-                    price_adjustment_mode=identity.price_adjustment_mode,  # type: ignore[arg-type]
-                )
-
             async def _contract_now() -> str:
-                sources = await _current_sources()
+                sources = await _daily_trade_sources(identity, lake_root, adjustment_version, history_floor)
                 return _daily_dch(
                     [r.id for r in sources],
                     [r.file_sha256 for r in sources],
@@ -1972,6 +1997,10 @@ async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSn
     # Expand required artifacts (now with real calendar if available)
     # -----------------------------------------------------------------------
     required, non_sessions = expand_required_artifacts(spec)
+    # A day older than the provider's history cannot be fetched again: asking
+    # for it is refused, and that refusal ends the whole backfill. It is left
+    # as it was captured (#2892).
+    history_floor = polygon_history_floor(trading_date_at_ms(int(time.time() * 1000)))
     for symbol, snapshot in snapshots.items():
         captured = await catalog_client.select_coverage_minute_bars(
             spec.market, symbol, "trade", None, None, price_adjustment_mode=spec.price_adjustment_mode,
@@ -1979,6 +2008,7 @@ async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSn
         )
         extra = [minute_bar_identity(spec, symbol=symbol, trading_date=row.trading_date, data_type="trade") for row in captured
                  if row.trading_date is not None
+                 and row.trading_date >= history_floor
                  and not _cache_matches(
                      row,
                      _minute_trade_dch(spec.price_adjustment_mode, snapshot.version, trading_date=row.trading_date),
@@ -2090,14 +2120,8 @@ async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSn
             # differently-windowed ensure_data call for the same symbol a
             # legitimate rebuild instead of a data_contract_mismatch — see
             # _process_daily_trade_artifact.
-            source_records = await catalog_client.select_coverage_minute_bars(
-                spec.market,
-                sym,
-                "trade",
-                None,
-                None,
-                price_adjustment_mode=spec.price_adjustment_mode,
-            )
+            version = snapshots[sym].version if sym in snapshots else None
+            source_records = await _daily_trade_sources(identity, lake_root, version, history_floor)
             if not source_records:
                 failures.append(
                     ArtifactFailure(
@@ -2111,13 +2135,14 @@ async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSn
                     )
                 )
                 continue
-            version = snapshots[sym].version if sym in snapshots else None
             if version is not None:
                 for source in source_records:
                     path = lake_root / source.file_path
                     if verify_adjustment_receipt(path, source.file_sha256, sym) != version:
                         raise AdjustmentVersionError(f"{sym}: mixed versions in the daily inputs; rebuild required")
-            record, failure, outcome = await _process_daily_trade_artifact(identity, source_records, spec, lake_root, version)
+            record, failure, outcome = await _process_daily_trade_artifact(
+                identity, source_records, spec, lake_root, version, history_floor,
+            )
             if record is not None:
                 artifacts.append(record)
                 if outcome == "reused":
