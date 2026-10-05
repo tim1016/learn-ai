@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -44,6 +43,7 @@ from app.engine.strategy.programs.ema_previous_crossover import (
     EmaPreviousCrossoverParams,
     build_ema_previous_crossover_program,
 )
+from app.lean_sidecar.parity_matrix.matrix import cell_by_id
 from app.lean_sidecar.trusted_samples.ema_previous_crossover import EMA_PREVIOUS_CROSSOVER_SOURCE
 from app.services.spec_strategy_runner import InMemoryDataReader
 from scripts.generate_signal_program_trace_corpus import _minute_bars
@@ -69,24 +69,20 @@ def test_fixture_is_the_committed_twin_s_output() -> None:
 
 @pytest.mark.parametrize("cell_id", _CELL_IDS)
 def test_ema_previous_crossover_matches_lean_fills_and_equity(cell_id: str) -> None:
-    cell = _INPUT["cells"][cell_id]
+    cell = cell_by_id(cell_id)
+    recorded = _INPUT["cells"][cell_id]
     oracle = _OUTPUT["cells"][cell_id]
-    observations = _SERVICE_ROOT / cell["observations_csv"]
-    assert hashlib.sha256(observations.read_bytes()).hexdigest() == cell["observations_sha256"]
+    observations = _SERVICE_ROOT / recorded["observations_csv"]
+    assert hashlib.sha256(observations.read_bytes()).hexdigest() == recorded["observations_sha256"]
 
     strategy = build_ema_previous_crossover_program(
-        EmaPreviousCrossoverParams(symbol=cell["ticker"], **_OUTPUT["parameters"])
+        EmaPreviousCrossoverParams(symbol=cell.ticker, **_OUTPUT["parameters"])
     ).strategy
-    pin_strategy_window(
-        strategy,
-        date.fromisoformat(cell["start_date"]),
-        date.fromisoformat(cell["end_date"]),
-        cash=Decimal(_INPUT["starting_cash"]),
-    )
+    pin_strategy_window(strategy, cell.start_date, cell.end_date, cash=Decimal(_INPUT["starting_cash"]))
     _credit_lean_dividends(strategy, oracle["dividends"])
     fee_model = IbkrEquityCommissionModel()
     result = BacktestEngine(
-        data_source=InMemoryDataReader(_minute_bars(observations.parent.parent, cell["ticker"])),  # type: ignore[arg-type]
+        data_source=InMemoryDataReader(_minute_bars(observations.parent.parent, cell.ticker)),  # type: ignore[arg-type]
         sizing_model=LeanSetHoldingsSizing(fee_model=fee_model),
         fill_model=FillModel(fee_model=fee_model, fill_stale_signal_at_current_open=True),
     ).run(strategy)

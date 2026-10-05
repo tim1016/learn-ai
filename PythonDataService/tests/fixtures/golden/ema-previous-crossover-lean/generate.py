@@ -101,10 +101,8 @@ def main() -> None:
             raise RuntimeError(
                 f"{cell_id}: fills and dividends give {final_equity}, but LEAN reports end equity {lean_end_equity}"
             )
+        # The cell id names the ticker and window; the parity matrix resolves them.
         inputs[cell_id] = {
-            "ticker": cell.ticker,
-            "start_date": cell.start_date.isoformat(),
-            "end_date": cell.end_date.isoformat(),
             "observations_csv": committed.relative_to(_SERVICE_ROOT).as_posix(),
             "observations_sha256": observations_sha256,
         }

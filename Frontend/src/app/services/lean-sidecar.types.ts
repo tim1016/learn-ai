@@ -63,11 +63,19 @@ export interface TrustedRunRequest {
    * ``SetBrokerageModel``).
    */
   template?: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
-  /** Runtime gates accepted by the parameterized EMA Crossover 2 bps template. */
+  /**
+   * Runtime settings for a parameterized template. Each template accepts its
+   * own subset and fills the rest with its defaults; the server refuses a
+   * setting the selected template does not take.
+   */
   strategy_parameters?: {
-    gap_bps: number;
-    rsi_min: number;
-    rsi_max: number;
+    gap?: number;
+    gap_bps?: number;
+    rsi_min?: number;
+    rsi_max?: number;
+    fast_period?: number;
+    slow_period?: number;
+    hold_bars?: number;
   };
   /**
    * PR B (2026-05-19) — canonical DataPolicy block. When provided, the

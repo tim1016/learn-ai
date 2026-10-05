@@ -16,6 +16,14 @@ All seven strategy settings are read from validated runtime parameters, so a
 companion run executes the same resolved configuration as Python at any
 point, not only the defaults.
 
+Two conventions are the EMA Crossover twin's and are kept on purpose. The
+QuantConnect Python bridge hands indicator values over as floats, so the
+gates compare floats where the Python strategy compares Decimals; the two can
+differ only when a value lands exactly on a floor or a band edge. And the
+position flag follows the signal, not the fill, because the Python strategy's
+does: a twin that waited for a fill would decide differently from the
+strategy it validates whenever an order sized to zero shares.
+
 The data contract is the EMA Crossover twin's: minute data, raw prices, no
 fill-forward, a 15-minute consolidator, the Interactive Brokers fee model,
 ``observations.csv`` (every minute bar received) and ``state.csv`` (one row

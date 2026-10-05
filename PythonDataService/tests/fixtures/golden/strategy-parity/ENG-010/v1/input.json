@@ -2,16 +2,10 @@
   "starting_cash": "100000",
   "cells": {
     "SPY_W6mo_2025-11-03_to_2026-04-30": {
-      "ticker": "SPY",
-      "start_date": "2025-11-03",
-      "end_date": "2026-04-30",
       "observations_csv": "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30/lean/observations.csv",
       "observations_sha256": "2ee2bcc9b27de28201c0abb9967273aec61cf7b96c792d8d59a135fde2c2d7b9"
     },
     "QQQ_W6mo_2025-11-03_to_2026-04-30": {
-      "ticker": "QQQ",
-      "start_date": "2025-11-03",
-      "end_date": "2026-04-30",
       "observations_csv": "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30/lean/observations.csv",
       "observations_sha256": "fb2dbadfc35868087c1d5878ce0411772eb3e91e2455174e6af30330e3c329f3"
     }
