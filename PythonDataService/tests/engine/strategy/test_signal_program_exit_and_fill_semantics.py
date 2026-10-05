@@ -193,6 +193,14 @@ def _arm_exit_ema(_strategy: Strategy) -> None:
     post-entry hold bars have run -- there is no relation to flip."""
 
 
+def _arm_entry_ema_previous(strategy: Strategy) -> None:
+    """A cross up on the driven bar that already clears both gates, so it is that cross's entry bar."""
+    strategy._ema_fast = _ReadyIndicator(Decimal("500.50"))  # type: ignore[attr-defined]
+    strategy._ema_slow = _ReadyIndicator(Decimal("500.00"))  # type: ignore[attr-defined]
+    strategy._rsi = _ReadyIndicator(Decimal("60"))  # type: ignore[attr-defined]
+    strategy._fast_was_above_slow = False  # type: ignore[attr-defined]
+
+
 def _arm_seed_sma(strategy: Strategy) -> None:
     strategy._sma_short = _ReadyIndicator(Decimal("99"))  # type: ignore[attr-defined]
     strategy._sma_long = _ReadyIndicator(Decimal("100"))  # type: ignore[attr-defined]
@@ -287,6 +295,11 @@ def _deployment_validation_pre_entry_hold_bars() -> int:
 _RIGS: dict[str, _ProgramRig] = {
     "ema_crossover_signal": _ProgramRig(
         arm_entry=_arm_entry_ema,
+        arm_exit=_arm_exit_ema,
+        post_entry_hold_bars=4,
+    ),
+    "ema_previous_crossover": _ProgramRig(
+        arm_entry=_arm_entry_ema_previous,
         arm_exit=_arm_exit_ema,
         post_entry_hold_bars=4,
     ),

@@ -37,6 +37,7 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 import uuid  # noqa: E402
 from collections import Counter  # noqa: E402
+from collections.abc import Mapping  # noqa: E402
 from datetime import UTC, date, datetime  # noqa: E402
 from decimal import Decimal  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
@@ -52,7 +53,7 @@ from app.lean_sidecar.cross_runner import CrossRunOrderEvent, run_engine_lab_on_
 from app.lean_sidecar.launcher.models import LaunchRequest  # noqa: E402
 from app.lean_sidecar.launcher.service import launch  # noqa: E402
 from app.lean_sidecar.lean_config import LeanConfig  # noqa: E402
-from app.lean_sidecar.normalized_parser import parse_workspace  # noqa: E402
+from app.lean_sidecar.normalized_parser import NormalizedResult, parse_workspace  # noqa: E402
 from app.lean_sidecar.parity_matrix.cell_runner import (  # noqa: E402
     CellRunReport,
     run_cell_gates,
@@ -122,8 +123,20 @@ def _resolve_target_cells(ns: argparse.Namespace) -> list[Cell]:
     raise SystemExit("no target specified")
 
 
-def _stage_lean_run(cell: Cell, output_dir: Path, *, image_digest: str) -> None:
+def _stage_lean_run(
+    cell: Cell,
+    output_dir: Path,
+    *,
+    image_digest: str,
+    algorithm_source: str = EMA_CROSSOVER_SIGNAL_SOURCE,
+    strategy_parameters: Mapping[str, str] | None = None,
+) -> NormalizedResult:
     """Run LEAN sidecar for one cell; write outputs to output_dir/lean/.
+
+    ``algorithm_source`` and ``strategy_parameters`` default to the cells'
+    own EMA Crossover Signal run. Another twin's fixture generator passes
+    its own to run over the same capture and window, and reads LEAN's own
+    statistics off the returned result.
 
     Sequence:
       1. Resolve a fresh run_id and workspace under DEFAULT_ARTIFACTS_ROOT.
@@ -164,7 +177,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path, *, image_digest: str) -> None:
     stage_lean_metadata_from_image(workspace, image_digest)
 
     # Stage algorithm source.
-    stage_algorithm_source(workspace, EMA_CROSSOVER_SIGNAL_SOURCE)
+    stage_algorithm_source(workspace, algorithm_source)
 
     # Build and write LEAN config.
     config = LeanConfig(
@@ -176,6 +189,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path, *, image_digest: str) -> None:
             "bar_minutes": "15",
             "session": "regular",
             "adjustment": "raw",
+            **(strategy_parameters or {}),
         }
     )
     stage_lean_config(workspace, config)
@@ -234,6 +248,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path, *, image_digest: str) -> None:
         encoding="utf-8",
     )
     logger.info("  LEAN outputs written to %s", lean_out)
+    return normalized
 
 
 def _run_engine_live(cell: Cell, output_dir: Path) -> list[CrossRunOrderEvent]:

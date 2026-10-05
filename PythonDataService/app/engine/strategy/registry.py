@@ -26,6 +26,8 @@ from app.engine.strategy.program_sources import (
     DEPLOYMENT_VALIDATION_WIRING_PATHS,
     EMA_CROSSOVER_SIGNAL_ARTIFACT_PATHS,
     EMA_CROSSOVER_SIGNAL_WIRING_PATHS,
+    EMA_PREVIOUS_CROSSOVER_ARTIFACT_PATHS,
+    EMA_PREVIOUS_CROSSOVER_WIRING_PATHS,
     RSI_MEAN_REVERSION_ARTIFACT_PATHS,
     RSI_MEAN_REVERSION_WIRING_PATHS,
     SMA_CROSSOVER_ARTIFACT_PATHS,
@@ -47,6 +49,12 @@ from app.engine.strategy.programs.ema_crossover_signal import (
     EMA_SIGNAL_PROGRAM_VERSION,
     EmaCrossoverSignalParams,
     build_ema_crossover_signal_program,
+)
+from app.engine.strategy.programs.ema_previous_crossover import (
+    EMA_PREVIOUS_CROSSOVER_PROGRAM_KEY,
+    EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
+    EmaPreviousCrossoverParams,
+    build_ema_previous_crossover_program,
 )
 from app.engine.strategy.programs.rsi_mean_reversion import (
     RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
@@ -464,12 +472,12 @@ def _macd_periods_refusal(params: StrategyParamsBase) -> str | None:
 
 
 def _ema_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
-    """The series ``EmaCrossoverSignalAlgorithm.initialize()`` builds for these lengths.
+    """The series either EMA program's ``initialize()`` builds for these lengths.
 
     An EMA's ``warmup_bars`` is its period (``samples >= period``); RSI(14)
-    is fixed in this program version and stays at ``period + 1``.
+    is fixed in both program versions and stays at ``period + 1``.
     """
-    assert isinstance(params, EmaCrossoverSignalParams)
+    assert isinstance(params, EmaCrossoverSignalParams | EmaPreviousCrossoverParams)
     return (
         SignalSeriesContract(
             name="ema_fast", indicator="ema", field="close", period=params.fast_period, warmup_bars=params.fast_period
@@ -483,7 +491,7 @@ def _ema_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, 
 
 def _ema_exit_eligibility_for(params: StrategyParamsBase) -> ExitEligibilityContract:
     """The countdown ``commit_signal_decision`` arms at entry: ``hold_bars`` decision clocks."""
-    assert isinstance(params, EmaCrossoverSignalParams)
+    assert isinstance(params, EmaCrossoverSignalParams | EmaPreviousCrossoverParams)
     return ExitEligibilityContract(countdown_decision_clocks=params.hold_bars, countdown_state_persistable=False)
 
 
@@ -722,30 +730,44 @@ _ADX_EXIT_CHECK = ViewCheck(check_id="adx_exit", label="ADX exit", chip="ADX", d
 _MACD_POSITIVE_CHECK = ViewCheck(check_id="macd_positive", label="MACD", chip="MACD", signed=True)
 _DECISION_COUNTDOWN_CHECK = ViewCheck(check_id="exit_countdown", label="Bars to exit", chip="exit in", decimals=0)
 
-_EMA_CROSSOVER_SIGNAL_VIEW = StrategyView(
-    values=(
-        ViewValue(
-            key="ema_fast",
-            label="EMA {fast_period}",
-            variable="EMA{fast_period}",
-            catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("fast_period")}),
-        ),
-        ViewValue(
-            key="ema_slow",
-            label="EMA {slow_period}",
-            variable="EMA{slow_period}",
-            catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("slow_period")}),
-        ),
-        ViewValue(
-            key="rsi",
-            label="RSI 14",
-            variable="RSI14",
-            pane="rsi",
-            catalogue=StrategyChartIndicator("rsi", {"length": 14}),
-            band=(ChartParamRef("rsi_min"), ChartParamRef("rsi_max")),
-            decimals=1,
-        ),
+# Both EMA programs record the same three values, gap floors and RSI gate;
+# they differ only in what they ask of the cross.
+_EMA_VIEW_VALUES = (
+    ViewValue(
+        key="ema_fast",
+        label="EMA {fast_period}",
+        variable="EMA{fast_period}",
+        catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("fast_period")}),
     ),
+    ViewValue(
+        key="ema_slow",
+        label="EMA {slow_period}",
+        variable="EMA{slow_period}",
+        catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("slow_period")}),
+    ),
+    ViewValue(
+        key="rsi",
+        label="RSI 14",
+        variable="RSI14",
+        pane="rsi",
+        catalogue=StrategyChartIndicator("rsi", {"length": 14}),
+        band=(ChartParamRef("rsi_min"), ChartParamRef("rsi_max")),
+        decimals=1,
+    ),
+)
+_EMA_GAP_CHECKS = (
+    ViewCheck(check_id="gap", label="Gap", chip="gap", signed=True),
+    ViewCheck(check_id="gap_bps", label="Gap (bps)", chip="gap", decimals=1, signed=True, unit=" bps"),
+)
+_EMA_RSI_GATE = ViewGate(
+    gate_id="rsi_band",
+    label="RSI in {rsi_min:g}–{rsi_max:g}",
+    expression="rsi_min ≤ RSI14 ≤ rsi_max",
+    check_id="rsi_band",
+)
+
+_EMA_CROSSOVER_SIGNAL_VIEW = StrategyView(
+    values=_EMA_VIEW_VALUES,
     checks=(
         ViewCheck(
             check_id="fresh_cross",
@@ -759,17 +781,34 @@ _EMA_CROSSOVER_SIGNAL_VIEW = StrategyView(
                 "relation_unknown": "no, EMAs only just ready",
             },
         ),
-        ViewCheck(check_id="gap", label="Gap", chip="gap", signed=True),
-        ViewCheck(check_id="gap_bps", label="Gap (bps)", chip="gap", decimals=1, signed=True, unit=" bps"),
+        *_EMA_GAP_CHECKS,
         _RSI_BAND_CHECK,
         _DECISION_COUNTDOWN_CHECK,
     ),
-    default_gate=ViewGate(
-        gate_id="rsi_band",
-        label="RSI in {rsi_min:g}–{rsi_max:g}",
-        expression="rsi_min ≤ RSI14 ≤ rsi_max",
-        check_id="rsi_band",
+    default_gate=_EMA_RSI_GATE,
+)
+
+_EMA_PREVIOUS_CROSSOVER_VIEW = StrategyView(
+    values=_EMA_VIEW_VALUES,
+    checks=(
+        ViewCheck(
+            check_id="open_cross",
+            label="Unused cross",
+            chip="cross",
+            needs="a cross up not yet used",
+            states={
+                "crossed_up": "yes, crossed this bar",
+                "waiting": "yes, crossed earlier",
+                "spent": "no, already used",
+                "unseen": "no, cross not seen",
+                "not_above": "no, below",
+            },
+        ),
+        *_EMA_GAP_CHECKS,
+        _RSI_BAND_CHECK,
+        _DECISION_COUNTDOWN_CHECK,
     ),
+    default_gate=_EMA_RSI_GATE,
 )
 
 _SMA_CROSSOVER_VIEW = StrategyView(
@@ -1196,6 +1235,206 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         # deliberately absent: a non-default value makes the companion
         # unavailable rather than comparing two different strategies (#2696).
         lean_parameter_names=("gap", "gap_bps", "rsi_min", "rsi_max"),
+    ),
+    EMA_PREVIOUS_CROSSOVER_PROGRAM_KEY: StrategyRegistration(
+        display_name="EMA Previous Crossover",
+        deploy_code="emap",
+        signal_program_contract=SignalProgramContract(
+            program_version=EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=EmaPreviousCrossoverParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="bfcba46e8b3e479fc6d80e271e12b277121ac82ef36f02b70eae4c70cb4578ec",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            decision_timeframe_ms=15 * 60_000,
+            # Same indicators as ema_crossover_signal, so the same buffer over
+            # the RSI(14) warmup at the default lengths; a deploy at longer
+            # ones seals the days they need (`resolved_warmup_lookback_days`).
+            # The lookback also bounds how old a cross a bot can have seen: a
+            # cross that began before it is not open (#2902).
+            warmup_lookback_days=5,
+            # EmaPreviousCrossoverAlgorithm.initialize() constructs exactly
+            # these three named series, each fed bar.close at bar.end_ms.
+            # These static values are the 5/10 default point; a seal records
+            # `signals_for` resolved against its own lengths.
+            signals=(
+                SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
+                SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
+                SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # commit_signal_decision arms the countdown to hold_bars at entry;
+            # this static value is the default five, and
+            # `exit_eligibility_for` resolves a seal's own hold. The cross
+            # state is decision math rebuilt by replaying bars, not persisted
+            # state, so countdown_state_persistable stays False as for every
+            # other program.
+            exit_eligibility=ExitEligibilityContract(
+                countdown_decision_clocks=5,
+                countdown_state_persistable=False,
+            ),
+            signals_for=_ema_signals_for,
+            exit_eligibility_for=_ema_exit_eligibility_for,
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an "
+                    "RSI(14) filter; fast/slow default to 5/10. A cross up opens a cross that "
+                    "stays open while EMA(fast) > EMA(slow). Entry bar: the first bar of an open "
+                    "cross where (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized "
+                    "gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50-70); "
+                    "that bar spends the cross whether or not the entry is taken. Exit: hold_bars "
+                    "consolidated decision bars after entry (default 5, 75 minutes)."
+                ),
+                reference=(
+                    "The rule is the owner's (#2902, 2026-10-05) and has no outside source. The "
+                    "port reference is LEAN's execution of the trusted template "
+                    "ema_previous_crossover, which supplies the consolidation, the EMAs, the RSI "
+                    "and the fills."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/ema_previous_crossover.py::EmaPreviousCrossoverAlgorithm"
+                ),
+                validated_against=(
+                    "tests/engine/strategy/algorithms/test_ema_previous_crossover.py; "
+                    "tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py; "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[ema_previous_crossover]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared, not tolerance-compared.
+                equivalence_level="bit_exact",
+                # One level down: the LEAN fill prices the ENG-010 fixture pins.
+                tolerance_atol=1e-6,
+                tolerance_rtol=0.0,
+                parity_fixture_ids=(
+                    "tests/fixtures/golden/ema-previous-crossover-signal/v1/trace-corpus.json",
+                    "tests/fixtures/golden/strategy-parity/ENG-010/v1/output.json",
+                ),
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "gap": "quote_currency",
+                "gap_bps": "basis_points",
+                "rsi_min": "rsi_points",
+                "rsi_max": "rsi_points",
+                "fast_period": "decision_bars",
+                "slow_period": "decision_bars",
+                "hold_bars": "decision_bars",
+            },
+            # The default configuration: the point the trace corpus and the
+            # ENG-010 LEAN fixture were both produced at.
+            validated_settings={
+                "gap": 0.20,
+                "gap_bps": 0.0,
+                "rsi_min": 50.0,
+                "rsi_max": 70.0,
+                "fast_period": 5,
+                "slow_period": 10,
+                "hold_bars": 5,
+            },
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            artifact_paths=EMA_PREVIOUS_CROSSOVER_ARTIFACT_PATHS,
+            wiring_artifact_paths=EMA_PREVIOUS_CROSSOVER_WIRING_PATHS,
+        ),
+        description=(
+            "Long-only intraday EMA signal generator that waits for a cross to "
+            "prove itself. Where EMA Crossover Signal needs the cross, the gap "
+            "and the RSI band on one bar, this strategy lets the cross happen "
+            "first and enters on a later bar.\n"
+            "\n"
+            "The strategy reads minute signal bars, consolidates them into "
+            "15-minute bars, and tracks a fast and a slow EMA (5 and 10 by "
+            "default) and Wilders RSI(14). A fast-over-slow cross opens a "
+            "cross, which stays open for as long as fast stays above slow. The "
+            "first bar of an open cross with a wide enough gap (0.20 by "
+            "default) and an RSI inside its band (50–70 by default) is that "
+            "cross's entry bar. Each cross has exactly one entry bar: if the "
+            "strategy cannot take it, the cross is spent and the strategy "
+            "waits for the next one. A position is held for a fixed number of "
+            "15-minute bars (five, 75 min, by default); the hold counts session "
+            "bars only. There is no stop, no target, no scaling, and at most "
+            "one position lifecycle open at a time. In live runs, the Action "
+            "Plan selects the stock to trade; the strategy does not."
+        ),
+        algorithm_pseudocode=(
+            "Universe\n"
+            "    signal_symbol = configurable (default SPY)\n"
+            "    resolution = 15-minute bars consolidated from minute data\n"
+            "\n"
+            "Indicators (Alpha — updated each 15m bar close at bar.end_time)\n"
+            "    EMA_fast = ExponentialMovingAverage(fast_period)   # default 5\n"
+            "    EMA_slow = ExponentialMovingAverage(slow_period)   # default 10\n"
+            "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
+            "\n"
+            "Cross state (updated on every bar, whatever the position)\n"
+            "    cross_up = EMA_fast > EMA_slow AND EMA_fast[-1] <= EMA_slow[-1]\n"
+            "    cross_up                 ⇒ cross = OPEN\n"
+            "    EMA_fast <= EMA_slow     ⇒ cross = NONE\n"
+            "    fast above slow on the first bar both EMAs are ready is not a\n"
+            "    cross: it stays NONE until a cross is seen\n"
+            "\n"
+            "Alpha — entry bar (needs all three indicators ready)\n"
+            "    gap_ok    = (EMA_fast - EMA_slow) >= gap         # default 0.20\n"
+            "    rsi_ok    = rsi_min <= RSI <= rsi_max           # default 50..70\n"
+            "    entry_bar = cross is OPEN AND gap_ok AND rsi_ok\n"
+            "    ⇒ on an entry bar: cross = SPENT\n"
+            "    ⇒ on an entry bar while flat: emit Insight(UP); emit ENTER\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    bars_held += 1 each new 15m decision bar (never wall-clock time)\n"
+            "    ⇒ when bars_held == hold_bars (default 5): emit EXIT\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    none — no stop-loss, no take-profit, no signal-flip exit.\n"
+            "    A reversed crossover inside the hold window is ignored.\n"
+            "\n"
+            "Action Plan / Portfolio Construction\n"
+            "    live execution selects the stock from its Action Plan\n"
+            "    Engine Lab binds intents to its single signal stream\n"
+            "\n"
+            "End of algorithm\n"
+            "    if still in position at the last bar: emit EXIT"
+        ),
+        gotchas=[
+            "Each cross has exactly one entry bar: the first bar where the "
+            "gap floors and the RSI band both pass. It is spent there even "
+            "when the strategy is holding an earlier trade, the bot is paused, "
+            "or the order is refused, so the entry bar depends only on prices.",
+            "A bot replays about five days of bars before it starts. A cross "
+            "spent during that replay stays spent, and a cross that began "
+            "before the replay window is not open, so a long backtest can "
+            "take an entry a freshly started bot does not. This is more "
+            "likely at long EMA lengths, where fast can stay above slow for "
+            "days.",
+            "Fast touching slow (equal values) closes the cross. The next bar "
+            "with fast above slow is a new cross.",
+            "The gap and the RSI must pass on the same bar. A gap that passed "
+            "on an earlier bar is not remembered.",
+            "EMA warmup is seeded from the SMA of the first N samples — "
+            "LEAN's convention, not the Pine/most-libraries default of "
+            "seeding from the first sample alone.",
+            "RSI uses Wilders smoothing with period+1 warmup. A cross seen "
+            "while RSI is still warming up is open and can enter once RSI is "
+            "ready.",
+            "The hold counts 15-minute decision bars across sessions, never "
+            "wall-clock time.",
+            "The Action Plan may trade a different stock from the signal "
+            "stream. That stock selection and sizing are execution concerns; "
+            "this strategy emits only ENTER and EXIT intents.",
+        ],
+        param_schema=EmaPreviousCrossoverParams,
+        strategy_view=_EMA_PREVIOUS_CROSSOVER_VIEW,
+        strategy_bars=StrategyBarCadence("minute", 15),
+        build=lambda p: build_ema_previous_crossover_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=build_ema_previous_crossover_program,
+        instrument_surface="policy",
+        action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
+        lean_twin="ema_previous_crossover",
+        # The twin reads every setting, so the parity companion is available
+        # at any configuration.
+        lean_parameter_names=("gap", "gap_bps", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars"),
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",

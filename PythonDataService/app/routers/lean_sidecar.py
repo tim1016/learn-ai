@@ -170,6 +170,42 @@ class EmaCrossoverSignalStrategyParametersModel(BaseModel):
         return self
 
 
+class EmaPreviousCrossoverStrategyParametersModel(BaseModel):
+    """All seven resolved settings accepted by the EMA previous-crossover twin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gap: float = Field(0.20, ge=0.0, allow_inf_nan=False)
+    gap_bps: float = Field(0.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    rsi_min: float = Field(50.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    rsi_max: float = Field(70.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    # Strict: lax parsing would read ``true`` as a one-bar hold.
+    fast_period: int = Field(5, ge=2, le=30, strict=True)
+    slow_period: int = Field(10, ge=3, le=40, strict=True)
+    hold_bars: int = Field(5, ge=1, le=26, strict=True)
+
+    @model_validator(mode="after")
+    def _validate_rsi_band(self) -> EmaPreviousCrossoverStrategyParametersModel:
+        if self.rsi_min >= self.rsi_max:
+            raise ValueError("rsi_min must be less than rsi_max")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ema_lengths(self) -> EmaPreviousCrossoverStrategyParametersModel:
+        if self.fast_period >= self.slow_period:
+            raise ValueError("fast_period must be less than slow_period")
+        return self
+
+
+# The settings model each parameterized template validates against; a
+# template absent here accepts no ``strategy_parameters``.
+_STRATEGY_PARAMETER_MODELS: dict[TrustedTemplate, type[BaseModel]] = {
+    TrustedTemplate.EMA_CROSSOVER_2_BPS: EmaCrossover2BpsStrategyParametersModel,
+    TrustedTemplate.EMA_CROSSOVER_SIGNAL: EmaCrossoverSignalStrategyParametersModel,
+    TrustedTemplate.EMA_PREVIOUS_CROSSOVER: EmaPreviousCrossoverStrategyParametersModel,
+}
+
+
 class TrustedRunRequestModel(BaseModel):
     """Pydantic shape for POST /api/lean-sidecar/trusted-runs.
 
@@ -250,7 +286,12 @@ class TrustedRunRequestModel(BaseModel):
             "report for. Ignored when ``algorithm_source`` is provided."
         ),
     )
-    strategy_parameters: EmaCrossover2BpsStrategyParametersModel | EmaCrossoverSignalStrategyParametersModel | None = Field(
+    strategy_parameters: (
+        EmaCrossover2BpsStrategyParametersModel
+        | EmaCrossoverSignalStrategyParametersModel
+        | EmaPreviousCrossoverStrategyParametersModel
+        | None
+    ) = Field(
         default=None,
         description=(
             "Validated strategy-logic parameters for a bundled trusted template. "
@@ -271,12 +312,8 @@ class TrustedRunRequestModel(BaseModel):
         if value is None:
             return None
         raw = value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value
-        template = info.data.get("template")
-        if template == TrustedTemplate.EMA_CROSSOVER_2_BPS:
-            return EmaCrossover2BpsStrategyParametersModel.model_validate(raw)
-        if template == TrustedTemplate.EMA_CROSSOVER_SIGNAL:
-            return EmaCrossoverSignalStrategyParametersModel.model_validate(raw)
-        return raw
+        parameter_model = _STRATEGY_PARAMETER_MODELS.get(info.data.get("template"))
+        return raw if parameter_model is None else parameter_model.model_validate(raw)
 
     # PR B canonical shape.
     data_policy: _DataPolicyModel | None = Field(
@@ -379,13 +416,8 @@ class TrustedRunRequestModel(BaseModel):
         if self.algorithm_source is not None:
             if self.strategy_parameters is not None:
                 raise ValueError("algorithm_source runs do not accept strategy_parameters")
-        elif self.template == TrustedTemplate.EMA_CROSSOVER_2_BPS:
-            parameters = EmaCrossover2BpsStrategyParametersModel.model_validate(
-                {} if self.strategy_parameters is None else self.strategy_parameters.model_dump()
-            )
-            object.__setattr__(self, "strategy_parameters", parameters)
-        elif self.template == TrustedTemplate.EMA_CROSSOVER_SIGNAL:
-            parameters = EmaCrossoverSignalStrategyParametersModel.model_validate(
+        elif (parameter_model := _STRATEGY_PARAMETER_MODELS.get(self.template)) is not None:
+            parameters = parameter_model.model_validate(
                 {} if self.strategy_parameters is None else self.strategy_parameters.model_dump()
             )
             object.__setattr__(self, "strategy_parameters", parameters)

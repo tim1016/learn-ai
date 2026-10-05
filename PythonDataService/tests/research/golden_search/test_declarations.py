@@ -21,6 +21,7 @@ from app.research.golden_search.declarations import (
 from app.research.sweep.eligibility import sweep_eligibility
 
 EMA = "ema_crossover_signal"
+EMA_PREVIOUS = "ema_previous_crossover"
 _EMA_DECLARATION = declaration_for(EMA)
 assert _EMA_DECLARATION is not None
 _EMA_SCHEMA = public_params_schema(_STRATEGY_REGISTRY[EMA])["properties"]
@@ -99,10 +100,25 @@ def test_ema_declaration_names_only_declared_searchable_knobs_in_rules_and_audit
     assert violates(_EMA_DECLARATION, {k.name: k.default_value for k in _EMA_DECLARATION.knobs}) is None
 
 
+def test_ema_previous_crossover_is_searched_like_ema_crossover_signal() -> None:
+    declaration = declaration_for(EMA_PREVIOUS)
+
+    assert declaration is not None
+    assert (declaration.knobs, declaration.fixed, declaration.constraints, declaration.default_pair_audits) == (
+        _EMA_DECLARATION.knobs,
+        _EMA_DECLARATION.fixed,
+        _EMA_DECLARATION.constraints,
+        _EMA_DECLARATION.default_pair_audits,
+    )
+    settings = set(public_params_schema(_STRATEGY_REGISTRY[EMA_PREVIOUS])["properties"]) - {"symbol"}
+    assert {k.name for k in declaration.knobs} == settings
+    assert unavailable_reason(EMA_PREVIOUS) is None
+
+
 def test_unavailable_reason_explains_every_registered_strategy() -> None:
     assert unavailable_reason(EMA) is None
     for key, registration in _STRATEGY_REGISTRY.items():
-        if key == EMA:
+        if key in (EMA, EMA_PREVIOUS):
             continue
         reason = unavailable_reason(key)
         assert declaration_for(key) is None

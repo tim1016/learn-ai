@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any, Literal
 
@@ -252,7 +252,13 @@ _EMA_DECLARATION = SearchDeclaration(
     default_pair_audits=(("fast_period", "slow_period"), ("rsi_min", "rsi_max")),
 )
 
-_DECLARATIONS: dict[str, SearchDeclaration] = {_EMA_DECLARATION.strategy_key: _EMA_DECLARATION}
+# EMA Previous Crossover has the same seven settings and bounds, so it is
+# searched in the same order with the same ranges (#2902).
+_EMA_PREVIOUS_DECLARATION = replace(_EMA_DECLARATION, strategy_key="ema_previous_crossover")
+
+_DECLARATIONS: dict[str, SearchDeclaration] = {
+    declaration.strategy_key: declaration for declaration in (_EMA_DECLARATION, _EMA_PREVIOUS_DECLARATION)
+}
 
 NO_DECLARATION_REASON = "No Golden Search declaration has shipped for this strategy yet."
 _INELIGIBILITY_COPY = {
