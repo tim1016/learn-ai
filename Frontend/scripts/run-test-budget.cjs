@@ -14,6 +14,10 @@ const fs = require("node:fs");
 // caller who runs the unsharded suite isn't left with unbounded worker
 // concurrency.
 //
+// A shard runs the specs only. The guard scripts check the tree, not a shard
+// of it, so CI runs them once, in its Frontend Lint job, and not six times
+// over (#2882). The unsharded `npm test` still runs them first.
+//
 // A CI job is sized to finish inside the target and fails only past the
 // limit (#2873). Past the target the run keeps its own exit code and says so;
 // past the limit it is killed and exits 124.
@@ -21,6 +25,8 @@ const TEST_TARGET_MS = 120_000;
 const TEST_LIMIT_MS = 180_000;
 const DEFAULT_MAX_WORKERS = "2";
 const CI_RUNNER_CONFIG_ARG = "--runner-config=vitest.ci.config.ts";
+const GUARDS_THEN_SPECS_SCRIPT = "test:unbounded";
+const SPECS_ONLY_SCRIPT = "test:specs";
 
 // The frontend-test-shard job records its own start here as its first step,
 // so checkout, Node setup and `npm ci` spend the same target and limit the
@@ -150,7 +156,8 @@ function runTestBudget({
       : forwardedArgs;
 
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const child = spawn(npm, ["run", "test:unbounded", "--", ...testArgs], {
+  const script = isShardRequested ? SPECS_ONLY_SCRIPT : GUARDS_THEN_SPECS_SCRIPT;
+  const child = spawn(npm, ["run", script, "--", ...testArgs], {
     detached: process.platform !== "win32",
     stdio: "inherit",
     env: {

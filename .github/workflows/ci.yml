@@ -111,6 +111,9 @@ jobs:
       - run: npm ci
       - run: npx eslint src/ --max-warnings 0
       - run: npx eslint tests/e2e --max-warnings 0
+      # The guard scripts check the tree, so they run here once and not in each
+      # of the six test shards, which run the specs only (#2882).
+      - run: npm run test:guards
 
   frontend-typecheck:
     name: Frontend Type Check
