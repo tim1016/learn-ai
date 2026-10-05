@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
+from app.data_lake.adjustment_versions import companion_path
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search.budget import estimate
 from app.research.golden_search.budget import review_protocol as review
 from app.research.golden_search.declarations import declaration_for
@@ -27,10 +29,12 @@ from app.research.golden_search.planning import (
     slowest_requirement,
 )
 from app.research.golden_search.protocol import IncumbentRef, KnobPlan, by_importance
+from app.research.grid_search import service as grid_service
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.golden_search_study import (
     DEVELOPMENT,
+    LAKE_FROM,
     frequency_plan_request,
     plan_request,
     seed_lake,
@@ -223,6 +227,28 @@ def test_a_run_up_refusal_names_no_start_when_no_later_one_keeps_a_fold(tmp_path
 
     assert refusal.code == "RUN_UP_HISTORY_MISSING" and refusal.nearest_valid_ms == ()
     assert refusal.message.endswith("the run-up is never carved from the scored range.")
+
+
+def test_a_run_up_the_lake_holds_but_cannot_read_is_refused_as_unreadable_not_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """History on disk without its adjustment record is not history the lake lacks: a backfill rebuilds it (#2887)."""
+    # The remedy depends on what the provider still serves, so the day is pinned.
+    monkeypatch.setattr(grid_service, "now_ms_utc", lambda: et_midnight_ms(date(2025, 6, 2)))
+    root = tmp_path / "polygon_split_adjusted"
+    symbol = unique_symbol()
+    seed_lake(root, symbol)
+    for day in expected_sessions(LAKE_FROM, DEVELOPMENT[0] - timedelta(days=1)):
+        companion_path(root / "equity" / "usa" / "minute" / symbol.lower() / f"{day:%Y%m%d}_trade.zip").unlink()
+
+    [refusal] = review_plan(protocol_from_request(plan_request(symbol)), roots=[root]).refusals
+
+    assert (refusal.code, refusal.field) == ("DATA_UNREADABLE", "development_start_ms")
+    assert "is on disk but cannot be read" in refusal.message and "does not hold them" not in refusal.message
+    assert f"backfill {symbol} in polygon_split_adjusted mode to rebuild the unreadable files" in refusal.message
+    # The readable sessions start with development, so a start one fold later has its run-up.
+    assert refusal.nearest_valid_ms == (et_midnight_ms(date(2025, 2, 1)),)
+    assert refusal.message.endswith(" The earliest start the lake can serve with whole folds is 2025-02-01.")
 
 
 def test_missing_sessions_are_a_refusal_in_the_preflight_not_an_error(tmp_path: Path) -> None:

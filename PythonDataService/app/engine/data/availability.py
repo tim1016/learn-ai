@@ -22,7 +22,9 @@ least one bar of the requested session. For ``"daily"`` it means
 ``LeanDailyDataReader`` parses a bar for that trading date out of the
 per-symbol history zip ``equity/usa/daily/{symbol}.zip``. A file the reader
 cannot decode is reported as *unreadable*, apart from *missing*: a backfill
-does not repair it (#2489). The per-root ``sources`` breakdown honors the
+does not repair it (#2489). An adjusted file refused for its adjustment
+record, not its bytes, is unreadable too, and marked ``needs_rebuild``: a
+backfill writes that record again. The per-root ``sources`` breakdown honors the
 same reference-first order that the readers use.
 """
 
@@ -39,7 +41,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Literal
 
-from app.data_lake.adjustment_versions import adjusted_root_for, companion_path, current_version
+from app.data_lake.adjustment_versions import AdjustmentVersionError, adjusted_root_for, companion_path, current_version
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
 from app.data_lake.path_policy import lake_root_for
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
@@ -100,10 +102,14 @@ class UnreadableFile:
 
     path: str
     reason: str
+    # Refused for its adjustment record, not its bytes: a backfill writes that record again.
+    needs_rebuild: bool = False
 
 
 def _unreadable(path: Path | str, exc: Exception) -> UnreadableFile:
-    unreadable = UnreadableFile(path=str(path), reason=f"{type(exc).__name__}: {exc}")
+    unreadable = UnreadableFile(
+        path=str(path), reason=f"{type(exc).__name__}: {exc}", needs_rebuild=isinstance(exc, AdjustmentVersionError)
+    )
     logger.warning(
         "[AVAILABILITY] a data file is on disk but cannot be read",
         extra={"path": unreadable.path, "reason": unreadable.reason},
@@ -155,7 +161,10 @@ def _read_minute_zip(path: Path, symbol: str, trading_date: date, session: Sessi
         root = adjusted_root_for(path)
         adjustment_key: tuple[str, int, int] | None = None
         if root is not None:
-            companion = companion_path(path).stat()
+            try:
+                companion = companion_path(path).stat()
+            except FileNotFoundError as exc:
+                raise AdjustmentVersionError(f"{symbol}: {path.name} has no adjustment record") from exc
             adjustment_key = (current_version(root, symbol), companion.st_mtime_ns, companion.st_ctime_ns)
         return _parse_minute_zip(str(path), version, symbol.upper(), trading_date, session, adjustment_key)
     except _DECODE_ERRORS as exc:
