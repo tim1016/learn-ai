@@ -13895,7 +13895,7 @@ export interface components {
             policy: components["schemas"]["GoldenSearchSelectionPolicy"];
             /**
              * Range Note
-             * @description Laid out inside a picked range: which of its sessions the plan leaves out and why. Null when it uses them all, or when no range was given.
+             * @description Laid out inside a picked range: which of its sessions the plan leaves out and why, and a final test that starts before its whole months. Null when neither, or when no range was given.
              */
             range_note?: string | null;
             /** Recent Window */

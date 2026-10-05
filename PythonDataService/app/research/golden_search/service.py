@@ -20,8 +20,8 @@ import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +238,15 @@ class LakeSessions:
 
     first: date
     last: date
+    #: Every complete minute session the lake holds for the symbol, the earlier stretches included.
+    held: frozenset[date] = field(default=frozenset(), compare=False, repr=False)
+
+    def run_start(self, last_day: date) -> date:
+        """The first session of the unbroken run that reaches ``last_day``: a range that ends before a hole is not held to the run after it.
+
+        The latest run's first session when no held session reaches ``last_day``.
+        """
+        return unbroken_run_start(self.held, last_day) or self.first
 
 
 async def lake_sessions(symbol: str) -> LakeSessions | None:
@@ -264,7 +273,7 @@ async def lake_sessions(symbol: str) -> LakeSessions | None:
         return None
     held = {row.trading_date for row in rows if row.trading_date is not None}
     first = unbroken_run_start(held, max(held)) if held else None
-    return None if first is None else LakeSessions(first=first, last=max(held))
+    return None if first is None else LakeSessions(first=first, last=max(held), held=frozenset(held))
 
 
 async def defaults(
@@ -294,7 +303,12 @@ async def defaults(
     coverage = await lake_coverage(symbol)
     now = now_ms_utc() if now_ms is None else now_ms
     latest = None if coverage is None else coverage.last
-    earliest = None if coverage is None else coverage.first
+    if coverage is None:
+        earliest = None
+    elif study_range is None:
+        earliest = coverage.first
+    else:
+        earliest = coverage.run_start(study_range.end - timedelta(days=1))
     fit = (
         None
         if study_range is None
@@ -317,7 +331,7 @@ async def defaults(
         **protocol.as_dict(),
         "final_months": final_months,
         "final_sessions_cut": default_final_interval(now, final_months, latest).sessions_cut if fit is None else 0,
-        "range_note": None if fit is None else range_fit_sentence(fit, training_months=training_months, test_months=test_months),
+        "range_note": None if fit is None else range_fit_sentence(fit, final_months=final_months, training_months=training_months, test_months=test_months),
         "incumbent_label": incumbent.label,
         "incumbent_sentence": params_sentence(declaration, incumbent.ref.params),
         "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),

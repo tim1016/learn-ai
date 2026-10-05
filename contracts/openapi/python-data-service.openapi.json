@@ -19516,7 +19516,7 @@
                 "type": "null"
               }
             ],
-            "description": "Laid out inside a picked range: which of its sessions the plan leaves out and why. Null when it uses them all, or when no range was given.",
+            "description": "Laid out inside a picked range: which of its sessions the plan leaves out and why, and a final test that starts before its whole months. Null when neither, or when no range was given.",
             "title": "Range Note"
           },
           "recent_window": {

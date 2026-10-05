@@ -10,6 +10,7 @@ import pytest
 from app.data_lake import catalog_client
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search import service
+from app.research.golden_search.planning import StudyRange, fit_range
 from app.research.golden_search.service import LakeSessions
 
 
@@ -52,3 +53,24 @@ async def test_a_symbol_without_a_hole_keeps_its_first_session_and_an_unheld_one
 
     _catalog_holding(monkeypatch, [])
     assert await service.lake_sessions("ZZZZ") is None
+
+
+async def test_a_range_that_ends_before_a_hole_is_laid_out_from_the_run_it_ends_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The floor of a picked range is the run that reaches its last day, not the lake's latest run (#2886)."""
+    before = expected_sessions(date(2024, 12, 2), date(2025, 4, 30))
+    after = expected_sessions(date(2025, 5, 5), date(2026, 10, 2))
+    _catalog_holding(monkeypatch, [*before, *after])
+
+    sessions = await service.lake_sessions("SPY")
+
+    assert sessions is not None and sessions.first == date(2025, 5, 5)
+    # A range ending on 2025-04-30 reads nothing across the hole of 05-01 and 05-02.
+    assert sessions.run_start(date(2025, 4, 30)) == date(2024, 12, 2)
+    fit = fit_range(
+        StudyRange(date(2025, 1, 1), date(2025, 5, 1)), final_months=1, training_months=1, test_months=1, earliest_session=sessions.run_start(date(2025, 4, 30))
+    )
+    assert (fit.development_start, fit.final_start) == (date(2025, 1, 1), date(2025, 4, 1))
+    # A range reaching past the hole is held to the later run, and one ending inside the hole to the latest.
+    assert sessions.run_start(date(2026, 10, 2)) == date(2025, 5, 5)
+    assert sessions.run_start(date(2025, 5, 2)) == date(2025, 5, 5)
+

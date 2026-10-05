@@ -739,9 +739,9 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(screen.queryByText(/^Study range:/)).toBeNull();
   });
 
-  it("starts the range on an offered day and ends it on the lake's last day when the plan ran past it (#2886)", async () => {
+  it("offers no first day while the plan's own last day is past the lake: the range would be laid out again from another last day (#2886)", async () => {
     const service = fakeService();
-    const message = 'The slowest setting needs 32 decision bars of history before 2024-01-01, and the lake does not hold them for SPY.';
+    const message = 'The slowest setting needs 32 decision bars of history before 2024-01-01, and the lake does not hold them for SPY. The earliest start the lake can serve with whole folds is 2024-03-01.';
     service.preflight.mockResolvedValueOnce(
       preflightFixture({ refusals: [{ code: 'RUN_UP_HISTORY_MISSING', field: 'development_start_ms', message, nearest_valid_ms: [etMidnightMs('2024-03-01')] }] }),
     );
@@ -749,27 +749,8 @@ describe('GoldenSearchPlanFormComponent', () => {
     const { view } = await renderForm(service, { pool: [{ ...STUDY_POOL[0], lastHeld: '2026-01-16' }] });
     pickSymbol(view.fixture, 'SPY');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start the range on 2024-03-01' }));
-
-    await waitFor(() =>
-      expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-03-01'), range_end_ms: etMidnightMs('2026-01-17') }),
-    );
-    expect(screen.queryByText(/^Study range:/)).toBeNull();
-  });
-
-  it('shows no plan dates under a range the server could not lay out (#2886)', async () => {
-    const service = fakeService();
-    const { view } = await renderForm(service);
-    await pickSpy(service, view);
-    expect(planDates(view.container)).toHaveLength(2);
-    const message = 'The range is too short: 6 months of training, one test of 2 months and a final test of 3 months need development to start by 2025-10-19, and the range starts on 2026-03-19.';
-    service.defaults.mockRejectedValueOnce(new HttpErrorResponse({ status: 400, error: { detail: { code: 'INTERVALS_INVALID', field: 'range_start_ms', message } } }));
-
-    fireEvent.click(quickRange('6M'));
-
-    expect(await screen.findByText(message)).not.toBeNull();
-    // The plan still holds the dates of the range before; they are not this range's.
-    expect(planDates(view.container)).toEqual([]);
+    await waitFor(() => expect(within(view.container.querySelector<HTMLElement>('[id="gs-plan-range"]') as HTMLElement).getByRole('alert').textContent).toBe(message));
+    expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull();
   });
 
   it('a range picked while dates are being laid out for a month count wins: the late layout is dropped', async () => {
@@ -802,7 +783,10 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     fireEvent.click(quickRange('6M'));
 
-    expect(await screen.findByText(message)).not.toBeNull();
+    // The server's words are under the range it refused; the plan's dates, which are the range before's, are not shown.
+    const range = view.container.querySelector<HTMLElement>('[id="gs-plan-range"]') as HTMLElement;
+    await waitFor(() => expect(within(range).getByRole('alert').textContent).toBe(message));
+    expect(planDates(view.container)).toEqual([]);
     expect(lockButton().disabled).toBe(true);
     expect(service.preflight).toHaveBeenCalledTimes(1);
   });
@@ -825,7 +809,7 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
 
-    expect(await screen.findByText(/the dates could not be laid out/i)).not.toBeNull();
+    expect((await screen.findAllByText(/the dates could not be laid out/i)).length).toBeGreaterThan(0);
     expect(lockButton().disabled).toBe(true);
     expect(service.preflight).toHaveBeenCalledTimes(1);
   });
@@ -843,6 +827,20 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight.mock.lastCall?.[0].training_months).toBe(9);
   });
 
+  it("tells a revised plan whose fold change the server refused how to have its dates laid out again (#2886)", async () => {
+    const service = fakeService();
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+    const message = '27 months do not divide into whole folds of 2 months after 9 months of training; the final test can start on 2026-02-01 or 2026-04-01';
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'FOLDS_INVALID', field: 'development_end_ms', message, nearest_valid_ms: [etMidnightMs('2026-02-01')] }] }));
+
+    fireEvent.input(screen.getByLabelText('Training window (months)'), { target: { value: '9' } });
+
+    // No field takes the day the server names, so the range says what does.
+    expect(await screen.findByText(/Pick a range, or enter the final test's length in months, and the dates are laid out again\./)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull();
+  });
+
   it("a revised plan asks for the final test's length before it lays a picked range out (#2886)", async () => {
     const service = fakeService();
     await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
@@ -850,7 +848,7 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     fireEvent.click(quickRange('2Y'));
 
-    expect(await screen.findByText("Final test (months): Enter the final test's length in months; the range is laid out from it.")).not.toBeNull();
+    expect(await screen.findByText("Final test (months): Enter the final test's length in months; the dates are laid out from it.")).not.toBeNull();
     expect(service.defaults).not.toHaveBeenCalled();
     service.defaults.mockResolvedValueOnce(twoYearDefaults());
     fireEvent.input(screen.getByLabelText('Final test (months)'), { target: { value: '3' } });

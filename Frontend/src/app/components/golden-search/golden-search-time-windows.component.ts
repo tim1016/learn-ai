@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, output, untracked } from '@angular/core';
+import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 
 import { etIsoDate } from '../../shared/date/et-midnight';
@@ -32,7 +33,7 @@ function percentAlong(ms: number, start: number, end: number): number {
  */
 @Component({
   selector: 'app-golden-search-time-windows',
-  imports: [InputText, TimestampDisplayComponent, DateRangePickerComponent],
+  imports: [ButtonModule, InputText, TimestampDisplayComponent, DateRangePickerComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-time-windows.component.html',
   styleUrls: ['./golden-search-plan-card.scss', './golden-search-time-windows.component.scss'],
@@ -50,6 +51,8 @@ export class GoldenSearchTimeWindowsComponent {
    * it: the plan then still holds the dates of the range before.
    */
   readonly rangeLaidOut = input(true);
+  /** Why the server could not lay the dates out for the range or the month counts, in its own words; null when it could. */
+  readonly layoutProblem = input<string | null>(null);
   /** Which sessions of the picked range the plan leaves out, in the server's words; null when it uses them all. */
   readonly rangeNote = input<string | null | undefined>(undefined);
   /** The final test's length in months; undefined while the dates do not follow a month count. */
@@ -94,12 +97,25 @@ export class GoldenSearchTimeWindowsComponent {
   });
   /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
   protected readonly gaps = computed<DataGaps | null>(() => this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.protocol().symbol, this.bounds(), 'minute'));
+  /**
+   * Whether a first day the server offers lands where it says: only when the
+   * plan's dates are the layout of the range shown. They are for a picked
+   * range once it is laid out, and for a fresh plan whose final test is whole
+   * months the lake holds. A final test cut short, one past the lake, and a
+   * revised plan's frozen dates would all be laid out again from another day.
+   */
+  private readonly offersApply = computed(() => {
+    if (this.range() !== undefined) return this.rangeLaidOut();
+    const last = this.held().max;
+    return this.finalMonths() !== undefined && !this.finalSessionsCut() && (last === null || this.shown().to <= last);
+  });
   /** The server's refusals of a date, in its own words, each with the first days it would take instead of the range's. */
   protected readonly rangeRefusals = computed(() => {
     const from = this.shown().from;
+    const apply = this.offersApply();
     return this.refusals()
       .filter((refusal) => refusal.target === RANGE_INPUT_ID)
-      .map((refusal) => ({ ...refusal, offers: refusal.offers.filter((day) => day !== from) }));
+      .map((refusal) => ({ ...refusal, offers: apply ? refusal.offers.filter((day) => day !== from) : [] }));
   });
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */
@@ -126,16 +142,9 @@ export class GoldenSearchTimeWindowsComponent {
     this.edit.emit({ kind: 'range', from: range.from, to: range.to });
   }
 
-  /**
-   * Starts the range on a day the server offered. It ends where it did, or on
-   * the lake's last day when the plan ran past it: an offered start is one the
-   * lake can serve, and a last day it does not hold would only be refused next.
-   * The keyboard moves to the range, because the button goes once the plan is laid out.
-   */
+  /** Starts the range on a day the server offered. The keyboard moves to the range, because the button goes once the plan is laid out. */
   protected startOn(day: string, block: HTMLElement): void {
-    const { to } = this.shown();
-    const last = this.held().max;
-    this.edit.emit({ kind: 'range', from: day, to: last !== null && to > last ? last : to });
+    this.edit.emit({ kind: 'range', from: day, to: this.shown().to });
     block.focus();
   }
 }

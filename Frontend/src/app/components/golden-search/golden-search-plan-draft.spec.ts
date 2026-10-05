@@ -37,7 +37,7 @@ describe('applyPlanEdit', () => {
     // A revised plan's frozen dates carry no month count.
     const ranged = applyPlanEdit(draft(), { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
 
-    expect(ranged.problems.get(numberProblemKey('final_months'))).toBe("Enter the final test's length in months; the range is laid out from it.");
+    expect(ranged.problems.get(numberProblemKey('final_months'))).toBe("Enter the final test's length in months; the dates are laid out from it.");
     expect(draftLayout(ranged)).toBeNull();
     const counted = applyPlanEdit(ranged, { kind: 'number', field: 'final_months', raw: '3' }, emaCapability());
     expect(counted.problems.size).toBe(0);

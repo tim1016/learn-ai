@@ -26,13 +26,17 @@ leaves at least one calendar month of unbroken lake history before it for
 the run-up (24 months when the lake's sessions are unknown), and (c) keeps
 the default plan's conservative evaluation bound within its budget.
 
-Formula (a picked range): the final interval is the ``final_months`` months
-ending where the range ends. Development ends where it starts, and starts
-on the earliest day ``training_months + k·test_months`` whole months before
-it (``k ≥ 1``) that falls inside the range and leaves the first month of
-the lake's unbroken history before it for the run-up. Scheduled sessions
-between the range's first day and that start are left out and reported; a
-range that holds no fold is refused.
+Formula (a picked range): the final interval ends where the range ends and
+nominally starts ``final_months`` months before. Development starts on the
+earliest day ``training_months + k·test_months`` months before that nominal
+start (``k ≥ 1``) that falls inside the range and leaves the first month of
+the lake's unbroken history before it for the run-up; the lake's run is the
+one that reaches the range's last day. Development ends, and the final
+interval starts, that many whole months after the start: on the nominal day,
+or up to three days before it when the start was clamped to a shorter
+month's end (a range ending on the 29th to the 31st). Scheduled sessions
+between the range's first day and the development start are left out and
+reported; a range that holds no fold is refused.
 The run cap does not shorten a picked range: the plan check judges it.
 
 Formula (default ranges): a knob's range is its declared default range
@@ -105,7 +109,7 @@ from app.research.sweep.warmup import (
     plan_run_up,
     probe_warmup_samples,
 )
-from app.research.walk_forward_study.folds import add_months, whole_months_between
+from app.research.walk_forward_study.folds import add_months
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
@@ -661,8 +665,10 @@ class RangeFit:
     final_start: date
     final_end: date
     unused_sessions: tuple[date, ...]
-    #: The run-up month of the lake's unbroken history put the development start later than the folds alone would.
-    held_back_for_run_up: bool
+    #: Where the lake's unbroken history starts, when its run-up month put the development start later than the folds alone would.
+    lake_from: date | None
+    #: Days the final test starts before its whole months: development ended there, from a start clamped to a shorter month's end.
+    final_early_days: int
 
 
 def study_range_at(range_start_ms: int | None, range_end_ms: int | None) -> StudyRange | None:
@@ -690,64 +696,81 @@ def fit_range(
     """The longest whole-fold plan inside ``study_range`` whose final test ends where the range ends.
 
     Development may start no earlier than the range's first day, nor before
-    the lake's latest unbroken run of sessions leaves a calendar month for the
-    run-up: nothing is read across a hole. A range that holds no fold is
-    refused with the start the plan needs.
+    the lake's unbroken run of sessions (``earliest_session`` starts it)
+    leaves a calendar month for the run-up: nothing is read across a hole. A
+    range that holds no fold is refused with the start the plan needs.
     """
     if min(final_months, training_months, test_months) < 1:
         raise GoldenSearchRefusal("Interval lengths must be at least one month.", code="INTERVALS_INVALID")
-    final_start = add_months(study_range.end, -final_months)
+    nominal_final_start = add_months(study_range.end, -final_months)
     floor = study_range.start if earliest_session is None else max(study_range.start, _earliest_development_start(earliest_session))
 
-    def first_fit(first_day: date) -> date | None:
-        """The earliest day on or after ``first_day`` that is training plus whole tests before the final start."""
-        folds = (_whole_months(first_day, final_start) - training_months) // test_months
+    def first_fit(first_day: date) -> tuple[date, date] | None:
+        """The earliest development start on or after ``first_day``, and the day its whole months end."""
+        folds = (_whole_months(first_day, nominal_final_start) - training_months) // test_months
         while folds >= 1:
-            start = add_months(final_start, -(training_months + folds * test_months))
-            # A start clamped to a shorter month's end is not a whole number of months before the final start.
-            if start >= first_day and whole_months_between(start, final_start) is not None:
-                return start
+            months = training_months + folds * test_months
+            start = add_months(nominal_final_start, -months)
+            if start >= first_day:
+                # From a start clamped to a shorter month's end, whole months end up to three days before the nominal day.
+                return start, add_months(start, months)
             folds -= 1
         return None
 
-    development_start = first_fit(floor)
-    if development_start is None:
-        needed = add_months(final_start, -(training_months + test_months))
-        why = (
-            f"the range starts on {floor.isoformat()}"
-            if floor == study_range.start
-            else f"the first month of the lake's unbroken history is kept for the run-up, so development cannot start before {floor.isoformat()}"
-        )
+    fit = first_fit(floor)
+    if fit is None:
+        needed = add_months(nominal_final_start, -(training_months + test_months)).isoformat()
+        asks = f"{_months(training_months)} of training, one test of {_months(test_months)} and a final test of {_months(final_months)}"
+        if earliest_session is None or floor == study_range.start:
+            raise GoldenSearchRefusal(
+                f"The range is too short: {asks} need development to start by {needed}, and the range starts on {floor.isoformat()}.",
+                code="INTERVALS_INVALID",
+                field="range_start_ms",
+            )
         raise GoldenSearchRefusal(
-            f"The range is too short: {_months(training_months)} of training, one test of {_months(test_months)} and a "
-            f"final test of {_months(final_months)} need development to start by {needed.isoformat()}, and {why}.",
+            f"The lake's unbroken history starts on {earliest_session.isoformat()}, and its first month is kept for the run-up, "
+            f"so development cannot start before {floor.isoformat()}. {asks[0].upper()}{asks[1:]} that end with "
+            f"this range need it to start by {needed}.",
             code="INTERVALS_INVALID",
-            field="range_start_ms",
         )
+    development_start, final_start = fit
     unused = expected_sessions(study_range.start, development_start - timedelta(days=1)) if development_start > study_range.start else []
+    held_back = floor > study_range.start and first_fit(study_range.start) != fit
     return RangeFit(
         development_start=development_start,
         final_start=final_start,
         final_end=study_range.end,
         unused_sessions=tuple(unused),
-        held_back_for_run_up=floor > study_range.start and first_fit(study_range.start) != development_start,
+        lake_from=earliest_session if held_back else None,
+        final_early_days=(nominal_final_start - final_start).days,
     )
 
 
-def range_fit_sentence(fit: RangeFit, *, training_months: int, test_months: int) -> str | None:
-    """Which sessions of a picked range the plan leaves out, and why; ``None`` when it uses them all."""
-    if not fit.unused_sessions:
-        return None
-    first, last = fit.unused_sessions[0].isoformat(), fit.unused_sessions[-1].isoformat()
-    count = len(fit.unused_sessions)
-    left_out = f"The session on {first} is" if count == 1 else f"The {count} sessions from {first} to {last} are"
-    split = f"split into {_months(training_months)} of training and whole tests of {_months(test_months)}"
-    why = (
-        f"the first month of the lake's unbroken history is kept for the run-up, and the rest has to {split}"
-        if fit.held_back_for_run_up
-        else f"the months before the final test have to {split}"
-    )
-    return f"Development starts on {fit.development_start.isoformat()}. {left_out} left out: {why}."
+def range_fit_sentence(fit: RangeFit, *, final_months: int, training_months: int, test_months: int) -> str | None:
+    """What a plan laid out inside a picked range does not take from it as asked, and why; ``None`` when nothing.
+
+    The sessions it leaves out at the range's start, and a final test that
+    starts before its whole months.
+    """
+    said: list[str] = []
+    if fit.unused_sessions:
+        first, last = fit.unused_sessions[0].isoformat(), fit.unused_sessions[-1].isoformat()
+        count = len(fit.unused_sessions)
+        left_out = f"The session on {first} is" if count == 1 else f"The {count} sessions from {first} to {last} are"
+        split = f"split into {_months(training_months)} of training and whole tests of {_months(test_months)}"
+        why = (
+            f"the months before the final test have to {split}"
+            if fit.lake_from is None
+            else f"the lake's unbroken history starts on {fit.lake_from.isoformat()}, its first month is kept for the run-up, and the rest has to {split}"
+        )
+        said.append(f"Development starts on {fit.development_start.isoformat()}. {left_out} left out: {why}.")
+    if fit.final_early_days:
+        early = "1 day" if fit.final_early_days == 1 else f"{fit.final_early_days} days"
+        said.append(
+            f"The final test starts on {fit.final_start.isoformat()}, {early} before its {_months(final_months)}: "
+            "development's whole months end there."
+        )
+    return " ".join(said) or None
 
 
 def _default_knob(knob: SearchKnob, seed: Decimal, benchmark: Decimal) -> KnobPlan:

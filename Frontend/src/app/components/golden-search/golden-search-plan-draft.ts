@@ -148,6 +148,9 @@ export const MONTH_FIELDS: ReadonlySet<ProtocolNumberField> = new Set(['final_mo
 /** The problem key of a study range with a day the picker cannot use. */
 export const RANGE_PROBLEM_KEY = 'range';
 
+/** A revised plan's frozen dates carry no final-test length, and a range is laid out from one. */
+const NEEDS_FINAL_MONTHS = "Enter the final test's length in months; the dates are laid out from it.";
+
 /**
  * What to ask `/defaults` to lay the dates out from: the three month counts,
  * and the picked range once there is one. Null while a count is unknown or
@@ -356,8 +359,7 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
       // What the server said about the last range, and its cut, belong to the dates being replaced.
       const { finalSessionsCut: _cut, rangeNote: _note, ...rest } = draft;
       const ranged = withProblem(problems, RANGE_PROBLEM_KEY, null);
-      // A revised plan's frozen dates carry no month count, and a range is laid out from one.
-      const counted = draft.finalMonths === undefined ? withProblem(ranged, numberProblemKey('final_months'), 'Enter the final test\'s length in months; the range is laid out from it.') : ranged;
+      const counted = draft.finalMonths === undefined ? withProblem(ranged, numberProblemKey('final_months'), NEEDS_FINAL_MONTHS) : ranged;
       return { ...rest, range: { from: edit.from, to: edit.to }, problems: counted };
     }
     case 'flag':

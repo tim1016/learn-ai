@@ -18,6 +18,7 @@ from app.research.golden_search.models import GoldenSearchRefusal
 from app.research.golden_search.planning import (
     UNKNOWN_HISTORY_MONTHS,
     FinalInterval,
+    RangeFit,
     StudyRange,
     _sessions_needed,
     default_final_interval,
@@ -365,14 +366,18 @@ def _fit(study_range: StudyRange = TWO_YEARS, *, earliest_session: date | None =
     return fit_range(study_range, final_months=final, training_months=training, test_months=test, earliest_session=earliest_session)
 
 
+def _note(fit: RangeFit, *, final: int = 3, training: int = 6, test: int = 2) -> str | None:
+    return range_fit_sentence(fit, final_months=final, training_months=training, test_months=test)
+
+
 def test_a_picked_range_ends_the_final_test_with_the_range_and_starts_development_on_its_first_whole_fold() -> None:
     fit = _fit()
 
     # 21 months lie before the final test; 6 of training and seven 2-month tests take 20 of them.
     assert (fit.development_start, fit.final_start, fit.final_end) == (date(2024, 11, 3), date(2026, 7, 3), date(2026, 10, 3))
     assert (len(fit.unused_sessions), fit.unused_sessions[0], fit.unused_sessions[-1]) == (22, date(2024, 10, 3), date(2024, 11, 1))
-    assert not fit.held_back_for_run_up
-    assert range_fit_sentence(fit, training_months=6, test_months=2) == (
+    assert fit.lake_from is None and fit.final_early_days == 0
+    assert _note(fit) == (
         "Development starts on 2024-11-03. The 22 sessions from 2024-10-03 to 2024-11-01 are left out: "
         "the months before the final test have to split into 6 months of training and whole tests of 2 months."
     )
@@ -382,7 +387,7 @@ def test_a_range_that_splits_evenly_is_used_whole_and_says_nothing() -> None:
     fit = _fit(StudyRange(date(2024, 11, 3), date(2026, 10, 3)))
 
     assert fit.development_start == date(2024, 11, 3) and fit.unused_sessions == ()
-    assert range_fit_sentence(fit, training_months=6, test_months=2) is None
+    assert _note(fit) is None
     # A range starting on a weekend leaves no session out either: 2024-11-03 is a Sunday.
     one_month_tests = _fit(test=1)
     assert one_month_tests.development_start == date(2024, 10, 3) and one_month_tests.unused_sessions == ()
@@ -392,13 +397,14 @@ def test_a_range_from_the_lakes_first_session_keeps_its_first_month_for_the_run_
     # The lake starts on 2024-10-03, so December is the first month with a whole month behind it.
     fit = _fit(earliest_session=date(2024, 10, 3))
 
-    assert fit.development_start == date(2025, 1, 3) and fit.held_back_for_run_up
-    assert range_fit_sentence(fit, training_months=6, test_months=2) == (
+    assert fit.development_start == date(2025, 1, 3) and fit.lake_from == date(2024, 10, 3)
+    assert _note(fit) == (
         "Development starts on 2025-01-03. The 63 sessions from 2024-10-03 to 2025-01-02 are left out: "
-        "the first month of the lake's unbroken history is kept for the run-up, and the rest has to split into 6 months of training and whole tests of 2 months."
+        "the lake's unbroken history starts on 2024-10-03, its first month is kept for the run-up, "
+        "and the rest has to split into 6 months of training and whole tests of 2 months."
     )
     # A range that starts after that month is not held back.
-    assert not _fit(earliest_session=date(2023, 1, 3)).held_back_for_run_up
+    assert _fit(earliest_session=date(2023, 1, 3)).lake_from is None
 
 
 def test_one_session_left_out_is_named_as_one() -> None:
@@ -406,7 +412,7 @@ def test_one_session_left_out_is_named_as_one() -> None:
     fit = _fit(StudyRange(date(2024, 11, 1), date(2026, 10, 3)), test=1, training=1)
 
     assert fit.development_start == date(2024, 11, 3)
-    assert range_fit_sentence(fit, training_months=1, test_months=1) == (
+    assert _note(fit, training=1, test=1) == (
         "Development starts on 2024-11-03. The session on 2024-11-01 is left out: "
         "the months before the final test have to split into 1 month of training and whole tests of 1 month."
     )
@@ -421,18 +427,61 @@ def test_a_range_too_short_for_one_fold_is_refused_with_what_the_plan_needs() ->
         "The range is too short: 6 months of training, one test of 2 months and a final test of 3 months "
         "need development to start by 2025-11-03, and the range starts on 2026-01-03."
     )
-    with pytest.raises(GoldenSearchRefusal, match="the first month of the lake's unbroken history is kept for the run-up, so development cannot start before 2026-03-01"):
+
+
+def test_a_range_the_lake_is_too_young_for_is_refused_naming_the_lake_not_the_range() -> None:
+    # The range is eleven months long; the lake's unbroken history starts two months before it ends.
+    with pytest.raises(GoldenSearchRefusal) as young:
         _fit(StudyRange(date(2025, 11, 3), date(2026, 10, 3)), earliest_session=date(2026, 1, 5))
 
+    assert (young.value.code, young.value.field) == ("INTERVALS_INVALID", None)
+    assert str(young.value) == (
+        "The lake's unbroken history starts on 2026-01-05, and its first month is kept for the run-up, so development "
+        "cannot start before 2026-03-01. 6 months of training, one test of 2 months and a final test of 3 months that "
+        "end with this range need it to start by 2025-11-03."
+    )
 
-def test_a_range_ending_at_a_months_end_still_plans_whole_folds() -> None:
-    # The final test starts on 2026-07-31; a development start in a shorter month would not be whole months from it.
+
+def test_a_range_ending_at_a_months_end_starts_the_final_test_where_developments_whole_months_end() -> None:
+    # The final test's three months start on 2026-07-31. Twenty months before is 2024-11-30, and twenty on from there is 07-30.
     fit = _fit(StudyRange(date(2024, 10, 31), date(2026, 10, 31)))
     protocol = default_protocol(EMA, "SPY", registry_incumbent(EMA, "SPY"), now_ms=OCTOBER_15, earliest_session=None, fit=fit)
 
-    assert fit.development_start == date(2025, 1, 31)
-    assert "FOLDS_INVALID" not in [item.code for item in review(protocol, _ema()).refusals]
-    assert len(review(protocol, _ema()).folds) == 6
+    assert (fit.development_start, fit.final_start, fit.final_end, fit.final_early_days) == (date(2024, 11, 30), date(2026, 7, 30), date(2026, 10, 31), 1)
+    assert _dates(protocol) == (date(2024, 11, 30), date(2026, 7, 30), date(2026, 7, 30), date(2026, 10, 31))
+    assert review(protocol, _ema()).refusals == () and len(review(protocol, _ema()).folds) == 7
+    assert _note(fit) == (
+        "Development starts on 2024-11-30. The 21 sessions from 2024-10-31 to 2024-11-29 are left out: "
+        "the months before the final test have to split into 6 months of training and whole tests of 2 months. "
+        "The final test starts on 2026-07-30, 1 day before its 3 months: development's whole months end there."
+    )
+
+
+@pytest.mark.parametrize(
+    ("study_range", "development_start", "final_start"),
+    [
+        # One year ending on Friday 2026-10-30: eleven months are asked and twelve are there.
+        (StudyRange(date(2025, 10, 31), date(2026, 10, 31)), date(2025, 11, 30), date(2026, 7, 30)),
+        # A final test whose months start on the 31st of May: eight months before is February's last day.
+        (StudyRange(date(2025, 9, 1), date(2026, 8, 31)), date(2025, 9, 30), date(2026, 5, 30)),
+        (StudyRange(date(2024, 12, 1), date(2025, 12, 31)), date(2025, 1, 30), date(2025, 9, 30)),
+    ],
+)
+def test_a_range_with_room_for_the_months_asked_is_laid_out_whatever_day_it_ends_on(
+    study_range: StudyRange, development_start: date, final_start: date
+) -> None:
+    fit = _fit(study_range)
+    protocol = default_protocol(EMA, "SPY", registry_incumbent(EMA, "SPY"), now_ms=OCTOBER_15, earliest_session=None, fit=fit)
+
+    assert (fit.development_start, fit.final_start) == (development_start, final_start)
+    assert review(protocol, _ema()).refusals == ()
+
+
+def test_the_start_a_too_short_range_is_told_it_needs_is_one_the_layout_takes() -> None:
+    with pytest.raises(GoldenSearchRefusal, match="need development to start by 2025-11-30, and the range starts on 2026-01-31"):
+        _fit(StudyRange(date(2026, 1, 31), date(2026, 10, 31)))
+
+    assert _fit(StudyRange(date(2025, 11, 30), date(2026, 10, 31))).development_start == date(2025, 11, 30)
 
 
 def test_a_picked_range_is_laid_out_whole_whatever_the_run_cap_admits() -> None:

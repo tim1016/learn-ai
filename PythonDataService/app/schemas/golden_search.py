@@ -356,7 +356,7 @@ class GoldenSearchDefaults(GoldenSearchProtocol):
     )
     range_note: str | None = Field(
         default=None,
-        description="Laid out inside a picked range: which of its sessions the plan leaves out and why. Null when it uses them all, or when no range was given.",
+        description="Laid out inside a picked range: which of its sessions the plan leaves out and why, and a final test that starts before its whole months. Null when neither, or when no range was given.",
     )
     incumbent_label: str
     incumbent_sentence: str = Field(description="The incumbent's settings at a glance, e.g. 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars'.")
