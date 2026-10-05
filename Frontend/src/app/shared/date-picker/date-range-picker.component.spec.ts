@@ -23,18 +23,28 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
     [sessionsOnly]="sessionsOnly()"
     [hostOffers]="hostOffers()"
     [gaps]="gaps()"
-    (picked)="picked.set($event)"
+    (picked)="onPicked($event)"
   />`,
 })
 class HostComponent {
   readonly gaps = signal<DataGaps | null>(null);
   readonly hostOffers = signal<readonly QuickRangeOffer[] | null>(null);
   readonly picked = signal<QuickRangeKey | null>(null);
+  /** Whether a picked host range is written to the host's dates, as a page that applies its server's range does. */
+  readonly appliesPicked = signal(false);
   readonly from = signal('2026-08-19');
   readonly to = signal('2026-09-18');
   readonly bounds = signal<DateBounds>(QQQ);
   readonly ranges = signal<readonly QuickRangeKey[]>(QUICK_RANGES);
   readonly sessionsOnly = signal(true);
+
+  onPicked(key: QuickRangeKey): void {
+    this.picked.set(key);
+    const range = this.hostOffers()?.find((offer) => offer.key === key)?.range;
+    if (!this.appliesPicked() || !range) return;
+    this.from.set(range.from);
+    this.to.set(range.to);
+  }
 }
 
 async function renderPicker(calendar: FakeTradingCalendar = fakeTradingCalendar(SESSIONS, '2026-10-02')) {
@@ -96,6 +106,24 @@ describe('DateRangePickerComponent', () => {
 
   it('shows the selected range again when its quick range is tapped in the same task as a typed date (#2866)', async () => {
     const { view, host, start, quick } = await renderPicker();
+
+    // A touch tap: the field's change and the click arrive with no render between them.
+    await userEvent.clear(start);
+    await userEvent.type(start, '2026-09-14');
+    start.dispatchEvent(new Event('change'));
+    quick('1M').click();
+    await view.fixture.whenStable();
+
+    expect(start.value).toBe('2026-08-19');
+    expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
+  });
+
+  it("shows a host's range again when its quick range is tapped in the same task as a typed date (#2883)", async () => {
+    const { view, host, start, quick } = await renderPicker();
+    // The host's server resolved the range its dates already hold, and the host writes it again on a pick.
+    host.hostOffers.set([{ key: '1M', range: { from: '2026-08-19', to: '2026-09-18' }, unavailable: null }]);
+    host.appliesPicked.set(true);
+    await view.fixture.whenStable();
 
     // A touch tap: the field's change and the click arrive with no render between them.
     await userEvent.clear(start);
