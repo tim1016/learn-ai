@@ -11788,6 +11788,47 @@ export interface components {
             rsi_min?: number;
         };
         /**
+         * EmaPreviousCrossoverStrategyParametersModel
+         * @description All seven resolved settings accepted by the EMA previous-crossover twin.
+         */
+        EmaPreviousCrossoverStrategyParametersModel: {
+            /**
+             * Fast Period
+             * @default 5
+             */
+            fast_period?: number;
+            /**
+             * Gap
+             * @default 0.2
+             */
+            gap?: number;
+            /**
+             * Gap Bps
+             * @default 0
+             */
+            gap_bps?: number;
+            /**
+             * Hold Bars
+             * @default 5
+             */
+            hold_bars?: number;
+            /**
+             * Rsi Max
+             * @default 70
+             */
+            rsi_max?: number;
+            /**
+             * Rsi Min
+             * @default 50
+             */
+            rsi_min?: number;
+            /**
+             * Slow Period
+             * @default 10
+             */
+            slow_period?: number;
+        };
+        /**
          * EngineBacktestJobRequest
          * @description Body of POST /api/jobs-internal/engine-backtest.
          *
@@ -24167,7 +24208,7 @@ export interface components {
              * Strategy Parameters
              * @description Validated strategy-logic parameters for a bundled trusted template. Accepted by the parameterized EMA twins; omitted values use that template's declared defaults.
              */
-            strategy_parameters?: components["schemas"]["EmaCrossover2BpsStrategyParametersModel"] | components["schemas"]["EmaCrossoverSignalStrategyParametersModel"] | null;
+            strategy_parameters?: components["schemas"]["EmaCrossover2BpsStrategyParametersModel"] | components["schemas"]["EmaCrossoverSignalStrategyParametersModel"] | components["schemas"]["EmaPreviousCrossoverStrategyParametersModel"] | null;
             /**
              * Symbol
              * @description DEPRECATED (PR B): use ``data_policy.symbol``.
@@ -24230,7 +24271,7 @@ export interface components {
          * @description Stable wire names for bundled LEAN algorithm sources.
          * @enum {string}
          */
-        TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "rsi_mean_reversion" | "deployment_validation";
+        TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
         /**
          * UnderlyingSnapshot
          * @description Underlying asset info from snapshot

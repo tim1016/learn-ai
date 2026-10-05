@@ -1574,6 +1574,50 @@
       ]
     },
     {
+      "id": "ENG-010",
+      "name": "EMA Previous Crossover LEAN trade parity",
+      "category": "strategy-parity",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/ema_previous_crossover.py",
+      "canonical_callable": "EmaPreviousCrossoverAlgorithm",
+      "reference": {
+        "kind": "cross_engine",
+        "oracle": "QuantConnect LEAN at source commit 261366a7e26ae942df858ab20df4fef8fa07de67",
+        "citation": "LEAN's execution of the trusted template ema_previous_crossover on the SPY and QQQ six-month cross-engine cells; the rule is the owner's (#2902). See attribution.md for image, algorithm, and input hashes."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon/Massive",
+        "generated_by": "tests/fixtures/golden/ema-previous-crossover-lean/generate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Order timestamps, directions, quantities, and fees are exact; Decimal fill prices and final equity are pinned at absolute tolerance 0.000001. Observed max errors are zero. LEAN's recorded dividend is credited to the engine (#2903)."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "771bc9c9058fe47cb78dcec21c96cbc417afc95e0e7c5312af7726da7275faa0",
+            "output.json": "f1f3d3f7b2e48ee76df22752f8529490ca11a687bcb8da965f1983b8228590c4"
+          },
+          "file_sha256": {
+            "input.json": "96d448904e270819c1929c7de2d171eee549180b2333159495faa8b38e57e8eb",
+            "output.json": "6be723d07b42e5697f874fb867447bc30feb8b21f4c1bc6ff272ee0656e6acc0",
+            "attribution.md": "cbc67de4787e4f6700448e68d9c0f48fd99baaaf3675a784a096bb1f995899c4"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py"
+      ]
+    },
+    {
       "id": "FEE-001",
       "name": "Alpaca equity regulatory pass-through fees",
       "category": "broker-fees",

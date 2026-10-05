@@ -14039,6 +14039,62 @@
         "title": "EmaCrossoverSignalStrategyParametersModel",
         "type": "object"
       },
+      "EmaPreviousCrossoverStrategyParametersModel": {
+        "additionalProperties": false,
+        "description": "All seven resolved settings accepted by the EMA previous-crossover twin.",
+        "properties": {
+          "fast_period": {
+            "default": 5,
+            "maximum": 30.0,
+            "minimum": 2.0,
+            "title": "Fast Period",
+            "type": "integer"
+          },
+          "gap": {
+            "default": 0.2,
+            "minimum": 0.0,
+            "title": "Gap",
+            "type": "number"
+          },
+          "gap_bps": {
+            "default": 0.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Gap Bps",
+            "type": "number"
+          },
+          "hold_bars": {
+            "default": 5,
+            "maximum": 26.0,
+            "minimum": 1.0,
+            "title": "Hold Bars",
+            "type": "integer"
+          },
+          "rsi_max": {
+            "default": 70.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Rsi Max",
+            "type": "number"
+          },
+          "rsi_min": {
+            "default": 50.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Rsi Min",
+            "type": "number"
+          },
+          "slow_period": {
+            "default": 10,
+            "maximum": 40.0,
+            "minimum": 3.0,
+            "title": "Slow Period",
+            "type": "integer"
+          }
+        },
+        "title": "EmaPreviousCrossoverStrategyParametersModel",
+        "type": "object"
+      },
       "EngineBacktestJobRequest": {
         "description": "Body of POST /api/jobs-internal/engine-backtest.\n\nMirrors the existing synchronous EngineBacktestRequest shape but\naccepts it as a ``backtest`` sub-object so the field validation\nremains the single source of truth. The .NET JobsApi forwards the\nEngine Lab POST body verbatim plus an injected ``job_id``.",
         "properties": {
@@ -45587,6 +45643,9 @@
                 "$ref": "#/components/schemas/EmaCrossoverSignalStrategyParametersModel"
               },
               {
+                "$ref": "#/components/schemas/EmaPreviousCrossoverStrategyParametersModel"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -45760,6 +45819,7 @@
           "ema_crossover",
           "ema_crossover_signal",
           "ema_crossover_2_bps",
+          "ema_previous_crossover",
           "rsi_mean_reversion",
           "deployment_validation"
         ],

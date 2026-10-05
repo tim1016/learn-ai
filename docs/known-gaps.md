@@ -576,6 +576,19 @@ re-arms the server-authored timeframe auto-correct, and numeric
   [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md),
   [final-bar decisions note](./references/final-bar-decisions-2467.md).
 
+## Backtest vs LEAN: dividends (#2903, 2026-10-05)
+
+- **P2: the backtest engine pays no cash dividend (#2903).** LEAN, on raw
+  prices, pays one whenever a position is held over an ex-date. A backtest
+  that holds a dividend payer overnight into its ex-date therefore ends with
+  less cash than its LEAN companion, and its later orders can be one share
+  smaller. Decisions, fill bars and fill prices are unaffected. Found on the
+  SPY six-month cell while building EMA Previous Crossover: 157 shares held
+  over 2026-03-20, $282.60. The ENG-010 parity test
+  (`PythonDataService/tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py`)
+  credits the recorded dividend itself; cash changes only in
+  `PythonDataService/app/engine/execution/portfolio.py::apply_fill`.
+
 ## Backtest vs reality: when a bot ends (#2607, 2026-09-29)
 
 - **P2: a backtest always holds overnight; the owner's end schedule is not

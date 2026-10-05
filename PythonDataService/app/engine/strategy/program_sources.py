@@ -52,6 +52,35 @@ EMA_CROSSOVER_SIGNAL_WIRING_PATHS: tuple[str, ...] = (
     "app/engine/strategy/params.py",
 )
 
+EMA_PREVIOUS_CROSSOVER_ARTIFACT_PATHS: tuple[str, ...] = (
+    # Same triage rule as ema_crossover_signal's artifact_paths (issue
+    # #1728 defect 2): the transitive first-party import closure of the
+    # root below, MINUS the files in
+    # _EMA_PREVIOUS_CROSSOVER_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+    # (scripts/run_signal_program_build_qualification.py) that are provably
+    # unreachable from evaluate_signal_bar()'s decision math. The algorithm
+    # is its own module and imports nothing from ema_crossover_signal's, so
+    # an edit to either program moves only its own digest (#2902).
+    "app/engine/strategy/algorithms/ema_previous_crossover.py",
+    "app/engine/strategy/base.py",
+    "app/engine/strategy/normalized_gap.py",
+    "app/engine/strategy/signal_intent.py",
+    "app/engine/strategy/signal_program.py",
+    "app/engine/strategy/decision_explanation.py",
+    "app/engine/indicators/base.py",
+    "app/engine/indicators/ema.py",
+    "app/engine/indicators/rsi.py",
+    "app/engine/indicators/sma.py",
+    "app/engine/consolidators/trade_bar_consolidator.py",
+    "app/engine/data/trade_bar.py",
+    "app/lean_sidecar/trading_calendar.py",
+    "app/utils/timestamps.py",
+)
+EMA_PREVIOUS_CROSSOVER_WIRING_PATHS: tuple[str, ...] = (
+    "app/engine/strategy/programs/ema_previous_crossover.py",
+    "app/engine/strategy/params.py",
+)
+
 SMA_CROSSOVER_ARTIFACT_PATHS: tuple[str, ...] = (
     # Same triage rule as ema_crossover_signal's artifact_paths (issue
     # #1728 defect 2): the transitive first-party import closure of the
@@ -232,6 +261,8 @@ DECLARED_PROGRAM_SOURCE_PATHS: frozenset[str] = frozenset(
     for paths in (
         EMA_CROSSOVER_SIGNAL_ARTIFACT_PATHS,
         EMA_CROSSOVER_SIGNAL_WIRING_PATHS,
+        EMA_PREVIOUS_CROSSOVER_ARTIFACT_PATHS,
+        EMA_PREVIOUS_CROSSOVER_WIRING_PATHS,
         SMA_CROSSOVER_ARTIFACT_PATHS,
         SMA_CROSSOVER_WIRING_PATHS,
         RSI_MEAN_REVERSION_ARTIFACT_PATHS,

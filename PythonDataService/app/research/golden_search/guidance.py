@@ -316,9 +316,12 @@ def _ema_sentence(values: Mapping[str, Decimal]) -> str:
     )
 
 
-_SENTENCES = {"ema_crossover_signal": _ema_sentence}
+_EMA_STRATEGY_KEYS = ("ema_crossover_signal", "ema_previous_crossover")
+_SENTENCES = dict.fromkeys(_EMA_STRATEGY_KEYS, _ema_sentence)
 # Short names for fixed knobs, where the declaration's label reads awkwardly in a sentence.
-_FIXED_NAMES: dict[tuple[str, str], tuple[str, str]] = {("ema_crossover_signal", "gap_bps"): ("Normalized gap", "bps")}
+_FIXED_NAMES: dict[tuple[str, str], tuple[str, str]] = {
+    (key, "gap_bps"): ("Normalized gap", "bps") for key in _EMA_STRATEGY_KEYS
+}
 
 
 def params_sentence(declaration: SearchDeclaration, point: Mapping[str, Any]) -> str:

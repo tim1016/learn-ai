@@ -14,6 +14,15 @@ describe("EMA Crossover 2 bps LEAN mapping", () => {
   });
 });
 
+describe("EMA Previous Crossover LEAN mapping", () => {
+  it("maps the Strategy Lab entry to its matching trusted template", () => {
+    expect(leanValidationTemplateForStrategy("ema_previous_crossover", "ema_previous_crossover"))
+      .toBe("ema_previous_crossover");
+    expect(leanValidationTemplateLabel("ema_previous_crossover"))
+      .toBe("EMA Previous Crossover");
+  });
+});
+
 describe("RSI Mean Reversion LEAN mapping", () => {
   it("maps the Strategy Lab entry to its matching trusted template", () => {
     expect(leanValidationTemplateForStrategy("rsi_mean_reversion", "rsi_mean_reversion"))

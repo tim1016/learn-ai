@@ -62,7 +62,7 @@ export interface TrustedRunRequest {
    * is provided (operator-pasted source pins its own brokerage via
    * ``SetBrokerageModel``).
    */
-  template?: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "rsi_mean_reversion" | "deployment_validation";
+  template?: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "ema_previous_crossover" | "rsi_mean_reversion" | "deployment_validation";
   /** Runtime gates accepted by the parameterized EMA Crossover 2 bps template. */
   strategy_parameters?: {
     gap_bps: number;

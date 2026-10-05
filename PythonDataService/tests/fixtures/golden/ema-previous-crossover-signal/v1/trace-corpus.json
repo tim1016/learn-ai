@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "program_key": "ema_previous_crossover",
+  "program_version": "ema-previous-crossover/v1",
+  "entries": [
+    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "AAPL"}, "trace_count": 2576, "trace_root": "eb31acfe4915de1ae8c371094ce6df1eb19bb653368b108880dc26ce9e602a03"},
+    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "AAPL"}, "trace_count": 5892, "trace_root": "43d9196317cdb84e1ff24f1818bcc7e96881e3bcb9aeff616de866ef30bf5add"},
+    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "QQQ"}, "trace_count": 1014, "trace_root": "280e86f1c5ab74430f78075fc168444933a52d9e5f1e53c9851b6576514e1b64"},
+    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "QQQ"}, "trace_count": 2576, "trace_root": "8483e2369c6f0099ec4e6689977d13e8424b4b8abb818a90194f5f96d7ee8c36"},
+    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "QQQ"}, "trace_count": 5892, "trace_root": "f6a1f85c40f9b397ede8d4704ca102ccef7e4a0bd28b0f155f9b248f7e4d07c1"},
+    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "SPY"}, "trace_count": 1014, "trace_root": "a1d4ae547d2c640f048565810e686122a121e809eb2fb61b267c5dfbd6acc460"},
+    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "SPY"}, "trace_count": 2576, "trace_root": "e4d1e6e9ab7c989192b3a7263020b96fc788675182810a7a52e88b7c6dfa3db2"},
+    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "SPY"}, "trace_count": 5892, "trace_root": "d2850b363918f2df2948d7912fc0731229430f24c849a162133e0065c7f3a97f"},
+    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "TSLA"}, "trace_count": 2576, "trace_root": "85b30a72968e0875651a401777b9076d1c5cfe8df565d552185e45d280f5f473"},
+    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"fast_period": "5", "gap": "0.2", "gap_bps": "0.0", "hold_bars": "5", "rsi_max": "70.0", "rsi_min": "50.0", "slow_period": "10", "symbol": "TSLA"}, "trace_count": 5892, "trace_root": "a562936c91495cfd125f8a5976c24d3298275291bed7ac48378a22e17b5d5f53"}
+  ],
+  "trace_root": "bfcba46e8b3e479fc6d80e271e12b277121ac82ef36f02b70eae4c70cb4578ec"
+}

@@ -89,6 +89,10 @@ _QUALIFICATION_SUITES: dict[str, str] = {
         "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
         "[ema_crossover_signal]"
     ),
+    "ema_previous_crossover": (
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[ema_previous_crossover]"
+    ),
     "sma_crossover": (
         "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
         "[sma_crossover]"
@@ -173,6 +177,15 @@ def _closure_exclusions(*, portfolio: str, insight: str, insight_manager: str) -
 
 
 _EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, never portfolio state, to compute its facts.',
+    insight='Insight/InsightDirection are constructed inside commit_signal_decision(), which advance() calls only after _build_trace() has already produced the immutable EvaluationTrace.',
+    insight_manager='Reached only via StrategyContext.emit_insight(), called from commit_signal_decision() after the trace for that bar already exists.',
+)
+
+# Same triage, for `ema_previous_crossover`'s own closure (#2902). Its
+# algorithm module imports exactly what EMA's does, and reaches every
+# excluded file the same way.
+_EMA_PREVIOUS_CROSSOVER_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
     portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, never portfolio state, to compute its facts.',
     insight='Insight/InsightDirection are constructed inside commit_signal_decision(), which advance() calls only after _build_trace() has already produced the immutable EvaluationTrace.',
     insight_manager='Reached only via StrategyContext.emit_insight(), called from commit_signal_decision() after the trace for that bar already exists.',
@@ -269,6 +282,7 @@ _DEPLOYMENT_VALIDATION_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _clo
 # rather than needing its own near-identical test file.
 _CLOSURE_EXCLUSIONS_BY_PROGRAM: dict[str, dict[str, str]] = {
     "ema_crossover_signal": _EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "ema_previous_crossover": _EMA_PREVIOUS_CROSSOVER_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
     "sma_crossover": _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
     "rsi_mean_reversion": _RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
     "spy_strategy_a": _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,

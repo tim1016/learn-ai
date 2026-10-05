@@ -52,6 +52,7 @@ SEALED_KEYS: tuple[str, ...] = tuple(key for key, _ in sealed_programs())
 
 OFF_VALIDATED_PERIODS: dict[str, dict[str, int]] = {
     "ema_crossover_signal": {"fast_period": 7, "slow_period": 20},
+    "ema_previous_crossover": {"fast_period": 7, "slow_period": 20},
     "sma_crossover": {"short_window": 7, "long_window": 21},
     "rsi_mean_reversion": {"window": 21},
     "spy_strategy_a": {
@@ -80,6 +81,7 @@ a program share a value, so a series wired to the wrong one cannot pass."""
 
 LONG_PERIODS: dict[str, dict[str, int]] = {
     "ema_crossover_signal": {"fast_period": 30, "slow_period": 40},
+    "ema_previous_crossover": {"fast_period": 30, "slow_period": 40},
     "sma_crossover": {"short_window": 50, "long_window": 200},
     "rsi_mean_reversion": {"window": 100},
     "spy_strategy_a": {"ema_fast_period": 50, "ema_slow_period": 200},
