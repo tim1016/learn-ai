@@ -33,6 +33,21 @@
     },
     {
       "schema_version": 2,
+      "program_key": "ema_previous_crossover",
+      "program_version": "ema-previous-crossover/v1",
+      "golden_trace_root": "bfcba46e8b3e479fc6d80e271e12b277121ac82ef36f02b70eae4c70cb4578ec",
+      "artifact_digest": "4661b4493b792e4a560b2c86e3fb2166757246a9834f7c8aba47eeaadee778d6",
+      "wiring_digest": "5fd119d90cf19d9e96eb804b64d113432a524dda34d1a0951c3eb180aa7d52d1",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_previous_crossover]",
+      "qualified_at_ms": 1791230686838,
+      "git_provenance": {
+        "commit_sha": "bc7a4558a6078dff26749843d8093575c37c1670",
+        "dirty": false
+      },
+      "receipt_hash": "0decba840b1df0f30ebdc4dfd6ceecc82869c331fb479f1d16a74513342b6f42"
+    },
+    {
+      "schema_version": 2,
       "program_key": "rsi_mean_reversion",
       "program_version": "rsi-mean-reversion/v1",
       "golden_trace_root": "46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
