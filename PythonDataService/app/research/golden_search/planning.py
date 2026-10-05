@@ -61,8 +61,7 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
-from app.data_lake.polygon_fetcher import polygon_history_floor
-from app.data_lake.types import polygon_mode_for, trading_date_to_calendar_anchor_ms
+from app.data_lake.types import trading_date_to_calendar_anchor_ms
 from app.engine.data.availability import (
     AvailabilityReport,
     MissingSessionsError,
@@ -119,7 +118,6 @@ from app.research.sweep.warmup import (
 )
 from app.research.walk_forward_study.folds import add_months
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
-from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -395,44 +393,21 @@ def _as_refusal(exc: GoldenSearchRefusal) -> ProtocolRefusal:
     return ProtocolRefusal(code=exc.code, field=exc.field, message=str(exc), nearest_valid_ms=exc.nearest_valid_ms)
 
 
-def backfill_remedy(report: AvailabilityReport) -> BackfillRemedy | None:
-    """The backfill that fetches a window's missing sessions, or ``None`` when the provider serves none of them.
-
-    Its window runs from the first to the last missing session the provider
-    still serves and the market has reached; a backfill reuses the sessions
-    between them that the lake already holds.
-    """
-    today = et_date_at_ms(now_ms_utc())
-    floor = polygon_history_floor(today)
-    fetchable = [day for day in report.missing_days if floor <= day <= today]
-    if not fetchable:
-        return None
-    return BackfillRemedy(
-        symbol=report.symbol,
-        price_adjustment_mode=polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"]),
-        start_trading_date_ms=trading_date_to_calendar_anchor_ms(fetchable[0]),
-        end_trading_date_ms=trading_date_to_calendar_anchor_ms(fetchable[-1]),
-    )
-
-
 def _servable_date(
     protocol: GoldenSearchProtocol, run_up: StudyRunUp, roots: Sequence[Path], report: AvailabilityReport
 ) -> tuple[str | None, tuple[int, ...]]:
-    """The date a plan with missing sessions could take instead, and the field it belongs to; no field when none helps.
+    """The one date whose change leaves the plan reading only sessions the lake holds, and its field; no field when none does.
 
-    A lake that stops before the final test does is served by ending the
-    final test after the lake's last session, while that leaves the final
-    test a session. A hole further back is served by a later development
-    start (:func:`_servable_start_ms`).
+    Every session before the first missing one is held. While that leaves
+    the final test a session, the final test can end after the last of
+    them. Otherwise the first hole is in development or the run-up: a later
+    development start passes it when every session after it is held
+    (:func:`_servable_start_ms`).
     """
-    held = [day for days in report.sources.values() for day in days]
-    if not held:
-        return None, ()
-    last_held = max(held)
-    if report.missing_days[-1] > last_held:
-        if last_held < et_date_at_ms(protocol.final_start_ms):
-            return None, ()
-        return "final_end_ms", (et_midnight_ms(last_held + timedelta(days=1)),)
+    first_missing = report.missing_days[0]
+    before = [day for days in report.sources.values() for day in days if day < first_missing]
+    if before and max(before) >= et_date_at_ms(protocol.final_start_ms):
+        return "final_end_ms", (et_midnight_ms(max(before) + timedelta(days=1)),)
     later = _servable_start_ms(protocol, run_up, roots)
     return (None, ()) if later is None else ("development_start_ms", (later,))
 
@@ -445,9 +420,18 @@ def _unread_sessions_refusal(
     if refused.code != "DATA_MISSING":
         return ProtocolRefusal(code=refused.code, field=None, message=str(refused))
     field, nearest = _servable_date(protocol, run_up, roots, report)
-    return ProtocolRefusal(
-        code=refused.code, field=field, message=str(refused), nearest_valid_ms=nearest, backfill=backfill_remedy(report)
+    fill = refused.backfill
+    backfill = (
+        None
+        if fill is None
+        else BackfillRemedy(
+            symbol=fill.symbol,
+            price_adjustment_mode=fill.mode,
+            start_trading_date_ms=trading_date_to_calendar_anchor_ms(fill.first),
+            end_trading_date_ms=trading_date_to_calendar_anchor_ms(fill.last),
+        )
     )
+    return ProtocolRefusal(code=refused.code, field=field, message=str(refused), nearest_valid_ms=nearest, backfill=backfill)
 
 
 def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None = None, check_data: bool = True) -> PlanReview:

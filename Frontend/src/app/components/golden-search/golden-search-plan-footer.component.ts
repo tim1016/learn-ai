@@ -5,7 +5,7 @@ import { ButtonModule } from 'primeng/button';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { durationRangeText } from './golden-search-display';
-import type { PlanBackfillState } from './golden-search-plan-backfill';
+import { covers, type PlanBackfillState } from './golden-search-plan-backfill';
 import type { PlanProblem } from './golden-search-plan-problems';
 import type { BackfillRemedy, GoldenSearchPreflight } from './golden-search.types';
 
@@ -53,6 +53,8 @@ export class GoldenSearchPlanFooterComponent {
   readonly jump = output<string>();
   /** Fetch the sessions a problem names as missing. */
   readonly fill = output<BackfillRemedy>();
+  /** Stop the backfill that is running. */
+  readonly cancelFill = output();
 
   protected readonly detailsOpen = signal(false);
   /** The fixed panel's height, reserved at the end of the form. */
@@ -73,11 +75,11 @@ export class GoldenSearchPlanFooterComponent {
     const state = this.backfill();
     return state?.kind === 'running' ? state : null;
   });
-  /** How the last backfill ended, while the plan is still refused for the sessions it was to fetch; null once it no longer misses them. */
+  /** How the last backfill ended, while the plan is still refused for sessions it was to fetch; null once it misses none of them. */
   protected readonly ended = computed(() => {
     const state = this.backfill();
     if (state === null || state.kind === 'running') return null;
-    return this.refusals().some((problem) => problem.backfill?.symbol === state.symbol) ? state : null;
+    return this.refusals().some((problem) => problem.backfill !== null && covers(state.remedy, problem.backfill)) ? state : null;
   });
   protected readonly estimate = computed(() => this.preflight()?.estimate ?? null);
   protected readonly duration = computed(() => {

@@ -93,12 +93,24 @@ RECEIPT_SCHEMA_VERSION = 1
 SWEEP_DATA_POLICY: dict[str, Any] = {"source": "polygon", "adjusted": True, "session": "regular"}
 
 
+@dataclass(frozen=True)
+class SessionsBackfill:
+    """The backfill that fetches a refused window's missing sessions: its lake tree, and the first and last session it can fetch."""
+
+    symbol: str
+    mode: str
+    first: date
+    last: date
+
+
 class GridSearchRefusal(ValueError):
     """A launch or Finish is refused for a reason the researcher can act on."""
 
-    def __init__(self, message: str, *, code: str) -> None:
+    def __init__(self, message: str, *, code: str, backfill: SessionsBackfill | None = None) -> None:
         super().__init__(message)
         self.code = code
+        #: The backfill the message prescribes for missing sessions, for a caller that runs it instead of advising it.
+        self.backfill = backfill
 
 
 def current_code_identity() -> CodeIdentity:
@@ -152,16 +164,32 @@ def _rebuild_remedy(report: AvailabilityReport, mode: str) -> str:
 
 
 def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
-    """The gaps, the lake tree the sweep read them from, and the remedy when a backfill is one."""
+    """The gaps, the lake tree the sweep read them from, and the remedy when a backfill is one.
+
+    A backfill fetches the missing sessions the provider serves: from its
+    history's floor through today. It is prescribed, and carried as data,
+    for those only, over one window from the first to the last of them; the
+    sessions between them that the lake already holds are reused.
+    """
+    report = missing.report
     mode = polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
-    if missing.report.unreadable_files:
-        return GridSearchRefusal(
-            f"{missing} (read from the {mode} lake){_rebuild_remedy(missing.report, mode)}", code="DATA_UNREADABLE"
-        )
-    return GridSearchRefusal(
-        f"{missing} (read from the {mode} lake); backfill {missing.report.symbol} in {mode} mode and launch again",
-        code="DATA_MISSING",
-    )
+    read = f"{missing} (read from the {mode} lake)"
+    if report.unreadable_files:
+        return GridSearchRefusal(f"{read}{_rebuild_remedy(report, mode)}", code="DATA_UNREADABLE")
+    today = et_date_at_ms(now_ms_utc())
+    floor = polygon_history_floor(today)
+    fetchable = [day for day in report.missing_days if floor <= day <= today]
+    serves = f"the provider serves {floor.isoformat()} through {today.isoformat()}"
+    if not fetchable:
+        return GridSearchRefusal(f"{read}; no backfill can fetch these sessions: {serves}", code="DATA_MISSING")
+    backfill = SessionsBackfill(symbol=report.symbol, mode=mode, first=fetchable[0], last=fetchable[-1])
+    remedy = f"backfill {report.symbol} in {mode} mode"
+    if len(fetchable) == len(report.missing_days):
+        remedy += " and launch again"
+    else:
+        days = backfill.first.isoformat() if backfill.first == backfill.last else f"{backfill.first.isoformat()}..{backfill.last.isoformat()}"
+        remedy += f" for {days}; no backfill can fetch the other missing sessions: {serves}"
+    return GridSearchRefusal(f"{read}; {remedy}", code="DATA_MISSING", backfill=backfill)
 
 
 # ── Window translation (one documented rule) ─────────────────────────────

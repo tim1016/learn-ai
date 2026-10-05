@@ -23,10 +23,13 @@
     </ul>
   }
   @if (running(); as run) {
-    <p class="backfill" role="status">
-      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-      The backfill is running@if (run.progress; as tick) {: {{ tick.current | number }} of {{ tick.total | number }} {{ tick.unit }}}. The plan is checked again when it ends.
-    </p>
+    <div class="backfill">
+      <p role="status">
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        The backfill is running@if (run.progress; as tick) {: {{ tick.current | number }} of {{ tick.total | number }} {{ tick.unit }}}. The plan is checked again when it ends.
+      </p>
+      <button type="button" class="ghost" [disabled]="!run.accepted" (click)="cancelFill.emit()">Cancel backfill</button>
+    </div>
   }
   @if (ended(); as end) {
     <p class="backfill problem" role="alert">

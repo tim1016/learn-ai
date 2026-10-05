@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/ang
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DataLakeService, type DataRunSpec } from '../../shared/data-lake';
+import { DataLakeService, type BackfillDefaults, type DataLakeRead, type DataRunSpec } from '../../shared/data-lake';
 import { BackfillJobRunner, type BackfillJobRun, type BackfillRunHooks, type BackfillRunState, type BackfillTerminalEvent } from '../../shared/data-lake/backfill-job-runner';
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
@@ -87,7 +87,6 @@ function quickRange(key: string): HTMLElement {
   return within(screen.getByRole('group', { name: 'Quick ranges' })).getByText(key, { exact: true });
 }
 
-/** The dates the plan ends up with, as the line under the bar tells them. */
 /** The lake stops on 2026-03-20; the default plan's final test runs through 2026-03-31. */
 const LAGGING_POOL = [{ ...STUDY_POOL[0], lastHeld: '2026-03-20' }];
 const MISSING_SESSIONS =
@@ -101,19 +100,28 @@ function missingSessions(remedy = true): GoldenSearchPreflight {
   return preflightFixture({ refusals: [{ code: 'DATA_MISSING', field: 'final_end_ms', message: MISSING_SESSIONS, nearest_valid_ms: [etMidnightMs('2026-03-21')], backfill }] });
 }
 
+const BACKFILL_DEFAULTS: DataLakeRead<BackfillDefaults> = {
+  kind: 'ok',
+  value: { market: 'usa', lean_image_digest: 'sha256:lean', max_trading_range_days: 1830, max_symbol_length: 16, provider_history_start_ms: 0 },
+};
+
 /** The lake's backfill job, which a spec reports on and ends by hand. */
-function fakeBackfill() {
+function fakeBackfill(defaultsRead: DataLakeRead<BackfillDefaults> = BACKFILL_DEFAULTS) {
   const terminal = deferred<BackfillTerminalEvent>();
   const state = signal<BackfillRunState>({ kind: 'running', started: true, progress: null });
   let hooks: BackfillRunHooks | undefined;
+  // Stopping to watch a job ends this form's wait for it, as the real runner's detach does.
+  const detach = vi.fn(() => terminal.resolve({ kind: 'detached' }));
+  const cancel = vi.fn(async () => undefined);
   const start = vi.fn(async (_spec: DataRunSpec, given?: BackfillRunHooks): Promise<BackfillJobRun> => {
     hooks = given;
-    return { jobId: 'job-1', state: state.asReadonly(), terminal: terminal.promise, detach: () => terminal.resolve({ kind: 'detached' }), cancel: async () => undefined };
+    return { jobId: 'job-1', state: state.asReadonly(), terminal: terminal.promise, detach, cancel };
   });
-  const lake = { backfillDefaults: async () => ({ kind: 'ok', value: { market: 'usa', lean_image_digest: 'sha256:lean', max_trading_range_days: 1830, max_symbol_length: 16, provider_history_start_ms: 0 } }) };
   return {
-    providers: [{ provide: BackfillJobRunner, useValue: { start } }, { provide: DataLakeService, useValue: lake }] satisfies Provider[],
+    providers: [{ provide: BackfillJobRunner, useValue: { start } }, { provide: DataLakeService, useValue: { backfillDefaults: async () => defaultsRead } }] satisfies Provider[],
     start,
+    detach,
+    cancel,
     progress: (current: number, total: number) => state.set({ kind: 'running', started: true, progress: { current, total, unit: 'days', message: null } }),
     /** One day of the run that fetched nothing, with the provider's reason. */
     dayFailed: (detail: string) =>
@@ -126,6 +134,7 @@ function backfillButton(): HTMLButtonElement {
   return within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: 'Backfill SPY' }) as HTMLButtonElement;
 }
 
+/** The dates the plan ends up with, as the line under the bar tells them. */
 function planDates(container: Element): string[] {
   return [...container.querySelectorAll('.spans > span')].map((span) => (span.textContent ?? '').replace(/\s+/g, ' ').trim());
 }
@@ -1010,6 +1019,90 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     expect(await screen.findByText(/The backfill did not finish: The provider refused the request\. Pick a study range the lake holds, or run the backfill again\./)).not.toBeNull();
     expect(backfillButton().disabled).toBe(false);
+  });
+
+  it('keeps what one backfill found to the sessions it ran over: a refusal for other sessions starts from its own backfill', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+    lake.dayFailed('Polygon returned no bars for SPY on 2026-03-23.');
+    lake.end({ kind: 'completed' });
+    await screen.findByText(/The backfill finished/);
+
+    // The plan changes onto a hole the backfill was never asked for.
+    const hole = 'missing data: SPY has no minute bars for 3 of 564 trading sessions in 2023-12-28..2026-03-20 — missing 2025-01-13..2025-01-15';
+    const elsewhere = { symbol: 'SPY', price_adjustment_mode: 'polygon_split_adjusted' as const, start_trading_date_ms: Date.UTC(2025, 0, 13, 12), end_trading_date_ms: Date.UTC(2025, 0, 15, 12) };
+    service.preflight.mockResolvedValue(
+      preflightFixture({ refusals: [{ code: 'DATA_MISSING', field: 'development_start_ms', message: hole, nearest_valid_ms: [etMidnightMs('2025-03-01')], backfill: elsewhere }] }),
+    );
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '4' } });
+
+    await waitFor(() => expect(within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: hole })).not.toBeNull());
+    expect(screen.queryByText(/The backfill finished/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull();
+    expect(backfillButton().disabled).toBe(false);
+  });
+
+  it('cancels a running backfill: the footer lets go of it at once, the server is told to stop, and the plan is checked again', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    const cancel = (await screen.findByRole('button', { name: 'Cancel backfill' })) as HTMLButtonElement;
+    await waitFor(() => expect(cancel.disabled).toBe(false));
+
+    fireEvent.click(cancel);
+
+    // A job whose end never arrives cannot hold the footer: nothing ended this one but the cancel.
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    expect(lake.cancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/The backfill/)).toBeNull();
+    // A cancelled backfill was not tried: the range offers nothing in its place yet.
+    expect(screen.queryByRole('button', { name: /^End the range on/ })).toBeNull();
+  });
+
+  it('stops watching a running backfill when the form goes, and checks nothing again', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    await waitFor(() => expect(lake.start).toHaveBeenCalledTimes(1));
+    await screen.findByRole('button', { name: 'Cancel backfill' });
+
+    view.fixture.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lake.detach).toHaveBeenCalledTimes(1);
+    // The job keeps running on the server: leaving the page does not cancel it.
+    expect(lake.cancel).not.toHaveBeenCalled();
+    expect(service.preflight).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why when the backfill cannot be started', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill({ kind: 'unavailable', message: 'The data lake service is not reachable.' });
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+
+    fireEvent.click(backfillButton());
+
+    expect(await screen.findByText(/The backfill did not finish: The data lake service is not reachable\./)).not.toBeNull();
+    expect(lake.start).not.toHaveBeenCalled();
   });
 
   it('offers the last day the lake serves at once when no backfill can fetch the missing sessions', async () => {

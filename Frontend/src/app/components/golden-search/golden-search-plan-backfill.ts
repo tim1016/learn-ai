@@ -1,20 +1,34 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 
-import { DataLakeService, rootFailureOf, toBackfillDayEvent, tradeBackfillSpec, type BackfillFailure } from '../../shared/data-lake';
+import { DataLakeService, classifyDataLakeError, rootFailureOf, toBackfillDayEvent, tradeBackfillSpec, type BackfillFailure } from '../../shared/data-lake';
 import { BackfillJobRunner, type BackfillJobRun, type BackfillProgressTick } from '../../shared/data-lake/backfill-job-runner';
 import { TickerCatalogService } from '../../shared/ticker-catalog';
 import type { BackfillRemedy } from './golden-search.types';
 
 /** How a backfill ended: the job did not run to its end, or it did, with the provider's reason when a day fetched nothing. */
 type PlanBackfillEnd =
-  | { readonly kind: 'failed'; readonly symbol: string; readonly message: string }
-  | { readonly kind: 'finished'; readonly symbol: string; readonly failure: BackfillFailure | null };
+  | { readonly kind: 'failed'; readonly remedy: BackfillRemedy; readonly message: string }
+  | { readonly kind: 'finished'; readonly remedy: BackfillRemedy; readonly failure: BackfillFailure | null };
 
 /** How the backfill of a refused plan's missing sessions stands: running, or how the last one ended. */
-export type PlanBackfillState = { readonly kind: 'running'; readonly symbol: string; readonly progress: BackfillProgressTick | null } | PlanBackfillEnd;
+export type PlanBackfillState =
+  | {
+      readonly kind: 'running';
+      readonly remedy: BackfillRemedy;
+      /** The server has taken the job, so it can be told to stop. */
+      readonly accepted: boolean;
+      readonly progress: BackfillProgressTick | null;
+    }
+  | PlanBackfillEnd;
 
-function remedyKey(remedy: BackfillRemedy): string {
-  return `${remedy.price_adjustment_mode}|${remedy.symbol}`;
+/** Whether `ran` was a backfill of every session `asked` names: the same symbol and lake tree, over a window that holds `asked`'s. */
+export function covers(ran: BackfillRemedy, asked: BackfillRemedy): boolean {
+  return (
+    ran.symbol === asked.symbol &&
+    ran.price_adjustment_mode === asked.price_adjustment_mode &&
+    ran.start_trading_date_ms <= asked.start_trading_date_ms &&
+    asked.end_trading_date_ms <= ran.end_trading_date_ms
+  );
 }
 
 /**
@@ -31,15 +45,17 @@ export class GoldenSearchPlanBackfill {
   private readonly catalog = inject(TickerCatalogService);
 
   private readonly job = signal<BackfillJobRun | null>(null);
-  private readonly phase = signal<{ readonly kind: 'running'; readonly symbol: string } | PlanBackfillEnd | null>(null);
-  /** The symbol and lake tree of every backfill that ran to an end here. */
-  private readonly ended = signal<ReadonlySet<string>>(new Set());
+  private readonly phase = signal<{ readonly kind: 'running'; readonly remedy: BackfillRemedy } | PlanBackfillEnd | null>(null);
+  /** Every backfill that ran to an end here. */
+  private readonly ended = signal<readonly BackfillRemedy[]>([]);
   /** The form is gone: a job still running keeps writing on the server, unobserved. */
   private left = false;
 
   readonly state = computed<PlanBackfillState | null>(() => {
     const phase = this.phase();
-    return phase?.kind === 'running' ? { ...phase, progress: this.job()?.state().progress ?? null } : phase;
+    if (phase?.kind !== 'running') return phase;
+    const job = this.job();
+    return { ...phase, accepted: job !== null, progress: job?.state().progress ?? null };
   });
 
   constructor() {
@@ -49,33 +65,51 @@ export class GoldenSearchPlanBackfill {
     });
   }
 
-  /** Whether a backfill of `remedy`'s symbol and lake tree has run to an end here. */
+  /** Whether a backfill of every session `remedy` names has run to an end here. */
   tried(remedy: BackfillRemedy): boolean {
-    return this.ended().has(remedyKey(remedy));
+    return this.ended().some((ran) => covers(ran, remedy));
   }
 
   /**
-   * Runs `remedy`'s backfill. Resolves true when it has ended and the lake's
-   * holdings are being read again; false when one was already running, or
-   * the form left before this one ended.
+   * Runs `remedy`'s backfill. Resolves true when it has ended or was
+   * cancelled, and the lake's holdings are being read again; false when one
+   * was already running, or the form left first.
    */
   async fill(remedy: BackfillRemedy): Promise<boolean> {
     if (this.phase()?.kind === 'running') return false;
     this.job.set(null);
-    this.phase.set({ kind: 'running', symbol: remedy.symbol });
+    this.phase.set({ kind: 'running', remedy });
     const end = await this.run(remedy);
-    if (end === null) return false;
-    // The pickers' held days and gaps are read off the lake, which the job just wrote.
+    if (this.left) return false;
+    // The pickers' held days and gaps are read off the lake, which the job wrote to, cancelled or not.
     this.catalog.viewFor(remedy.price_adjustment_mode).reload();
-    this.ended.update((ended) => new Set(ended).add(remedyKey(remedy)));
+    if (end !== null) this.ended.update((ended) => [...ended, remedy]);
     this.phase.set(end);
     return true;
   }
 
-  /** Never rejects: a throw would leave the footer on "running" for what is a failure to report. Null when the form left. */
+  /**
+   * Stops the running backfill: this form stops watching it at once, so a
+   * job whose end never arrives cannot hold the footer, and the server is
+   * then asked to stop it. The sessions it already fetched stay.
+   */
+  async cancel(): Promise<void> {
+    const phase = this.phase();
+    const job = this.job();
+    if (phase?.kind !== 'running' || job === null) return;
+    job.detach();
+    try {
+      await job.cancel();
+    } catch (error) {
+      if (this.left) return;
+      const { message } = classifyDataLakeError(error);
+      this.phase.set({ kind: 'failed', remedy: phase.remedy, message: `The server was not told to stop the backfill, so it may still be running. ${message}` });
+    }
+  }
+
+  /** How the job ended; null when this form stopped watching it. Never rejects: a throw would leave the footer on "running". */
   private async run(remedy: BackfillRemedy): Promise<PlanBackfillEnd | null> {
-    const { symbol } = remedy;
-    const failed = (message: string): PlanBackfillEnd => ({ kind: 'failed', symbol, message });
+    const failed = (message: string): PlanBackfillEnd => ({ kind: 'failed', remedy, message });
     try {
       const defaults = await this.lake.backfillDefaults();
       if (defaults.kind !== 'ok') return failed(defaults.message);
@@ -88,15 +122,13 @@ export class GoldenSearchPlanBackfill {
           failure = rootFailureOf(toBackfillDayEvent(event)?.failures ?? []) ?? failure;
         },
       });
-      if (this.left) {
-        job.detach();
-        return null;
-      }
       this.job.set(job);
+      // The form left while the server was taking the job.
+      if (this.left) job.detach();
       const terminal = await job.terminal;
       switch (terminal.kind) {
         case 'completed':
-          return { kind: 'finished', symbol, failure };
+          return { kind: 'finished', remedy, failure };
         case 'failed':
           return failed(terminal.message);
         case 'cancelled':
@@ -105,7 +137,6 @@ export class GoldenSearchPlanBackfill {
           return null;
       }
     } catch (error) {
-      if (this.left) return null;
       // A refused submission arrives here in the data plane's own words.
       return failed(error instanceof Error ? error.message : String(error));
     }

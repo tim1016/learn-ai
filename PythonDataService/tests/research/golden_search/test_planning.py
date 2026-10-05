@@ -12,7 +12,6 @@ import pytest
 from app.data_lake.adjustment_versions import companion_path
 from app.data_lake.types import trading_date_to_calendar_anchor_ms
 from app.lean_sidecar.trading_calendar import expected_sessions
-from app.research.golden_search import planning
 from app.research.golden_search.budget import estimate
 from app.research.golden_search.budget import review_protocol as review
 from app.research.golden_search.declarations import declaration_for
@@ -276,7 +275,7 @@ def test_missing_sessions_are_a_refusal_in_the_preflight_not_an_error(tmp_path: 
 
 def _pin_today(monkeypatch: pytest.MonkeyPatch, today: date) -> None:
     """What a backfill can fetch depends on the provider's history and the day, so the day is pinned."""
-    monkeypatch.setattr(planning, "now_ms_utc", lambda: et_midnight_ms(today) + 12 * 3_600_000)
+    monkeypatch.setattr(grid_service, "now_ms_utc", lambda: et_midnight_ms(today) + 12 * 3_600_000)
 
 
 def test_a_lake_that_stops_before_the_final_test_does_names_its_backfill_and_the_end_it_can_serve(
@@ -345,6 +344,46 @@ def test_a_backfill_is_named_only_for_missing_sessions_it_can_fetch(
     assert named == (None if window is None else tuple(trading_date_to_calendar_anchor_ms(day) for day in window))
     # The end the lake serves does not depend on what a backfill could fetch.
     assert refusal.field == "final_end_ms"
+
+
+@pytest.mark.parametrize("tail_held", [True, False])
+def test_a_hole_in_the_final_test_names_the_end_before_it_whatever_follows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail_held: bool
+) -> None:
+    """Ending after the lake's last session would leave an earlier hole in the plan; only the end before the first hole is accepted."""
+    _pin_today(monkeypatch, date(2025, 6, 2))
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol, end=date(2025, 4, 8))
+    seed_lake(tmp_path, symbol, start=date(2025, 4, 11), end=date(2025, 4, 30 if tail_held else 17))
+    asked = protocol_from_request(plan_request(symbol))
+
+    [refusal] = review_plan(asked, roots=[tmp_path]).refusals
+
+    assert refusal.code == "DATA_MISSING" and refusal.backfill is not None
+    assert (refusal.backfill.start_trading_date_ms, refusal.backfill.end_trading_date_ms) == (
+        trading_date_to_calendar_anchor_ms(date(2025, 4, 9)),
+        trading_date_to_calendar_anchor_ms(date(2025, 4, 10) if tail_held else date(2025, 4, 30)),
+    )
+    assert (refusal.field, refusal.nearest_valid_ms) == ("final_end_ms", (et_midnight_ms(date(2025, 4, 9)),))
+    assert review_plan(replace(asked, final_end_ms=refusal.nearest_valid_ms[0]), roots=[tmp_path]).refusals == ()
+
+
+def test_a_hole_in_development_and_a_lake_that_stops_early_name_no_date_that_serves_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_today(monkeypatch, date(2025, 6, 2))
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol, end=date(2025, 1, 9))
+    seed_lake(tmp_path, symbol, start=date(2025, 1, 15), end=date(2025, 4, 17))
+
+    [refusal] = review_plan(protocol_from_request(plan_request(symbol)), roots=[tmp_path]).refusals
+
+    # No one date passes both gaps; the backfill's one window reaches from the first to the last missing session.
+    assert (refusal.code, refusal.field, refusal.nearest_valid_ms) == ("DATA_MISSING", None, ())
+    assert refusal.backfill is not None and (refusal.backfill.start_trading_date_ms, refusal.backfill.end_trading_date_ms) == (
+        trading_date_to_calendar_anchor_ms(date(2025, 1, 10)),
+        trading_date_to_calendar_anchor_ms(date(2025, 4, 30)),
+    )
 
 
 def test_a_lake_that_stops_before_the_final_test_starts_names_no_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

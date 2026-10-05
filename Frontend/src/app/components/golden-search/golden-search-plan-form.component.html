@@ -87,6 +87,7 @@
       (run)="lock(true)"
       (jump)="jumpTo($event)"
       (fill)="fill($event)"
+      (cancelFill)="backfill.cancel()"
     />
   } @else if (loadingDefaults()) {
     <p class="hint" role="status">Loading the study defaults…</p>

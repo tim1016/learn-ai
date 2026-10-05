@@ -133,6 +133,47 @@ def test_preflight_refuses_a_window_with_missing_sessions_and_names_them(tmp_pat
     assert "in polygon_split_adjusted mode" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("today", "window", "remedy"),
+    [
+        # The provider serves both missing sessions.
+        (date(2025, 2, 3), (date(2025, 1, 23), date(2025, 1, 24)), "backfill SPY in polygon_split_adjusted mode and launch again"),
+        # The market has not reached the second.
+        (
+            date(2025, 1, 23),
+            (date(2025, 1, 23), date(2025, 1, 23)),
+            "backfill SPY in polygon_split_adjusted mode for 2025-01-23; no backfill can fetch the other missing sessions: "
+            "the provider serves 2020-01-25 through 2025-01-23",
+        ),
+        # Five years on the provider's history starts on the second.
+        (
+            date(2030, 1, 22),
+            (date(2025, 1, 24), date(2025, 1, 24)),
+            "backfill SPY in polygon_split_adjusted mode for 2025-01-24; no backfill can fetch the other missing sessions: "
+            "the provider serves 2025-01-24 through 2030-01-22",
+        ),
+        # Two days later it starts after both.
+        (date(2030, 1, 24), None, "no backfill can fetch these sessions: the provider serves 2025-01-26 through 2030-01-24"),
+    ],
+)
+def test_a_missing_data_refusal_prescribes_and_carries_a_backfill_only_for_sessions_the_provider_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, today: date, window: tuple[date, date] | None, remedy: str
+) -> None:
+    """The sentence and the backfill a caller can run are one read of what the provider serves, so they cannot disagree."""
+    for day in SESSIONS[:-2]:
+        seed_store_day(tmp_path, "SPY", day)
+    monkeypatch.setattr(service, "now_ms_utc", lambda: service.et_midnight_ms(today))
+
+    with pytest.raises(service.GridSearchRefusal) as excinfo:
+        service.preflight(_spec(), roots=[tmp_path])
+
+    assert excinfo.value.code == "DATA_MISSING"
+    assert str(excinfo.value).endswith(f"(read from the polygon_split_adjusted lake); {remedy}")
+    assert excinfo.value.backfill == (
+        None if window is None else service.SessionsBackfill(symbol="SPY", mode="polygon_split_adjusted", first=window[0], last=window[1])
+    )
+
+
 def test_preflight_refuses_an_unreadable_zip_by_path_without_prescribing_a_backfill(lake: Path) -> None:
     """A backfill does not repair a file already on disk, so the refusal names it and stops there (#2489)."""
     damaged = lake / "equity" / "usa" / "minute" / "spy" / f"{SESSIONS[-1].strftime('%Y%m%d')}_trade.zip"
