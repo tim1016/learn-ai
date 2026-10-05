@@ -42422,6 +42422,20 @@
             "title": "Gotchas",
             "type": "array"
           },
+          "lean_data_policy_parameter_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lean Data Policy Parameter Names",
+            "type": "array"
+          },
+          "lean_parameter_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lean Parameter Names",
+            "type": "array"
+          },
           "lean_twin": {
             "anyOf": [
               {

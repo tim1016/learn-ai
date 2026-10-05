@@ -37,19 +37,51 @@ const STRATEGY = {
   strategy_bars: { timespan: "minute", multiplier: 15, parameter: null },
 } satisfies StrategyInfo;
 
-const PARAMETERIZED_STRATEGY = {
+const EMA_PARAMS_SCHEMA = {
+  properties: {
+    symbol: { type: "string", default: "SPY" },
+    gap: { type: "number", default: 0.2 },
+    gap_bps: { type: "number", default: 0 },
+    rsi_min: { type: "number", default: 50 },
+    rsi_max: { type: "number", default: 70 },
+    fast_period: { type: "integer", default: 5 },
+    slow_period: { type: "integer", default: 10 },
+    hold_bars: { type: "integer", default: 5 },
+  },
+};
+
+/** Its twin reads the four entry gates and hardcodes the EMA lengths and the hold. */
+const EMA_SIGNAL_STRATEGY = {
   ...STRATEGY,
-  name: "ema_crossover_2_bps",
-  display_name: "EMA Crossover 2 bps",
-  lean_twin: "ema_crossover_2_bps",
+  params_schema: EMA_PARAMS_SCHEMA,
+  lean_parameter_names: ["gap", "gap_bps", "rsi_min", "rsi_max"],
+} satisfies StrategyInfo;
+
+/** Its twin reads all seven settings. */
+const EMA_PREVIOUS_STRATEGY = {
+  ...STRATEGY,
+  name: "ema_previous_crossover",
+  display_name: "EMA Previous Crossover",
+  lean_twin: "ema_previous_crossover",
+  params_schema: EMA_PARAMS_SCHEMA,
+  lean_parameter_names: ["gap", "gap_bps", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars"],
+} satisfies StrategyInfo;
+
+/** Its twin takes no strategy parameters, and reads the bar cadence from the data policy. */
+const RSI_STRATEGY = {
+  ...STRATEGY,
+  name: "rsi_mean_reversion",
+  display_name: "RSI Mean Reversion",
+  lean_twin: "rsi_mean_reversion",
   params_schema: {
     properties: {
       symbol: { type: "string", default: "SPY" },
-      gap_bps: { type: "number", default: 2 },
-      rsi_min: { type: "number", default: 50 },
-      rsi_max: { type: "number", default: 70 },
+      resolution_minutes: { type: "integer", default: 15 },
+      window: { type: "integer", default: 14 },
     },
   },
+  strategy_bars: { timespan: "minute", multiplier: 15, parameter: "resolution_minutes" },
+  lean_data_policy_parameter_names: ["resolution_minutes"],
 } satisfies StrategyInfo;
 
 describe("StrategyLab configuration and runner", () => {
@@ -318,35 +350,106 @@ describe("StrategyLab configuration and runner", () => {
     );
   });
 
-  it("refuses a LEAN run whose changed parameters the template cannot take", async () => {
-    // The parameterized LEAN twin went away with the `ema_crossover_2_bps`
-    // registration in the signal/asset decoupling sweep, so the bundled
-    // template hardcodes its own gates. Running anyway would persist an
-    // experiment whose results describe different rules than the screen
-    // (#1865 review) -- a silent misattribution, so refuse instead.
-    config.strategies.set([PARAMETERIZED_STRATEGY]);
-    config.selectStrategy(PARAMETERIZED_STRATEGY.name);
-    config.updateParameter("gap_bps", "4", "number");
-    config.engine.set("lean");
+  describe("a LEAN-only run with changed settings (#2904)", () => {
+    function selectForLean(strategy: StrategyInfo): void {
+      config.strategies.set([strategy]);
+      config.selectStrategy(strategy.name);
+      config.engine.set("lean");
+    }
 
-    await runner.run();
+    it("sends LEAN every setting the twin reads, changed or not", async () => {
+      selectForLean(EMA_PREVIOUS_STRATEGY);
+      config.updateParameter("hold_bars", "8", "integer");
 
-    expect(startJob).not.toHaveBeenCalled();
-    expect(runner.runError()).toContain("gap_bps");
-  });
+      await runner.run();
 
-  it("still sends the template when every parameter is left at its default", async () => {
-    // Selecting a strategy materializes all defaults into paramValues, so a
-    // presence test here would refuse every unedited run.
-    config.strategies.set([PARAMETERIZED_STRATEGY]);
-    config.selectStrategy(PARAMETERIZED_STRATEGY.name);
-    config.engine.set("lean");
+      expect(startJob.mock.calls[0]?.[1]?.request).toEqual(expect.objectContaining({
+        template: "ema_previous_crossover",
+        strategy_parameters: {
+          gap: 0.2, gap_bps: 0, rsi_min: 50, rsi_max: 70, fast_period: 5, slow_period: 10, hold_bars: 8,
+        },
+      }));
+    });
 
-    await runner.run();
+    it("sends only the settings the twin reads when it hardcodes the rest", async () => {
+      selectForLean(EMA_SIGNAL_STRATEGY);
+      config.updateParameter("gap", "0.35", "number");
 
-    const request = startJob.mock.calls[0]?.[1]?.request;
-    expect(request).toHaveProperty("template");
-    expect(request).not.toHaveProperty("strategy_parameters");
+      await runner.run();
+
+      expect(startJob.mock.calls[0]?.[1]?.request.strategy_parameters).toEqual({
+        gap: 0.35, gap_bps: 0, rsi_min: 50, rsi_max: 70,
+      });
+    });
+
+    it("refuses a changed setting the twin does not read, and names only that one", async () => {
+      // Running anyway would persist an experiment whose results describe
+      // different rules than the screen (#1865 review).
+      selectForLean(EMA_SIGNAL_STRATEGY);
+      config.updateParameter("rsi_min", "45", "number");
+      config.updateParameter("fast_period", "8", "integer");
+
+      await runner.run();
+
+      expect(startJob).not.toHaveBeenCalled();
+      expect(runner.runError()).toContain("fast_period");
+      expect(runner.runError()).not.toContain("rsi_min");
+    });
+
+    it("refuses a setting the twin reads once it is left blank, so LEAN never runs its own default unseen", async () => {
+      selectForLean(EMA_PREVIOUS_STRATEGY);
+      config.updateParameter("hold_bars", "", "integer");
+
+      await runner.run();
+
+      expect(startJob).not.toHaveBeenCalled();
+      expect(runner.runError()).toContain("hold_bars");
+    });
+
+    it("lets a changed bar cadence through, because the data policy carries it to the twin", async () => {
+      selectForLean(RSI_STRATEGY);
+      config.updateParameter("resolution_minutes", "30", "integer");
+
+      await runner.run();
+
+      const request = startJob.mock.calls[0]?.[1]?.request;
+      expect(request.data_policy.strategy_bars).toEqual({ timespan: "minute", multiplier: 30 });
+      expect(request).not.toHaveProperty("strategy_parameters");
+    });
+
+    it("refuses a bar cadence the data policy would not carry", async () => {
+      // The policy falls back to the declared 15 minutes for a cadence it
+      // cannot use, so LEAN would consolidate at 15 while the screen says 0.
+      selectForLean(RSI_STRATEGY);
+      config.updateParameter("resolution_minutes", "0", "integer");
+
+      await runner.run();
+
+      expect(startJob).not.toHaveBeenCalled();
+      expect(runner.runError()).toContain("resolution_minutes");
+    });
+
+    it("refuses every changed setting of a twin the catalog lists no settings for", async () => {
+      selectForLean(RSI_STRATEGY);
+      config.updateParameter("window", "20", "integer");
+
+      await runner.run();
+
+      expect(startJob).not.toHaveBeenCalled();
+      expect(runner.runError()).toContain("window");
+    });
+
+    it("still sends the template when every parameter is left at its default", async () => {
+      // Selecting a strategy materializes all defaults into paramValues, so a
+      // presence test here would refuse every unedited run.
+      selectForLean(RSI_STRATEGY);
+
+      await runner.run();
+
+      const request = startJob.mock.calls[0]?.[1]?.request;
+      expect(request).toHaveProperty("template");
+      expect(request).not.toHaveProperty("strategy_parameters");
+    });
   });
 
   it("runs browser-edited QCAlgorithm source without requiring template parameters", async () => {

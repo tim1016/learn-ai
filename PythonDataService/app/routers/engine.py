@@ -81,6 +81,11 @@ class StrategyInfo(BaseModel):
     # The LEAN trusted template that validates this strategy's execution
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
+    # The settings that twin reads, so a LEAN-only run can send them and
+    # refuse only the rest (#2904): the first list travels as
+    # ``strategy_parameters``, the second through the data policy.
+    lean_parameter_names: list[str] = Field(default_factory=list)
+    lean_data_policy_parameter_names: list[str] = Field(default_factory=list)
     strategy_bars: StrategyBarCadenceInfo
     # Sweep eligibility (PRD #1926): the one structured answer Recency Chart,
     # Grid Search and Walk-Forward all derive from — flag, reason codes, and
@@ -123,6 +128,8 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 algorithm_pseudocode=reg.algorithm_pseudocode,
                 gotchas=list(reg.gotchas),
                 lean_twin=reg.lean_twin,
+                lean_parameter_names=list(reg.lean_parameter_names),
+                lean_data_policy_parameter_names=list(reg.lean_data_policy_parameter_names),
                 strategy_category=reg.strategy_category,
                 experimental_notice=reg.experimental_notice,
                 sweep_eligibility=SweepEligibilityInfo(**eligibility.as_dict()),

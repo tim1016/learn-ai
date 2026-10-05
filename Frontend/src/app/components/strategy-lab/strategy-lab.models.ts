@@ -42,6 +42,11 @@ export interface StrategyInfo {
   algorithm_pseudocode?: string;
   gotchas?: string[];
   lean_twin?: string | null;
+  /** Settings the LEAN twin takes as `strategy_parameters`. A catalog that
+   *  predates the field lists none, so every changed setting is refused. */
+  lean_parameter_names?: string[];
+  /** Settings the LEAN twin reads from the data policy instead. */
+  lean_data_policy_parameter_names?: string[];
   strategy_bars: {
     timespan: "minute" | "day";
     multiplier: number;

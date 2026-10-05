@@ -355,25 +355,25 @@ export class StrategyLabRunner {
       ]);
       const configuredSource = this.config.customLeanSource();
       const customSource = configuredSource?.trim() ? configuredSource : null;
-      // No registered strategy declares a LEAN twin that takes runtime
-      // parameters any more: the bundled template hardcodes its own gates.
-      // So a changed parameter cannot reach LEAN, and running anyway would
-      // persist an experiment whose results describe different rules than
-      // the configuration on screen. Refuse instead — a custom source is the
-      // one way to express parameters the template cannot take.
-      const changed = this.config.changedParameterNames();
-      if (customSource === null && changed.length > 0) {
+      // A changed parameter the bundled template would ignore cannot run:
+      // the persisted experiment would describe different rules than the
+      // configuration on screen. Refuse instead — a custom source is the one
+      // way to express parameters the template cannot take.
+      const ignored = this.config.parametersLeanWouldIgnore();
+      if (customSource === null && ignored.length > 0) {
+        const one = ignored.length === 1;
         this.fail(
           "LEAN cannot run these parameters",
-          `The bundled LEAN template hardcodes its own gates, so ${changed.join(", ")} ` +
-            "would not reach it. Restore the defaults, or supply a custom LEAN source " +
-            "that takes them.",
+          `The bundled LEAN template would ignore the ${one ? "value" : "values"} set for ` +
+            `${ignored.join(", ")} and run its own. Restore ${one ? "its default" : "their defaults"}, ` +
+            `or supply a custom LEAN source that takes ${one ? "it" : "them"}.`,
         );
         this.updateRunningState();
         return;
       }
+      const strategyParameters = this.config.leanStrategyParameters();
       const algorithm = customSource === null
-        ? { template }
+        ? { template, ...(strategyParameters === null ? {} : { strategy_parameters: strategyParameters }) }
         : { algorithm_source: customSource };
       const leanJobId = await this.jobs.startJob("lean_engine_run", {
         request: {

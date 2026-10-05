@@ -23018,6 +23018,10 @@ export interface components {
             experimental_notice?: string | null;
             /** Gotchas */
             gotchas?: string[];
+            /** Lean Data Policy Parameter Names */
+            lean_data_policy_parameter_names?: string[];
+            /** Lean Parameter Names */
+            lean_parameter_names?: string[];
             /** Lean Twin */
             lean_twin?: string | null;
             /** Name */

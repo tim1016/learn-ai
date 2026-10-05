@@ -13,6 +13,7 @@ from app.lean_sidecar.trusted_templates import (
     TRUSTED_TEMPLATE_DEFINITIONS,
     TrustedTemplate,
 )
+from app.routers.lean_sidecar import _STRATEGY_PARAMETER_MODELS
 from app.services.strategy_lean_source_service import resolve_strategy_lean_source
 
 
@@ -189,3 +190,25 @@ def test_untwinned_list_does_not_name_an_unregistered_strategy() -> None:
     phantom = {name for name in _STRATEGIES_WITHOUT_A_LEAN_TWIN if name not in _STRATEGY_REGISTRY}
 
     assert not phantom, f"unknown strategies in the exemption list: {sorted(phantom)}"
+
+
+def test_each_twin_takes_exactly_the_settings_its_strategy_forwards() -> None:
+    """A strategy's ``lean_parameter_names`` must be its template's settings model.
+
+    Strategy Lab and the parity companion both send exactly the listed names
+    as ``strategy_parameters``. The router refuses a name the template's model
+    lacks, and a model field the list lacks would run at the template's
+    default while the strategy runs the configured value.
+    """
+    twinned = {
+        name: registration
+        for name, registration in _STRATEGY_REGISTRY.items()
+        if registration.lean_twin is not None
+    }
+
+    assert any(registration.lean_parameter_names for registration in twinned.values())
+
+    for name, registration in twinned.items():
+        model = _STRATEGY_PARAMETER_MODELS.get(TrustedTemplate(registration.lean_twin))
+        accepted = set(model.model_fields) if model is not None else set()
+        assert set(registration.lean_parameter_names) == accepted, name
