@@ -119,9 +119,11 @@ def test_preflight_refuses_an_oversized_workload_on_total_backtests(lake: Path) 
     assert "5050 backtests exceed the limit of 5000" in str(excinfo.value)
 
 
-def test_preflight_refuses_a_window_with_missing_sessions_and_names_them(tmp_path: Path) -> None:
+def test_preflight_refuses_a_window_with_missing_sessions_and_names_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for day in SESSIONS[:-2]:
         seed_store_day(tmp_path, "SPY", day)
+    # The remedy depends on what the provider still serves, so the day is pinned.
+    monkeypatch.setattr(service, "now_ms_utc", lambda: service.et_midnight_ms(date(2025, 2, 3)))
 
     with pytest.raises(service.GridSearchRefusal) as excinfo:
         service.preflight(_spec(), roots=[tmp_path])

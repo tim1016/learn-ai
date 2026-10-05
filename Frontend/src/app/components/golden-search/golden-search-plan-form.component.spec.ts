@@ -990,7 +990,7 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     const said = await screen.findByText(/The backfill finished, and the lake still does not hold every session this plan reads\./);
     expect(said.textContent).toContain('Polygon returned no bars for SPY on 2026-03-23.');
-    expect(said.textContent).toContain('Pick a study range the lake holds, or run the backfill again.');
+    expect(screen.getByText('Pick a study range the lake holds, or run the backfill again.')).not.toBeNull();
     expect(backfillButton().disabled).toBe(false);
 
     service.defaults.mockResolvedValueOnce(defaults({ final_start_ms: etMidnightMs('2025-12-21'), development_end_ms: etMidnightMs('2025-12-21'), final_end_ms: etMidnightMs('2026-03-21') }));
@@ -1017,7 +1017,7 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     lake.end({ kind: 'failed', code: 'provider_entitlement_error', message: 'The provider refused the request.' });
 
-    expect(await screen.findByText(/The backfill did not finish: The provider refused the request\. Pick a study range the lake holds, or run the backfill again\./)).not.toBeNull();
+    expect(await screen.findByText(/The backfill did not finish: The provider refused the request\./)).not.toBeNull();
     expect(backfillButton().disabled).toBe(false);
   });
 
@@ -1068,6 +1068,26 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(screen.queryByText(/The backfill/)).toBeNull();
     // A cancelled backfill was not tried: the range offers nothing in its place yet.
     expect(screen.queryByRole('button', { name: /^End the range on/ })).toBeNull();
+  });
+
+  it('says so when the server could not be told to stop a cancelled backfill', async () => {
+    const service = fakeService();
+    service.preflight.mockResolvedValue(missingSessions());
+    const lake = fakeBackfill();
+    lake.cancel.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, statusText: 'Service Unavailable' }));
+    const { view } = await renderForm(service, { pool: LAGGING_POOL, providers: lake.providers });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    fireEvent.click(backfillButton());
+    const cancel = (await screen.findByRole('button', { name: 'Cancel backfill' })) as HTMLButtonElement;
+    await waitFor(() => expect(cancel.disabled).toBe(false));
+
+    fireEvent.click(cancel);
+
+    // The plan is checked again all the same, and the footer still says what the cancel could not do.
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(backfillButton().disabled).toBe(false));
+    expect(screen.getByText(/The backfill did not finish: it was cancelled here, but the server could not be told to stop it, so it may still be running\./)).not.toBeNull();
   });
 
   it('stops watching a running backfill when the form goes, and checks nothing again', async () => {

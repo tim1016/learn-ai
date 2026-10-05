@@ -83,8 +83,11 @@ export class GoldenSearchPlanBackfill {
     if (this.left) return false;
     // The pickers' held days and gaps are read off the lake, which the job wrote to, cancelled or not.
     this.catalog.viewFor(remedy.price_adjustment_mode).reload();
-    if (end !== null) this.ended.update((ended) => [...ended, remedy]);
-    this.phase.set(end);
+    // A run this form stopped watching was cancelled, and what the footer then says is `cancel`'s to write.
+    if (end !== null) {
+      this.ended.update((ended) => [...ended, remedy]);
+      this.phase.set(end);
+    }
     return true;
   }
 
@@ -97,13 +100,15 @@ export class GoldenSearchPlanBackfill {
     const phase = this.phase();
     const job = this.job();
     if (phase?.kind !== 'running' || job === null) return;
+    this.phase.set(null);
     job.detach();
     try {
       await job.cancel();
     } catch (error) {
-      if (this.left) return;
+      // Nothing to tell a form that has gone, or one already showing a newer backfill.
+      if (this.left || this.phase() !== null) return;
       const { message } = classifyDataLakeError(error);
-      this.phase.set({ kind: 'failed', remedy: phase.remedy, message: `The server was not told to stop the backfill, so it may still be running. ${message}` });
+      this.phase.set({ kind: 'failed', remedy: phase.remedy, message: `it was cancelled here, but the server could not be told to stop it, so it may still be running. ${message}` });
     }
   }
 
