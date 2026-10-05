@@ -8,7 +8,8 @@ const { spawnSync } = require('node:child_process');
 // frontend-test-shard matrix locally: reject a half-set shard env pair
 // instead of silently falling back to the full suite, auto-append
 // --runner-config=vitest.ci.config.ts when both shard vars are set (unless
-// the caller already passed a --runner-config), and default
+// the caller already passed a --runner-config), run a shard's specs without
+// the guard scripts CI runs once elsewhere (#2882), and default
 // NG_BUILD_MAX_WORKERS=2 on the spawned child. It also holds a run to two
 // time limits (#2873): past the two-minute target the run keeps its own exit
 // code and says so, and past the three-minute limit it is killed and fails.
@@ -46,13 +47,11 @@ function makeFakeNpm(captureFile, finishedFile) {
   return binDir;
 }
 
-// Vars this guard drives per test case. CI's frontend-test-shard job sets
-// TEST_SHARD_INDEX/TEST_SHARD_COUNT at the job level and records
-// CI_JOB_STARTED_AT_MS as its first step, and test:guards runs inside the
-// wrapper's own spawned child in real usage — so this guard's own process can
-// inherit them. Strip them from the base env before layering on each case's
-// explicit overrides, or a "neither set" case would silently inherit the
-// host's shard vars, and its job's start, on CI.
+// Vars this guard drives per test case. This guard's own process can inherit
+// them: a developer reproducing a CI shard exports the shard pair, and a CI
+// job may set any of them at the job level. Strip them from the base env
+// before layering on each case's explicit overrides, or a "neither set" case
+// would silently inherit the host's shard vars, and its job's start.
 const CASE_DRIVEN_ENV_VARS = [
   'TEST_SHARD_INDEX',
   'TEST_SHARD_COUNT',
@@ -122,7 +121,8 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
   assert.equal(capture, null, 'a half-set shard env pair (other side) must never spawn npm');
 }
 
-// Both shard vars set: auto-append the CI runner config to the forwarded args.
+// Both shard vars set: auto-append the CI runner config to the forwarded
+// args, and run the specs only. The guards are not a shard's to run.
 {
   const { result, capture } = runWrapper({
     env: { TEST_SHARD_INDEX: '1', TEST_SHARD_COUNT: '6', FAKE_NPM_EXIT_CODE: '0' },
@@ -131,7 +131,7 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
   assert.ok(capture, 'both shard vars set must spawn npm');
   assert.deepEqual(capture.argv, [
     'run',
-    'test:unbounded',
+    'test:specs',
     '--',
     '--runner-config=vitest.ci.config.ts',
   ]);
@@ -145,11 +145,11 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
     env: { TEST_SHARD_INDEX: '1', TEST_SHARD_COUNT: '6' },
   });
   assert.ok(capture, 'both shard vars set (custom runner-config) must spawn npm');
-  assert.deepEqual(capture.argv, ['run', 'test:unbounded', '--', '--runner-config=custom.config.ts']);
+  assert.deepEqual(capture.argv, ['run', 'test:specs', '--', '--runner-config=custom.config.ts']);
 }
 
 // Neither shard var set: forwarded args pass through unchanged, no runner
-// config is appended (the plain, unsharded local run).
+// config is appended, and the guards run first (the plain, unsharded local run).
 {
   const { capture } = runWrapper({ args: ['--coverage'] });
   assert.ok(capture, 'the unsharded run must still spawn npm');

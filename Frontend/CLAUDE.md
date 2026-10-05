@@ -27,6 +27,7 @@ Frontend tests are **independent** — no backend or database needed.
 - Test behavior, not implementation — assert rendered output, not signal values
 - Spec files co-located: `*.component.spec.ts`, `*.service.spec.ts`
 - Locally, run one exact spec (`npx ng test --include='src/app/<path>/<name>.spec.ts'`); CI runs the rest. To reproduce a failing CI shard, run `TEST_SHARD_INDEX=<n> TEST_SHARD_COUNT=6 npm test` (the `frontend-test-shard` matrix in `.github/workflows/ci.yml`); `scripts/run-test-budget.cjs` then adds `--runner-config=vitest.ci.config.ts`. `NG_BUILD_MAX_WORKERS` defaults to `2` (overridable).
+- A CI shard runs each spec in a VM context (`pool: "vmThreads"` in `vitest.ci.config.ts`); a local `ng test` runs each in its own worker. A spec that passes locally and fails only in CI is reproduced with the shard command above. A shard runs the specs only: the guard scripts (`npm run test:guards`) run once in CI's Frontend Lint job, and first in an unsharded `npm test`.
 
 ## Gotchas
 
