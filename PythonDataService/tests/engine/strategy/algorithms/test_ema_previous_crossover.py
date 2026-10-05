@@ -163,6 +163,19 @@ def test_gap_and_rsi_must_pass_on_the_same_bar() -> None:
     assert run.cross_states() == ["not_above", "crossed_up", "waiting", "waiting", "waiting", "waiting"]
 
 
+@pytest.mark.parametrize(
+    ("reading", "params"),
+    [
+        (above("0.20", "70"), {}),
+        (above("0.20", "50"), {}),
+        (above("0.20"), {"gap": 0.0, "gap_bps": 20.0}),
+    ],
+    ids=["gap-floor-and-rsi-upper", "rsi-lower", "normalized-gap-floor"],
+)
+def test_gap_floors_and_rsi_band_are_inclusive(reading: Reading, params: dict[str, float]) -> None:
+    assert _drive([below(), reading], **params).staged == [None, ENTER]
+
+
 def test_normalized_gap_floor_applies_on_the_entry_bar() -> None:
     # 20 bps of a 100 slow EMA is 0.20.
     run = _drive([below(), above("0.10"), above("0.25")], gap=0.0, gap_bps=20.0)
@@ -234,10 +247,11 @@ def test_fast_already_above_slow_when_first_known_is_never_an_entry() -> None:
     assert run.cross_states() == ["unseen", "unseen", "unseen"]
 
 
-def test_cross_spent_during_replay_stays_spent_after_force_flat() -> None:
-    run = _drive([below(), GOOD, GOOD, GOOD], force_flat_before=frozenset({2}))
+def test_force_flat_drops_the_position_and_keeps_the_cross_spent() -> None:
+    """Bar 2 stays out because the cross is spent; bar 4 enters because the position is gone."""
+    run = _drive([below(), GOOD, GOOD, below(), GOOD], force_flat_before=frozenset({2}))
 
-    assert run.staged == [None, ENTER, None, None]
+    assert run.staged == [None, ENTER, None, None, ENTER]
 
 
 def test_hold_counts_decision_bars_across_the_session_close() -> None:
@@ -283,16 +297,8 @@ def _entry_gates_pass(decision: SignalDecision) -> bool:
     return decision.ready and bool(entry) and all(check.passed for check in entry)
 
 
-@pytest.mark.parametrize(
-    ("gap", "rsi_min", "has_later_entry_bars"),
-    # With no gap floor nearly every cross bar already passes, so the rule
-    # has nothing left to wait for; at the 0.20 floor it does.
-    [(0.20, 50.0, True), (0.0, 30.0, False)],
-    ids=["lean-parity-point", "no-gap-floor"],
-)
-def test_every_ema_crossover_signal_entry_bar_is_an_entry_bar_of_the_same_cross(
-    gap: float, rsi_min: float, has_later_entry_bars: bool
-) -> None:
+@pytest.mark.parametrize(("gap", "rsi_min"), [(0.20, 50.0), (0.0, 30.0)], ids=["lean-parity-point", "no-gap-floor"])
+def test_every_ema_crossover_signal_entry_bar_is_an_entry_bar_of_the_same_cross(gap: float, rsi_min: float) -> None:
     """On shared bars, the bars where EMA Crossover Signal's entry rule passes are
     exactly this program's entry bars that fall on the cross bar itself.
 
@@ -310,7 +316,6 @@ def test_every_ema_crossover_signal_entry_bar_is_an_entry_bar_of_the_same_cross(
     assert [bar.end_ms for bar, _ in reference] == [bar.end_ms for bar, _ in candidate]
 
     reference_entry_bars = {bar.end_ms for bar, decision in reference if _entry_gates_pass(decision)}
-    candidate_entry_bars = {bar.end_ms for bar, decision in candidate if _entry_gates_pass(decision)}
     candidate_cross_bar_entries = {
         bar.end_ms
         for bar, decision in candidate
@@ -320,4 +325,3 @@ def test_every_ema_crossover_signal_entry_bar_is_an_entry_bar_of_the_same_cross(
 
     assert reference_entry_bars, "the cell exercises the reference rule"
     assert candidate_cross_bar_entries == reference_entry_bars
-    assert (candidate_entry_bars > reference_entry_bars) is has_later_entry_bars

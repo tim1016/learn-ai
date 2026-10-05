@@ -3,21 +3,22 @@
 The rule is the owner's (#2902) and has no outside reference, so the oracle
 is LEAN's execution of the trusted template: LEAN consolidates the minute
 bars, computes the EMAs and the RSI, applies the same one-entry-bar-per-cross
-rule, and fills the orders. This pins that run so indicator, consolidation,
-rule or template drift fails CI.
+rule, and fills the orders. This pins that run so indicator, consolidation or
+rule drift fails CI, and an edited template fails until LEAN is rerun.
 
 The input is the committed cross-engine cell's own minute bars. The fixture
 records their hash because the generator refused to write unless LEAN
 reported receiving exactly those bars.
 
-Accepted divergence -- dividends. In raw mode LEAN pays a cash dividend on a
-position held over an ex-date; the Python engine pays none (#2903). The
+Accepted divergence -- dividends (owner, 2026-10-05). In raw mode LEAN pays a
+cash dividend on a position held over an ex-date; the Python engine pays none
+(#2903). The
 SPY cell holds 157 shares over the 2026-03-20 ex-date, so LEAN's cash is
 $282.60 higher from then on and some later orders are one share larger: a
 QUANTITY_MISMATCH with a known cause. Nothing is loosened for it. The test
-credits each dividend the fixture records to the engine's cash at the open
-after its ex-date and then requires every fill, fee and the final equity to
-match exactly. The credit is necessary (without it the SPY cell diverges at
+credits each dividend the fixture records to the engine's cash on the
+ex-date's first minute bar and then requires every fill, fee and the final
+equity to match exactly. The credit is necessary (without it the SPY cell diverges at
 its 141st fill) and sufficient, so the dividend is the whole of the
 difference. The QQQ cell collects no dividend and is credited nothing.
 """
@@ -43,6 +44,7 @@ from app.engine.strategy.programs.ema_previous_crossover import (
     EmaPreviousCrossoverParams,
     build_ema_previous_crossover_program,
 )
+from app.lean_sidecar.trusted_samples.ema_previous_crossover import EMA_PREVIOUS_CROSSOVER_SOURCE
 from app.services.spec_strategy_runner import InMemoryDataReader
 from scripts.generate_signal_program_trace_corpus import _minute_bars
 
@@ -56,6 +58,13 @@ _CELL_IDS = sorted(_INPUT["cells"])
 # agree exactly; the bound is the one every strategy-parity fixture states.
 PRICE_ATOL = Decimal("0.000001")
 PNL_ATOL = Decimal("0.000001")
+# LEAN reports its own end equity to the cent.
+LEAN_END_EQUITY_ATOL = Decimal("0.005")
+
+
+def test_fixture_is_the_committed_twin_s_output() -> None:
+    """The fills are only this template's while its source is the one LEAN ran."""
+    assert hashlib.sha256(EMA_PREVIOUS_CROSSOVER_SOURCE.encode("utf-8")).hexdigest() == _OUTPUT["algorithm_source_sha256"]
 
 
 @pytest.mark.parametrize("cell_id", _CELL_IDS)
@@ -92,6 +101,7 @@ def test_ema_previous_crossover_matches_lean_fills_and_equity(cell_id: str) -> N
         assert actual.fee == Decimal(expected["order_fee"])
         assert abs(actual.fill_price - Decimal(expected["fill_price"])) <= PRICE_ATOL
     assert abs(result.final_equity - Decimal(oracle["final_equity"])) <= PNL_ATOL
+    assert abs(result.final_equity - Decimal(oracle["lean_reported_end_equity"])) <= LEAN_END_EQUITY_ATOL
 
 
 def _credit_lean_dividends(strategy: Strategy, dividends: list[dict]) -> None:

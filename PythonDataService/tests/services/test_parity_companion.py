@@ -108,6 +108,14 @@ def test_new_parity_group_id_is_run_id_safe():
         ("ema_crossover_signal", {"params": {"symbol": "SPY", "fast_period": 7}}, REASON_PARAMETERS_UNREPRESENTABLE),
         ("ema_crossover_signal", {"params": {"symbol": "SPY", "slow_period": 20}}, REASON_PARAMETERS_UNREPRESENTABLE),
         ("ema_crossover_signal", {"params": {"symbol": "SPY", "hold_bars": 6}}, REASON_PARAMETERS_UNREPRESENTABLE),
+        # EMA Previous Crossover's twin reads all seven settings (#2902), so
+        # changed lengths and a changed hold stay comparable too.
+        ("ema_previous_crossover", {}, None),
+        (
+            "ema_previous_crossover",
+            {"params": {"symbol": "SPY", "gap": 0.1, "rsi_min": 45.0, "fast_period": 7, "slow_period": 20, "hold_bars": 6}},
+            None,
+        ),
         # A changed cadence is representable for rsi_mean_reversion, whose
         # template consolidates at whatever bar_minutes the forwarded data
         # policy carries; the policy carries the executed period, so both
@@ -210,6 +218,40 @@ def test_non_default_ema_gates_reach_the_companion_request(verdict_writes) -> No
         validated_parameters=parameters,
     )
 
+    assert launched["request"]["strategy_parameters"] == parameters
+    assert not verdict_writes["failed"]
+
+
+@respx.mock
+def test_every_ema_previous_crossover_setting_reaches_its_own_template(verdict_writes) -> None:
+    launched: dict = {}
+
+    def _capture_job(request: httpx.Request) -> httpx.Response:
+        launched.update(json.loads(request.content))
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        TrustedRunRequestModel.model_validate(launched["request"])
+        return httpx.Response(202, json={"id": "job-previous-crossover"})
+
+    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
+    parameters = {
+        "gap": 0.35,
+        "gap_bps": 2.5,
+        "rsi_min": 42.0,
+        "rsi_max": 68.0,
+        "fast_period": 7,
+        "slow_period": 20,
+        "hold_bars": 6,
+    }
+    dispatch_parity_companion(
+        registration=_STRATEGY_REGISTRY["ema_previous_crossover"],
+        request=_request(strategy_name="ema_previous_crossover", params={"symbol": "SPY", **parameters}),
+        parity_group_id="pg-previous-crossover",
+        left_execution_id=45,
+        validated_parameters=parameters,
+    )
+
+    assert launched["request"]["template"] == "ema_previous_crossover"
     assert launched["request"]["strategy_parameters"] == parameters
     assert not verdict_writes["failed"]
 

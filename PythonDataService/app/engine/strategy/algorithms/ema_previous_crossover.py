@@ -30,11 +30,9 @@ fast found above slow on the first bar both EMAs are ready is not a cross.
 A cross seen while RSI is still warming up is open and can enter once RSI is
 ready. No intent is emitted before all three indicators are ready.
 
-Accepted divergence from the LEAN twin: none in the decisions. In raw mode
-LEAN pays a cash dividend on a position held over an ex-date and the backtest
-engine pays none (#2903), so after such a hold LEAN's orders are sized from
-more cash. The parity test credits the recorded dividend and then matches
-every fill and the final equity exactly.
+Divergence from the LEAN twin: none in the decisions, which read prices
+alone. The parity test states how any difference in the two engines' cash
+accounting is handled before it compares order sizes and equity.
 
 Trade logging: trades are logged in ``on_order_event`` from actual fill
 prices and times. The indicator snapshot is captured at signal time, because
@@ -157,7 +155,8 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         self._fast_was_above_slow: bool = False
         self._cross: _Cross = _Cross.NONE
 
-        # Position custody, changed only when a decision is committed.
+        # Position lifecycle. The position opens and closes only when a
+        # decision is committed; the countdown also steps on each held bar.
         self._in_position: bool = False
         self._bars_until_exit: int = 0
         self._pending_entry: _PendingEntry | None = None
@@ -271,10 +270,10 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
     def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision:
         """Advance the indicators and the cross, and describe one possible action.
 
-        Never emits an intent or changes position custody. The cross is
-        advanced here, on every bar and whatever the position, so it is a
-        function of the bars alone: a discarded or observe-only entry bar
-        still spends its cross.
+        Never emits an intent, and never opens or closes the position. The
+        cross is advanced here, on every bar and whatever the position, so
+        it is a function of the bars alone: a discarded or observe-only
+        entry bar still spends its cross.
         """
         assert self._ema_fast is not None
         assert self._ema_slow is not None

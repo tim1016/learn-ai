@@ -811,6 +811,54 @@ class TestTemplateSelection:
         assert model.strategy_parameters.gap_bps == 0.0
         assert model.strategy_parameters.rsi_min == expected_rsi_min
 
+    async def test_previous_crossover_template_accepts_all_seven_settings(self) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_previous_crossover"
+        payload["strategy_parameters"] = {
+            "gap": 0.35,
+            "gap_bps": 2.5,
+            "rsi_min": 42,
+            "rsi_max": 68,
+            "fast_period": 7,
+            "slow_period": 20,
+            "hold_bars": 6,
+        }
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.strategy_parameters is not None
+        assert model.strategy_parameters.model_dump() == payload["strategy_parameters"]
+
+    @pytest.mark.parametrize(
+        "strategy_parameters",
+        [
+            {"fast_period": 1},
+            {"slow_period": 41},
+            {"hold_bars": 27},
+            {"hold_bars": True},
+            {"fast_period": 10, "slow_period": 10},
+            {"rsi_min": 70, "rsi_max": 70},
+            {"gap": -0.01},
+        ],
+        ids=["fast-too-short", "slow-too-long", "hold-too-long", "boolean-hold", "fast-not-below-slow", "empty-rsi-band", "negative-gap"],
+    )
+    async def test_previous_crossover_template_rejects_settings_its_strategy_refuses(
+        self,
+        strategy_parameters: dict[str, float],
+    ) -> None:
+        from pydantic import ValidationError
+
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_previous_crossover"
+        payload["strategy_parameters"] = strategy_parameters
+
+        with pytest.raises(ValidationError):
+            TrustedRunRequestModel.model_validate(payload)
+
     async def test_non_parameterized_template_rejects_strategy_parameters(self) -> None:
         from pydantic import ValidationError
 
