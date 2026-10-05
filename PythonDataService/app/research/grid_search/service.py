@@ -144,9 +144,11 @@ def _rebuild_remedy(report: AvailabilityReport, mode: str) -> str:
         remedy = f"{backfill} from {floor.isoformat()} on; the earlier ones are {too_old}, so no backfill can rebuild them"
     else:
         remedy = f"the unreadable files are {too_old}, which starts {floor.isoformat()}, so no backfill can rebuild them"
-    if report.missing_days:
-        remedy += "; the missing sessions need a backfill over their own dates"
-    return f"; {remedy}, then launch again" if all(served) else f"; {remedy}"
+    fetchable = [day >= floor for day in report.missing_days]
+    if any(fetchable):
+        missing = "the missing sessions" if all(fetchable) else f"the missing sessions from {floor.isoformat()} on"
+        remedy += f"; {missing} need a backfill over their own dates"
+    return f"; {remedy}, then launch again" if all(served) and all(fetchable) else f"; {remedy}"
 
 
 def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:

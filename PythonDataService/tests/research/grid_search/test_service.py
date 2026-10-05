@@ -150,31 +150,38 @@ def test_preflight_refuses_an_unreadable_zip_by_path_without_prescribing_a_backf
     ("today", "absent", "remedy"),
     [
         # The provider still serves both sessions, so a backfill writes their records again.
-        (date(2025, 2, 3), False, "; backfill SPY in polygon_split_adjusted mode to rebuild the unreadable files, then launch again"),
+        (date(2025, 2, 3), None, "; backfill SPY in polygon_split_adjusted mode to rebuild the unreadable files, then launch again"),
         # A session the lake does not hold at all needs its own dates backfilled.
         (
             date(2025, 2, 3),
-            True,
+            date(2025, 1, 13),
             "; backfill SPY in polygon_split_adjusted mode to rebuild the unreadable files; the missing sessions need a "
             "backfill over their own dates, then launch again",
         ),
         # Five years on the provider's history starts 2025-01-12, between the two.
         (
             date(2030, 1, 10),
-            False,
+            None,
+            "; backfill SPY in polygon_split_adjusted mode to rebuild the unreadable files from 2025-01-12 on; the earlier "
+            "ones are older than the provider's history, so no backfill can rebuild them",
+        ),
+        # A missing session the provider no longer serves is not sent to a backfill either.
+        (
+            date(2030, 1, 10),
+            date(2025, 1, 7),
             "; backfill SPY in polygon_split_adjusted mode to rebuild the unreadable files from 2025-01-12 on; the earlier "
             "ones are older than the provider's history, so no backfill can rebuild them",
         ),
         # Two weeks later it starts 2025-01-26, after both.
         (
             date(2030, 1, 24),
-            False,
+            None,
             "; the unreadable files are older than the provider's history, which starts 2025-01-26, so no backfill can rebuild them",
         ),
     ],
 )
 def test_preflight_prescribes_a_backfill_only_for_adjustment_records_the_provider_can_still_rebuild(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, today: date, absent: bool, remedy: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, today: date, absent: date | None, remedy: str
 ) -> None:
     """A file refused only for its adjustment record is rebuilt by a backfill while one can still fetch its session (#2887)."""
     root = tmp_path / "polygon_split_adjusted"
@@ -183,8 +190,8 @@ def test_preflight_prescribes_a_backfill_only_for_adjustment_records_the_provide
     minute = root / "equity" / "usa" / "minute" / "spy"
     for day in (SESSIONS[0], SESSIONS[-1]):
         companion_path(minute / f"{day.strftime('%Y%m%d')}_trade.zip").unlink()
-    if absent:
-        (minute / f"{SESSIONS[5].strftime('%Y%m%d')}_trade.zip").unlink()
+    if absent is not None:
+        (minute / f"{absent.strftime('%Y%m%d')}_trade.zip").unlink()
     monkeypatch.setattr(service, "now_ms_utc", lambda: service.et_midnight_ms(today))
 
     with pytest.raises(service.GridSearchRefusal) as excinfo:
