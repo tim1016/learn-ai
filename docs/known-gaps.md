@@ -587,7 +587,9 @@ re-arms the server-authored timeframe auto-correct, and numeric
   over 2026-03-20, $282.60. The ENG-010 parity test
   (`PythonDataService/tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py`)
   credits the recorded dividend itself; cash changes only in
-  `PythonDataService/app/engine/execution/portfolio.py::apply_fill`.
+  `PythonDataService/app/engine/execution/portfolio.py::apply_fill`. The
+  owner accepted this as a documented difference for that fixture on
+  2026-10-05.
 
 ## Backtest vs reality: when a bot ends (#2607, 2026-09-29)
 
