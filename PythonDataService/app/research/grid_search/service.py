@@ -30,8 +30,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.data_lake.types import polygon_mode_for
-from app.engine.data.availability import MissingSessionsError, check_availability
+from app.engine.data.availability import AvailabilityReport, MissingSessionsError, check_availability
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
 from app.jobs.progress import JobCancelled
@@ -75,6 +76,7 @@ from app.research.sweep.warmup import (
     slowest_warmup_probe,
 )
 from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, et_midnight_ms
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -123,15 +125,34 @@ def current_code_identity() -> CodeIdentity:
         ) from exc
 
 
-def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
-    """The gaps, the lake tree the sweep read them from, and the remedy when a backfill is one.
+def _rebuild_remedy(report: AvailabilityReport, mode: str) -> str:
+    """What repairs a window's unreadable files, when a backfill does.
 
-    A file that is on disk but cannot be read is not repaired by a backfill,
-    so that refusal names the file and prescribes nothing (#2489).
+    A damaged file is not repaired by one, so nothing is prescribed for it
+    (#2489). A file that only lacks a current adjustment record is rebuilt by
+    one while the provider still serves its session (#2887).
     """
+    if not all(file.needs_rebuild for file in report.unreadable_files):
+        return ""
+    floor = polygon_history_floor(et_date_at_ms(now_ms_utc()))
+    served = [day >= floor for day in report.unreadable_days]
+    if all(served):
+        return f"; backfill {report.symbol} in {mode} mode to rebuild them and launch again"
+    if not any(served):
+        return f"; they are older than the provider's history, which starts {floor.isoformat()}, so no backfill can rebuild them"
+    return (
+        f"; backfill {report.symbol} in {mode} mode to rebuild the ones from {floor.isoformat()} on; the earlier ones are "
+        "older than the provider's history, so no backfill can rebuild them"
+    )
+
+
+def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
+    """The gaps, the lake tree the sweep read them from, and the remedy when a backfill is one."""
     mode = polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"])
     if missing.report.unreadable_files:
-        return GridSearchRefusal(f"{missing} (read from the {mode} lake)", code="DATA_UNREADABLE")
+        return GridSearchRefusal(
+            f"{missing} (read from the {mode} lake){_rebuild_remedy(missing.report, mode)}", code="DATA_UNREADABLE"
+        )
     return GridSearchRefusal(
         f"{missing} (read from the {mode} lake); backfill {missing.report.symbol} in {mode} mode and launch again",
         code="DATA_MISSING",

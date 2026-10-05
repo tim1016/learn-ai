@@ -7,8 +7,10 @@ past the seed (clipped to the domain), in every combination the declared constra
 allow — by the real program (``app.research.sweep.warmup``). The canonical
 planner (``plan_run_up``) turns it into whole sessions before the
 development start; a plan whose run-up would have to be carved from the
-scored range is refused (``RUN_UP_HISTORY_MISSING``), because a carved start
-would shift the development interval. Every evaluation window then reads
+scored range is refused, because a carved start would shift the development
+interval: ``RUN_UP_HISTORY_MISSING`` when the lake does not hold those
+sessions, ``DATA_UNREADABLE`` when it holds them and a run cannot read
+them. Every evaluation window then reads
 the same number of sessions before its start, widened to the deepest
 window's need so a window behind an early close is still fully primed.
 
@@ -305,27 +307,42 @@ def plan_study_run_up(protocol: GoldenSearchProtocol, declaration: SearchDeclara
     except RunUpExceedsRangeError as exc:
         raise GoldenSearchRefusal(str(exc), code="RUN_UP_EXCEEDS_RANGE") from exc
 
-    def missing() -> GoldenSearchRefusal:
+    deepest = _deepest_run_up_sessions(protocol, probe)
+
+    def refused() -> GoldenSearchRefusal:
+        """Why the run-up cannot be read: the lake holds it and a run cannot read it, or the lake does not hold it."""
         later = _servable_start_ms(protocol, probe, roots)
         named = "" if later is None else f" The earliest start the lake can serve with whole folds is {et_date_at_ms(later).isoformat()}."
+        offered = () if later is None else (later,)
+        held = check_availability(
+            roots, protocol.symbol, warmup_session(protocol.development_start_ms, deepest), start_day - timedelta(days=1)
+        )
+        need = f"The slowest setting needs {probe.required_samples} decision bars of history before {start_day.isoformat()}"
+        if held.unreadable_files:
+            unreadable = data_missing_refusal(MissingSessionsError(held))
+            return GoldenSearchRefusal(
+                f"{need}, and a run cannot read them: {unreadable}.{named}",
+                code=unreadable.code,
+                field="development_start_ms",
+                nearest_valid_ms=offered,
+            )
         return GoldenSearchRefusal(
-            f"The slowest setting needs {probe.required_samples} decision bars of history before "
-            f"{start_day.isoformat()}, and the lake does not hold them for {protocol.symbol}. Backfill earlier "
+            f"{need}, and the lake does not hold them for {protocol.symbol}. Backfill earlier "
             f"history or start the development interval later; the run-up is never carved from the scored range.{named}",
             code="RUN_UP_HISTORY_MISSING",
             field="development_start_ms",
-            nearest_valid_ms=() if later is None else (later,),
+            nearest_valid_ms=offered,
         )
 
     if plan.carved_from_range:
-        raise missing()
-    sessions = max(plan.run_up_sessions, _deepest_run_up_sessions(protocol, probe))
+        raise refused()
+    sessions = max(plan.run_up_sessions, deepest)
     data_start = plan.data_start
     if sessions > plan.run_up_sessions:
         data_start = warmup_session(protocol.development_start_ms, sessions)
         prior = check_availability(roots, protocol.symbol, data_start, plan.data_start - timedelta(days=1))
         if not prior.is_complete:
-            raise missing()
+            raise refused()
     return StudyRunUp(
         required_samples=probe.required_samples,
         bar_span_ms=probe.bar_span_ms,
