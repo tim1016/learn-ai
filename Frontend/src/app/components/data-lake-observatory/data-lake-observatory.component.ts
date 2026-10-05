@@ -18,6 +18,7 @@ import {
   CoverageHeatmapComponent,
   type CoverageCellSelection,
 } from './coverage-heatmap/coverage-heatmap.component';
+import { GapBannerComponent } from './gap-banner/gap-banner.component';
 import { LakePanelComponent } from './lake-panel/lake-panel.component';
 import { LakeToggleComponent } from './lake-toggle/lake-toggle.component';
 import {
@@ -32,6 +33,7 @@ import { buildCoverageBoard, type CoverageBoard } from './lib/coverage-board';
 import {
   PRICE_ADJUSTMENT_OPTIONS,
   coverageWindow,
+  fillRows,
   readinessRows,
   readinessTotals,
   rebuildRequests,
@@ -57,6 +59,9 @@ const EMPTY_BOARD: CoverageBoard = {
   firstSessionMs: null,
   lastSessionMs: null,
 };
+
+/** Which banner started a list of backfills: each narrates only its own. */
+type BackfillList = 'rebuild' | 'fill';
 
 /** What the session grid reads. Compared by value, so a re-read of readiness alone does not reset the grid. */
 interface CoverageRequest {
@@ -112,6 +117,7 @@ function tradingDateAt(ms: number): string {
     AssetIdentityComponent,
     ArtifactInspectorDrawerComponent,
     CoverageHeatmapComponent,
+    GapBannerComponent,
     LakeBackfillPanelComponent,
     LakePanelComponent,
     LakeStorageFoldComponent,
@@ -160,6 +166,8 @@ export class DataLakeObservatoryComponent {
   });
 
   protected readonly totals = computed(() => readinessTotals(this.rows()));
+  /** The symbols with sessions missing between their first and last that a backfill can fetch. */
+  protected readonly gapRows = computed(() => fillRows(this.rows()));
 
   /** Follows the rows: the pick survives a re-read, and the first row stands in when it is gone. */
   protected readonly selectedSymbol = linkedSignal<readonly SymbolReadinessRow[], string | null>({
@@ -249,14 +257,12 @@ export class DataLakeObservatoryComponent {
 
   protected readonly backfillBusy = computed(() => this.backfillPanel()?.busy() ?? false);
 
-  /** The symbol a rebuild is on and its place in the list; null when none is running. */
-  private readonly rebuildProgress = signal<RebuildProgress | null>(null);
+  /** The symbol a list is on, its place in it, and which banner started it; null when none is running. */
+  private readonly rebuildProgress = signal<(RebuildProgress & { readonly list: BackfillList }) | null>(null);
 
-  /** What the banner narrates: a list of symbols. A single symbol's run is the backfill panel's to show. */
-  protected readonly queueProgress = computed(() => {
-    const progress = this.rebuildProgress();
-    return progress !== null && progress.total > 1 ? progress : null;
-  });
+  /** What each banner narrates: its own list of symbols. A single symbol's run is the backfill panel's to show. */
+  protected readonly queueProgress = computed(() => this.listProgress('rebuild'));
+  protected readonly fillProgress = computed(() => this.listProgress('fill'));
 
   protected selectSession(selection: CoverageCellSelection): void {
     this.selectedDateMs.set(selection.cell.tradingDateMs);
@@ -275,7 +281,7 @@ export class DataLakeObservatoryComponent {
    * view, because the backfill panel writes the view on screen and the rest
    * of the list was composed for the one they left.
    */
-  protected async rebuild(requests: readonly RebuildRequest[]): Promise<void> {
+  protected async rebuild(requests: readonly RebuildRequest[], list: BackfillList = 'rebuild'): Promise<void> {
     const panel = this.backfillPanel();
     if (panel === undefined || this.backfillBusy() || this.rebuildProgress() !== null) return;
     const mode = this.mode();
@@ -287,6 +293,7 @@ export class DataLakeObservatoryComponent {
           symbol: request.symbol,
           position: index + 1,
           total: requests.length,
+          list,
         });
         const end = await panel.rebuild(request);
         if (end === null) return;
@@ -298,6 +305,11 @@ export class DataLakeObservatoryComponent {
     } finally {
       this.rebuildProgress.set(null);
     }
+  }
+
+  private listProgress(list: BackfillList): RebuildProgress | null {
+    const progress = this.rebuildProgress();
+    return progress !== null && progress.list === list && progress.total > 1 ? progress : null;
   }
 
   /** A finished backfill changes what is on disk, so every read of the lake is taken again. */

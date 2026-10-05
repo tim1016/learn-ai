@@ -47,10 +47,13 @@ from app.data_lake.catalog_client import MinuteBarLeaseStatus, select_minute_bar
 from app.data_lake.ensure_data import ensure_data, provider_for_data_type
 from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.data_lake.run_readiness import (
+    SpanGaps,
     coverage_gaps,
     current_versions,
     fold_run_readiness,
+    gapped_symbols,
     needs_adjustment_record,
+    span_gaps,
 )
 from app.data_lake.types import (
     MAX_SYMBOL_LENGTH,
@@ -346,9 +349,17 @@ async def get_run_readiness(
         data_type,
     )
     data_root_id = root_identity.active_root_id()
+    floor = _provider_history_floor()
     counts = await catalog_client.select_symbol_revision_counts(
-        market, price_adjustment_mode, data_type, _provider_history_floor(), data_root_id=data_root_id
+        market, price_adjustment_mode, data_type, floor, data_root_id=data_root_id
     )
+    # The counts say which symbols have a hole in their span; only those are read session by session.
+    gaps: dict[str, SpanGaps] = {}
+    for symbol in gapped_symbols(counts):
+        held = await catalog_client.select_coverage_minute_bars(
+            market, symbol, data_type, None, None, price_adjustment_mode=price_adjustment_mode, data_root_id=data_root_id
+        )
+        gaps[symbol] = span_gaps({row.trading_date for row in held if row.trading_date is not None}, floor)
     versions = (
         await asyncio.to_thread(
             current_versions,
@@ -363,7 +374,7 @@ async def get_run_readiness(
         price_adjustment_mode=price_adjustment_mode,
         data_type=data_type,
         data_root_id=data_root_id,
-        symbols=fold_run_readiness(counts, versions),
+        symbols=fold_run_readiness(counts, versions, gaps),
     )
 
 

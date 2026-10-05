@@ -102,6 +102,13 @@ export interface StorageSummaryResponse {
  * many a run can read. `rebuild_*` bound the sessions a backfill can rebuild;
  * `unrebuildable_count` is the unreadable sessions older than the provider's
  * history, which no backfill can fetch again.
+ *
+ * `gap_*` describe the sessions the calendar schedules between the first and
+ * the last held one that the lake does not hold: `gap_session_count` of them
+ * in `gap_count` unbroken stretches. `fill_first/last_trading_date_ms` bound
+ * the ones a backfill can fetch; `unfillable_gap_session_count` is the ones
+ * older than the provider's history. A data plane older than this page sends
+ * none of them.
  */
 export interface SymbolRunReadiness {
   readonly symbol: string;
@@ -112,6 +119,11 @@ export interface SymbolRunReadiness {
   readonly unrebuildable_count: number;
   readonly rebuild_first_trading_date_ms: number | null;
   readonly rebuild_last_trading_date_ms: number | null;
+  readonly gap_session_count?: number;
+  readonly gap_count?: number;
+  readonly unfillable_gap_session_count?: number;
+  readonly fill_first_trading_date_ms?: number | null;
+  readonly fill_last_trading_date_ms?: number | null;
 }
 
 export interface RunReadinessResponse {

@@ -14,18 +14,27 @@ Two views answer for it:
 * ``fold_run_readiness`` counts a whole lake from the version the catalog
   recorded for each session, so it opens one snapshot per symbol instead of
   one record per session.
+
+A session the lake never fetched is a third thing: neither view lists it,
+because no row exists for it. A symbol backfilled in two stretches holds a
+first and a last session with a hole between them, and a run laid over the
+hole is refused. ``gapped_symbols`` finds those symbols from the counts
+alone; ``span_gaps`` measures one symbol's holes from its held sessions.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from bisect import bisect_left, bisect_right
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
+from itertools import groupby
 from pathlib import Path
 
 from app.data_lake.adjustment_versions import AdjustmentVersionError, adjusted_file_gap, current_version
 from app.data_lake.catalog_client import ArtifactCoverageRow, SymbolRevisionCount
 from app.data_lake.types import AdjustedFileGap, PriceAdjustmentMode, SymbolRunReadiness
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 
 
 def needs_adjustment_record(price_adjustment_mode: PriceAdjustmentMode) -> bool:
@@ -60,14 +69,71 @@ def current_versions(lake_root: Path, symbols: Iterable[str]) -> dict[str, str |
     return versions
 
 
+@dataclass(frozen=True)
+class SpanGaps:
+    """The scheduled sessions between a symbol's first and last held one that the lake does not hold."""
+
+    session_count: int
+    #: Unbroken stretches of missing sessions: one long hole and fifty scattered days count differently.
+    gap_count: int
+    #: Missing sessions older than the provider's history, which no backfill can fetch.
+    unfillable_count: int
+    #: The first and last missing session a backfill can fetch; ``None`` when there are none.
+    fill_first: date | None
+    fill_last: date | None
+
+
+_NO_GAPS = SpanGaps(session_count=0, gap_count=0, unfillable_count=0, fill_first=None, fill_last=None)
+
+
+def gapped_symbols(counts: Sequence[SymbolRevisionCount]) -> list[str]:
+    """The symbols holding fewer sessions than the calendar schedules between their first and last one."""
+    spans: dict[str, tuple[date, date, int]] = {}
+    for count in counts:
+        first, last, held = spans.get(count.symbol, (count.first_trading_date, count.last_trading_date, 0))
+        spans[count.symbol] = (min(first, count.first_trading_date), max(last, count.last_trading_date), held + count.session_count)
+    if not spans:
+        return []
+    # One schedule for the widest span, read per symbol: a schedule per symbol costs more than the catalog query.
+    sessions = expected_sessions(min(first for first, _, _ in spans.values()), max(last for _, last, _ in spans.values()))
+    return sorted(
+        symbol
+        for symbol, (first, last, held) in spans.items()
+        if held < bisect_right(sessions, last) - bisect_left(sessions, first)
+    )
+
+
+def span_gaps(held: Collection[date], floor: date) -> SpanGaps:
+    """The holes between the first and last of ``held``; ``floor`` is the oldest session the provider still serves."""
+    if not held:
+        return _NO_GAPS
+    stretches = [
+        list(days)
+        for is_held, days in groupby(expected_sessions(min(held), max(held)), key=set(held).__contains__)
+        if not is_held
+    ]
+    missing = [day for stretch in stretches for day in stretch]
+    fillable = [day for day in missing if day >= floor]
+    return SpanGaps(
+        session_count=len(missing),
+        gap_count=len(stretches),
+        unfillable_count=len(missing) - len(fillable),
+        fill_first=fillable[0] if fillable else None,
+        fill_last=fillable[-1] if fillable else None,
+    )
+
+
 def fold_run_readiness(
-    counts: Sequence[SymbolRevisionCount], versions: Mapping[str, str | None] | None
+    counts: Sequence[SymbolRevisionCount],
+    versions: Mapping[str, str | None] | None,
+    gaps: Mapping[str, SpanGaps] | None = None,
 ) -> list[SymbolRunReadiness]:
     """One readiness row per symbol, in symbol order.
 
     ``versions`` is ``None`` for a mode whose files need no adjustment
     record: every complete session is then readable. Otherwise a session is
     readable when the catalog recorded the symbol's current version for it.
+    ``gaps`` holds the symbols with a hole in their span; one it leaves out has none.
     """
     by_symbol: dict[str, list[SymbolRevisionCount]] = {}
     for count in counts:
@@ -82,6 +148,7 @@ def fold_run_readiness(
         ]
         rebuildable = [group for group in unreadable if not group.before_floor]
         session_count = sum(group.session_count for group in groups)
+        holes = (gaps or {}).get(symbol, _NO_GAPS)
         rows.append(
             SymbolRunReadiness(
                 symbol=symbol,
@@ -100,6 +167,11 @@ def fold_run_readiness(
                     if rebuildable
                     else None
                 ),
+                gap_session_count=holes.session_count,
+                gap_count=holes.gap_count,
+                unfillable_gap_session_count=holes.unfillable_count,
+                fill_first_trading_date_ms=None if holes.fill_first is None else session_open_ms_utc(holes.fill_first),
+                fill_last_trading_date_ms=None if holes.fill_last is None else session_open_ms_utc(holes.fill_last),
             )
         )
     return rows

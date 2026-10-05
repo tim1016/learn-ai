@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import zipfile
 import zlib
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
@@ -257,6 +257,23 @@ def _describe_unreadable(report: AvailabilityReport) -> str:
         f"unreadable data: {report.symbol} {report.resolution} data for "
         f"{_describe_window(report, len(report.unreadable_days))} is on disk but cannot be read — {shown}{more}"
     )
+
+
+def unbroken_run_start(held: Collection[date], end: date) -> date | None:
+    """The first session of the unbroken run of held sessions that reaches ``end``.
+
+    A held span is only a first and a last day: the sessions between them can
+    be missing, and a window laid over such a hole cannot be read. ``None``
+    when the last session on or before ``end`` is not held.
+    """
+    if not held or end < min(held):
+        return None
+    start: date | None = None
+    for session in reversed(_expected_sessions(min(held), end)):
+        if session not in held:
+            break
+        start = session
+    return start
 
 
 class MissingSessionsError(ValueError):

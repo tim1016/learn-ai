@@ -251,6 +251,51 @@ describe('DataLakeObservatoryComponent', () => {
     });
   });
 
+  it('flags symbols with sessions missing between their first and last, and fills each over its own gap', async () => {
+    // Every held session of both is readable, and neither is whole. GLD keeps the rebuild banner on screen beside theirs.
+    const qqq = readinessEntry({
+      symbol: 'QQQ',
+      gap_session_count: 724,
+      gap_count: 1,
+      unfillable_gap_session_count: 10,
+      fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+    });
+    const iwm = readinessEntry({
+      symbol: 'IWM',
+      gap_session_count: 2,
+      gap_count: 2,
+      fill_first_trading_date_ms: sessionOpenMs(2025, 6, 2),
+      fill_last_trading_date_ms: sessionOpenMs(2025, 7, 1),
+    });
+    const { startJob, endJob } = await renderObservatory([GLD, qqq, iwm]);
+
+    const banner = screen
+      .getByRole('heading', { name: '2 symbols have sessions missing between their first and last' })
+      .closest('section') as HTMLElement;
+    expect(banner.textContent.replace(/\s+/g, ' ')).toContain('714 sessions, 2021-11-01 to 2024-09-03');
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Fill the gaps in all 2 symbols' }));
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(1));
+
+    expect(specOf(startJob, 0)).toMatchObject({
+      symbols: ['IWM'],
+      start_trading_date_ms: Date.UTC(2025, 5, 2, 12),
+      end_trading_date_ms: Date.UTC(2025, 6, 1, 12),
+    });
+    // The list is narrated by the banner that started it, not by the rebuild banner beside it.
+    expect(within(banner).getByText(/Filling IWM \(1 of 2\)/)).toBeTruthy();
+    expect(screen.queryByText(/Rebuilding IWM/)).toBeNull();
+
+    endJob('job-1', 'job.completed');
+    await vi.waitFor(() => expect(startJob).toHaveBeenCalledTimes(2));
+    expect(specOf(startJob, 1)).toMatchObject({
+      symbols: ['QQQ'],
+      start_trading_date_ms: Date.UTC(2021, 10, 1, 12),
+      end_trading_date_ms: Date.UTC(2024, 8, 3, 12),
+    });
+  });
+
   it('stops a rebuild of every symbol when one run fails, and re-reads the lake', async () => {
     const { lake, startJob, endJob } = await renderObservatory([GLD, AMZN]);
 
@@ -340,10 +385,18 @@ describe('DataLakeObservatoryComponent', () => {
     expect(screen.getByText("A run can't read this session")).toBeTruthy();
   });
 
-  it('passes AXE with a symbol that needs a rebuild and a picked session', async () => {
-    await renderObservatory();
+  it('passes AXE with a symbol that needs a rebuild, one with a gap, and a picked session', async () => {
+    const gapped = readinessEntry({
+      symbol: 'QQQ',
+      gap_session_count: 724,
+      gap_count: 1,
+      fill_first_trading_date_ms: sessionOpenMs(2021, 11, 1),
+      fill_last_trading_date_ms: sessionOpenMs(2024, 9, 3),
+    });
+    await renderObservatory([GLD, SPY, gapped]);
     fireEvent.click(await screen.findByRole('button', { name: 'GLD, 2026-05-18, Needs Rebuild' }));
     await screen.findByText("A run can't read this session");
+    expect(screen.getByRole('button', { name: 'Fill the gap in QQQ' })).toBeTruthy();
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },

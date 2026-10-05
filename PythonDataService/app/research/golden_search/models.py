@@ -76,7 +76,9 @@ class GoldenSearchRefusal(ValueError):
 
     ``study`` carries the current row when the refusal is about it (a stale
     revision answers with the study as it now stands); ``refusals`` carries
-    every plan refusal when a lock is refused for more than one reason.
+    every plan refusal when a lock is refused for more than one reason;
+    ``nearest_valid_ms`` carries the nearest instants ``field`` would accept
+    instead, when the refusal can name them.
     """
 
     def __init__(
@@ -88,11 +90,13 @@ class GoldenSearchRefusal(ValueError):
         field: str | None = None,
         study: StudyRow | None = None,
         refusals: tuple[dict[str, Any], ...] = (),
+        nearest_valid_ms: tuple[int, ...] = (),
     ) -> None:
         super().__init__(message)
         self.code = code
         self.kind = kind
         self.field = field
+        self.nearest_valid_ms = nearest_valid_ms
         self.study = study
         self.refusals = refusals
 

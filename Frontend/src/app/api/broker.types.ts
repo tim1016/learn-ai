@@ -23725,10 +23725,31 @@ export interface components {
          *     not older than the provider's history. Both are ``None`` when there are
          *     none. ``unrebuildable_count`` is the unreadable sessions older than that
          *     history, which no backfill can fetch again.
+         *
+         *     ``gap_*`` describe the sessions the calendar schedules between the first
+         *     and the last held one that the lake does not hold: ``gap_session_count``
+         *     of them, in ``gap_count`` unbroken stretches. ``fill_first_trading_date_ms``
+         *     and ``fill_last_trading_date_ms`` bound the ones a backfill can fetch, and
+         *     are ``None`` when there are none; ``unfillable_gap_session_count`` is the
+         *     ones older than the provider's history.
          */
         SymbolRunReadiness: {
+            /** Fill First Trading Date Ms */
+            fill_first_trading_date_ms?: number | null;
+            /** Fill Last Trading Date Ms */
+            fill_last_trading_date_ms?: number | null;
             /** First Trading Date Ms */
             first_trading_date_ms: number;
+            /**
+             * Gap Count
+             * @default 0
+             */
+            gap_count?: number;
+            /**
+             * Gap Session Count
+             * @default 0
+             */
+            gap_session_count?: number;
             /** Last Trading Date Ms */
             last_trading_date_ms: number;
             /** Rebuild First Trading Date Ms */
@@ -23741,6 +23762,11 @@ export interface components {
             session_count: number;
             /** Symbol */
             symbol: string;
+            /**
+             * Unfillable Gap Session Count
+             * @default 0
+             */
+            unfillable_gap_session_count?: number;
             /** Unrebuildable Count */
             unrebuildable_count: number;
         };

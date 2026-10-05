@@ -112,6 +112,10 @@
     margin-top: var(--space-1);
     font-size: var(--fs-xs);
     color: var(--text-subtle);
+
+    &--gap {
+      color: var(--warn);
+    }
   }
 
   &__action {
