@@ -44,6 +44,12 @@ export class GoldenSearchTimeWindowsComponent {
   readonly protocol = input.required<ProtocolRequest>();
   /** The study range picked on the form; undefined until one is, and the picker then shows the plan's own first and last day. */
   readonly range = input<StudyRange | undefined>(undefined);
+  /**
+   * Whether the plan's dates were laid out inside the picked range. They were
+   * not while a new range waits for its layout, nor after the server refused
+   * it: the plan then still holds the dates of the range before.
+   */
+  readonly rangeLaidOut = input(true);
   /** Which sessions of the picked range the plan leaves out, in the server's words; null when it uses them all. */
   readonly rangeNote = input<string | null | undefined>(undefined);
   /** The final test's length in months; undefined while the dates do not follow a month count. */
@@ -67,11 +73,24 @@ export class GoldenSearchTimeWindowsComponent {
     const p = this.protocol();
     return this.range() ?? { from: etIsoDate(p.development_start_ms), to: etIsoDate(p.final_end_ms - 1) };
   });
-  /** The days a study of this instrument can read: what the default tree holds for it. */
-  protected readonly bounds = computed<DateBounds>(() => {
+  /** The days the default tree holds for this instrument. */
+  private readonly held = computed<DateBounds>(() => {
     const symbol = this.protocol().symbol;
     // `viewFor` may install a resource effect, which a reactive context forbids.
     return heldBoundsFor(untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)), symbol);
+  });
+  /**
+   * The days a study of this instrument can read: the ones the lake holds.
+   * Until a range is picked the picker shows the plan's own first and last
+   * day, and those are admitted too. A default plan can end after the lake
+   * does; that is the server's to refuse, with the backfill that fixes it,
+   * not an entry the trader has to finish.
+   */
+  protected readonly bounds = computed<DateBounds>(() => {
+    const held = this.held();
+    if (this.range() !== undefined) return held;
+    const { from, to } = this.shown();
+    return { ...held, min: held.min !== null && from < held.min ? from : held.min, max: held.max !== null && to > held.max ? to : held.max };
   });
   /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
   protected readonly gaps = computed<DataGaps | null>(() => this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.protocol().symbol, this.bounds(), 'minute'));
@@ -107,9 +126,16 @@ export class GoldenSearchTimeWindowsComponent {
     this.edit.emit({ kind: 'range', from: range.from, to: range.to });
   }
 
-  /** Starts the range on a day the server offered. The keyboard moves to the range, because the button goes once the plan is laid out. */
+  /**
+   * Starts the range on a day the server offered. It ends where it did, or on
+   * the lake's last day when the plan ran past it: an offered start is one the
+   * lake can serve, and a last day it does not hold would only be refused next.
+   * The keyboard moves to the range, because the button goes once the plan is laid out.
+   */
   protected startOn(day: string, block: HTMLElement): void {
-    this.edit.emit({ kind: 'range', from: day, to: this.shown().to });
+    const { to } = this.shown();
+    const last = this.held().max;
+    this.edit.emit({ kind: 'range', from: day, to: last !== null && to > last ? last : to });
     block.focus();
   }
 }

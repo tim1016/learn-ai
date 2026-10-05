@@ -35,11 +35,12 @@
     </p>
   }
 
-  @if (timeline(); as line) {
+  @if (rangeLaidOut() ? timeline() : null; as line) {
+    @let folds = preflight()?.folds?.length ?? 0;
     <div class="timeline" role="img" aria-label="Development, its test-over-time folds, then the sealed final test">
       <div class="bar">
         <div class="bar__dev" [style.width.%]="line.finalAt">
-          <span>Development · {{ preflight()?.folds?.length ?? 0 }} test-over-time folds</span>
+          <span>Development · {{ folds }} test-over-time {{ folds === 1 ? 'fold' : 'folds' }}</span>
           @for (fold of line.folds; track fold.key) { <span class="bar__fold" [style.left.%]="fold.left" [style.width.%]="fold.width"></span> }
         </div>
         <div class="bar__final"><i class="pi pi-lock" aria-hidden="true"></i> Final test</div>

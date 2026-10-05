@@ -43,10 +43,13 @@ function fakeService(): FakeService {
   };
 }
 
-async function renderForm(service: FakeService, options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number } = {}) {
+async function renderForm(
+  service: FakeService,
+  options: { capabilities?: StrategyCapability[]; reviseFrom?: StudyDetail | null; debounceMs?: number; pool?: Parameters<typeof fakePickerWorld>[0] } = {},
+) {
   const view = await render(GoldenSearchPlanFormComponent, {
     inputs: { capabilities: options.capabilities ?? [emaCapability(), unavailableCapability()], reviseFrom: options.reviseFrom ?? null, preflightDebounceMs: options.debounceMs ?? 0 },
-    providers: [...fakePickerWorld(STUDY_POOL).providers, { provide: GoldenSearchService, useValue: service }],
+    providers: [...fakePickerWorld(options.pool ?? STUDY_POOL).providers, { provide: GoldenSearchService, useValue: service }],
   });
   const locked = vi.fn();
   view.fixture.componentInstance.locked.subscribe(locked);
@@ -721,6 +724,52 @@ describe('GoldenSearchPlanFormComponent', () => {
     );
     await waitFor(() => expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull());
     expect(document.activeElement).toBe(range);
+  });
+
+  it("leaves a default plan that ends after the lake's last day to the server's check: its own last day is not an entry to fix (#2886)", async () => {
+    const service = fakeService();
+    // The lake stops in January; the default plan's final test runs through 2026-03-31.
+    const { view } = await renderForm(service, { pool: [{ ...STUDY_POOL[0], lastHeld: '2026-01-16' }] });
+
+    pickSymbol(view.fixture, 'SPY');
+
+    // The plan reaches the server, which names the sessions the lake lacks and the backfill for them.
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(1));
+    expect((screen.getByRole('textbox', { name: 'End date' }) as HTMLInputElement).value).toBe('2026-03-31');
+    expect(screen.queryByText(/^Study range:/)).toBeNull();
+  });
+
+  it("starts the range on an offered day and ends it on the lake's last day when the plan ran past it (#2886)", async () => {
+    const service = fakeService();
+    const message = 'The slowest setting needs 32 decision bars of history before 2024-01-01, and the lake does not hold them for SPY.';
+    service.preflight.mockResolvedValueOnce(
+      preflightFixture({ refusals: [{ code: 'RUN_UP_HISTORY_MISSING', field: 'development_start_ms', message, nearest_valid_ms: [etMidnightMs('2024-03-01')] }] }),
+    );
+    // The lake stops in January; the default plan's final test runs through 2026-03-31.
+    const { view } = await renderForm(service, { pool: [{ ...STUDY_POOL[0], lastHeld: '2026-01-16' }] });
+    pickSymbol(view.fixture, 'SPY');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start the range on 2024-03-01' }));
+
+    await waitFor(() =>
+      expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-03-01'), range_end_ms: etMidnightMs('2026-01-17') }),
+    );
+    expect(screen.queryByText(/^Study range:/)).toBeNull();
+  });
+
+  it('shows no plan dates under a range the server could not lay out (#2886)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    expect(planDates(view.container)).toHaveLength(2);
+    const message = 'The range is too short: 6 months of training, one test of 2 months and a final test of 3 months need development to start by 2025-10-19, and the range starts on 2026-03-19.';
+    service.defaults.mockRejectedValueOnce(new HttpErrorResponse({ status: 400, error: { detail: { code: 'INTERVALS_INVALID', field: 'range_start_ms', message } } }));
+
+    fireEvent.click(quickRange('6M'));
+
+    expect(await screen.findByText(message)).not.toBeNull();
+    // The plan still holds the dates of the range before; they are not this range's.
+    expect(planDates(view.container)).toEqual([]);
   });
 
   it('a range picked while dates are being laid out for a month count wins: the late layout is dropped', async () => {

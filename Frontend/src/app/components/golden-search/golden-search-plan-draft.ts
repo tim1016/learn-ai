@@ -92,6 +92,12 @@ export interface PlanDraft {
   readonly range?: StudyRange;
   /** Which sessions of the picked range the server's layout left out, and why; null when it used them all. */
   readonly rangeNote?: string | null;
+  /**
+   * The range the plan's dates were laid out inside. It is not `range` while a
+   * newly picked range waits for its layout, nor after the server refused it:
+   * the plan then still holds the dates of the range before.
+   */
+  readonly laidOutRange?: StudyRange;
 }
 
 /** A draft of `protocol` as it stands, with nothing unreadable; its knob table is what a reset restores. */
@@ -157,7 +163,7 @@ export function draftLayout(draft: PlanDraft): DefaultsLayout | null {
 /** The draft with the dates the server laid out, and what it left out of a picked range; every other edit, the counts and the range included, is kept. */
 export function withServerDates(draft: PlanDraft, laidOut: GoldenSearchDefaults): PlanDraft {
   const { development_start_ms, development_end_ms, final_start_ms, final_end_ms, final_sessions_cut, range_note } = laidOut;
-  return { ...draft, protocol: { ...draft.protocol, development_start_ms, development_end_ms, final_start_ms, final_end_ms }, finalSessionsCut: final_sessions_cut, rangeNote: range_note ?? null };
+  return { ...draft, protocol: { ...draft.protocol, development_start_ms, development_end_ms, final_start_ms, final_end_ms }, finalSessionsCut: final_sessions_cut, rangeNote: range_note ?? null, laidOutRange: draft.range };
 }
 
 export function knobProblemKey(name: string, field: KnobNumberField): string {
