@@ -22,6 +22,7 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
     [ranges]="ranges()"
     [sessionsOnly]="sessionsOnly()"
     [hostOffers]="hostOffers()"
+    [hostDays]="hostDays()"
     [gaps]="gaps()"
     (picked)="onPicked($event)"
   />`,
@@ -29,6 +30,7 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
 class HostComponent {
   readonly gaps = signal<DataGaps | null>(null);
   readonly hostOffers = signal<readonly QuickRangeOffer[] | null>(null);
+  readonly hostDays = signal<readonly string[]>([]);
   readonly picked = signal<QuickRangeKey | null>(null);
   /** Whether a picked host range is written to the host's dates, as a page that applies its server's range does. */
   readonly appliesPicked = signal(false);
@@ -175,6 +177,24 @@ describe('DateRangePickerComponent', () => {
     expect(screen.getByText('2026-09-07 is a market holiday (Labor Day). The next session is 2026-09-08.')).not.toBeNull();
     expect(host.to()).toBe('');
     expect(end.value).toBe('2026-09-07');
+  });
+
+  it("leaves a day its host says is the host's own to the host, outside the bounds, and keeps the quick ranges inside them", async () => {
+    const { view, host, end, quick, retype } = await renderPicker();
+    // The host's server laid a plan out through 2026-09-30; QQQ is held through 2026-09-18.
+    host.hostDays.set(['2026-08-19', '2026-09-30']);
+    host.to.set('2026-09-30');
+    await view.fixture.whenStable();
+
+    expect([end.value, end.getAttribute('aria-invalid'), host.to()]).toEqual(['2026-09-30', 'false', '2026-09-30']);
+
+    // Another day past the bounds is still refused, with the reason.
+    await retype(end, '2026-09-29');
+    expect(host.to()).toBe('');
+    expect(screen.getByText('QQQ is held through 2026-09-18.')).not.toBeNull();
+
+    await userEvent.click(quick('1Y'));
+    expect([host.from(), host.to()]).toEqual(['2025-09-19', '2026-09-18']);
   });
 
   it('sets both dates with one click on a quick range', async () => {

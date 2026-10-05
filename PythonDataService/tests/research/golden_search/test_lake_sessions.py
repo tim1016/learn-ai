@@ -10,8 +10,9 @@ import pytest
 from app.data_lake import catalog_client
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search import service
-from app.research.golden_search.planning import StudyRange, fit_range
+from app.research.golden_search.planning import StudyRange, fit_range, registry_incumbent
 from app.research.golden_search.service import LakeSessions
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 
 def _catalog_holding(monkeypatch: pytest.MonkeyPatch, held: list[date]) -> list[dict[str, object]]:
@@ -70,7 +71,40 @@ async def test_a_range_that_ends_before_a_hole_is_laid_out_from_the_run_it_ends_
         StudyRange(date(2025, 1, 1), date(2025, 5, 1)), final_months=1, training_months=1, test_months=1, earliest_session=sessions.run_start(date(2025, 4, 30))
     )
     assert (fit.development_start, fit.final_start) == (date(2025, 1, 1), date(2025, 4, 1))
-    # A range reaching past the hole is held to the later run, and one ending inside the hole to the latest.
-    assert sessions.run_start(date(2026, 10, 2)) == date(2025, 5, 5)
-    assert sessions.run_start(date(2025, 5, 2)) == date(2025, 5, 5)
+    # A range reaching past the hole, or past the lake's last day, is held to the later run.
+    assert sessions.run_start(date(2026, 10, 2)) == sessions.run_start(date(2026, 11, 30)) == date(2025, 5, 5)
+    # No run reaches a day inside the hole: the plan check names the sessions the lake lacks.
+    assert sessions.run_start(date(2025, 5, 2)) is None
+
+
+async def test_the_default_plan_for_a_range_before_a_hole_keeps_the_run_up_month_of_the_run_it_ends_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`defaults` hands the range layout the run that reaches the range's last day (#2886)."""
+    held = frozenset([*expected_sessions(date(2024, 12, 2), date(2025, 4, 30)), *expected_sessions(date(2025, 5, 5), date(2026, 10, 2))])
+
+    async def _coverage(symbol: str) -> LakeSessions:
+        return LakeSessions(first=date(2025, 5, 5), last=date(2026, 10, 2), held=held)
+
+    async def _incumbent(strategy_key: str, symbol: str, **_: object) -> service.IncumbentChoice:
+        return service.IncumbentChoice(ref=registry_incumbent(strategy_key, symbol), label="Registry validated settings")
+
+    async def _exposure(symbol: str, start_ms: int, end_ms: int, **_: object) -> dict[str, object]:
+        return {"state": "not_opened", "ledger_overlaps": 0, "outside_activity_overlaps": 0, "explanation": ""}
+
+    monkeypatch.setattr(service, "resolve_incumbent", _incumbent)
+    monkeypatch.setattr(service, "exposure_view", _exposure)
+
+    plan = await service.defaults(
+        "ema_crossover_signal",
+        "SPY",
+        final_months=1,
+        training_months=1,
+        test_months=1,
+        range_start_ms=et_midnight_ms(date(2024, 11, 15)),
+        range_end_ms=et_midnight_ms(date(2025, 5, 1)),
+        lake_coverage=_coverage,
+    )
+
+    # The run before the hole starts on 2024-12-02; its first month is the run-up, so development starts in January.
+    assert et_date_at_ms(plan["development_start_ms"]) == date(2025, 1, 1)
+    assert "the lake's unbroken history starts on 2024-12-02" in plan["range_note"]
 

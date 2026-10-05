@@ -76,27 +76,29 @@ export class GoldenSearchTimeWindowsComponent {
     const p = this.protocol();
     return this.range() ?? { from: etIsoDate(p.development_start_ms), to: etIsoDate(p.final_end_ms - 1) };
   });
-  /** The days the default tree holds for this instrument. */
-  private readonly held = computed<DateBounds>(() => {
+  /** The days a study of this instrument can read: the ones the default tree holds for it. */
+  protected readonly bounds = computed<DateBounds>(() => {
     const symbol = this.protocol().symbol;
     // `viewFor` may install a resource effect, which a reactive context forbids.
     return heldBoundsFor(untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)), symbol);
   });
   /**
-   * The days a study of this instrument can read: the ones the lake holds.
-   * Until a range is picked the picker shows the plan's own first and last
-   * day, and those are admitted too. A default plan can end after the lake
-   * does; that is the server's to refuse, with the backfill that fixes it,
-   * not an entry the trader has to finish.
+   * The plan's own first and last day. The picker does not refuse them for
+   * the lake's sake: a default plan can end after the lake does, and that is
+   * the server's to refuse, with the backfill that fixes it, not an entry the
+   * trader has to finish.
    */
-  protected readonly bounds = computed<DateBounds>(() => {
-    const held = this.held();
-    if (this.range() !== undefined) return held;
-    const { from, to } = this.shown();
-    return { ...held, min: held.min !== null && from < held.min ? from : held.min, max: held.max !== null && to > held.max ? to : held.max };
+  protected readonly planDays = computed(() => {
+    const p = this.protocol();
+    return [etIsoDate(p.development_start_ms), etIsoDate(p.final_end_ms - 1)];
   });
-  /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
-  protected readonly gaps = computed<DataGaps | null>(() => this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.protocol().symbol, this.bounds(), 'minute'));
+  /** The sessions the tree lacks from the lake's first day, or the plan's, to the later of their last: a held span is only a first and a last day. */
+  protected readonly gaps = computed<DataGaps | null>(() => {
+    const held = this.bounds();
+    const [first, last] = this.planDays();
+    const span = { ...held, min: held.min !== null && first < held.min ? first : held.min, max: held.max !== null && last > held.max ? last : held.max };
+    return this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.protocol().symbol, span, 'minute');
+  });
   /**
    * Whether a first day the server offers lands where it says: only when the
    * plan's dates are the layout of the range shown. They are for a picked
@@ -106,7 +108,7 @@ export class GoldenSearchTimeWindowsComponent {
    */
   private readonly offersApply = computed(() => {
     if (this.range() !== undefined) return this.rangeLaidOut();
-    const last = this.held().max;
+    const last = this.bounds().max;
     return this.finalMonths() !== undefined && !this.finalSessionsCut() && (last === null || this.shown().to <= last);
   });
   /** The server's refusals of a date, in its own words, each with the first days it would take instead of the range's. */
@@ -117,6 +119,14 @@ export class GoldenSearchTimeWindowsComponent {
       .filter((refusal) => refusal.target === RANGE_INPUT_ID)
       .map((refusal) => ({ ...refusal, offers: apply ? refusal.offers.filter((day) => day !== from) : [] }));
   });
+
+  /**
+   * Whether the plan's dates answer what the form now asks for. They do not
+   * while a picked range has no layout of its own, nor after the server
+   * refused the range or a month count: the bar and the notes under it would
+   * then describe the plan before.
+   */
+  protected readonly current = computed(() => this.rangeLaidOut() && this.layoutProblem() === null);
 
   /** Where the final test starts along the bar, and each fold's test window within development; null when the dates are out of order. */
   protected readonly timeline = computed<{ readonly finalAt: number; readonly folds: readonly Span[] } | null>(() => {

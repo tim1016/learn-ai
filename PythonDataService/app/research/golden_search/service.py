@@ -241,12 +241,17 @@ class LakeSessions:
     #: Every complete minute session the lake holds for the symbol, the earlier stretches included.
     held: frozenset[date] = field(default=frozenset(), compare=False, repr=False)
 
-    def run_start(self, last_day: date) -> date:
+    def run_start(self, last_day: date) -> date | None:
         """The first session of the unbroken run that reaches ``last_day``: a range that ends before a hole is not held to the run after it.
 
-        The latest run's first session when no held session reaches ``last_day``.
+        The latest run's first session for a day after the lake's last one.
+        ``None`` for a day inside a hole or before the lake: no run reaches
+        it, so no run-up month is kept and the plan check names the sessions
+        the lake lacks.
         """
-        return unbroken_run_start(self.held, last_day) or self.first
+        if last_day > self.last or not self.held:
+            return self.first
+        return unbroken_run_start(self.held, last_day)
 
 
 async def lake_sessions(symbol: str) -> LakeSessions | None:

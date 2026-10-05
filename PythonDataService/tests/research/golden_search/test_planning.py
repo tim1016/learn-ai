@@ -429,6 +429,15 @@ def test_a_range_too_short_for_one_fold_is_refused_with_what_the_plan_needs() ->
     )
 
 
+def test_a_range_too_short_by_itself_is_told_so_whatever_the_lake_holds() -> None:
+    # The lake's history is short too, but no backfill would make nine months hold eleven.
+    with pytest.raises(GoldenSearchRefusal) as short:
+        _fit(StudyRange(date(2026, 1, 3), date(2026, 10, 3)), earliest_session=date(2025, 12, 15))
+
+    assert short.value.field == "range_start_ms"
+    assert str(short.value).endswith("need development to start by 2025-11-03, and the range starts on 2026-01-03.")
+
+
 def test_a_range_the_lake_is_too_young_for_is_refused_naming_the_lake_not_the_range() -> None:
     # The range is eleven months long; the lake's unbroken history starts two months before it ends.
     with pytest.raises(GoldenSearchRefusal) as young:

@@ -719,18 +719,19 @@ def fit_range(
 
     fit = first_fit(floor)
     if fit is None:
-        needed = add_months(nominal_final_start, -(training_months + test_months)).isoformat()
+        needed = add_months(nominal_final_start, -(training_months + test_months))
         asks = f"{_months(training_months)} of training, one test of {_months(test_months)} and a final test of {_months(final_months)}"
-        if earliest_session is None or floor == study_range.start:
+        # The range is to blame whenever it starts too late by itself: no backfill cures that, whatever the lake holds.
+        if earliest_session is None or study_range.start > needed:
             raise GoldenSearchRefusal(
-                f"The range is too short: {asks} need development to start by {needed}, and the range starts on {floor.isoformat()}.",
+                f"The range is too short: {asks} need development to start by {needed.isoformat()}, and the range starts on {study_range.start.isoformat()}.",
                 code="INTERVALS_INVALID",
                 field="range_start_ms",
             )
         raise GoldenSearchRefusal(
             f"The lake's unbroken history starts on {earliest_session.isoformat()}, and its first month is kept for the run-up, "
             f"so development cannot start before {floor.isoformat()}. {asks[0].upper()}{asks[1:]} that end with "
-            f"this range need it to start by {needed}.",
+            f"this range need it to start by {needed.isoformat()}.",
             code="INTERVALS_INVALID",
         )
     development_start, final_start = fit

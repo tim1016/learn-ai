@@ -693,7 +693,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.defaults).toHaveBeenCalledTimes(1);
     expect(service.preflight).toHaveBeenCalledTimes(1);
 
-    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    service.defaults.mockResolvedValueOnce(defaults({ development_start_ms: etMidnightMs('2024-10-01') }));
     fireEvent.change(start, { target: { value: '2024-09-19' } });
 
     await waitFor(() => expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-09-19'), range_end_ms: etMidnightMs('2026-04-01') }));
@@ -715,14 +715,15 @@ describe('GoldenSearchPlanFormComponent', () => {
     fireEvent.click(within(screen.getByRole('list', { name: /cannot be locked/i })).getByRole('button', { name: message }));
     expect(document.activeElement).toBe(range);
 
-    service.defaults.mockResolvedValueOnce(twoYearDefaults());
+    service.defaults.mockResolvedValueOnce(defaults({ development_start_ms: etMidnightMs('2024-11-01') }));
     fireEvent.click(screen.getByRole('button', { name: 'Start the range on 2024-11-01' }));
 
     // The offered day becomes the range's first and its last day stays; the server lays the plan out inside it.
     await waitFor(() =>
       expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 3, training_months: 6, test_months: 2, range_start_ms: etMidnightMs('2024-11-01'), range_end_ms: etMidnightMs('2026-04-01') }),
     );
-    await waitFor(() => expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull());
+    await waitFor(() => expect(planDates(view.container)[0]).toBe('Development 2024-11-01 to 2025-12-31'));
+    expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull();
     expect(document.activeElement).toBe(range);
   });
 
@@ -751,6 +752,43 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     await waitFor(() => expect(within(view.container.querySelector<HTMLElement>('[id="gs-plan-range"]') as HTMLElement).getByRole('alert').textContent).toBe(message));
     expect(screen.queryByRole('button', { name: /^Start the range on/ })).toBeNull();
+  });
+
+  it("lays a quick range out inside the lake when the default plan ran past it, and keeps the plan's own last day when only the first is typed (#2886)", async () => {
+    const service = fakeService();
+    // The lake stops on 2026-01-16; the default plan's final test runs through 2026-03-31.
+    const { view } = await renderForm(service, { pool: [{ ...STUDY_POOL[0], lastHeld: '2026-01-16' }] });
+    pickSymbol(view.fixture, 'SPY');
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(1));
+
+    // The plan's own last day is the server's to judge, so a first day typed beside it is laid out as asked.
+    service.defaults.mockResolvedValueOnce(defaults({ development_start_ms: etMidnightMs('2024-08-01') }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2024-07-15' } });
+    await waitFor(() => expect(service.defaults.mock.lastCall?.[2]).toMatchObject({ range_start_ms: etMidnightMs('2024-07-15'), range_end_ms: etMidnightMs('2026-04-01') }));
+
+    // A quick range is the lake's: it ends on the last day held.
+    service.defaults.mockResolvedValueOnce(defaults({ development_start_ms: etMidnightMs('2025-02-17'), development_end_ms: etMidnightMs('2025-10-17'), final_start_ms: etMidnightMs('2025-10-17'), final_end_ms: etMidnightMs('2026-01-17') }));
+    fireEvent.click(quickRange('1Y'));
+
+    await waitFor(() => expect(service.defaults.mock.lastCall?.[2]).toMatchObject({ range_start_ms: etMidnightMs('2025-01-17'), range_end_ms: etMidnightMs('2026-01-17') }));
+    await waitFor(() => expect(planDates(view.container)[1]).toBe('Final test 2025-10-17 to 2026-01-16'));
+    expect(screen.queryByText(/^Study range:/)).toBeNull();
+  });
+
+  it('says so when the data plane answers a range with dates that are not that range (#2886)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    // A data plane older than this page ignores the range and answers with its default dates.
+    service.defaults.mockResolvedValueOnce(defaults());
+
+    fireEvent.click(quickRange('2Y'));
+
+    const range = view.container.querySelector<HTMLElement>('[id="gs-plan-range"]') as HTMLElement;
+    await waitFor(() => expect(within(range).getByRole('alert').textContent).toMatch(/it is older than this page\. Restart the data plane, then pick the range again\./));
+    expect(planDates(view.container)).toEqual([]);
+    expect(lockButton().disabled).toBe(true);
+    expect(service.preflight).toHaveBeenCalledTimes(1);
   });
 
   it('a range picked while dates are being laid out for a month count wins: the late layout is dropped', async () => {
@@ -810,6 +848,8 @@ describe('GoldenSearchPlanFormComponent', () => {
     fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
 
     expect((await screen.findAllByText(/the dates could not be laid out/i)).length).toBeGreaterThan(0);
+    // The bar would describe the plan of the months before.
+    expect(planDates(view.container)).toEqual([]);
     expect(lockButton().disabled).toBe(true);
     expect(service.preflight).toHaveBeenCalledTimes(1);
   });

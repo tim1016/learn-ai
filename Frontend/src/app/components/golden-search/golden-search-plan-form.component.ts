@@ -20,6 +20,8 @@ import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, Stud
 import type { DefaultsLayout, GoldenSearchMethod, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
 
+const RANGE_NOT_LAID_OUT = 'The data plane did not lay the dates out inside this range: it is older than this page. Restart the data plane, then pick the range again.';
+
 /**
  * The Plan step (#2696): choose a strategy with a Golden Search declaration
  * and an instrument, start from the server's defaults, edit the method,
@@ -312,6 +314,12 @@ export class GoldenSearchPlanFormComponent {
       const draft = this.draft();
       if (generation !== this.datesGeneration || draft === null) return;
       this.layingDates.set(false);
+      // A final test ends where its range does. A data plane older than this page ignores the range and answers with its default dates.
+      if (layout.range_end_ms !== undefined && laidOut.final_end_ms !== layout.range_end_ms) {
+        this.datesError.set(RANGE_NOT_LAID_OUT);
+        this.invalidateCheck();
+        return;
+      }
       this.draft.set(withServerDates(draft, laidOut));
       this.scheduleCheck();
     } catch (error) {

@@ -13,7 +13,7 @@
   </div>
   <div #block class="range" role="group" aria-labelledby="gs-plan-range-label" [id]="rangeId" tabindex="-1">
     <span class="range__label" id="gs-plan-range-label">Study range</span>
-    <app-date-range-picker label="Study range dates" [from]="shown().from" [to]="shown().to" [bounds]="bounds()" [gaps]="gaps()" [ranges]="quickRanges" [sessionsOnly]="false" (changed)="onRange($event)" />
+    <app-date-range-picker label="Study range dates" [from]="shown().from" [to]="shown().to" [bounds]="bounds()" [hostDays]="planDays()" [gaps]="gaps()" [ranges]="quickRanges" [sessionsOnly]="false" (changed)="onRange($event)" />
     @if (layoutProblem(); as problem) {
       <p class="refusal" role="alert">{{ problem }}</p>
     }
@@ -32,16 +32,16 @@
     }
   </div>
   <p class="hint">Days are New York dates. The final test is the last months of the range, and development is laid out before it. The final-test dates cannot be extended after a result is seen.</p>
-  @if (rangeNote(); as note) {
+  @if (current() ? rangeNote() : null; as note) {
     <p class="cut" role="note">{{ note }}</p>
   }
-  @if (finalSessionsCut(); as cut) {
+  @if (current() ? finalSessionsCut() : null; as cut) {
     <p class="cut" role="note">
       The final test ends with the lake's last session on <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /> — {{ cut }} scheduled {{ cut === 1 ? 'session' : 'sessions' }} short of {{ finalMonths() }} whole months. Backfill the instrument and change a month count to lay out the whole months.
     </p>
   }
 
-  @if (rangeLaidOut() ? timeline() : null; as line) {
+  @if (current() ? timeline() : null; as line) {
     @let folds = preflight()?.folds?.length ?? 0;
     <div class="timeline" role="img" aria-label="Development, its test-over-time folds, then the sealed final test">
       <div class="bar">
