@@ -345,6 +345,13 @@ async def test_a_live_shadow_sell_with_no_bar_of_its_minute_fills_at_the_newest_
         record = ports.book.record(sale.client_order_id)
         assert record is not None and record.anchor is not None
         assert (record.anchor.fill_model, record.anchor.decision_bar_end_ms) == ("older_bar_close", enter_ms)
+        # The bot page reads the same record by the Clerk's own order ref, and from it the price's age.
+        priced = facade.synthesized_fill_anchors()
+        sale_ref = sale.client_order_id
+        assert sale_ref in sold.child_order_refs
+        assert (priced[sale_ref].fill_model, sale.filled_at_ms - priced[sale_ref].decision_bar_end_ms) == (
+            "older_bar_close", 3 * MINUTE_MS,
+        )
     finally:
         repo.close()
         evidence.close()
@@ -551,6 +558,8 @@ async def test_a_dry_run_fills_at_the_traded_assets_close(tmp_path: Path) -> Non
 
         assert bought.state is not EffectOperationState.REJECTED, bought.explanation
         assert _fill_prices(runtime.clerk.repository, bought) == [40.10]
+        [buy_ref] = bought.child_order_refs
+        assert runtime.clerk.synthesized_fill_anchors()[buy_ref].fill_model == "decision_bar_close"
     finally:
         await close_synthetic_clerk_runtimes()
         market_liveness.reset_market_liveness_store_for_testing()

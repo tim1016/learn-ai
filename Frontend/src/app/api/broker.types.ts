@@ -9381,6 +9381,7 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            simulated?: components["schemas"]["SimulatedFillView"] | null;
             /** Symbol */
             symbol?: string | null;
         };
@@ -22556,6 +22557,29 @@ export interface components {
             period: number;
             /** Warmup Bars */
             warmup_bars: number;
+        };
+        /**
+         * SimulatedFillView
+         * @description How a fill that no venue made was priced (#2912).
+         *
+         *     A Dry Run's and a Live Shadow's fills are worked out from market data.
+         *     Each one says which rule priced it, so it is not read as what a real
+         *     order would have got.
+         */
+        SimulatedFillView: {
+            /** Caution */
+            caution: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bar_close" | "older_bar_close" | "limit_touch" | "live_quote" | "run_end_close" | "unknown";
+            /** Label */
+            label: string;
+            /** Price Age Ms */
+            price_age_ms?: number | null;
+            /** Sentence */
+            sentence: string;
         };
         /**
          * SnapshotBar

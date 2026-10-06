@@ -29,6 +29,9 @@ from app.broker.contract.models import (
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
     from app.services.source_bar_ledger import RetainedSourceBar
 
 
@@ -232,6 +235,15 @@ class GuardedBrokerTradePort:
         if not callable(bind):
             return False
         return bool(bind(client_order_id, symbol=symbol))
+
+    def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
+        """How a no-submit port priced each order it filled, by client order id (#2912).
+
+        A vendor's port fills nothing itself and has none. This reads the
+        port's own order ledger and reaches no broker, so it is not fenced.
+        """
+        read = getattr(self._inner, "synthesized_fill_anchors", None)
+        return read() if callable(read) else {}
 
     def _assert_unfenced(self, method: str) -> None:
         if self._intake.current_scope_depth() != 0:

@@ -78,7 +78,7 @@ def _event_copy(event: RetainedContinuityEvent) -> tuple[str, str]:
     return label, explanation
 
 
-def _duration_label(duration_ms: int) -> str:
+def duration_label(duration_ms: int) -> str:
     seconds = max(0, duration_ms) // 1_000
     if seconds < 60:
         return f"{seconds} second{'s' if seconds != 1 else ''}"
@@ -171,7 +171,7 @@ def build_feed_continuity(
                 explanation=event_explanation,
                 cause=event.cause,
                 duration_ms=duration_ms,
-                duration_label=(_duration_label(duration_ms) if duration_ms is not None else None),
+                duration_label=(duration_label(duration_ms) if duration_ms is not None else None),
                 window_start_ms=event.window_start_ms,
                 window_end_ms=event.window_end_ms,
             )
@@ -187,7 +187,7 @@ def build_feed_continuity(
             event_views[index] = view.model_copy(
                 update={
                     "duration_ms": active_duration_ms,
-                    "duration_label": _duration_label(active_duration_ms),
+                    "duration_label": duration_label(active_duration_ms),
                 }
             )
             break

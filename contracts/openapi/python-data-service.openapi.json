@@ -8197,6 +8197,16 @@
             "title": "Side",
             "type": "string"
           },
+          "simulated": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulatedFillView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "symbol": {
             "anyOf": [
               {
@@ -41352,6 +41362,55 @@
           "warmup_bars"
         ],
         "title": "SignalSeriesContract",
+        "type": "object"
+      },
+      "SimulatedFillView": {
+        "description": "How a fill that no venue made was priced (#2912).\n\nA Dry Run's and a Live Shadow's fills are worked out from market data.\nEach one says which rule priced it, so it is not read as what a real\norder would have got.",
+        "properties": {
+          "caution": {
+            "title": "Caution",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "bar_close",
+              "older_bar_close",
+              "limit_touch",
+              "live_quote",
+              "run_end_close",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "price_age_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Age Ms"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "sentence",
+          "caution"
+        ],
+        "title": "SimulatedFillView",
         "type": "object"
       },
       "SnapshotBar": {

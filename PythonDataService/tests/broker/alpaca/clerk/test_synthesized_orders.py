@@ -135,6 +135,33 @@ def test_records_round_trip_with_leg_and_anchor(tmp_path: Path) -> None:
     assert ledger.latest_orders()[0].client_order_id == "learn-ai/ema-1/v1:a"
 
 
+def _anchor(ledger_bars: SourceBarLedger) -> SynthesizedAnchor:
+    retained = ledger_bars.append(_bar(), run_id="run-1")
+    return SynthesizedAnchor(
+        fill_model="decision_bar_close", evidence_account_id=retained.account_id, provider=retained.provider,
+        bar_identity=retained.bar_identity, bar_ref=retained.bar_ref,
+        decision_bar_start_ms=retained.start_ms, decision_bar_end_ms=retained.end_ms,
+    )
+
+
+def test_fill_anchors_name_how_each_filled_order_was_priced_and_follow_the_ledger(tmp_path: Path) -> None:
+    """The bot page asks on every refresh (#2912): an order written since the last answer is in the next one."""
+    ledger, bars = _ledger(tmp_path)
+    anchor = _anchor(bars)
+    assert ledger.fill_anchors() == {}, "a ledger never written has priced nothing"
+
+    with ledger.transaction() as records:
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:a"), anchor=anchor)
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:unfilled", filled=0.0, price=None), anchor=anchor)
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:old"))
+    assert ledger.fill_anchors() == {"learn-ai/ema-1/v1:a": anchor}, "an unfilled order has no fill to explain"
+
+    with ledger.transaction() as records:
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:b", side="sell"), anchor=anchor)
+
+    assert set(ledger.fill_anchors()) == {"learn-ai/ema-1/v1:a", "learn-ai/ema-1/v1:b"}
+
+
 def test_an_append_outside_the_transaction_is_refused(tmp_path: Path) -> None:
     """The ``records`` list is only the transaction's read while the lock is held."""
     ledger, _bars = _ledger(tmp_path)

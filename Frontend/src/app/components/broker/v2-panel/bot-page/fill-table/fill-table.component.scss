@@ -39,6 +39,25 @@
   &:hover td { background: var(--bg-hover); }
 }
 
+// A fill no venue made says which rule priced it (#2912).
+.fill-table__simulated {
+  display: block;
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+
+  &--caution { color: var(--warn); }
+}
+
+// The whole sentence, under a fill whose price may not be its own moment's.
+.fill-table__row:has(+ .fill-table__note) td { border-bottom: 0; }
+
+.fill-table .fill-table__note td {
+  padding-top: 0;
+  color: var(--warn);
+  font-size: var(--fs-xxs);
+  text-align: left;
+}
+
 .fill-table__side { font-weight: var(--fw-semibold); }
 .fill-table__row--buy .fill-table__side { color: var(--bull); }
 .fill-table__row--sell .fill-table__side { color: var(--bear); }

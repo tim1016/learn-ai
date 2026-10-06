@@ -30,6 +30,8 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
     settle_unavailable_words,
 )
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+from app.broker.contract.models import OrderSide
 from app.schemas.action_plan import order_symbol
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
@@ -49,8 +51,17 @@ from app.schemas.bot_page import (
     ToolbarTone,
 )
 from app.schemas.broker_bots import BotRunView
-from app.schemas.broker_v2_panel import BotPanelView, ChannelHealthView, PanelAction
+from app.schemas.broker_v2_panel import (
+    BotPanelView,
+    ChannelHealthView,
+    ChartFillMarker,
+    PanelAction,
+    SimulatedFillView,
+)
 from app.services.broker_v2_panel.catalog_projection_service import duty_outcome_needs_attention
+from app.services.broker_v2_panel.chart_projection_service import fill_to_marker
+from app.services.broker_v2_panel.feed_continuity_projection import duration_label
+from app.services.source_bar_ledger import RECOVERY_QUOTE_PROVIDER, RUN_END_CLOSE_PROVIDER
 from app.utils.et_words import et_clock_words, et_day_words
 from app.utils.session_anchors import et_date_at_ms
 
@@ -665,6 +676,90 @@ def bot_page_view(
     )
 
 
+_NOT_A_REAL_FILL = "A real order might not have filled at that price."
+_UNREAD_SIMULATED_FILL = SimulatedFillView(
+    kind="unknown",
+    label="Simulated · pricing not readable",
+    sentence="Simulated. The record of how this fill was priced could not be read.",
+    caution=True,
+)
+
+
+def simulated_fill_view(anchor: SynthesizedAnchor, fill: FillRecord) -> SimulatedFillView:
+    """How one simulated fill was priced, in the owner's words (#2912).
+
+    The anchor's provider tells a market bar from the two prices a no-submit
+    world makes for itself: a recovery exit's live quote and a run-end
+    close's last price seen.
+    """
+    if anchor.provider == RECOVERY_QUOTE_PROVIDER:
+        quoted = "bid" if fill.side is OrderSide.SELL else "ask"
+        return SimulatedFillView(
+            kind="live_quote",
+            label="Simulated · live quote",
+            sentence=f"Simulated: filled at once at the live IBKR {quoted}. {_NOT_A_REAL_FILL}",
+            caution=False,
+        )
+    if anchor.provider == RUN_END_CLOSE_PROVIDER:
+        return SimulatedFillView(
+            kind="run_end_close",
+            label="Simulated · last price seen",
+            sentence="Simulated: closed at the last price this run saw, which may be older than this fill.",
+            caution=True,
+        )
+    if anchor.fill_model == "older_bar_close":
+        age_ms = max(0, fill.filled_at_ms - anchor.decision_bar_end_ms)
+        age = duration_label(age_ms)
+        return SimulatedFillView(
+            kind="older_bar_close",
+            label=f"Simulated · price {age} old",
+            sentence=(
+                f"Simulated: {fill.symbol} had no price for this minute, so the fill used its "
+                f"newest earlier closing price, which was {age} old."
+            ),
+            price_age_ms=age_ms,
+            caution=True,
+        )
+    if anchor.fill_model == "limit_touch":
+        return SimulatedFillView(
+            kind="limit_touch",
+            label="Simulated · limit reached",
+            sentence=(
+                "Simulated: filled at its limit price when a later minute's range reached it. "
+                "A real order might not have filled."
+            ),
+            caution=False,
+        )
+    return SimulatedFillView(
+        kind="bar_close",
+        label="Simulated",
+        sentence=f"Simulated: filled at once at the closing price of its minute. {_NOT_A_REAL_FILL}",
+        caution=False,
+    )
+
+
+def run_fill_markers(
+    run_fills: Sequence[FillRecord], anchors: Mapping[str, SynthesizedAnchor] | None
+) -> list[ChartFillMarker]:
+    """The run's newest fills as the page lists them, each simulated one saying how it was priced (#2912).
+
+    ``anchors`` is a no-submit authority's record of how it priced each
+    order, by order ref; a Paper or Live authority has none. ``None`` is a
+    record that could not be read: every fill is then a simulated one whose
+    pricing is unknown, and says so.
+    """
+    markers: list[ChartFillMarker] = []
+    for fill in run_fills[-RUN_FILL_LIMIT:]:
+        marker = fill_to_marker(fill)
+        if anchors is None:
+            simulated: SimulatedFillView | None = _UNREAD_SIMULATED_FILL
+        else:
+            anchor = anchors.get(fill.order_ref)
+            simulated = None if anchor is None else simulated_fill_view(anchor, fill)
+        markers.append(marker if simulated is None else marker.model_copy(update={"simulated": simulated}))
+    return markers
+
+
 __all__ = [
     "RUN_FILL_LIMIT",
     "SUMMARY_TEMPLATE_VERSION",
@@ -674,8 +769,10 @@ __all__ = [
     "health_groups",
     "run_ending",
     "run_facts",
+    "run_fill_markers",
     "run_summary",
     "run_summary_facts",
     "run_summary_text",
+    "simulated_fill_view",
     "toolbar_actions",
 ]

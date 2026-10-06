@@ -140,6 +140,23 @@ async def test_guarded_trade_port_forwards_the_broker_id_lookup_only_unfenced() 
     assert broker.broker_id_lookups == ["broker-order-b"]
 
 
+async def test_a_vendors_trade_port_has_priced_no_fill_itself_and_the_question_is_never_fenced() -> None:
+    """The bot page asks how a simulated fill was priced (#2912); it reaches no broker, so intake never refuses it."""
+    fence = ReentrantAsyncLock()
+    priced = {"learn-ai/spy-bot/v1:a": object()}
+
+    class _NoSubmit(_Broker):
+        def synthesized_fill_anchors(self) -> dict[str, object]:
+            return priced
+
+    _read, vendor = guard_broker_ports(read=_Broker(), trade=_Broker(), intake=fence)
+    _read, simulated = guard_broker_ports(read=_NoSubmit(), trade=_NoSubmit(), intake=fence)
+
+    async with fence:
+        assert vendor.synthesized_fill_anchors() == {}
+        assert simulated.synthesized_fill_anchors() == priced
+
+
 def test_guarded_ports_are_explicitly_async_protocol_complete() -> None:
     assert missing_guarded_async_methods(BrokerReadPort, GuardedBrokerReadPort) == frozenset()
     assert missing_guarded_async_methods(BrokerTradePort, GuardedBrokerTradePort) == frozenset()

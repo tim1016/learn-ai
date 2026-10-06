@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal, NoReturn
@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.sqlite.scheduled_end import (
     end_sale_waits_for_operator_words,
     end_sales_waiting_for_operator,
 )
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
 from app.broker.ibkr.config import live_artifacts_root
 from app.broker.v2panel.action_policy import sealed_account_archive_action
 from app.engine.live.identity import INSTANCE_ID_PATTERN
@@ -96,13 +97,12 @@ from app.services.broker_v2_panel.action_execution_service import (
     execute_action,
 )
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, custody_facade
-from app.services.broker_v2_panel.bot_page_projection import RUN_FILL_LIMIT, bot_page_view, run_facts
+from app.services.broker_v2_panel.bot_page_projection import bot_page_view, run_facts, run_fill_markers
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     custody_bot_status,
     unreadable_catalog_view,
 )
-from app.services.broker_v2_panel.chart_projection_service import fill_to_marker
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
     DryRunRestoringError,
@@ -654,6 +654,23 @@ def _latest_run(
         return _LatestRun(None, unreadable=True)
 
 
+def _simulated_fill_anchors(facade: SqliteAlpacaClerkFacade, sid: str) -> Mapping[str, SynthesizedAnchor] | None:
+    """How this authority priced its simulated fills; ``None`` when its order ledger cannot be read.
+
+    The fills themselves are the Clerk's and still show. Only how each was
+    priced is lost, and the page says that instead of failing.
+    """
+    try:
+        return facade.synthesized_fill_anchors()
+    except (RuntimeError, OSError, ValueError) as error:
+        logger.warning(
+            "Bot page: the simulated order ledger cannot be read",
+            exc_info=True,
+            extra={"action": "bot_page_simulated_fills_unreadable", "strategy_instance_id": sid, "error": str(error)},
+        )
+        return None
+
+
 def _with_bot_page(
     panel: BotPanelView,
     evidence: SqlitePanelEvidence,
@@ -689,7 +706,7 @@ def _with_bot_page(
                 execution_coverage_complete=evidence.economics.snapshot.execution_coverage == "complete",
                 now_ms=now_ms,
             ),
-            "run_fills": [fill_to_marker(fill) for fill in run_fills[-RUN_FILL_LIMIT:]],
+            "run_fills": run_fill_markers(run_fills, _simulated_fill_anchors(facade, sid)),
         }
     )
 

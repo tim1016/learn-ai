@@ -46,7 +46,7 @@ not rediscover them in production:
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -337,6 +337,10 @@ class ShadowOrderBook:
     def order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return next((order for order in self.orders() if order.order_id == order_id), None)
 
+    def fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
+        """How each filled order was priced, read as the book was left: nothing is settled (#2912)."""
+        return self._ledger.fill_anchors()
+
     def record(self, client_order_id: str) -> SynthesizedOrderRecord | None:
         """The durable record — order, leg and fill anchor — for one client order id."""
         return next(
@@ -584,6 +588,9 @@ class NoSubmitAlpacaTradePort:
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
         return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol, side=side)
+
+    def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
+        return self._book.fill_anchors()
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         return self._book.submit(leg, client_order_id=client_order_id)

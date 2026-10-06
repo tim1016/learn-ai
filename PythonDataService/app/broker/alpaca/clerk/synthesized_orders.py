@@ -30,7 +30,7 @@ buy/reduce/add/flip parity fixture (``atol=0``, ``rtol=0``).
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, NamedTuple, TypeGuard
@@ -205,6 +205,7 @@ class SynthesizedOrderLedger:
         self._verify_bar = verify_bar
         self._bound_bars: dict[str, BoundBar] = {}
         self._binding_lock = threading.Lock()
+        self._fill_anchors: tuple[tuple[int, int] | None, Mapping[str, SynthesizedAnchor]] | None = None
         # Thread-local because the transaction lock is held by one thread at a
         # time: a sibling thread outside a transaction must not read another
         # thread's held flag as its own permission to append.
@@ -305,6 +306,33 @@ class SynthesizedOrderLedger:
 
     def latest_records(self) -> dict[str, SynthesizedOrderRecord]:
         return self.latest_records_from(self._orders.read_all())
+
+    def fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
+        """How each order this ledger filled was priced, by client order id (#2912).
+
+        A plain read: nothing is settled and nothing is written. The bot page
+        asks on every refresh, so a ledger that has not changed since the
+        last answer is not read again.
+        """
+        stamp = self._orders_stamp()
+        answered = self._fill_anchors
+        if answered is not None and answered[0] == stamp:
+            return answered[1]
+        anchors = {
+            client_order_id: record.anchor
+            for client_order_id, record in self.latest_records().items()
+            if record.anchor is not None and record.order.filled_quantity > 0
+        }
+        self._fill_anchors = (stamp, anchors)
+        return anchors
+
+    def _orders_stamp(self) -> tuple[int, int] | None:
+        """The order WAL's size and last write, which every append changes; ``None`` before its first."""
+        try:
+            stat = self._orders.path.stat()
+        except FileNotFoundError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
 
     @staticmethod
     def latest_records_from(

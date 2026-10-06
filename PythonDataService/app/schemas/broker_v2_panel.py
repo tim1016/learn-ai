@@ -1102,6 +1102,32 @@ class ChartBar(BaseModel):
 ChartAsset = Literal["listens", "trades"]
 
 
+class SimulatedFillView(BaseModel):
+    """How a fill that no venue made was priced (#2912).
+
+    A Dry Run's and a Live Shadow's fills are worked out from market data.
+    Each one says which rule priced it, so it is not read as what a real
+    order would have got.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # ``bar_close`` is the closing price of the order's own minute.
+    # ``older_bar_close`` is an earlier minute's, used when its own had none.
+    # ``limit_touch`` is a resting limit a later minute reached.
+    # ``live_quote`` is the live IBKR bid or ask, for a recovery exit.
+    # ``run_end_close`` is the last price the run saw, at a run-end close.
+    # ``unknown`` is a simulated fill whose pricing record cannot be read.
+    kind: Literal["bar_close", "older_bar_close", "limit_touch", "live_quote", "run_end_close", "unknown"]
+    label: str
+    sentence: str
+    # How long before the fill its price was made, when that is known and
+    # the price is older than the fill.
+    price_age_ms: int | None = Field(default=None, ge=0)
+    # The price may not be the one of the fill's own moment.
+    caution: bool
+
+
 class ChartFillMarker(BaseModel):
     """One fill marker for a chart pane.
 
@@ -1128,6 +1154,9 @@ class ChartFillMarker(BaseModel):
     # order_ref; two fills — of the same or different orders — can share a
     # millisecond timestamp).
     event_key: str
+    # Set on the bot page's run fills for a fill that was simulated. A chart
+    # marker carries none.
+    simulated: SimulatedFillView | None = None
 
 
 class ChartOverlayNoticeView(BaseModel):

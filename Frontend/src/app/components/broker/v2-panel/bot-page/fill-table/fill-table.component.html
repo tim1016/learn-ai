@@ -21,8 +21,24 @@
         @if (showAsset()) {
           <td>@if (fill.symbol; as asset) { <app-asset-identity [symbol]="asset" size="xs" /> } @else { — }</td>
         }
-        <td>{{ fmtCurrency(fill.price) }}</td>
+        <td>
+          {{ fmtCurrency(fill.price) }}
+          @if (fill.simulated; as simulated) {
+            <small
+              class="fill-table__simulated"
+              [class.fill-table__simulated--caution]="simulated.caution"
+              [title]="simulated.sentence"
+            >{{ simulated.label }}</small>
+          }
+        </td>
       </tr>
+      @if (fill.simulated; as simulated) {
+        @if (simulated.caution) {
+          <tr class="fill-table__note">
+            <td [attr.colspan]="showAsset() ? 5 : 4">{{ simulated.sentence }}</td>
+          </tr>
+        }
+      }
     }
   </tbody>
 </table>
