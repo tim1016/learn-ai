@@ -23,6 +23,7 @@ candidate-subscription policy for a stopped bot:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -1044,7 +1045,7 @@ def _spy_bot_trading(traded_symbol: str, *, mode: str = "trade") -> StartRequest
     )
 
 
-def _status_by_symbol(**states: str):
+def _status_by_symbol(**states: str) -> Callable[[str, int], MarketLivenessFact]:
     """A liveness source where each named symbol has that trading status and every other is tradable."""
 
     def market_liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
