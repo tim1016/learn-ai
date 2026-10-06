@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -60,7 +61,9 @@ class _FakeFillSource:
         self, broker: str, account_id: str, sid: str, *, now_ms: int
     ) -> tuple[str, tuple[FillRecord, ...]]:
         self.call_count += 1
-        return "", self.fills_by_sid.get(sid, ())
+        # The symbol the bot's tile charts, as the real source answers it:
+        # the hub draws a fill only on the candles of its own asset (#2912).
+        return "SPY", self.fills_by_sid.get(sid, ())
 
 
 def _status_label_for(*, phase: str, running: bool) -> str:
@@ -564,7 +567,9 @@ async def test_build_snapshot_populates_markers_from_todays_fills(
 
     # Byte-identical to calling the canonical helper directly — proves the
     # hub reused it rather than re-deriving an equivalent-looking mapping.
-    expected = markers_in_window((in_window, out_of_window), from_ms=_OPEN_MS, to_ms=_CLOSE_MS)
+    expected = markers_in_window(
+        (in_window, out_of_window), from_ms=_OPEN_MS, to_ms=_CLOSE_MS, charted_symbol="SPY"
+    )
     assert snap.markers == {"Aug11-02": expected}
     marker = snap.markers["Aug11-02"][0]
     assert marker.side == "buy"
@@ -1004,3 +1009,20 @@ async def test_build_snapshot_reads_the_real_aggregator_line_status(
     assert feed.state == "ERRORED"
     assert feed.attention_required is True
     assert feed.last_error is not None and "IBKR connection lost" in feed.last_error
+
+
+def test_a_fill_is_drawn_only_on_the_chart_of_its_own_asset() -> None:
+    """#2912: a bot listens to SPY and trades QQQ. Its QQQ fill is no mark on SPY's candles, at QQQ's price."""
+    in_spy = _fill(sid="bot", event_key="spy-fill", filled_at_ms=_OPEN_MS + 1)
+    in_qqq = replace(in_spy, event_key="qqq-fill", symbol="QQQ", fill_price=40.1)
+
+    def drawn(charted_symbol: str) -> list[tuple[str, str | None]]:
+        return [
+            (marker.event_key, marker.symbol)
+            for marker in markers_in_window(
+                (in_spy, in_qqq), from_ms=_OPEN_MS, to_ms=_CLOSE_MS, charted_symbol=charted_symbol
+            )
+        ]
+
+    assert drawn("SPY") == [("spy-fill", "SPY")]
+    assert drawn("qqq") == [("qqq-fill", "QQQ")]

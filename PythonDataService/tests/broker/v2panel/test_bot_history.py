@@ -33,6 +33,7 @@ from app.engine.live.bot_lifecycle_state import stable_bot_lifecycle_state_path
 from app.services.bot_binding_repository import (
     BotRunOutcomeRecord,
     BotRunRecord,
+    alpaca_v1_action_plan,
     live_state_binding_repository,
 )
 from app.services.bot_lifecycle_projection import SqliteAlpacaLifecycleAuthority
@@ -144,6 +145,28 @@ async def test_every_bot_is_listed_with_its_world_status_outcome_and_money(lane:
     assert (dry.world, dry.world_label) == ("dry_run", "DRY RUN · simulated cash")
     assert dry.outcome is not None and dry.outcome.headline == "Ended at its scheduled time"
     assert dry.account_id == _ACCOUNT
+
+
+@pytest.mark.asyncio
+async def test_a_bot_that_traded_another_asset_is_listed_under_what_it_listened_to(
+    lane: ClerkSqliteRepository,
+) -> None:
+    """#2912: the Clerk holds it under QQQ, the asset it traded; its line says it listened to SPY and traded QQQ."""
+    lane.register_strategy_instance(
+        strategy_instance_id="spy-qqq", symbol="QQQ", config_hash="seal-spy-qqq", exit_terms=TERMS,
+        strategy_key="ema_crossover", display_name="EMA crossover",
+        config_json=json.dumps({
+            "mode": "trade", "carryover_policy": "FORBID", "quantity": 1, "symbol": "SPY",
+            "action_plan": alpaca_v1_action_plan("QQQ").model_dump(mode="json"),
+        }),
+    )
+
+    history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
+
+    bots = {bot.strategy_instance_id: bot for bot in history.bots}
+    assert bots["spy-qqq"].symbol == "SPY"
+    assert bots["spy-qqq"].traded is not None and bots["spy-qqq"].traded.symbol == "QQQ"
+    assert (bots["done"].symbol, bots["done"].traded) == ("SPY", None)
 
 
 @pytest.mark.asyncio

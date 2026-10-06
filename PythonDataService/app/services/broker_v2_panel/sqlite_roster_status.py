@@ -30,7 +30,9 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
+from app.schemas.action_plan import ActionPlan, TradedInstrumentView
 from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services.bot_binding_repository import live_state_binding_repository
 from app.services.bot_registry_projection import (
     duty_outcome_view,
@@ -43,19 +45,37 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 
 @dataclass(frozen=True)
 class DeclaredConfiguration:
-    """The submission-capability facts a roster row must state truthfully."""
+    """What a roster row states from the bot's own immutable configuration.
+
+    What it may submit (mode, quantity, carryover), what it listens to and
+    trades, and the owner's acknowledgement of an untested traded asset.
+    """
 
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"]
+    # What the bot listens to, as its own configuration states it. ``None``
+    # for a configuration that names no symbol; the caller then has only the
+    # Clerk's registration, which is what the bot trades.
+    signal_symbol: str | None = None
+    # What it trades, when that is not shares of ``signal_symbol`` (#2912).
+    traded: TradedInstrumentView | None = None
+    # The owner's written acceptance of that untested asset, when one was given.
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
+
+    def listens_to(self, registered_symbol: str) -> str:
+        """The row's ``symbol``: the Signal stream, never the Clerk's registration when the two differ."""
+        return self.signal_symbol or registered_symbol
 
 
 def declared_configuration(strategy_instance_id: str, config_json: str) -> DeclaredConfiguration:
-    """Read mode, quantity, and carryover policy out of SQLite's own config.
+    """Read a bot's declared facts out of SQLite's own config.
 
     Refuses rather than substitutes a default: guessing `trade` for a row
     whose real mode is unreadable would overstate what the bot may do, and
-    guessing `log_only` would understate it. Neither is safe to render.
+    guessing `log_only` would understate it. Neither is safe to render. An
+    Action Plan or an acknowledgement that cannot be read is refused the
+    same way.
     """
     try:
         declared = json.loads(config_json)
@@ -70,11 +90,49 @@ def declared_configuration(strategy_instance_id: str, config_json: str) -> Decla
             f"Bot '{strategy_instance_id}' has no declared mode or carryover policy in SQLite."
         )
     quantity = declared.get("quantity")
+    signal_symbol = declared.get("symbol")
     return DeclaredConfiguration(
         mode=mode,
         quantity=int(quantity) if quantity is not None else None,
         carryover_policy=carryover_policy,
+        signal_symbol=signal_symbol if isinstance(signal_symbol, str) and signal_symbol else None,
+        traded=_declared_traded_instrument(strategy_instance_id, declared),
+        traded_asset_acknowledgement=_declared_acknowledgement(strategy_instance_id, declared),
     )
+
+
+def _declared_acknowledgement(
+    strategy_instance_id: str, declared: dict
+) -> UntestedTradedAssetAcknowledgement | None:
+    """The acceptance the bot was deployed with, exactly as its configuration hash covers it."""
+    recorded = declared.get("traded_asset_acknowledgement")
+    if recorded is None:
+        return None
+    try:
+        return UntestedTradedAssetAcknowledgement.model_validate(recorded)
+    except ValueError as exc:
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' has an unreadable untested-asset acceptance in its "
+            "immutable SQLite configuration."
+        ) from exc
+
+
+def _declared_traded_instrument(strategy_instance_id: str, declared: dict) -> TradedInstrumentView | None:
+    """What the configuration's Action Plan trades, when that is not the shares it listens to.
+
+    A plan that cannot be read is refused like any other incomplete
+    configuration: guessing "trades what it listens to" would put a bot's
+    position under the wrong symbol on every screen.
+    """
+    signal_symbol, plan = declared.get("symbol"), declared.get("action_plan")
+    if plan is None or not isinstance(signal_symbol, str):
+        return None
+    try:
+        return TradedInstrumentView.of(ActionPlan.model_validate(plan), signal_symbol=signal_symbol)
+    except ValueError as exc:
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' has an unreadable Action Plan in its immutable SQLite configuration."
+        ) from exc
 
 
 def lifecycle_record(strategy_instance_id: str) -> BotLifecycleStateRecord | None:
@@ -301,7 +359,9 @@ def build_terminal_roster_status(
         strategy_key=config.strategy_key,
         strategy_label=config.display_name,
         broker=broker,
-        symbol=str(registration["symbol"]),
+        symbol=declared.listens_to(str(registration["symbol"])),
+        traded=declared.traded,
+        traded_asset_acknowledgement=declared.traded_asset_acknowledgement,
         mode=declared.mode,
         quantity=declared.quantity,
         carryover_policy=declared.carryover_policy,
@@ -334,7 +394,9 @@ def build_roster_status(
         strategy_key=config.strategy_key,
         strategy_label=config.display_name,
         broker=broker,
-        symbol=str(registration["symbol"]),
+        symbol=declared.listens_to(str(registration["symbol"])),
+        traded=declared.traded,
+        traded_asset_acknowledgement=declared.traded_asset_acknowledgement,
         mode=declared.mode,
         quantity=declared.quantity,
         carryover_policy=declared.carryover_policy,

@@ -21,7 +21,7 @@ from pydantic import (
 from pydantic.json_schema import SkipJsonSchema
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
-from app.schemas.action_plan import ActionPlan
+from app.schemas.action_plan import ActionPlan, TradedInstrumentView
 from app.schemas.bot_end import BotEndInput, BotEndView, refuse_explicit_null_end
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.deployment_budget import DeploymentBudgetInput
@@ -31,6 +31,7 @@ from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.traded_asset_acknowledgement import (
     UntestedTradedAssetAcknowledgement,
+    UntestedTradedAssetWarning,
     substantive_reason,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -288,6 +289,23 @@ class BotDeployPrefill(BaseModel):
     exit_terms: ExitTermsInput | None = None
 
 
+class DeployTradedAssetView(BaseModel):
+    """What Deploy says about an asset the owner picked for a bot to trade (#2912).
+
+    Read the moment the asset is picked, before any money is reviewed: can
+    Alpaca trade it, and what the strategy's evidence does not cover.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # Why the picked asset cannot be traded, in the owner's words. ``None``
+    # when it can.
+    refusal: str | None = None
+    # ``None`` when the pick is the symbol the bot listens to, or cannot be
+    # traded. It carries no sentence to accept: the owner accepts at Confirm.
+    warning: UntestedTradedAssetWarning | None = None
+
+
 class AlpacaPaperDeployEligibility(BaseModel):
     """Backend-authored launch verdict rendered verbatim by Angular."""
 
@@ -488,6 +506,8 @@ class AlpacaPaperDeployView(BaseModel):
     # the form pre-fills it.
     default_end: BotEndView
     next_deploy_open_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # What a bot deployed from this view trades by default, in the owner's
+    # words: the shares of the symbol it listens to (#2912).
     action_plan_explanation: str
     carryover_available: bool
     carryover_label: str
@@ -507,7 +527,14 @@ class BotStatusView(BaseModel):
     # durable display-name record yet, so only they may leave it absent.
     strategy_label: str | None = None
     broker: str
+    # The Signal stream: what the bot listens to, whatever it trades.
     symbol: str
+    # What it trades, when that is something else (#2912).
+    traded: TradedInstrumentView | None = None
+    # The owner's written acceptance that the strategy is untested trading
+    # ``traded``, as it was given at Deploy. ``None`` for a Dry Run, which
+    # needs none, and for every bot that trades what it listens to.
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"

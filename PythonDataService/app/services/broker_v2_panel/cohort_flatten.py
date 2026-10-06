@@ -68,7 +68,13 @@ def _leg_from_panel(panel: BotPanelView, action: PanelAction | None) -> CohortFl
 
 
 async def get_cohort_flatten_view(broker: str, account_id: str) -> CohortFlattenView:
-    """Group the roster by (strategy_key, symbol); present per-leg facts."""
+    """Group the roster by (strategy_key, symbol); present per-leg facts.
+
+    ``symbol`` is what each bot listens to. A cohort is the bots a stop wave
+    strands together, and those are the ones that enter and exit in lockstep
+    on one signal (ADR 0051), whatever each trades (#2912). Each leg's own
+    exposure says what it holds.
+    """
     resolved = await validate_account(broker, account_id)
     rows = await panel_data_source.get_catalog(broker, resolved)
     groups: dict[tuple[str, str], list[BotCatalogView]] = {}

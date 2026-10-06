@@ -45,6 +45,8 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployView,
     AlpacaPaperSizingSelection,
     BotDeployPrefill,
+    DeployTradedAssetView,
+    normalized_symbol,
 )
 from app.schemas.deployment_budget import (
     BudgetDeployCommandReceipt,
@@ -83,6 +85,7 @@ from app.services.broker_v2_panel.panel_errors import (
 from app.services.broker_v2_panel.panel_scope import (
     clerk_status,
     resolve_account_snapshot,
+    validate_account,
     validate_account_scope,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
@@ -309,6 +312,7 @@ async def preview_alpaca_deployment_budget(
     return preview.model_copy(update={
         "same_symbol_note": same_symbol_note,
         "traded_asset_warning": _untested_traded_asset_warning(request),
+        "trades_summary": _trades_summary(request),
     })
 
 
@@ -883,9 +887,19 @@ async def _require_tradable_traded_asset(broker: str, request: AlpacaPaperDeploy
     Run asks too, so that what it rehearses is something a real bot could
     trade.
     """
-    symbol = request.traded_symbol
-    if symbol is None:
+    if request.traded_symbol is None:
         return
+    untradable = await _untradable(broker, request.traded_symbol)
+    if untradable is not None:
+        raise untradable
+
+
+async def _untradable(broker: str, symbol: str) -> PanelRunnerError | None:
+    """Why Alpaca cannot trade ``symbol``, or ``None`` when it can.
+
+    Raises when Alpaca could not be asked: nothing was learned about the
+    asset, so that is never an answer about it.
+    """
     try:
         asset = await get_broker_registry().resolve(broker).get_asset(symbol)
     except BrokerError as exc:
@@ -903,13 +917,43 @@ async def _require_tradable_traded_asset(broker: str, request: AlpacaPaperDeploy
             ),
             http_status=exc.http_status,
         ) from exc
-    if not is_active_tradable_us_equity(asset):
-        raise PanelRunnerError(
-            f"Alpaca cannot trade {symbol}. Choose another asset.",
-            detail=f"{symbol} is not an active, tradable US stock or ETF at Alpaca.",
-            next_action="Choose another asset to trade, or trade the symbol the bot listens to.",
-            http_status=409,
-        )
+    if is_active_tradable_us_equity(asset):
+        return None
+    return PanelRunnerError(
+        f"Alpaca cannot trade {symbol}. Choose another asset.",
+        detail=f"{symbol} is not an active, tradable US stock or ETF at Alpaca.",
+        next_action="Choose another asset to trade, or trade the symbol the bot listens to.",
+        http_status=409,
+    )
+
+
+async def deploy_traded_asset(broker: str, account_id: str, symbol: str, traded_symbol: str) -> DeployTradedAssetView:
+    """What Deploy says about a picked traded asset, before any money is reviewed (#2912).
+
+    The same two facts the money review and Deploy act on, so the owner
+    reads them while still choosing: whether Alpaca can trade the asset, and
+    the warning about what the strategy was never tested on. Picking the
+    symbol the bot listens to is picking nothing, and says nothing.
+    """
+    await validate_account(broker, account_id)
+    listens_to, trades = normalized_symbol(symbol), normalized_symbol(traded_symbol)
+    if trades == listens_to:
+        return DeployTradedAssetView()
+    untradable = await _untradable(broker, trades)
+    if untradable is not None:
+        return DeployTradedAssetView(refusal=str(untradable))
+    return DeployTradedAssetView(
+        warning=UntestedTradedAssetWarning.for_symbols(listens_to, trades, acceptance_required=False),
+    )
+
+
+def _trades_summary(request: AlpacaPaperDeployRequest) -> str:
+    """Confirm's "Trades" line: what the bot listens to, what it trades, and how many shares."""
+    quantity = request.sizing.quantity
+    shares = f"{quantity} {'share' if quantity == 1 else 'shares'}"
+    if request.traded_symbol is None:
+        return f"{request.symbol} · {shares}"
+    return f"listens to {request.symbol} · trades {request.traded_symbol} · {shares}"
 
 
 def _require_dry_run_deploy_request(

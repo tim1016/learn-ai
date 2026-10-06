@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     SETTLE_UNKNOWN_EXIT_ORDER_LABEL,
     settle_unavailable_words,
 )
+from app.schemas.action_plan import order_symbol
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
     BotHealthGroupsView,
@@ -485,7 +486,8 @@ def _manual_order_entry(panel: BotPanelView) -> ToolbarActionView:
     if panel.status == "cleared":
         return _entry("manual_order", "Manual order", "bot", "not_needed", "A cleared bot's page is read-only.")
     return _entry(
-        "manual_order", "Manual order", "bot", "available", f"Place an order for {panel.symbol} on this account."
+        "manual_order", "Manual order", "bot", "available",
+        f"Place an order for {order_symbol(panel.symbol, panel.traded)} on this account.",
     )
 
 

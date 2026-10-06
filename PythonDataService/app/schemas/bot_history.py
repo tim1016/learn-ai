@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -84,7 +85,11 @@ class BotHistoryBot(BaseModel):
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str
+    #: What the bot listened to.
     symbol: str
+    #: What it traded, when that was something else (#2912). Left off the
+    #: wire when absent (``_omit_an_absent_traded_instrument``).
+    traded: TradedInstrumentView | None = None
     account_id: str
     world: BotHistoryWorld
     #: The world worded once, e.g. "PAPER · practice money" (PRD #2560 D4).
@@ -117,6 +122,23 @@ class BotHistoryBot(BaseModel):
     #: ``None`` when it can. A bot of the account's other world is kept in a
     #: database that workspace does not read, so only History shows it.
     page_unavailable_reason: str | None
+
+
+    # No return annotation: the row's published schema stays this model's
+    # own fields, where an annotated ``dict`` would replace it with a bare
+    # object.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_traded_instrument(self, handler: SerializerFunctionWrapHandler):
+        """A bot that traded what it listened to answers exactly as before the field existed.
+
+        The coordinator reads each lane's answer strictly. A ``null`` here
+        from a lane on this build would make a coordinator still on the
+        build before it refuse every row of every account until it restarts.
+        """
+        row = handler(self)
+        if row.get("traded") is None:
+            row.pop("traded", None)
+        return row
 
 
 class BotHistoryGap(BaseModel):

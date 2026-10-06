@@ -4330,6 +4330,16 @@
             ],
             "title": "Trade Count"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "world_label": {
             "title": "World Label",
             "type": "string"
@@ -4956,6 +4966,16 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "transaction_count": {
             "minimum": 0.0,
             "title": "Transaction Count",
@@ -5552,6 +5572,46 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_warning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetWarning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_market_pulse": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketPulseView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at_ms": {
             "title": "Updated At Ms",
             "type": "integer"
@@ -5921,6 +5981,26 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -8106,6 +8186,17 @@
             ],
             "title": "Side",
             "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
           }
         },
         "required": [
@@ -12961,6 +13052,35 @@
         "title": "DeploySubmissionUncommitted",
         "type": "object"
       },
+      "DeployTradedAssetView": {
+        "additionalProperties": false,
+        "description": "What Deploy says about an asset the owner picked for a bot to trade (#2912).\n\nRead the moment the asset is picked, before any money is reviewed: can\nAlpaca trade it, and what the strategy's evidence does not cover.",
+        "properties": {
+          "refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetWarning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "DeployTradedAssetView",
+        "type": "object"
+      },
       "DeploymentBudgetInput": {
         "additionalProperties": false,
         "properties": {
@@ -13158,6 +13278,17 @@
                 "type": "null"
               }
             ]
+          },
+          "trades_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trades Summary"
           },
           "unreserved_usd": {
             "anyOf": [
@@ -16920,6 +17051,16 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "transaction_count": {
             "minimum": 0.0,
             "title": "Transaction Count",
@@ -17388,6 +17529,16 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -37022,6 +37173,17 @@
             "title": "Recorded At Ms",
             "type": "integer"
           },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Reason"
+          },
           "seq": {
             "title": "Seq",
             "type": "integer"
@@ -45479,6 +45641,30 @@
         "title": "TopOfBookQuote",
         "type": "object"
       },
+      "TradedInstrumentView": {
+        "additionalProperties": false,
+        "description": "What a bot trades, when that is not shares of the symbol it listens to (#2912).\n\nA bot's ``symbol`` is its Signal stream: what it listens to. This is on\nits row only when it trades something else, so its presence is the\nserver's one answer to \"does this bot trade something else\". The answer\ncomes from the instrument's type and identity, never from a screen\ncomparing tickers: options on the bot's own symbol are something else.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "stock",
+              "option"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "symbol"
+        ],
+        "title": "TradedInstrumentView",
+        "type": "object"
+      },
       "TradingCalendarWindow": {
         "description": "The scheduled NYSE sessions in a window, oldest first.\n\nParallel arrays: session ``i`` opens at ``session_open_ms[i]`` and closes\nat ``session_close_ms[i]``. The close is the scheduled one, so a half-day\ncarries its early close.",
         "properties": {
@@ -53363,6 +53549,97 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/traded-asset": {
+      "get": {
+        "operationId": "get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "What the bot listens to.",
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "description": "What the bot listens to.",
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "description": "What the owner picked to trade.",
+            "in": "query",
+            "name": "traded_symbol",
+            "required": true,
+            "schema": {
+              "description": "What the owner picked to trade.",
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+              "title": "Traded Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployTradedAssetView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deploy: can a picked traded asset be traded, and what the strategy was never tested on",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
       "post": {
         "operationId": "run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post",
@@ -53734,6 +54011,22 @@
                 }
               ],
               "title": "To Ms"
+            }
+          },
+          {
+            "description": "Whose candles: the symbol the bot listens to, or the asset it trades. The same chart for a bot that trades what it listens to.",
+            "in": "query",
+            "name": "asset",
+            "required": false,
+            "schema": {
+              "default": "listens",
+              "description": "Whose candles: the symbol the bot listens to, or the asset it trades. The same chart for a bot that trades what it listens to.",
+              "enum": [
+                "listens",
+                "trades"
+              ],
+              "title": "Asset",
+              "type": "string"
             }
           },
           {
@@ -56318,6 +56611,81 @@
           }
         },
         "summary": "Fleet Bot End Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/traded-asset": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/traded-asset (deploy).",
+        "operationId": "fleet_bot_traded_asset_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_traded_asset_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Traded Asset Read",
         "tags": [
           "broker-clerks"
         ]

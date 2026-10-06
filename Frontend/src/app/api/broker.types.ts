@@ -1300,6 +1300,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/traded-asset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Deploy: can a picked traded asset be traded, and what the strategy was never tested on */
+        get: operations["get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
         parameters: {
             query?: never;
@@ -1965,6 +1982,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/bots/end-preview (deploy).
          */
         post: operations["fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/traded-asset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Traded Asset Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/traded-asset (deploy).
+         */
+        get: operations["fleet_bot_traded_asset_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_traded_asset_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7869,6 +7906,7 @@ export interface components {
             symbol: string;
             /** Trade Count */
             trade_count?: number | null;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
             /** World Label */
             world_label: string;
         };
@@ -8109,6 +8147,7 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
             /** Transaction Count */
             transaction_count: number;
             /**
@@ -8302,6 +8341,10 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
+            traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+            traded_market_pulse?: components["schemas"]["MarketPulseView"] | null;
             /** Updated At Ms */
             updated_at_ms: number;
             warmup_join?: components["schemas"]["WarmupJoinView"] | null;
@@ -8423,6 +8466,8 @@ export interface components {
             strategy_label?: string | null;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
         };
         /**
          * BreachProbability
@@ -9335,6 +9380,8 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /** Symbol */
+            symbol?: string | null;
         };
         /** ChartGapDetail */
         ChartGapDetail: {
@@ -11346,6 +11393,18 @@ export interface components {
             /** Submission Key */
             submission_key: string;
         };
+        /**
+         * DeployTradedAssetView
+         * @description What Deploy says about an asset the owner picked for a bot to trade (#2912).
+         *
+         *     Read the moment the asset is picked, before any money is reviewed: can
+         *     Alpaca trade it, and what the strategy's evidence does not cover.
+         */
+        DeployTradedAssetView: {
+            /** Refusal */
+            refusal?: string | null;
+            warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+        };
         /** DeploymentBudgetInput */
         DeploymentBudgetInput: {
             /** Amount Usd */
@@ -11404,6 +11463,8 @@ export interface components {
              */
             state: "ready" | "unavailable" | "awaiting_price";
             traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+            /** Trades Summary */
+            trades_summary?: string | null;
             /** Unreserved Usd */
             unreserved_usd?: string | null;
             /**
@@ -12896,6 +12957,7 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
             /** Transaction Count */
             transaction_count: number;
             /**
@@ -13054,6 +13116,7 @@ export interface components {
             sid: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
         };
         /**
          * GalleryFeedView
@@ -20854,6 +20917,8 @@ export interface components {
             reason_code: string;
             /** Recorded At Ms */
             recorded_at_ms: number;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
             /** Seq */
             seq: number;
             /**
@@ -24092,6 +24157,25 @@ export interface components {
             observed_at_ms: number;
             /** Source */
             source: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * TradedInstrumentView
+         * @description What a bot trades, when that is not shares of the symbol it listens to (#2912).
+         *
+         *     A bot's ``symbol`` is its Signal stream: what it listens to. This is on
+         *     its row only when it trades something else, so its presence is the
+         *     server's one answer to "does this bot trade something else". The answer
+         *     comes from the instrument's type and identity, never from a screen
+         *     comparing tickers: options on the bot's own symbol are something else.
+         */
+        TradedInstrumentView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stock" | "option";
             /** Symbol */
             symbol: string;
         };
@@ -27813,6 +27897,45 @@ export interface operations {
             };
         };
     };
+    get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get: {
+        parameters: {
+            query: {
+                /** @description What the bot listens to. */
+                symbol: string;
+                /** @description What the owner picked to trade. */
+                traded_symbol: string;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeployTradedAssetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post: {
         parameters: {
             query?: never;
@@ -27968,6 +28091,8 @@ export interface operations {
                 timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
                 from_ms?: number | null;
                 to_ms?: number | null;
+                /** @description Whose candles: the symbol the bot listens to, or the asset it trades. The same chart for a bot that trades what it listens to. */
+                asset?: "listens" | "trades";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -29121,6 +29246,41 @@ export interface operations {
                 "application/json": Record<string, never> | null;
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_traded_asset_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_traded_asset_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

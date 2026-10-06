@@ -127,6 +127,11 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/strategy-view",
       "requires_account": true
     },
+    "bot_traded_asset_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/traded-asset",
+      "requires_account": true
+    },
     "bots_catalog_read": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/catalog",

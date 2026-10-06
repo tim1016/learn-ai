@@ -11,8 +11,10 @@ from typing import Literal
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.config import settings
+from app.schemas.action_plan import order_symbol
 from app.schemas.broker_v2_panel import (
     BotPanelView,
+    ChartAsset,
     ChartHistoryResponse,
     ChartHistoryTimeframe,
     ChartLiveResponse,
@@ -192,12 +194,18 @@ async def get_history_chart(
     sid: str,
     timeframe: ChartHistoryTimeframe,
     window: tuple[int, int] | None = None,
+    asset: ChartAsset = "listens",
 ) -> ChartHistoryResponse:
     """Build bounded history from SQLite facts.
 
     With ``window`` (``from_ms``, ``to_ms``), the tape is that window of the
     bot's latest run instead of the newest bars (#2794); a window outside the
     run raises ``ChartWindowError``.
+
+    ``asset`` chooses whose candles: the symbol the bot listens to, or the
+    asset it trades (#2912). They are the same chart for a bot that trades
+    what it listens to. For one that trades something else, the traded
+    asset's chart is where its fills are drawn, at their own prices.
 
     Issue #2204: this Clerk-side assembly never calls Polygon directly —
     every Fleet Clerk boots with a present-but-empty ``POLYGON_API_KEY``
@@ -233,13 +241,14 @@ async def get_history_chart(
         )
     status = evidence.status
     fills = evidence.fills.fills
+    symbol = order_symbol(status.symbol, status.traded) if asset == "trades" else status.symbol
 
     if window is not None:
         return await build_run_window_chart(
             timeframe,
             fills,
             strategy_instance_id=sid,
-            symbol=status.symbol,
+            symbol=symbol,
             batch_provider=build_history_batch_provider(),
             window=(from_ms, to_ms),
             now_ms=observed_at_ms,
@@ -248,7 +257,7 @@ async def get_history_chart(
         timeframe,
         fills,
         strategy_instance_id=sid,
-        symbol=status.symbol,
+        symbol=symbol,
         batch_provider=build_history_batch_provider(),
         now_ms=observed_at_ms,
     )

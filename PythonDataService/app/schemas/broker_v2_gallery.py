@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.broker_v2_panel import ChartBar, ChartFillMarker
 from app.services.live_chart_window import ChartFeedState
 
@@ -52,7 +53,10 @@ class GalleryBotView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     sid: str
+    # What the bot listens to: the tile's candles and feed are this symbol's.
     symbol: str
+    # What it trades, when that is something else (#2912).
+    traded: TradedInstrumentView | None = None
     label: str
     running: bool
     phase: str

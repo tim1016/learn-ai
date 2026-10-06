@@ -645,6 +645,7 @@ def _decision_receipt_from_resource(
                 "decision_bar_close_ms": facts.get("decision_bar_close_ms"),
                 "explanation": explanation,
                 "explanation_unreadable": explanation is None and facts.get("explanation") is not None,
+                "refusal_reason": _facts_optional_str(facts, "refusal_reason"),
                 "decision_id": (
                     _facts_optional_str(facts, "decision_id")
                     or _facts_optional_str(facts, "evaluation_id")
@@ -1272,9 +1273,12 @@ async def read_account_projection(facade: SqliteAlpacaClerkFacade) -> ClerkProje
 class HomeRosterBot:
     """Where one live registration sits on its account's Home (PRD #2560 D7).
 
-    ``group`` is ``None`` when the bot's lifecycle cannot be read, so where it
-    sits is unknown. ``unclean_ended_at_ms`` is when a stopped bot's run ended
-    without a clean exit (a crash, an unverified exit), else ``None``.
+    ``symbol`` is what the bot trades, the asset the Clerk registered it
+    under: its readers ask what a bot holds or sends orders in, never what it
+    listens to (#2912). ``group`` is ``None`` when the bot's lifecycle cannot
+    be read, so where it sits is unknown. ``unclean_ended_at_ms`` is when a
+    stopped bot's run ended without a clean exit (a crash, an unverified
+    exit), else ``None``.
     """
 
     strategy_instance_id: str
@@ -1320,7 +1324,7 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
         )
         bots.append(HomeRosterBot(
             strategy_instance_id=sid,
-            symbol=status.symbol,
+            symbol=str(registration["symbol"]),
             group=bot_group(world=bot_world_kind, running=status.running, holds_money=sid in holding),
             unclean_ended_at_ms=ended_at_ms(status, latest_stop_ms=stops.get(sid)) if unclean else None,
         ))
@@ -1399,7 +1403,8 @@ def _uncleanly_ended(
             continue
         outcome = status.duty_outcome
         if outcome is not None and ended_uncleanly(kind=outcome.kind, running=status.running):
-            ended.append(_EndedBot(sid=sid, symbol=status.symbol, kind=outcome.kind))
+            # The notices say what the bot may still hold: the asset the Clerk registered it under.
+            ended.append(_EndedBot(sid=sid, symbol=str(registration["symbol"]), kind=outcome.kind))
     return ended, unreadable
 
 

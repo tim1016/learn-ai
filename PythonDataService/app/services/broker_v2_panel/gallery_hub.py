@@ -358,6 +358,7 @@ class GalleryHub:
         return model(
             sid=row.strategy_instance_id,
             symbol=row.symbol,
+            traded=getattr(row, "traded", None),
             label=getattr(row, "strategy_label", ""),
             running=getattr(row, "running", False),
             phase=getattr(row, "phase", ""),
@@ -526,8 +527,8 @@ class GalleryHub:
                     exc_info=result,
                 )
                 continue
-            _symbol, fills = result
-            projected = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
+            charted_symbol, fills = result
+            projected = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms, charted_symbol=charted_symbol)
             if projected:
                 markers[sid] = projected
         self._markers_cache = markers

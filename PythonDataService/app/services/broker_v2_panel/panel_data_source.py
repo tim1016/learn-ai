@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.sqlite.scheduled_end import (
 from app.broker.ibkr.config import live_artifacts_root
 from app.broker.v2panel.action_policy import sealed_account_archive_action
 from app.engine.live.identity import INSTANCE_ID_PATTERN
+from app.schemas.action_plan import order_symbol
 from app.schemas.bot_end import BotEndView
 from app.schemas.broker_bots import (
     BotRunView,
@@ -57,6 +58,7 @@ from app.schemas.broker_bots import (
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
+    ChartAsset,
     ChartHistoryResponse,
     ChartHistoryTimeframe,
     ChartLiveResponse,
@@ -499,7 +501,9 @@ async def _get_panel_with_entries_from_authority(
     entries: list[OrderJournalEntry] = []
     # The card names the authority the evidence came from: a Dry Run's own
     # simulated account, never the real account it is listed under (H33).
-    clerk = await clerk_status(symbol=binding.symbol, facade=facade)
+    # Its channels are the Clerk's own submission gate, which reads the feed
+    # of the asset the bot's orders are in, not the one it listens to (#2912).
+    clerk = await clerk_status(symbol=order_symbol(binding.symbol, status.traded), facade=facade)
     try:
         decision_read = read_sqlite_decision_receipts(broker, sid, facade=facade)
     except SqlitePanelDecisionUnavailable as exc:
@@ -565,6 +569,19 @@ async def _get_panel_with_entries_from_authority(
             use_rth=binding.use_rth,
             bot_running=status.running,
             extended_window=facade.program_leg_policy.window,
+        ),
+        # A bot that trades something else depends on that asset's feed too:
+        # a halt or a stale line there refuses its entries while the symbol
+        # it listens to reads healthy.
+        traded_market_pulse=(
+            None if status.traded is None else build_market_pulse(
+                market_data_feed,
+                now_ms=now_ms_utc(),
+                symbol=status.traded.symbol,
+                use_rth=binding.use_rth,
+                bot_running=status.running,
+                extended_window=facade.program_leg_policy.window,
+            )
         ),
         feed_continuity_events=None if source_evidence is None else source_evidence.events,
         feed_continuity_run_id=binding.run_id,
@@ -769,13 +786,14 @@ async def get_history_chart(
     sid: str,
     timeframe: ChartHistoryTimeframe,
     window: tuple[int, int] | None = None,
+    asset: ChartAsset = "listens",
 ) -> ChartHistoryResponse:
     """Build the bounded HISTORY chart pane for one bot, or a window of its latest run (#2794)."""
     from app.services.broker_v2_panel.panel_chart_data_source import (
         get_history_chart as build_history_chart_response,
     )
 
-    return await build_history_chart_response(broker, account_id, sid, timeframe, window)
+    return await build_history_chart_response(broker, account_id, sid, timeframe, window, asset)
 
 
 def _action_performers(

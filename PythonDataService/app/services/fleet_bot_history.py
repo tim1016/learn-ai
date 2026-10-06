@@ -70,6 +70,11 @@ def lane_refusal(status_code: int, body: bytes) -> LaneRefusedRead:
     return LaneRefusedRead(words or f"This account's Clerk refused the read ({status_code}).")
 
 
+def _symbols_of(row: FleetBotHistoryRow) -> tuple[str, ...]:
+    """The symbols a bot is found under: what it listened to, and what it traded when that was something else."""
+    return (row.symbol,) if row.traded is None else (row.symbol, row.traded.symbol)
+
+
 @dataclass(frozen=True)
 class BotHistoryFilters:
     """What the owner narrowed the list to; ``None`` is "any"."""
@@ -84,7 +89,7 @@ class BotHistoryFilters:
         return (
             (self.status is None or row.status == self.status)
             and (self.world is None or row.world == self.world)
-            and (self.symbol is None or row.symbol == self.symbol)
+            and (self.symbol is None or self.symbol in _symbols_of(row))
             and (self.strategy_instance_id is None or row.strategy_instance_id == self.strategy_instance_id)
         )
 
@@ -163,7 +168,7 @@ def merge_bot_history(
         total=len(matching),
         page=page,
         page_size=page_size,
-        symbols=tuple(sorted({row.symbol for row in rows})),
+        symbols=tuple(sorted({symbol for row in rows for symbol in _symbols_of(row)})),
     )
 
 

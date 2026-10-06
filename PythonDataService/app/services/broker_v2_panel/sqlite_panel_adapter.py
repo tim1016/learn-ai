@@ -45,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.action_policy import archive_action
 from app.broker.v2panel.vocabulary import copy_for
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
+from app.schemas.action_plan import order_symbol
 from app.schemas.alpaca_clerk_sqlite import UnknownOrderSettlementResponse
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
@@ -876,7 +877,7 @@ def _with_terminal_exposure_notices(
     if outcome is None:
         return health
     notices = terminal_exposure_notices(
-        projection, sid=panel.strategy_instance_id, symbol=panel.symbol,
+        projection, sid=panel.strategy_instance_id, symbol=order_symbol(panel.symbol, panel.traded),
         kind=outcome.kind, running=health.running, pass_proof=pass_proof,
     )
     return health.model_copy(update={"duty_outcome": outcome.model_copy(update={"exposure_notices": notices})})
@@ -1077,7 +1078,7 @@ def _working_order_view(
     return WorkingOrderView(
         order_ref=order.order_ref,
         broker_order_id=order.broker_order_id or "",
-        symbol=order.symbol or panel.symbol,
+        symbol=order.symbol or order_symbol(panel.symbol, panel.traded),
         side=order.side or "unavailable",
         quantity=order.quantity,
         filled_quantity=order.filled_quantity,

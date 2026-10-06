@@ -757,7 +757,7 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
 
     async def _evidence(*_args, **_kwargs):
         return SimpleNamespace(
-            status=SimpleNamespace(running=True),
+            status=SimpleNamespace(running=True, traded=None),
             projection=SimpleNamespace(),
             economics=SimpleNamespace(
                 session_fills=(),
