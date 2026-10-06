@@ -88,7 +88,7 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
 
     expect(screen.getByRole('heading', { name: '2026-01-01 – 2026-03-31 is still sealed' })).not.toBeNull();
     const lock = screen.getByRole('region', { name: /is still sealed/i });
-    expect(lock.textContent).toContain('All-period fit and Recent fit and the frozen incumbent will be evaluated.');
+    expect(lock.textContent).toContain('All-period fit, Recent fit and the frozen incumbent will be evaluated.');
     expect(lock.textContent).toContain('You choose which fit to approve after you see the results.');
     expect(lock.textContent).toMatch(/Recent fit\s*Gap \$0\.10 · RSI 45–70 · EMA 5\/10 · hold 3 bars/);
     expect(lock.textContent).toMatch(/Development\s*2024-01-01\s*–\s*2025-12-31\s*· used to choose/);

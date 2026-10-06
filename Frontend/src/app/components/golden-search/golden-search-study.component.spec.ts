@@ -394,7 +394,7 @@ describe('GoldenSearchStudyComponent', () => {
 
     await screen.findByRole('heading', { name: /is still sealed/i });
     expect(currentStep()).toMatch(/Final decision/);
-    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toContain('All-period fit and Recent fit and the frozen incumbent will be evaluated.');
+    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toContain('All-period fit, Recent fit and the frozen incumbent will be evaluated.');
     expect(service.command).not.toHaveBeenCalled();
   });
 

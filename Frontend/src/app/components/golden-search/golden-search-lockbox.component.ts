@@ -40,7 +40,7 @@ export class GoldenSearchLockboxComponent {
   protected readonly exposure = computed(() => exposurePreview(this.study()));
   protected readonly canOpen = computed(() => this.study().permitted_actions.includes('open_exam'));
   protected readonly refusal = computed(() => (this.canOpen() ? null : (this.study().action_refusals.open_exam ?? null)));
-  protected readonly names = computed(() => this.fits().map((fit) => fit.candidate.label).join(' and '));
+  protected readonly names = computed(() => this.fits().map((fit) => fit.candidate.label).join(', '));
   protected readonly warned = computed(() => this.fits().filter((fit) => fit.candidate.flags.length > 0));
 
   protected onAcknowledge(event: Event): void {
