@@ -420,6 +420,68 @@ async def test_a_deploy_that_names_no_traded_asset_is_sent_as_it_always_was(depl
     assert alpaca.asked == [], "Alpaca is asked about an asset only when the bot trades another one"
 
 
+# ── the moment the asset is picked ──────────────────────────────────────
+
+
+async def _picked(app, **query: str) -> httpx.Response:
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.get(f"{_BOTS}/traded-asset", params=query)
+
+
+async def test_picking_an_asset_alpaca_trades_says_what_the_strategy_was_never_tested_on(
+    deploy_app, alpaca: _Alpaca
+) -> None:
+    """Read before any money is reviewed, so the owner sees it while still choosing."""
+    app, _registry = deploy_app
+
+    response = await _picked(app, symbol="SPY", traded_symbol="QQQ")
+
+    assert response.status_code == 200, response.text
+    said = response.json()
+    assert said["refusal"] is None
+    assert "SPY" in said["warning"]["headline"] and "QQQ" in said["warning"]["headline"]
+    assert said["warning"]["acceptance_label"] is None, "the owner accepts at Confirm, not here"
+    assert alpaca.asked == ["QQQ"]
+
+
+async def test_picking_an_asset_alpaca_cannot_trade_says_so_at_once(deploy_app, alpaca: _Alpaca) -> None:
+    app, _registry = deploy_app
+
+    response = await _picked(app, symbol="SPY", traded_symbol="XYZ")
+
+    assert response.status_code == 200, response.text
+    assert "XYZ" in response.json()["refusal"]
+    assert response.json()["warning"] is None
+
+
+async def test_picking_the_symbol_the_bot_listens_to_is_picking_nothing(deploy_app, alpaca: _Alpaca) -> None:
+    app, _registry = deploy_app
+
+    response = await _picked(app, symbol="SPY", traded_symbol="SPY")
+
+    assert response.json() == {"refusal": None, "warning": None}
+    assert alpaca.asked == [], "Alpaca is asked only about another asset"
+
+
+async def test_the_review_writes_the_trades_line_for_both_kinds_of_bot(
+    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirm shows the backend's line: no screen puts the two symbols and the share count together."""
+    app, _registry = deploy_app
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="synthetic")
+    monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
+    monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        other = await client.post(
+            f"{_BOTS}/budget-preview", json={**_SETTINGS, "execution_mode": "dry_run", "traded_symbol": "QQQ"},
+        )
+        own = await client.post(f"{_BOTS}/budget-preview", json={**_SETTINGS, "execution_mode": "dry_run"})
+
+    assert other.json()["trades_summary"] == "listens to SPY · trades QQQ · 2 shares"
+    assert own.json()["trades_summary"] == "SPY · 2 shares"
+
+
 # ── the money: priced from what the bot buys ────────────────────────────
 
 

@@ -464,6 +464,13 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             account=True,
         ),
         _op(
+            "bot_traded_asset_read",
+            "GET",
+            "/accounts/{account_id}/bots/traded-asset",
+            capability=Capability.DEPLOY,
+            account=True,
+        ),
+        _op(
             "bot_panel_read",
             "GET",
             "/accounts/{account_id}/bots/{sid}/panel",

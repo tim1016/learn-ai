@@ -229,6 +229,11 @@ class DeploymentBudgetPreview(BaseModel):
     # What the strategy's evidence does not cover, when the bot trades another
     # asset than it listens to (#2912). ``None`` when it trades its own symbol.
     traded_asset_warning: UntestedTradedAssetWarning | None = None
+    # Confirm's "Trades" line for these settings, written here so no screen
+    # composes it: what the bot listens to, what it trades when that is
+    # something else, and how many shares. ``None`` on a preview no route
+    # served.
+    trades_summary: str | None = None
     # The previewed amount as Python normalizes it: what Deploy sets aside.
     budget_usd: str | None = None
     observed_at_ms: EpochMs | None = None

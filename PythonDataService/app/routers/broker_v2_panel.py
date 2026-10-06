@@ -39,6 +39,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
     BotDeployPrefill,
+    DeployTradedAssetView,
 )
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
@@ -326,6 +327,25 @@ async def get_alpaca_paper_deploy_view(
         return await panel_deploy.get_alpaca_paper_deploy_view(broker, account_id, symbol, terms)
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/traded-asset",
+    response_model=DeployTradedAssetView,
+    summary="Deploy: can a picked traded asset be traded, and what the strategy was never tested on",
+)
+async def get_deploy_traded_asset(
+    broker: str,
+    account_id: str,
+    symbol: str = Query(..., pattern=US_EQUITY_SYMBOL_PATTERN, description="What the bot listens to."),
+    traded_symbol: str = Query(..., pattern=US_EQUITY_SYMBOL_PATTERN, description="What the owner picked to trade."),
+) -> DeployTradedAssetView:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Trading another asset is available on Alpaca accounts.")
+    try:
+        return await panel_deploy.deploy_traded_asset(broker, account_id, symbol, traded_symbol)
+    except panel_errors.PanelDataError as error:
+        _raise_alpaca_deploy_error(error)
 
 
 @router.post(

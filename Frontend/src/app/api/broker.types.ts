@@ -1300,6 +1300,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/traded-asset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Deploy: can a picked traded asset be traded, and what the strategy was never tested on */
+        get: operations["get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
         parameters: {
             query?: never;
@@ -1965,6 +1982,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/bots/end-preview (deploy).
          */
         post: operations["fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/traded-asset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Traded Asset Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/traded-asset (deploy).
+         */
+        get: operations["fleet_bot_traded_asset_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_traded_asset_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -11356,6 +11393,18 @@ export interface components {
             /** Submission Key */
             submission_key: string;
         };
+        /**
+         * DeployTradedAssetView
+         * @description What Deploy says about an asset the owner picked for a bot to trade (#2912).
+         *
+         *     Read the moment the asset is picked, before any money is reviewed: can
+         *     Alpaca trade it, and what the strategy's evidence does not cover.
+         */
+        DeployTradedAssetView: {
+            /** Refusal */
+            refusal?: string | null;
+            warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+        };
         /** DeploymentBudgetInput */
         DeploymentBudgetInput: {
             /** Amount Usd */
@@ -11414,6 +11463,8 @@ export interface components {
              */
             state: "ready" | "unavailable" | "awaiting_price";
             traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+            /** Trades Summary */
+            trades_summary?: string | null;
             /** Unreserved Usd */
             unreserved_usd?: string | null;
             /**
@@ -27846,6 +27897,45 @@ export interface operations {
             };
         };
     };
+    get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get: {
+        parameters: {
+            query: {
+                /** @description What the bot listens to. */
+                symbol: string;
+                /** @description What the owner picked to trade. */
+                traded_symbol: string;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeployTradedAssetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post: {
         parameters: {
             query?: never;
@@ -29156,6 +29246,41 @@ export interface operations {
                 "application/json": Record<string, never> | null;
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_traded_asset_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_traded_asset_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

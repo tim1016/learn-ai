@@ -31,6 +31,7 @@ from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.traded_asset_acknowledgement import (
     UntestedTradedAssetAcknowledgement,
+    UntestedTradedAssetWarning,
     substantive_reason,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -286,6 +287,23 @@ class BotDeployPrefill(BaseModel):
     # ``None`` when the source bot's terms were never recorded in full: the
     # form then starts from this account's defaults.
     exit_terms: ExitTermsInput | None = None
+
+
+class DeployTradedAssetView(BaseModel):
+    """What Deploy says about an asset the owner picked for a bot to trade (#2912).
+
+    Read the moment the asset is picked, before any money is reviewed: can
+    Alpaca trade it, and what the strategy's evidence does not cover.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # Why the picked asset cannot be traded, in the owner's words. ``None``
+    # when it can.
+    refusal: str | None = None
+    # ``None`` when the pick is the symbol the bot listens to, or cannot be
+    # traded. It carries no sentence to accept: the owner accepts at Confirm.
+    warning: UntestedTradedAssetWarning | None = None
 
 
 class AlpacaPaperDeployEligibility(BaseModel):
