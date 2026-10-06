@@ -1,0 +1,73 @@
+:host {
+  display: block;
+}
+
+.traded-asset {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.traded-asset__toggle {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  padding: 0;
+  border: 0;
+  color: var(--text-secondary);
+  background: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.traded-asset__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.traded-asset__body {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.traded-asset__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: var(--fs-sm);
+
+  label {
+    display: inline-flex;
+    gap: 0.4rem;
+    align-items: center;
+  }
+}
+
+em {
+  color: var(--bear);
+  font-size: var(--fs-xs);
+  font-style: normal;
+}
+
+.traded-asset__warning {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.75rem;
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface-card));
+  font-size: var(--fs-sm);
+
+  > span {
+    color: var(--warn);
+    font-weight: 800;
+  }
+
+  p {
+    margin: 0.25rem 0 0;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+}

@@ -223,7 +223,7 @@ export const DEPLOY_VIEW: DeployBotView = {
       default_quantity: 1,
     },
   ],
-  action_plan_explanation: 'One long stock ENTER and one matching close-leg EXIT.',
+  action_plan_explanation: 'Trades SPY shares, the symbol it listens to',
   carryover_available: false,
   carryover_label: 'Allow Clerk-proven exposure carryover on STOP',
   carryover_explanation: 'Account policy currently forbids carried exposure.',

@@ -62,6 +62,7 @@ export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
 export type DeploySubmissionBody = components['schemas']['AlpacaDeploySubmission'];
 /** Deploy again: one earlier bot's sealed settings, never its money or consent. */
 export type BotDeployPrefill = components['schemas']['BotDeployPrefill'];
+export type DeployTradedAssetView = components['schemas']['DeployTradedAssetView'];
 export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
 /** The recovery read's answer for a key whose Deploy has not committed:
  * `in_flight` while this clerk is still sending it, `not_committed` when
@@ -184,6 +185,16 @@ export class BrokerV2PanelService {
   /** Deploy again: `sid`'s sealed strategy, symbol, size, parameters and exit terms. */
   getDeployPrefill(target: ResourceTarget, sid: string): Promise<BotDeployPrefill> {
     return firstValueFrom(this.http.get<BotDeployPrefill>(operationUrl('bot_deploy_prefill_read', { ...target, sid })));
+  }
+
+  /** What Deploy says about an asset the owner picked for a bot to trade
+   * (#2912): whether Alpaca can trade it, and the warning about what the
+   * strategy was never tested on. Read the moment it is picked. */
+  getDeployTradedAsset(target: ResourceTarget, symbol: string, tradedSymbol: string): Promise<DeployTradedAssetView> {
+    const params = new HttpParams().set('symbol', symbol).set('traded_symbol', tradedSymbol);
+    return firstValueFrom(
+      this.http.get<DeployTradedAssetView>(operationUrl('bot_traded_asset_read', target), { params }),
+    );
   }
 
   /** The Deploy form's check of the end a Deploy would record: its words,
