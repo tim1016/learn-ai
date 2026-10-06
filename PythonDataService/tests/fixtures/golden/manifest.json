@@ -1841,6 +1841,51 @@
       "validated_by": [
         "tests/engine/strategy/algorithms/test_ema_decision_explanation_2026_09_29.py"
       ]
+    },
+    {
+      "id": "OSM-001",
+      "name": "Option structure entry money: Alpaca requirement, premium, commitment, loss estimate, round-trip cost",
+      "category": "option-structures",
+      "canonical_module": "PythonDataService/app/options/requirement.py",
+      "canonical_callable": "entry_money",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "hand-written figures, each checked by a brute-force scan of the exercise payoff at every thousandth of a dollar",
+        "citation": "Alpaca, Options Level 3 Trading (https://docs.alpaca.markets/docs/options-level-3-trading, page dated 2025-09-24, read 2026-10-06): the maintenance-margin rule and its two worked examples; PRD #2913's worked cases; ADR 0076. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": "Alpaca documented examples",
+        "generated_by": "PythonDataService/scripts/fixture_generators/option_structure_money.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Bit-exact. Every figure is an integer number of cents built from strikes in whole thousandths of a dollar and exact decimal prices; no step rounds."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "c6a321343ce5849ec6cb37a22234074c234d4d18e5b7e1d730398c298057ae9f",
+            "output.json": "2e997fdc06daa3fd5a564b0c25fe3fbf0eb67d8c50e95fd10ef1a5f9dc66e09e",
+            "attribution.md": "8738043f0264f078883802e49dc59a8da3eee005c90f0e9bc64b37a3611c9843"
+          },
+          "file_sha256": {
+            "input.json": "8b8b1c0d30caa59f416c8410c65d9de554ae89705d27b37ddfba2ad4446814f7",
+            "output.json": "8bb0459af304d5dd699985bb7cb8531d23adbc777502e5103b90db19ea294189",
+            "attribution.md": "8738043f0264f078883802e49dc59a8da3eee005c90f0e9bc64b37a3611c9843"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_option_structure_money_fixture.py::test_structure_money_matches_alpacas_examples_and_the_hand_derived_cases"
+      ]
     }
   ]
 }

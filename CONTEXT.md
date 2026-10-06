@@ -1607,6 +1607,27 @@ Where one account's money is (PRD #2560). Python authors every figure and every 
   _Avoid_: bot log, archive list, cleared-bots list (the separate list PRD #2560 had agreed, which History replaced).
 - **Transactions (of a bot or run)** — its effective fills after broker corrections: the count `trade_count` reports. A run's are the fills whose orders its own operations placed; work done after a run ended counts toward the bot, never a run.
 
+## Option structures (resolved 2026-10-06)
+
+**Lineage: live.**
+
+What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012's amendment of 2026-10-06, ADR 0076.
+
+- **Option structure** — one to four option legs on one underlying, opened by one order and closed by one exit that closes every leg exactly once. Each leg is bought or sold, a call or a put, with a rule for its strike and a rule for its expiry.
+  _Avoid_: strategy (that is the signal), combo, spread (one kind of structure).
+- **Resolved structure** — the contracts a structure's rules picked at one entry, leg by leg. The exit closes these contracts and never asks the rules again.
+- **Option expiry** — one instant per expiry date: 16:00 New York time on that date. It names the date; it is not when the contract stops trading.
+- **Net entry premium** — what an entry pays (positive) or receives (negative): bought legs' prices minus sold legs' prices.
+  _Avoid_: cost (the commitment), debit or credit as a separate figure.
+- **Broker requirement** — what Alpaca holds against a structure by its published rule, leaving premiums out.
+  _Avoid_: margin, worst-case loss, buying power.
+- **Entry commitment** — what the bot sets aside when an entry is accepted: requirement plus premium plus a fee provision. It decides whether an entry may start.
+  _Avoid_: maximum spend, maximum loss, cap.
+- **Loss at expiry (estimate)** — the most a structure loses if every leg shares one expiry, is held to it, is never exercised or assigned early, and settles at its exercise value, before fees. "Not estimated" when the legs do not share an expiry.
+  _Avoid_: maximum loss, risk.
+- **Round-trip cost** — what opening a structure and closing it at once would cost: every leg's bid-ask gap, by its ratio.
+- **Structure cost limit** — the most round-trip cost an entry may carry, as a percent of its entry commitment.
+
 ## Market-data readiness (resolved 2026-09-22)
 
 - **Market-data readiness** — current evidence that the symbol's live data is usable for a trading decision. It is distinct from connection health and the venue's reported halt status.

@@ -1,0 +1,162 @@
+{
+  "cases": [
+    {
+      "case": "alpaca_documented_four_calls_offset_to_nothing",
+      "broker_requirement_cents": 0
+    },
+    {
+      "case": "alpaca_documented_call_credit_spread",
+      "broker_requirement_cents": 100000,
+      "net_entry_premium_cents": -50000,
+      "commitment_before_fees_cents": 50000,
+      "loss_at_expiry_cents": 50000
+    },
+    {
+      "case": "call_spread_bought_for_1_94",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 19400,
+      "commitment_before_fees_cents": 19400,
+      "loss_at_expiry_cents": 19400,
+      "round_trip_cost_cents": 800
+    },
+    {
+      "case": "five_wide_call_spread_sold_for_3_07",
+      "broker_requirement_cents": 50000,
+      "net_entry_premium_cents": -30700,
+      "commitment_before_fees_cents": 19300,
+      "loss_at_expiry_cents": 19300,
+      "round_trip_cost_cents": 1000
+    },
+    {
+      "case": "bought_call",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 64600,
+      "commitment_before_fees_cents": 64600,
+      "loss_at_expiry_cents": 64600,
+      "round_trip_cost_cents": 600
+    },
+    {
+      "case": "bought_put_three_units",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 94500,
+      "commitment_before_fees_cents": 94500,
+      "loss_at_expiry_cents": 94500,
+      "round_trip_cost_cents": 1500
+    },
+    {
+      "case": "long_straddle",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 124300,
+      "commitment_before_fees_cents": 124300,
+      "loss_at_expiry_cents": 124300,
+      "round_trip_cost_cents": 1300
+    },
+    {
+      "case": "long_strangle",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 60100,
+      "commitment_before_fees_cents": 60100,
+      "loss_at_expiry_cents": 60100,
+      "round_trip_cost_cents": 1100
+    },
+    {
+      "case": "bought_call_and_put_in_the_money_keep_an_exercise_value",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 242500,
+      "commitment_before_fees_cents": 242500,
+      "loss_at_expiry_cents": 42500
+    },
+    {
+      "case": "iron_condor_two_units",
+      "broker_requirement_cents": 100000,
+      "net_entry_premium_cents": -35200,
+      "commitment_before_fees_cents": 64800,
+      "loss_at_expiry_cents": 64800,
+      "round_trip_cost_cents": 3800
+    },
+    {
+      "case": "iron_butterfly",
+      "broker_requirement_cents": 50000,
+      "net_entry_premium_cents": -44000,
+      "commitment_before_fees_cents": 6000,
+      "loss_at_expiry_cents": 6000
+    },
+    {
+      "case": "call_butterfly",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 10000,
+      "commitment_before_fees_cents": 10000,
+      "loss_at_expiry_cents": 10000
+    },
+    {
+      "case": "put_butterfly",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 11000,
+      "commitment_before_fees_cents": 11000,
+      "loss_at_expiry_cents": 11000
+    },
+    {
+      "case": "broken_wing_call_butterfly_loses_past_its_body",
+      "broker_requirement_cents": 50000,
+      "net_entry_premium_cents": -2400,
+      "commitment_before_fees_cents": 47600,
+      "loss_at_expiry_cents": 47600
+    },
+    {
+      "case": "half_dollar_strikes",
+      "broker_requirement_cents": 25000,
+      "net_entry_premium_cents": -11500,
+      "commitment_before_fees_cents": 13500,
+      "loss_at_expiry_cents": 13500
+    },
+    {
+      "case": "eighth_dollar_strikes_come_to_whole_cents",
+      "broker_requirement_cents": 3750,
+      "net_entry_premium_cents": -1900,
+      "commitment_before_fees_cents": 1850,
+      "loss_at_expiry_cents": 1850
+    },
+    {
+      "case": "sold_put_alone_is_at_its_worst_at_zero",
+      "broker_requirement_cents": 4500000,
+      "net_entry_premium_cents": -59000,
+      "commitment_before_fees_cents": 4441000,
+      "loss_at_expiry_cents": 4441000
+    },
+    {
+      "case": "put_ratio_spread_is_at_its_worst_at_zero_not_at_a_strike",
+      "broker_requirement_cents": 4300000
+    },
+    {
+      "case": "call_ratio_spread_keeps_losing_above_its_last_strike",
+      "refusal": "OPTION_STRUCTURE_LOSS_UNBOUNDED"
+    },
+    {
+      "case": "sold_call_alone_keeps_losing",
+      "refusal": "OPTION_STRUCTURE_LOSS_UNBOUNDED"
+    },
+    {
+      "case": "bought_legs_with_two_expiries_have_no_loss_estimate",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 162600,
+      "commitment_before_fees_cents": 162600,
+      "loss_at_expiry_cents": null
+    },
+    {
+      "case": "sold_leg_covered_by_a_later_expiry_is_not_worked_out",
+      "refusal": "OPTION_STRUCTURE_MIXED_EXPIRY_WITH_SOLD_LEG"
+    },
+    {
+      "case": "credit_larger_than_the_width_is_refused",
+      "refusal": "OPTION_STRUCTURE_COMMITMENT_NOT_POSITIVE"
+    },
+    {
+      "case": "narrow_legs_hide_a_costly_spread",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 1400,
+      "commitment_before_fees_cents": 1400,
+      "loss_at_expiry_cents": 1400,
+      "round_trip_cost_cents": 800
+    }
+  ]
+}
