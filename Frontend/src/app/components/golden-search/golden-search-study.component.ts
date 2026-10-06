@@ -263,10 +263,9 @@ export class GoldenSearchStudyComponent {
     }
   }
 
-  /** A step's own action; locking a candidate moves on to the step where its final test is opened. */
+  /** A step's own action. */
   async onStepCommand(command: StudyCommand): Promise<void> {
-    const accepted = await this.runCommand(command);
-    if (accepted && command.command === 'select_candidate') this.selectStep('decision');
+    await this.runCommand(command);
   }
 
   /**

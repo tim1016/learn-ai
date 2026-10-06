@@ -15,8 +15,7 @@ import type { CandidateDetail, CandidateKey } from './golden-search.types';
  * rules, its settings, the development net return, Sharpe, worst fall and
  * trades against the development minimum (the server's flag beside a figure
  * that breaks a rule), and a small line of its development return. The
- * button on each card picks the candidate; once the final test is opened the
- * pick is fixed.
+ * button on each card chooses the candidate the Compare step shows.
  */
 @Component({
   selector: 'app-golden-search-candidate-cards',
@@ -28,8 +27,6 @@ import type { CandidateDetail, CandidateKey } from './golden-search.types';
 export class GoldenSearchCandidateCardsComponent {
   readonly rows = input.required<readonly CandidateRow[]>();
   readonly selected = input<CandidateKey | null>(null);
-  /** The final test was opened: the pick can no longer change. */
-  readonly fixed = input(false);
   readonly capital = input.required<number>();
   /** The development trade minimum; null when the study does not carry it. */
   readonly floor = input<number | null>(null);

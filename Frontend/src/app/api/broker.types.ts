@@ -13539,6 +13539,11 @@ export interface components {
              * @default false
              */
             research_override?: boolean;
+            /**
+             * Selection Note
+             * @description Set when the approved fit was chosen with two final-test results in view (#2930); null otherwise.
+             */
+            selection_note?: string | null;
             /** Validation Verdict Label */
             validation_verdict_label?: string | null;
             /** Weakness */
@@ -13793,7 +13798,7 @@ export interface components {
              * Command
              * @enum {string}
              */
-            command: "continue" | "run_research" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
+            command: "continue" | "run_research" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
             /** Expectedrevision */
             expectedRevision: number;
             /** Idempotencykey */
@@ -14306,8 +14311,6 @@ export interface components {
             edge_hits: string[];
             /** Eligible */
             eligible: boolean;
-            /** Exam Eligible */
-            exam_eligible: boolean;
             /** Fixed Sentence */
             fixed_sentence: string;
             /** Flags */
@@ -14352,6 +14355,11 @@ export interface components {
         GoldenSearchEvidenceView: {
             /** Candidates */
             candidates: components["schemas"]["GoldenSearchEvidenceCandidate"][];
+            /**
+             * Fits To Test
+             * @description What opening the final test will run beside the current settings; empty when every fit returned them.
+             */
+            fits_to_test: components["schemas"]["GoldenSearchFitToTest"][];
             /** Incomplete */
             incomplete: boolean;
             /** Pair Maps */
@@ -14373,18 +14381,48 @@ export interface components {
              */
             status: "pass" | "fail" | "not_available";
         };
+        /**
+         * GoldenSearchExamFit
+         * @description One fit that sat the final test, judged on its own under the frozen rules.
+         */
+        GoldenSearchExamFit: {
+            /** Checks */
+            checks: components["schemas"]["GoldenSearchExamCheck"][];
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "incumbent" | "all_period" | "recent";
+            /** Label */
+            label: string;
+            metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Outcome */
+            outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
+            /** Point */
+            point: Record<string, never>;
+            /**
+             * Retention
+             * @description Descriptive only, never a check.
+             */
+            retention: number | null;
+            /**
+             * Same As
+             * @description Other fits that chose exactly these settings and so share this result.
+             */
+            same_as: ("incumbent" | "all_period" | "recent")[];
+            /**
+             * Weakness
+             * @description What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules.
+             */
+            weakness: components["schemas"]["GoldenSearchFinding"][];
+        };
         /** GoldenSearchExamView */
         GoldenSearchExamView: {
             /**
-             * Candidate Key
-             * @enum {string}
+             * Chosen Key
+             * @description The fit the owner named; null until an approval names one.
              */
-            candidate_key: "incumbent" | "all_period" | "recent";
-            candidate_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
-            /** Candidate Point */
-            candidate_point: Record<string, never>;
-            /** Checks */
-            checks: components["schemas"]["GoldenSearchExamCheck"][];
+            chosen_key: ("incumbent" | "all_period" | "recent") | null;
             /**
              * Claim
              * @enum {string}
@@ -14395,19 +14433,23 @@ export interface components {
              * @enum {string}
              */
             exposure_state: "not_opened" | "previously_used" | "history_unknown";
+            /**
+             * Fits
+             * @description Every fit that ran on the final interval; one for a final test recorded with a locked candidate.
+             */
+            fits: components["schemas"]["GoldenSearchExamFit"][];
             incumbent_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
-            /** Outcome */
-            outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
             /**
-             * Retention
-             * @description Descriptive only, never a check.
+             * Pick
+             * @description Whether the owner named the fit before the test opened or after its outcomes.
+             * @enum {string}
              */
-            retention: number | null;
+            pick: "before_test" | "after_test";
             /**
-             * Weakness
-             * @description What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules.
+             * Selection Note
+             * @description What the record says about a pick made with two final-test results in view; null otherwise.
              */
-            weakness: components["schemas"]["GoldenSearchFinding"][];
+            selection_note: string | null;
             window: components["schemas"]["GoldenSearchWindow"];
         };
         /** GoldenSearchExecution */
@@ -14494,6 +14536,21 @@ export interface components {
             code: string;
             /** Text */
             text: string;
+        };
+        /**
+         * GoldenSearchFitToTest
+         * @description One set of fitted settings the final test runs, under the candidates that chose it.
+         */
+        GoldenSearchFitToTest: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "incumbent" | "all_period" | "recent";
+            /** Label */
+            label: string;
+            /** Same As */
+            same_as: ("incumbent" | "all_period" | "recent")[];
         };
         /** GoldenSearchFixedControl */
         GoldenSearchFixedControl: {
@@ -15797,7 +15854,7 @@ export interface components {
             exam_outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
             /** Exposure Claim */
             exposure_claim: ("confirmatory" | "exploratory") | null;
-            /** @description What opening the final test would record, while a candidate is chosen; null otherwise. */
+            /** @description What opening the final test would record, while the candidates are compared; null otherwise. */
             exposure_preview: components["schemas"]["GoldenSearchExposure"] | null;
             /** Failure Reason */
             failure_reason: string | null;
@@ -15818,7 +15875,7 @@ export interface components {
             /** Parent Study Id */
             parent_study_id: string | null;
             /** Permitted Actions */
-            permitted_actions: ("continue" | "run_research" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
+            permitted_actions: ("continue" | "run_research" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
             /**
              * Presented Status
              * @enum {string}
@@ -15844,7 +15901,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "candidate_locked" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
+            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
             /** Strategy Key */
             strategy_key: string;
             /** Symbol */
@@ -15903,7 +15960,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "candidate_locked" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
+            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
             /** Strategy Key */
             strategy_key: string;
             /** Symbol */

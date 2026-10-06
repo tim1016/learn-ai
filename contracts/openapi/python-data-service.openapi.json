@@ -18649,6 +18649,18 @@
             "title": "Research Override",
             "type": "boolean"
           },
+          "selection_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the approved fit was chosen with two final-test results in view (#2930); null otherwise.",
+            "title": "Selection Note"
+          },
           "validation_verdict_label": {
             "anyOf": [
               {
@@ -19328,7 +19340,6 @@
             "enum": [
               "continue",
               "run_research",
-              "select_candidate",
               "open_exam",
               "approve",
               "retain",
@@ -20587,10 +20598,6 @@
             "title": "Eligible",
             "type": "boolean"
           },
-          "exam_eligible": {
-            "title": "Exam Eligible",
-            "type": "boolean"
-          },
           "fixed_sentence": {
             "title": "Fixed Sentence",
             "type": "string"
@@ -20701,8 +20708,7 @@
           "guidance",
           "flags",
           "params_sentence",
-          "fixed_sentence",
-          "exam_eligible"
+          "fixed_sentence"
         ],
         "title": "GoldenSearchEvidenceCandidate",
         "type": "object"
@@ -20739,6 +20745,14 @@
             "title": "Candidates",
             "type": "array"
           },
+          "fits_to_test": {
+            "description": "What opening the final test will run beside the current settings; empty when every fit returned them.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFitToTest"
+            },
+            "title": "Fits To Test",
+            "type": "array"
+          },
           "incomplete": {
             "title": "Incomplete",
             "type": "boolean"
@@ -20759,6 +20773,7 @@
         },
         "required": [
           "candidates",
+          "fits_to_test",
           "pair_maps",
           "recommendation",
           "scope",
@@ -20801,32 +20816,10 @@
         "title": "GoldenSearchExamCheck",
         "type": "object"
       },
-      "GoldenSearchExamView": {
+      "GoldenSearchExamFit": {
         "additionalProperties": false,
+        "description": "One fit that sat the final test, judged on its own under the frozen rules.",
         "properties": {
-          "candidate_key": {
-            "enum": [
-              "incumbent",
-              "all_period",
-              "recent"
-            ],
-            "title": "Candidate Key",
-            "type": "string"
-          },
-          "candidate_metrics": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GoldenSearchMetrics"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "candidate_point": {
-            "title": "Candidate Point",
-            "type": "object"
-          },
           "checks": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchExamCheck"
@@ -20834,24 +20827,20 @@
             "title": "Checks",
             "type": "array"
           },
-          "claim": {
+          "key": {
             "enum": [
-              "confirmatory",
-              "exploratory"
+              "incumbent",
+              "all_period",
+              "recent"
             ],
-            "title": "Claim",
+            "title": "Key",
             "type": "string"
           },
-          "exposure_state": {
-            "enum": [
-              "not_opened",
-              "previously_used",
-              "history_unknown"
-            ],
-            "title": "Exposure State",
+          "label": {
+            "title": "Label",
             "type": "string"
           },
-          "incumbent_metrics": {
+          "metrics": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/GoldenSearchMetrics"
@@ -20878,6 +20867,10 @@
             ],
             "title": "Outcome"
           },
+          "point": {
+            "title": "Point",
+            "type": "object"
+          },
           "retention": {
             "anyOf": [
               {
@@ -20890,30 +20883,131 @@
             "description": "Descriptive only, never a check.",
             "title": "Retention"
           },
+          "same_as": {
+            "description": "Other fits that chose exactly these settings and so share this result.",
+            "items": {
+              "enum": [
+                "incumbent",
+                "all_period",
+                "recent"
+              ],
+              "type": "string"
+            },
+            "title": "Same As",
+            "type": "array"
+          },
           "weakness": {
-            "description": "What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules.",
+            "description": "What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules.",
             "items": {
               "$ref": "#/components/schemas/GoldenSearchFinding"
             },
             "title": "Weakness",
             "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "same_as",
+          "label",
+          "point",
+          "outcome",
+          "checks",
+          "retention",
+          "metrics",
+          "weakness"
+        ],
+        "title": "GoldenSearchExamFit",
+        "type": "object"
+      },
+      "GoldenSearchExamView": {
+        "additionalProperties": false,
+        "properties": {
+          "chosen_key": {
+            "anyOf": [
+              {
+                "enum": [
+                  "incumbent",
+                  "all_period",
+                  "recent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The fit the owner named; null until an approval names one.",
+            "title": "Chosen Key"
+          },
+          "claim": {
+            "enum": [
+              "confirmatory",
+              "exploratory"
+            ],
+            "title": "Claim",
+            "type": "string"
+          },
+          "exposure_state": {
+            "enum": [
+              "not_opened",
+              "previously_used",
+              "history_unknown"
+            ],
+            "title": "Exposure State",
+            "type": "string"
+          },
+          "fits": {
+            "description": "Every fit that ran on the final interval; one for a final test recorded with a locked candidate.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchExamFit"
+            },
+            "title": "Fits",
+            "type": "array"
+          },
+          "incumbent_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pick": {
+            "description": "Whether the owner named the fit before the test opened or after its outcomes.",
+            "enum": [
+              "before_test",
+              "after_test"
+            ],
+            "title": "Pick",
+            "type": "string"
+          },
+          "selection_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the record says about a pick made with two final-test results in view; null otherwise.",
+            "title": "Selection Note"
           },
           "window": {
             "$ref": "#/components/schemas/GoldenSearchWindow"
           }
         },
         "required": [
-          "candidate_key",
-          "candidate_point",
           "window",
           "claim",
           "exposure_state",
-          "outcome",
-          "checks",
-          "retention",
-          "candidate_metrics",
+          "fits",
           "incumbent_metrics",
-          "weakness"
+          "pick",
+          "chosen_key",
+          "selection_note"
         ],
         "title": "GoldenSearchExamView",
         "type": "object"
@@ -21100,6 +21194,44 @@
           "text"
         ],
         "title": "GoldenSearchFinding",
+        "type": "object"
+      },
+      "GoldenSearchFitToTest": {
+        "additionalProperties": false,
+        "description": "One set of fitted settings the final test runs, under the candidates that chose it.",
+        "properties": {
+          "key": {
+            "enum": [
+              "incumbent",
+              "all_period",
+              "recent"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "same_as": {
+            "items": {
+              "enum": [
+                "incumbent",
+                "all_period",
+                "recent"
+              ],
+              "type": "string"
+            },
+            "title": "Same As",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "same_as",
+          "label"
+        ],
+        "title": "GoldenSearchFitToTest",
         "type": "object"
       },
       "GoldenSearchFixedControl": {
@@ -24847,7 +24979,7 @@
                 "type": "null"
               }
             ],
-            "description": "What opening the final test would record, while a candidate is chosen; null otherwise."
+            "description": "What opening the final test would record, while the candidates are compared; null otherwise."
           },
           "failure_reason": {
             "anyOf": [
@@ -24903,7 +25035,6 @@
               "enum": [
                 "continue",
                 "run_research",
-                "select_candidate",
                 "open_exam",
                 "approve",
                 "retain",
@@ -24983,7 +25114,6 @@
               "awaiting_validation",
               "validation_running",
               "awaiting_candidate",
-              "candidate_locked",
               "exam_running",
               "awaiting_review",
               "qualification_pending",
@@ -25194,7 +25324,6 @@
               "awaiting_validation",
               "validation_running",
               "awaiting_candidate",
-              "candidate_locked",
               "exam_running",
               "awaiting_review",
               "qualification_pending",

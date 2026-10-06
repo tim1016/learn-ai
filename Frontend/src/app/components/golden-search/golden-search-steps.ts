@@ -28,7 +28,6 @@ const STEP_OF_STATE: Readonly<Record<StudyState, StudyStep>> = {
   awaiting_validation: 'search',
   validation_running: 'test',
   awaiting_candidate: 'compare',
-  candidate_locked: 'decision',
   exam_running: 'decision',
   awaiting_review: 'decision',
   qualification_pending: 'decision',
@@ -71,7 +70,6 @@ const RESEARCH_STATES: ReadonlySet<StudyState> = new Set(['locked', 'awaiting_va
 
 const STEP_ACTIONS: Partial<Readonly<Record<StudyState, PrimaryAction>>> = {
   awaiting_candidate: { kind: 'step', step: 'compare', label: 'Compare candidates' },
-  candidate_locked: { kind: 'step', step: 'decision', label: 'Review the final test' },
   awaiting_review: { kind: 'step', step: 'decision', label: 'Make the final decision' },
   qualification_failed: { kind: 'step', step: 'decision', label: 'Make the final decision' },
   approved: { kind: 'step', step: 'decision', label: 'See the golden configuration' },

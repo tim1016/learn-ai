@@ -45,7 +45,7 @@ To review a study end to end, read these charts in this order, one question at e
 - **Current settings**: the strategy's settings as frozen at lock, also called the incumbent. Every result is set against them on the same window.
 - **Development period**: the dates Search, Test over time and Compare use. Everything measured on it helped choose the settings, so it flatters them.
 - **Eligible**, or **meets the rules**: a run that completed, made at least the window's trade minimum of trades, has an objective and a worst fall recorded, kept its worst fall within the limit and, when the plan requires one, made a profit. See [Eligibility map](#eligibility-map).
-- **Final test**: the window after the development period. It stays sealed until a candidate is locked, then runs once for that candidate and for the current settings. See [Final-test checks](#final-checks).
+- **Final test**: the window after the development period. It stays sealed until you open it, then runs once for every fit and for the current settings. You choose which fit to approve afterwards. See [Final-test checks](#final-checks).
 - **Fold**: one training window followed by its test window, inside the development period. See [Fold timeline](#fold-timeline).
 - **Forward minimum**: the trade minimum for all the fold test windows together. No single fold's test window has a minimum of its own.
 - **Grid** and **Zoom**: the two search methods. Grid scores every combination of the searched values. Zoom starts from a starting point and searches one knob at a time, in passes, narrowing around the best value it finds.
@@ -88,7 +88,7 @@ Four tiles: the search method and its settings, the development period with its 
 
 1. The search method: Zoom moves one knob at a time; Grid tries every combination.
 2. The development period: the data the search chooses on, with its trading sessions.
-3. The final test: kept sealed until you choose, then opened once.
+3. The final test: kept sealed until you open it, once, for every fit.
 4. The engine runs the plan may use, against the study’s cap.
 
 #### Good signs and warning signs
@@ -1105,7 +1105,7 @@ A café's takings by hour and weekday. A busy Saturday morning across many weeks
 
 ## Final decision
 
-The final test opens once, after you choose a candidate. Only that candidate and your current settings run on it, on data no step of the study chose on: it is the study's one out-of-sample look at the choice itself.
+The final test opens once. Every fit that differs from your current settings runs on it, beside those current settings, on data no step of the study chose on: it is the study's one out-of-sample look. Each fit gets its own outcome under the same rules. When two fits ran, select one in the result table and the charts below follow it; you choose which to approve after seeing both, and the record says the choice came after the final test.
 
 ### Final-test checks {#final-checks}
 
@@ -1115,7 +1115,7 @@ Did the final test meet each rule, in words?
 
 #### What you're looking at
 
-A line for each rule the final test is judged by, with its outcome first (pass, fail or not available) and then the numbers it compared. Retention, the share of the development objective the final test kept, is described beside the result and is never one of the checks.
+A line for each rule the selected fit is judged by on the final test, with its outcome first (pass, fail or not available) and then the numbers it compared. Retention, the share of the development objective the final test kept, is described beside the result and is never one of the checks.
 
 #### How to read it
 
@@ -1141,7 +1141,7 @@ Which measures held up on the final test?
 
 #### What you're looking at
 
-A block for each measure, each on its own scale: annualized return, Sharpe, worst fall and trades a trading year. In each block, the candidate and the current settings each have a teal bar for the development period and a blue bar for the final test. Hover a bar for both values and the change.
+A block for each measure, each on its own scale: annualized return, Sharpe, worst fall and trades a trading year. In each block, each fit and the current settings have a teal bar for the development period and a blue bar for the final test. Hover a bar for both values and the change.
 
 The return and the trade count are put on a yearly basis so periods of different lengths compare:
 
@@ -1156,11 +1156,11 @@ Each window's trading years count its sessions in each calendar year against all
 1. Each block is one measure on its own scale: annualized return, Sharpe, worst fall, trades a year.
 2. The teal bar is the development period: the data the study chose from.
 3. The blue bar is the final test: data no step chose on.
-4. Compare the candidate’s change with the current settings’: a drop both share is the market; a drop only the candidate shows is the fit.
+4. Compare each fit’s change with the current settings’: a drop they share is the market; a drop only a fit shows comes from the fitting.
 
 #### Good signs and warning signs
 
-- Good: the candidate's final bars close to its development bars.
+- Good: a fit's final bars close to its development bars.
 - Warning: a big drop in return or Sharpe that the current settings did not share.
 - Warning: far fewer trades a year on the final test. The strategy may have stopped finding its setups.
 
@@ -1172,11 +1172,11 @@ A student's practice-exam scores beside the real exam. Some drop is normal; a co
 
 #### The question it answers
 
-How did the candidate and the current settings do through the final test?
+How did each fit and the current settings do through the final test?
 
 #### What you're looking at
 
-The same two-part chart as Compare's equity and fall from peak, drawn for the final test. On top, each run's cumulative return at every session close, from its own fresh starting capital: the candidate as a solid line and the current settings dashed, with the label at the right edge where each ended. Beneath, each run's fall from its own highest point so far, with the worst-fall limit dashed. Hover a session for both values of both runs.
+The same two-part chart as Compare's equity and fall from peak, drawn for the final test. On top, each run's cumulative return at every session close, from its own fresh starting capital: each fit as a solid line, the selected one thicker, and the current settings dashed, with the label at the right edge where each ended. Beneath, each run's fall from its own highest point so far, with the worst-fall limit dashed. Hover a session for both values of every run.
 
 $$\text{fall from peak} = \frac{\text{equity today}}{\text{highest equity so far}} - 1$$
 
@@ -1185,12 +1185,12 @@ $$\text{fall from peak} = \frac{\text{equity today}}{\text{highest equity so far
 1. Read the labels at the right edge: where each run ended the final test.
 2. Follow each line: a steady climb is more convincing than one jump.
 3. Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.
-4. The amber dashed line labelled “limit” is the worst-fall limit. The final test reads the candidate’s fall bar by bar, which can be deeper than its line here.
+4. The amber dashed line labelled “limit” is the worst-fall limit. The final test reads each fit’s fall bar by bar, which can be deeper than its line here.
 
 #### Good signs and warning signs
 
-- Good: the candidate ahead for most of the test, not just at the end, with shallow falls.
-- Warning: the candidate ahead only after one late jump.
+- Good: a fit ahead for most of the test, not just at the end, with shallow falls.
+- Warning: a fit ahead only after one late jump.
 - Warning: a fall near the limit. The rule reads the bar-by-bar fall, which can cross the limit even when this line does not.
 - This is one look: a short final test can swing either way by chance.
 
@@ -1206,18 +1206,18 @@ Was the final result spread out, or carried by one month?
 
 #### What you're looking at
 
-A pair of bars for each month of the final test: the candidate's net return and the current settings', each on that month's opening equity. A month a run did not record has no bar. Hover a month for both returns.
+A group of bars for each month of the final test: each fit's net return and the current settings', each on that month's opening equity. A month a run did not record has no bar. Hover a month for every run's return.
 
 #### How to read it
 
-1. Each pair of bars is one month of the final test: the candidate and the current settings.
+1. Each group of bars is one month of the final test: each fit and the current settings.
 2. Look for one month far taller than the rest: a final result carried by a single month is fragile.
 3. Count the months each run won. Winning most months is steadier than winning one big one.
-4. Hover a month for both returns.
+4. Hover a month for every run’s return.
 
 #### Good signs and warning signs
 
-- Good: the candidate ahead in most months.
+- Good: a fit ahead in most months.
 - Warning: one strong month and the rest flat or negative.
 
 #### An everyday comparison

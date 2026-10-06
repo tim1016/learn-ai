@@ -167,20 +167,28 @@ export type EvidenceScope = Schemas['GoldenSearchEvidenceScope'];
 
 /**
  * One candidate on the development scope. `guidance` comes from a closed copy
- * map keyed by its situation; `params_sentence` is Python-authored; the
- * incumbent is not `exam_eligible` (keeping it needs no final test).
+ * map keyed by its situation; `params_sentence` is Python-authored.
  */
 export type EvidenceCandidate = Omit<Schemas['GoldenSearchEvidenceCandidate'], 'point'> & { point: Point };
 /** `incomplete` when the budget stopped the stage before every candidate's evidence ran. */
 export type EvidenceView = Omit<Schemas['GoldenSearchEvidenceView'], 'candidates'> & { candidates: EvidenceCandidate[] };
+/** One set of fitted settings the final test runs, as the server names it. */
+export type FitToTest = Schemas['GoldenSearchFitToTest'];
 
 export type ExamCheck = Schemas['GoldenSearchExamCheck'];
 /**
- * `retention` is descriptive only, never a check; `weakness` is what approving
+ * One fit that sat the final test, judged on its own. `retention` is
+ * descriptive only, never a check; `weakness` is what approving this fit
  * needs the owner to acknowledge, in the acknowledgement's words — empty
  * before an outcome and when the evidence meets the rules.
  */
-export type ExamView = Omit<Schemas['GoldenSearchExamView'], 'candidate_point'> & { candidate_point: Point };
+export type ExamFit = Omit<Schemas['GoldenSearchExamFit'], 'point'> & { point: Point };
+/**
+ * The final test (#2930): every fit that ran, the fit the owner named
+ * (`chosen_key`, null until an approval names one) and whether that pick came
+ * before the test or after its outcomes (`pick`).
+ */
+export type ExamView = Omit<Schemas['GoldenSearchExamView'], 'fits'> & { fits: ExamFit[] };
 
 /** The canonical point Deploy applies, without `symbol`. */
 export type DeployOffer = Omit<Schemas['GoldenSearchDeployHandoff'], 'parameters'> & { parameters: Point };
@@ -200,8 +208,8 @@ export type StudyScope = Schemas['GoldenSearchScope'];
 
 /**
  * One study as the workbench reads it. `protocol` is the frozen plan echo;
- * `exposure_preview` is what opening the final test would record, while a
- * candidate is chosen (null otherwise).
+ * `exposure_preview` is what opening the final test would record, while the
+ * candidates are compared (null otherwise).
  */
 export type StudyDetail = Omit<Schemas['GoldenSearchStudyDetail'], 'protocol' | 'results' | 'action_refusals'> & {
   protocol: ProtocolRequest;
@@ -221,11 +229,16 @@ interface CommandEnvelope<C extends StudyCommandName, P> {
 export type StudyCommandRequest =
   | CommandEnvelope<'continue', Record<string, never>>
   | CommandEnvelope<'run_research', Record<string, never>>
-  | CommandEnvelope<'select_candidate', { candidate_key: CandidateKey }>
   | CommandEnvelope<'open_exam', { acknowledge_final_test: true }>
   | CommandEnvelope<
       'approve',
-      { note: string; acknowledge_missing_parity: true; acknowledge_research_weakness: boolean; expected_default_qualification_id: string | null }
+      {
+        candidate_key: CandidateKey;
+        note: string;
+        acknowledge_missing_parity: true;
+        acknowledge_research_weakness: boolean;
+        expected_default_qualification_id: string | null;
+      }
     >
   | CommandEnvelope<'retain', { kind: RetainKind; note: string }>
   | CommandEnvelope<'close', { note: string }>

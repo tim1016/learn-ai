@@ -41,7 +41,13 @@ from tests._helpers.golden_search_study import FakeApproval, FakeEngine, plan_re
 BASE = "/api/research/golden-search"
 JOBS = "/api/jobs-internal/golden-search"
 EMA_KNOB_ORDER = ["gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars", "gap_bps"]
-APPROVE = {"note": "Reviewed.", "acknowledge_missing_parity": True, "acknowledge_research_weakness": False, "expected_default_qualification_id": None}
+APPROVE = {
+    "candidate_key": "all_period",
+    "note": "Reviewed.",
+    "acknowledge_missing_parity": True,
+    "acknowledge_research_weakness": False,
+    "expected_default_qualification_id": None,
+}
 
 
 def _key() -> str:
@@ -388,9 +394,8 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     page = await client.get(f"{BASE}/studies/{study['id']}/evaluations", params={"stage": "search", "page": 1, "page_size": 5})
     assert page.status_code == 200 and page.json()["total"] > 5 and len(page.json()["rows"]) == 5
 
-    study = await _advance(client, harness, study, "select_candidate", {"candidate_key": "all_period"})
     study = await _advance(client, harness, study, "open_exam", {"acknowledge_final_test": True})
-    assert study["state"] == "awaiting_review" and study["results"]["exam"]["outcome"] == "meets_rules"
+    assert study["state"] == "awaiting_review" and [fit["outcome"] for fit in study["results"]["exam"]["fits"]] == ["meets_rules"]
     assert (await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")).json()["exam"] is not None
 
     study = await _advance(client, harness, study, "approve", APPROVE)
@@ -417,7 +422,7 @@ async def test_run_research_locks_and_one_job_carries_the_study_to_compare_over_
     await harness.run(await _start(client, study))
     done = (await client.get(f"{BASE}/studies/{study['id']}")).json()
     assert (done["state"], done["presented_status"]) == ("awaiting_candidate", "completed")
-    assert "select_candidate" in done["permitted_actions"] and done["results"]["evidence"] is not None
+    assert "open_exam" in done["permitted_actions"] and done["results"]["evidence"] is not None
 
 
 async def test_a_stale_revision_is_a_409_carrying_the_study_as_it_now_stands(client: httpx.AsyncClient, harness: Harness, symbol: str) -> None:

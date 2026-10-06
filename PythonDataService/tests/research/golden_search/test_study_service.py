@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+from datetime import date
 from pathlib import Path
 
 import asyncpg
@@ -80,9 +81,8 @@ async def test_configured_frequency_survives_lock_selection_views_and_final_test
     assert all(fold["status"] == "completed" for fold in detail["results"]["validation"]["folds"])
     # A frequency plan's forward minimum is the one the receipt froze for all forward tests.
     assert (await service.test_over_time_charts(row.id))["forward_minimum"] == windows["forward"]["minimum_trades"]
-    row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
-    check = next(item for item in row.results["exam"]["checks"] if item["code"] == "SAMPLE_FLOOR")
+    check = next(item for item in row.results["exam"]["fits"][0]["checks"] if item["code"] == "SAMPLE_FLOOR")
     assert check["label"] == "Expected trade frequency"
     assert "minimum is 9" in check["detail"]
 
@@ -141,27 +141,28 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     keys = [candidate["key"] for candidate in evidence["candidates"]]
     assert keys == ["incumbent", "all_period", "recent"]
 
-    assert detail["exposure_preview"]["state"] == "not_opened"
-    row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
-    assert row.state == "candidate_locked" and row.candidate_key == "all_period"
     # The lock box says what opening the test would record, before it is opened.
-    assert (await driver.detail(row))["exposure_preview"]["state"] == "not_opened"
+    assert detail["exposure_preview"]["state"] == "not_opened"
+    # Both fits chose one set of settings, so the lock names one run for the two of them.
+    assert evidence["fits_to_test"] == [{"key": "all_period", "same_as": ["recent"], "label": "All-period and recent fit"}]
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
     detail = await driver.detail(row)
-    assert detail["state"] == "awaiting_review"
+    assert detail["state"] == "awaiting_review" and row.candidate_key is None
     assert detail["exposure_preview"] is None
     exam = detail["results"]["exam"]
-    assert (exam["exposure_state"], exam["claim"], exam["outcome"]) == ("not_opened", "confirmatory", "meets_rules")
+    # Both fits chose the same settings here, so one result stands for both and there is no choice to note.
+    (fit,) = exam["fits"]
+    assert (fit["key"], fit["same_as"], fit["label"]) == ("all_period", ["recent"], "All-period and recent fit")
+    assert (exam["exposure_state"], exam["claim"], fit["outcome"]) == ("not_opened", "confirmatory", "meets_rules")
+    assert (exam["pick"], exam["chosen_key"], exam["selection_note"]) == ("after_test", None, None)
+    assert detail["exam_outcome"] == "meets_rules"
     assert detail["guidance"]["headline"] == "Approve the settings you want to use"
     assert detail["scope"]["final_state"] == "opened_once"
 
-    row = await driver.advance(
-        row,
-        "approve",
-        {"note": "Meets the rules.", "acknowledge_missing_parity": True, "acknowledge_research_weakness": False, "expected_default_qualification_id": None},
-    )
+    row = await driver.advance(row, "approve", {**APPROVE, "note": "Meets the rules."})
     detail = await driver.detail(row)
-    assert detail["state"] == "approved"
+    assert detail["state"] == "approved" and row.candidate_key == "all_period"
+    assert detail["results"]["exam"]["chosen_key"] == "all_period"
     qualification = detail["results"]["qualification"]
     assert qualification["status"] == "ready" and qualification["deploy"]["symbol"] == symbol
     assert "symbol" not in qualification["deploy"]["parameters"]
@@ -172,7 +173,13 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert used["proof"] == 3 and sum(used.values()) == detail["consumed_evaluations"]
 
 
-APPROVE = {"note": "Reviewed.", "acknowledge_missing_parity": True, "acknowledge_research_weakness": False, "expected_default_qualification_id": None}
+APPROVE = {
+    "candidate_key": "all_period",
+    "note": "Reviewed.",
+    "acknowledge_missing_parity": True,
+    "acknowledge_research_weakness": False,
+    "expected_default_qualification_id": None,
+}
 
 
 # ── Commands: idempotency, revision, permissions ─────────────────────────
@@ -415,8 +422,8 @@ async def test_a_budget_reached_mid_stage_keeps_evidence_marks_it_incomplete_and
     conn: asyncpg.Connection, driver: Driver, symbol: str
 ) -> None:
     row = await driver.lock(symbol)
-    # A cap tighter than the plan's bound (lock refuses that); development stages may use cap - 5.
-    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 11 WHERE id = $1", row.id)
+    # A cap tighter than the plan's bound (lock refuses that); development stages may use cap - 6.
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 12 WHERE id = $1", row.id)
     row = await driver.advance(await service.get_row(row.id), "continue")
 
     assert row.state == "awaiting_validation" and row.consumed_evaluations == 6
@@ -619,21 +626,32 @@ async def test_a_superseded_attempt_can_neither_record_nor_spend(conn: asyncpg.C
 async def test_a_spent_development_budget_still_leaves_the_exam_and_proof_their_reservation(
     conn: asyncpg.Connection, driver: Driver, symbol: str
 ) -> None:
+    # Two different fits, so the final test needs all three of its reserved runs.
+    driver.engine.score = _recent_prefers_a_wide_gap
+    row = await driver.to_candidate(symbol)
+    assert row.receipt["estimate"]["reserved_for_exam_and_proof"] == 6
+    # A cap of exactly what development spent plus the reserve: 3 for the final test's incumbent and two fits, 3 for the proof.
+    spent = row.consumed_evaluations
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = $2 WHERE id = $1", row.id, spent + 6)
+
+    row = await driver.advance(await service.get_row(row.id), "open_exam", {"acknowledge_final_test": True})
+    fits = row.results["exam"]["fits"]
+    assert len(fits) == 2 and (row.state, row.consumed_evaluations) == ("awaiting_review", spent + 3)
+    assert all(fit["metrics"]["status"] == "completed" for fit in fits)
+
+    row = await driver.advance(row, "approve", APPROVE)
+    assert (row.state, row.consumed_evaluations, row.budget_cap) == ("approved", spent + 6, spent + 6)
+
+
+async def test_development_stages_never_spend_the_exam_and_proof_reservation(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
     row = await driver.lock(symbol)
-    # The plan's bound fits 5000; a cap of 11 leaves the development stages 6 and holds 2 + 3 back.
-    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 11 WHERE id = $1", row.id)
+    # The plan's bound fits 5000; a cap of 12 leaves the development stages 6 and holds 3 + 3 back.
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 12 WHERE id = $1", row.id)
     row = await driver.advance(await service.get_row(row.id), "continue")
     row = await driver.advance(row, "continue")
+
     assert (row.state, row.consumed_evaluations) == ("awaiting_candidate", 6)
     assert all(fold["failure_code"] == "BUDGET" for fold in row.results["validation"]["folds"])
-
-    row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
-    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
-    assert (row.state, row.consumed_evaluations) == ("awaiting_review", 8)
-    assert row.results["exam"]["candidate_metrics"]["status"] == "completed"
-
-    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
-    assert (row.state, row.consumed_evaluations, row.budget_cap) == ("approved", 11, 11)
 
 
 # ── Leakage and capability ───────────────────────────────────────────────
@@ -728,8 +746,8 @@ async def test_a_proof_draw_lost_before_its_checkpoint_is_not_drawn_again_by_a_l
 async def test_two_concurrent_final_tests_on_one_symbol_cannot_both_claim_an_unopened_interval(
     driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    first = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
-    second = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    first = await driver.to_candidate(symbol)
+    second = await driver.to_candidate(symbol)
     read_ledger = repo.exposure_overlaps
     reads = 0
 
@@ -756,7 +774,7 @@ async def test_outside_research_on_the_final_interval_makes_its_history_unknown(
     from app.research.backtest_runs.records import record_from_payload
     from tests.research.backtest_runs.payloads import engine_payload
 
-    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    row = await driver.to_candidate(symbol)
     await backtest_repo.insert_run(conn, record_from_payload(engine_payload(symbol=symbol, start_date="2025-04-07", end_date="2025-04-11")))
 
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
@@ -775,8 +793,7 @@ async def test_outside_research_on_the_final_interval_makes_its_history_unknown(
 
 
 async def test_exposure_rows_survive_hiding_the_study(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
-    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
-    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
     await service.hide(row.id, liveness=driver.liveness)
 
     assert [item["kind"] for item in await repo.list_exposures(conn, study_id=row.id)] == ["reserved", "result"]
@@ -801,13 +818,123 @@ async def test_a_recent_fit_equal_to_the_all_period_fit_collapses_to_one_candida
     assert details == 1  # one detail run serves both
 
 
-async def test_the_incumbent_cannot_be_locked_for_the_final_test(driver: Driver, symbol: str) -> None:
+RECENT_START_MS = window_ms((date(2025, 3, 1), DEVELOPMENT[1]))[0]
+
+
+def _recent_prefers_a_wide_gap(point: dict, window: tuple[int, int], scenario: str) -> float:
+    """The recent window alone peaks at gap 0.6, and on the final interval a wider gap does better, so both fits beat the incumbent."""
+    gap = float(point.get("gap", 0.2))
+    if window == (RECENT_START_MS, FINAL_START_MS):
+        return 2.0 - 8.0 * (gap - 0.6) ** 2
+    if window[0] >= FINAL_START_MS:
+        return 1.0 + gap
+    return smooth_score(point, window, scenario)
+
+
+async def _two_fits_to_review(driver: Driver, symbol: str, score=_recent_prefers_a_wide_gap) -> StudyRow:  # type: ignore[no-untyped-def]
+    driver.engine.score = score
     row = await driver.to_candidate(symbol)
+    return await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+
+
+async def test_both_fits_sit_the_final_test_and_the_owner_names_one_afterwards(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await _two_fits_to_review(driver, symbol)
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    assert [(fit["key"], fit["same_as"], fit["label"]) for fit in exam["fits"]] == [("all_period", [], "All-period fit"), ("recent", [], "Recent fit")]
+    # The lock promised exactly these fits.
+    assert [(fit["key"], fit["label"]) for fit in detail["results"]["evidence"]["fits_to_test"]] == [(fit["key"], fit["label"]) for fit in exam["fits"]]
+    assert exam["fits"][0]["point"] != exam["fits"][1]["point"]
+    # Each fit is judged on its own run; the incumbent ran once beside them.
+    assert [fit["outcome"] for fit in exam["fits"]] == ["meets_rules", "meets_rules"]
+    assert exam["fits"][0]["metrics"]["sharpe_ratio"] != exam["fits"][1]["metrics"]["sharpe_ratio"]
+    assert (await service.evaluations(row.id, stage="exam", page=1, page_size=10))["total"] == 3
+    assert (exam["pick"], exam["chosen_key"]) == ("after_test", None)
+    assert exam["selection_note"].startswith("2 fits ran on the final test.")
+    # The interval is used once, with a reservation and a result for each fit.
+    ledger = await repo.list_exposures(conn, study_id=row.id)
+    assert sorted((item["kind"], item["payload"]["candidate_key"]) for item in ledger) == [
+        ("reserved", "all_period"), ("reserved", "recent"), ("result", "all_period"), ("result", "recent"),
+    ]
+    assert (await service.exposure_view(symbol, *window_ms(FINAL)))["ledger_overlaps"] == 1
+    for key in ("all_period", "recent", "incumbent"):
+        assert (await service.candidate(row.id, key))["exam"] is not None
+
+    with pytest.raises(GoldenSearchRefusal) as unnamed:
+        await driver.command(row, "approve", {key: value for key, value in APPROVE.items() if key != "candidate_key"})
+    assert (unnamed.value.code, unnamed.value.field) == ("PAYLOAD_INVALID", "candidate_key")
+    with pytest.raises(GoldenSearchRefusal) as untested:
+        await driver.command(row, "approve", {**APPROVE, "candidate_key": "incumbent"})
+    assert untested.value.code == "PAYLOAD_INVALID"
+
+    row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": "recent"})
+    detail = await driver.detail(row)
+    assert (row.state, row.candidate_key) == ("approved", "recent")
+    request = driver.approval.requests[-1]
+    assert request.candidate_point == exam["fits"][1]["point"]
+    assert (request.research["candidate_key"], request.research["fits_tested"], request.research["pick"]) == ("recent", 2, "after_test")
+    assert detail["results"]["exam"]["selection_note"] == "Chosen after the final test, from 2 fits."
+    assert detail["results"]["qualification"]["deploy"]["parameters"]["gap"] == exam["fits"][1]["point"]["gap"]
+    picks = await repo.list_trials(conn, row.id, kind="pick")
+    assert [trial["payload"]["candidate_key"] for trial in picks] == ["recent"]
+
+
+async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and_the_other_does_not(driver: Driver, symbol: str) -> None:
+    def wide_gap_loses_on_the_final_interval(point: dict, window: tuple[int, int], scenario: str) -> float:
+        if window[0] >= FINAL_START_MS and float(point.get("gap", 0.2)) > 0.45:
+            return -1.0
+        return _recent_prefers_a_wide_gap(point, window, scenario)
+
+    row = await _two_fits_to_review(driver, symbol, wide_gap_loses_on_the_final_interval)
+    detail = await driver.detail(row)
+    fits = {fit["key"]: fit for fit in detail["results"]["exam"]["fits"]}
+    assert (fits["all_period"]["outcome"], fits["recent"]["outcome"]) == ("meets_rules", "does_not_meet_rules")
+    assert fits["all_period"]["weakness"] == [] and [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES"]
+    # The study reads by its strongest result until a fit is named.
+    assert detail["exam_outcome"] == "meets_rules" and detail["guidance"]["headline"] == "Approve the settings you want to use"
+
+    with pytest.raises(GoldenSearchRefusal) as weak:
+        await driver.command(row, "approve", {**APPROVE, "candidate_key": "recent"})
+    assert weak.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
+    row = await driver.advance(row, "approve", APPROVE)
+    assert row.state == "approved" and driver.approval.requests[-1].research["weakness"] == []
+
+
+async def test_a_study_kept_after_two_fits_ran_says_how_many_ran_and_promises_no_approval(driver: Driver, symbol: str) -> None:
+    row = await _two_fits_to_review(driver, symbol)
+    assert (await driver.detail(row))["results"]["exam"]["selection_note"].endswith("chosen after the final test, from 2 fits.")
+
+    row = await driver.advance(row, "retain", {"kind": "keep_current", "note": "Neither is worth the change."})
+
+    assert (await driver.detail(row))["results"]["exam"]["selection_note"] == "2 fits ran on the final test."
+
+
+async def test_a_retried_approval_must_name_the_fit_it_started_with(driver: Driver, symbol: str) -> None:
+    row = await _two_fits_to_review(driver, symbol)
+    driver.approval = FakeApproval(fail_with=("PROOF_MISMATCH", "The restored replay differs from the lake replay."))
+    row = await driver.advance(row, "approve", APPROVE)
+    assert (row.state, row.candidate_key) == ("qualification_failed", "all_period")
+
+    driver.approval = FakeApproval()
+    with pytest.raises(GoldenSearchRefusal) as other:
+        await driver.command(row, "approve", {**APPROVE, "candidate_key": "recent"})
+    assert (other.value.code, other.value.kind) == ("FIT_ALREADY_CHOSEN", "conflict")
+    row = await driver.advance(row, "approve", APPROVE)
+    assert (row.state, row.candidate_key) == ("approved", "all_period")
+
+
+async def test_fits_that_return_the_current_settings_leave_nothing_to_test(driver: Driver, symbol: str) -> None:
+    def current_settings_win(point: dict, window: tuple[int, int], scenario: str) -> float:
+        return 2.0 - 8.0 * (float(point.get("gap", 0.2)) - 0.2) ** 2 - ((float(point.get("hold_bars", 5)) - 5.0) / 4.0) ** 2
+
+    driver.engine.score = current_settings_win
+    row = await driver.to_candidate(symbol)
+    detail = await driver.detail(row)
+    assert detail["results"]["evidence"]["fits_to_test"] == []
+    assert "open_exam" not in detail["permitted_actions"] and "retain" in detail["permitted_actions"]
     with pytest.raises(GoldenSearchRefusal) as refused:
-        await driver.command(row, "select_candidate", {"candidate_key": "incumbent"})
-    assert refused.value.code == "INCUMBENT_NOT_EXAMINABLE"
-    candidates = (await driver.detail(row))["results"]["evidence"]["candidates"]
-    assert [item["exam_eligible"] for item in candidates] == [False, True, True]
+        await driver.command(row, "open_exam", {"acknowledge_final_test": True})
+    assert refused.value.code == "COMMAND_NOT_PERMITTED" and "nothing to test" in str(refused.value)
 
 
 async def test_revise_forks_a_linked_study_and_leaves_the_original_untouched(driver: Driver, symbol: str) -> None:
@@ -848,8 +975,7 @@ async def test_two_concurrent_revisions_under_one_key_fork_one_study(conn: async
 
 
 async def test_a_technical_approval_failure_reads_back_failed_and_can_be_retried(driver: Driver, symbol: str) -> None:
-    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
-    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
     driver.approval = FakeApproval(fail_with=("PROOF_MISMATCH", "The restored replay differs from the lake replay."))
     row = await driver.advance(row, "approve", APPROVE)
     detail = await driver.detail(row)
@@ -1046,8 +1172,7 @@ async def test_keeping_the_current_settings_ends_the_study_without_opening_the_f
 
 
 async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_exam(driver: Driver, symbol: str) -> None:
-    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
-    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    row = await driver.advance(await driver.to_candidate(symbol), "open_exam", {"acknowledge_final_test": True})
 
     chosen = await service.candidate(row.id, "all_period")
     assert chosen["development"]["window"] == {"start_ms": row.protocol["development_start_ms"], "end_ms": row.protocol["development_end_ms"]}
@@ -1068,6 +1193,7 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     assert (await service.candidate(row.id, "recent"))["exam"] is not None  # the same point
     assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark
 
+    # One fit (both chose the same settings) and the incumbent.
     page = await service.evaluations(row.id, stage="exam", page=1, page_size=10)
     assert page["total"] == 2 and {item["detail"] for item in page["rows"]} == {True}
     with pytest.raises(GoldenSearchRefusal) as refused:

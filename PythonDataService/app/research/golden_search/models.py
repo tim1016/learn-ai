@@ -19,7 +19,6 @@ StudyState = Literal[
     "awaiting_validation",
     "validation_running",
     "awaiting_candidate",
-    "candidate_locked",
     "exam_running",
     "awaiting_review",
     "qualification_pending",
@@ -31,7 +30,7 @@ StudyState = Literal[
 StageName = Literal["search", "validation", "exam", "qualification"]
 FenceStatus = Literal["idle", "queued", "running", "completed", "failed", "cancelled"]
 CommandName = Literal[
-    "continue", "run_research", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
+    "continue", "run_research", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 ]
 CandidateKey = Literal["incumbent", "all_period", "recent"]
 RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"]
@@ -39,10 +38,9 @@ RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"
 RefusalKind = Literal["invalid", "conflict", "not_found", "unavailable"]
 
 COMMANDS: tuple[CommandName, ...] = (
-    "continue", "run_research", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
+    "continue", "run_research", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 )
 RETAIN_KINDS: tuple[RetainKind, ...] = ("keep_current", "wait_for_fresh_data", "retain_exploration")
-CANDIDATE_KEYS: tuple[CandidateKey, ...] = ("incumbent", "all_period", "recent")
 
 #: The state a stage runs in, by stage; a stage run owns a worker while its study is in this state.
 STAGE_STATES: dict[StageName, StudyState] = {

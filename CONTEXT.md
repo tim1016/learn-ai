@@ -1019,10 +1019,12 @@ still means owner-approved, never optimal.
   incumbent; it reports "no improvement along the tested moves", never an
   optimum. **Grid Search** inside a study is the same evaluator over every
   listed combination.
-- **Final test** — the interval held back at lock and opened once for one picked
-  candidate beside the frozen incumbent. Its **exposure** is **not opened in
-  recorded research** (the only confirmatory state), **previously used**, or
-  **history unknown**; the exposure ledger outlives every study.
+- **Final test** — the interval held back at lock and opened once for every
+  **fit** (the all-period fit and the recent fit) beside the frozen incumbent.
+  Each fit has its own outcome; the owner names the fit to approve afterwards.
+  Its **exposure** is **not opened in recorded research** (the only
+  confirmatory state), **previously used**, or **history unknown**; the
+  exposure ledger outlives every study.
 - **Qualified version** — the immutable record an approval publishes: program and
   version, stock, exact parameters, program bytes, replay proof, research
   outcome and the owner's note. It is **ready**, **stale** (the program changed

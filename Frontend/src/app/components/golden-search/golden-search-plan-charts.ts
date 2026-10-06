@@ -40,7 +40,7 @@ const KIND_NOTES: Readonly<Record<PlanWindow['kind'], string>> = {
   training: 'This fold searches again on these months only.',
   test: 'This fold tests its winner here; a single fold has no trade minimum of its own.',
   forward: 'Every fold’s test together: the verdict’s trade minimum applies here.',
-  final: 'Opened once, at the end, for the chosen candidate and the current settings.',
+  final: 'Opened once, at the end, for every fit and the current settings.',
 };
 
 /** Every window as a bar on one time axis, a row each. */

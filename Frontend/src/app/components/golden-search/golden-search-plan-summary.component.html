@@ -35,7 +35,7 @@
             <li>
               <span class="tile__label">Final test</span>
               <strong><app-timestamp-display [value]="w.start_ms" mode="date-et" /> → <app-timestamp-display [value]="w.end_ms - 1" mode="date-et" /></strong>
-              <span class="tile__detail">{{ w.sessions | number }} sessions · {{ s.exam_locked ? 'opened once' : 'locked until you choose' }}</span>
+              <span class="tile__detail">{{ w.sessions | number }} sessions · {{ s.exam_locked ? 'opened once' : 'locked until you open it' }}</span>
             </li>
           }
           <li>

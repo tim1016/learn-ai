@@ -6,6 +6,7 @@ import type {
   EvidenceCandidate,
   EvidenceView,
   ExamOutcome,
+  ExamFit,
   ExamView,
   ExposureState,
   ExposureView,
@@ -552,7 +553,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       flags: [],
       params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
-      exam_eligible: true,
       edge_hits: [],
     },
     recent: {
@@ -573,7 +573,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
       params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
-      exam_eligible: true,
       edge_hits: [],
     },
     incumbent: {
@@ -595,7 +594,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       flags: [],
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
-      exam_eligible: false,
       edge_hits: [],
     },
   };
@@ -621,6 +619,10 @@ export function concentration(overrides: Partial<MeasuredConcentration> = {}): M
 export function evidenceView(overrides: Partial<EvidenceView> = {}): EvidenceView {
   return {
     candidates: [evidenceCandidate('incumbent'), evidenceCandidate('all_period'), evidenceCandidate('recent')],
+    fits_to_test: [
+      { key: 'all_period', same_as: [], label: 'All-period fit' },
+      { key: 'recent', same_as: [], label: 'Recent fit' },
+    ],
     pair_maps: [pairMap()],
     recommendation: {
       headline: 'The recent fit earns more in this replay, but nearby settings lose money. Inspect that sensitivity before using your final test.',
@@ -679,9 +681,9 @@ export function tradeCharts(trades: Partial<TradeRecord>[] = [{}, {}]): Measured
   };
 }
 
-/** A final-test run: +1.8% for the candidate, +0.9% for the current settings, with its measures beside development. */
+/** A final-test run: +1.8% for the all-period fit, +1.2% for the recent fit, +0.9% for the current settings, with its measures beside development. */
 export function finalRun(key: CandidateKey): NonNullable<CandidateDetail['exam']> {
-  const end = key === 'incumbent' ? 0.009 : 0.018;
+  const end = { all_period: 0.018, recent: 0.012, incumbent: 0.009 }[key];
   const sessions = [etMidnightMs('2026-01-02'), etMidnightMs('2026-02-02'), etMidnightMs('2026-03-31')];
   return {
     window: { start_ms: FINAL_START_MS, end_ms: etMidnightMs('2026-04-01') },
@@ -759,28 +761,28 @@ const EXPOSURE_WEAKNESS: Readonly<Record<ExposureState, string>> = {
   history_unknown: 'the unknown history of this test interval',
 };
 
-/** What the server names as weak about an exam: nothing before an outcome, or when the evidence meets the rules. */
-function weaknessOf(exam: Omit<ExamView, 'weakness'>): Finding[] {
-  if (exam.outcome === null) return [];
+type ExamClaim = Pick<ExamView, 'claim' | 'exposure_state'>;
+
+/** What the server names as weak about a fit: nothing before an outcome, or when the evidence meets the rules. */
+function weaknessOf(fit: Omit<ExamFit, 'weakness'>, exam: ExamClaim): Finding[] {
+  if (fit.outcome === null) return [];
   const found: Finding[] = [];
-  if (exam.outcome === 'does_not_meet_rules') {
-    const failed = exam.checks.filter((check) => check.status === 'fail').map((check) => check.label.toLowerCase());
+  if (fit.outcome === 'does_not_meet_rules') {
+    const failed = fit.checks.filter((check) => check.status === 'fail').map((check) => check.label.toLowerCase());
     found.push({ code: 'EXAM_DOES_NOT_MEET_RULES', text: failed.length > 0 ? `failing the stated rules (${failed.join(', ')})` : 'failing the stated rules' });
-  } else if (exam.outcome !== 'meets_rules') {
-    found.push({ code: `EXAM_${exam.outcome.toUpperCase()}`, text: EXAM_WEAKNESS[exam.outcome] });
+  } else if (fit.outcome !== 'meets_rules') {
+    found.push({ code: `EXAM_${fit.outcome.toUpperCase()}`, text: EXAM_WEAKNESS[fit.outcome] });
   }
   if (exam.claim !== 'confirmatory') found.push({ code: `EXPOSURE_${exam.exposure_state.toUpperCase()}`, text: EXPOSURE_WEAKNESS[exam.exposure_state] });
   return found;
 }
 
-/** A final test; its `weakness` follows its outcome, claim and exposure as the server's does, unless an override names it. */
-export function examView(overrides: Partial<ExamView> = {}): ExamView {
-  const exam: Omit<ExamView, 'weakness'> = {
-    candidate_key: 'all_period',
-    candidate_point: { ...ALL_PERIOD_POINT },
-    window: { start_ms: FINAL_START_MS, end_ms: FINAL_END_MS },
-    claim: 'confirmatory',
-    exposure_state: 'not_opened',
+const FIT_DEFAULTS: Readonly<Record<'all_period' | 'recent', Omit<ExamFit, 'weakness'>>> = {
+  all_period: {
+    key: 'all_period',
+    same_as: [],
+    label: 'All-period fit',
+    point: { ...ALL_PERIOD_POINT },
     outcome: 'meets_rules',
     checks: [
       { code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'pass', detail: 'Net profit $1,840.' },
@@ -789,11 +791,55 @@ export function examView(overrides: Partial<ExamView> = {}): ExamView {
       { code: 'BEATS_INCUMBENT', label: 'At least the incumbent', status: 'pass', detail: 'Sharpe 0.91 against 0.54.' },
     ],
     retention: 0.61,
-    candidate_metrics: metrics({ total_return_pct: 0.018, max_drawdown_pct: 0.031, total_trades: 36, sharpe_ratio: 0.91 }),
+    metrics: metrics({ total_return_pct: 0.018, max_drawdown_pct: 0.031, total_trades: 36, sharpe_ratio: 0.91 }),
+  },
+  recent: {
+    key: 'recent',
+    same_as: [],
+    label: 'Recent fit',
+    point: { ...RECENT_POINT },
+    outcome: 'meets_rules',
+    checks: [
+      { code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'pass', detail: 'Net profit $1,210.' },
+      { code: 'DRAWDOWN_WITHIN', label: 'Worst drawdown within the ceiling', status: 'pass', detail: '5.2% against 20%.' },
+      { code: 'SAMPLE_FLOOR', label: 'Enough trades', status: 'pass', detail: '33 trades against 30.' },
+      { code: 'BEATS_INCUMBENT', label: 'At least the incumbent', status: 'pass', detail: 'Sharpe 0.66 against 0.54.' },
+    ],
+    retention: 0.46,
+    metrics: metrics({ total_return_pct: 0.012, max_drawdown_pct: 0.052, total_trades: 33, sharpe_ratio: 0.66 }),
+  },
+};
+
+/** One fit of a final test; its `weakness` follows its outcome and the test's claim as the server's does, unless an override names it. */
+export function examFit(key: 'all_period' | 'recent' = 'all_period', overrides: Partial<ExamFit> = {}, exam: ExamClaim = { claim: 'confirmatory', exposure_state: 'not_opened' }): ExamFit {
+  const fit = { ...FIT_DEFAULTS[key], ...overrides };
+  return { ...fit, weakness: overrides.weakness ?? weaknessOf(fit, exam) };
+}
+
+export const UNDECIDED_NOTE = '2 fits ran on the final test. The one you approve is recorded as chosen after the final test, from 2 fits.';
+export const CHOSEN_NOTE = 'Chosen after the final test, from 2 fits.';
+
+/** A final test of both fits, not yet decided, unless `fits` names others; `allPeriod` overrides the all-period fit. */
+export function examView(overrides: Partial<ExamView> = {}, allPeriod: Partial<ExamFit> = {}): ExamView {
+  const claim: ExamClaim = { claim: overrides.claim ?? 'confirmatory', exposure_state: overrides.exposure_state ?? 'not_opened' };
+  const fits = overrides.fits ?? [examFit('all_period', allPeriod, claim), examFit('recent', {}, claim)];
+  const chosen = overrides.chosen_key ?? null;
+  return {
+    window: { start_ms: FINAL_START_MS, end_ms: FINAL_END_MS },
+    ...claim,
     incumbent_metrics: metrics({ total_return_pct: 0.009, max_drawdown_pct: 0.042, total_trades: 39, sharpe_ratio: 0.54 }),
+    pick: 'after_test',
+    chosen_key: chosen,
+    selection_note: fits.length < 2 ? null : chosen === null ? UNDECIDED_NOTE : CHOSEN_NOTE,
     ...overrides,
+    fits,
   };
-  return { ...exam, weakness: overrides.weakness ?? weaknessOf(exam) };
+}
+
+/** A final test still running: every fit opened, none scored. */
+function examRunning(): ExamView {
+  const unscored = { outcome: null, checks: [], retention: null, metrics: null };
+  return examView({ fits: [examFit('all_period', unscored), examFit('recent', unscored)], incumbent_metrics: null });
 }
 
 export function qualificationView(overrides: Partial<QualificationView> = {}): QualificationView {
@@ -829,10 +875,9 @@ const GUIDANCE: Readonly<Record<StudyState, { headline: string; detail: string }
   search_running: { headline: 'The search is running', detail: 'Results appear when the stage finishes.' },
   awaiting_validation: { headline: 'Check whether the search procedure holds up over time', detail: 'Each fold repeats the procedure on its own past.' },
   validation_running: { headline: 'Testing the procedure over time', detail: 'Folds run one after another.' },
-  awaiting_candidate: { headline: 'Compare the candidates', detail: 'Pick one candidate for the final test, or keep the current settings.' },
-  candidate_locked: { headline: 'Open the final test', detail: 'One candidate, one look.' },
-  exam_running: { headline: 'The final test is running', detail: 'The candidate and the incumbent run on the held-back dates.' },
-  awaiting_review: { headline: 'Decide', detail: 'Approve the candidate or keep the current settings.' },
+  awaiting_candidate: { headline: 'Compare the candidates', detail: 'Open the final test for every fit, or keep the current settings.' },
+  exam_running: { headline: 'The final test is running', detail: 'Every fit and the incumbent run on the held-back dates.' },
+  awaiting_review: { headline: 'Decide', detail: 'Approve a fit or keep the current settings.' },
   qualification_pending: { headline: 'Building the proof', detail: 'Qualification is running.' },
   approved: { headline: 'Golden configuration ready in Deploy', detail: 'Use it in Deploy.' },
   qualification_failed: { headline: 'Qualification failed · current default unchanged', detail: QUALIFICATION_FAILURE },
@@ -850,6 +895,8 @@ const PROGRESS_STAGE: Partial<Readonly<Record<StudyState, StudyProgress['stage']
 
 /** States reached only after the final test was opened. */
 const AFTER_EXAM: readonly StudyState[] = ['exam_running', 'awaiting_review', 'qualification_pending', 'approved', 'qualification_failed'];
+/** States reached only once an approval named a fit. */
+const AFTER_PICK: readonly StudyState[] = ['qualification_pending', 'approved', 'qualification_failed'];
 
 function progressFor(state: StudyState): StudyProgress | null {
   const stage = PROGRESS_STAGE[state];
@@ -885,6 +932,7 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
   const reachedValidation = reachedSearch && !['awaiting_validation', 'validation_running'].includes(state);
   const examOpened = AFTER_EXAM.includes(state);
   const examJudged = examOpened && state !== 'exam_running';
+  const picked: CandidateKey | null = AFTER_PICK.includes(state) ? 'all_period' : null;
   return {
     id: 'study-0001-aaaa',
     parent_study_id: null,
@@ -931,13 +979,13 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
       recent: reachedSearch ? procedureView({ winner_hash: 'r1', stop_reason: 'pass_limit', stop_explanation: 'The pass limit was reached while knobs still moved.', edge_hits: [] }) : null,
       validation: reachedValidation ? validationView() : null,
       evidence: reachedValidation ? evidenceView() : null,
-      exam: examJudged ? examView() : examOpened ? examView({ outcome: null, checks: [], retention: null, candidate_metrics: null, incumbent_metrics: null }) : null,
+      exam: examJudged ? examView({ chosen_key: picked }) : examOpened ? examRunning() : null,
       qualification: qualificationFor(state),
     },
     decision: state === 'approved' ? { kind: 'approve', note: 'Accept this exact configuration after reviewing the stated limitations.', at_ms: etMidnightMs('2026-09-30') } : null,
-    candidate_key: examOpened || state === 'candidate_locked' ? 'all_period' : null,
+    candidate_key: picked,
     exam_locked: examOpened,
-    exposure_preview: state === 'awaiting_candidate' || state === 'candidate_locked' ? exposure() : null,
+    exposure_preview: state === 'awaiting_candidate' ? exposure() : null,
     scope: {
       development_label_start_ms: DEVELOPMENT_START_MS,
       development_end_ms: FINAL_START_MS,
@@ -960,8 +1008,7 @@ function permittedFor(state: StudyState): StudyDetail['permitted_actions'] {
     case 'awaiting_validation':
       return ['continue', 'run_research', 'retain', 'revise', 'close'];
     case 'awaiting_candidate':
-    case 'candidate_locked':
-      return state === 'candidate_locked' ? ['select_candidate', 'open_exam', 'retain', 'revise', 'close'] : ['select_candidate', 'retain', 'revise', 'close'];
+      return ['open_exam', 'retain', 'revise', 'close'];
     case 'awaiting_review':
     case 'qualification_failed':
       return ['approve', 'retain', 'revise'];

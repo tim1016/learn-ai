@@ -13,7 +13,9 @@ scenario count:
               — a detail run per candidate (incumbent, all-period, recent),
               both neighbors of every searched knob for the two fitted
               candidates, every stress scenario per candidate
-  exam        ``2`` — candidate and incumbent, RESERVED at lock
+  exam        ``1 + N`` — the incumbent and each of the ``N`` fits (the
+              all-period fit, and the recent fit when the recent window is
+              fitted), RESERVED at lock
   proof       ``3`` — persisted run, lake replay, restored replay, RESERVED at lock
 ``total_max`` is the sum; a plan whose ``total_max`` exceeds its budget cap is
 refused (``WORKLOAD_LIMIT``). Every engine evaluation in a study, proof
@@ -48,7 +50,6 @@ from app.research.golden_search.zoom import max_evaluations
 from app.research.grid_search.service import ESTIMATE_FIXED_SECONDS, ESTIMATE_SECONDS_PER_MONTH
 from app.utils.session_anchors import et_date_at_ms
 
-EXAM_EVALUATIONS = 2
 PROOF_EVALUATIONS = 3
 EVIDENCE_CANDIDATES = 3
 NEIGHBOR_CANDIDATES = 2
@@ -86,6 +87,11 @@ class StudyEstimate:
         }
 
 
+def exam_evaluations(protocol: GoldenSearchProtocol) -> int:
+    """The final test's runs: the incumbent and every fit the plan produces (#2930)."""
+    return 1 + (2 if protocol.recent_window else 1)
+
+
 def procedure_bound(protocol: GoldenSearchProtocol) -> int:
     """Upper bound on one search procedure's evaluations under the plan's method."""
     return max_evaluations(protocol) if protocol.method == "zoom" else max_grid_evaluations(protocol)
@@ -107,6 +113,7 @@ def estimate(protocol: GoldenSearchProtocol, *, folds: int) -> StudyEstimate:
     development_months = _months(protocol.development_start_ms, protocol.development_end_ms)
     final_months = _months(protocol.final_start_ms, protocol.final_end_ms)
     search = bound + len(protocol.pair_audits) * PAIR_GRID_SIZE**2
+    exam = exam_evaluations(protocol)
     evidence = (
         EVIDENCE_CANDIDATES
         + (NEIGHBOR_CANDIDATES * 2 * searched if protocol.neighbor_audit else 0)
@@ -132,7 +139,7 @@ def estimate(protocol: GoldenSearchProtocol, *, folds: int) -> StudyEstimate:
                 ),
             ),
             ("evidence", "Gather candidate evidence", evidence, evidence * _seconds_per_evaluation(development_months)),
-            ("exam", "Final test (reserved)", EXAM_EVALUATIONS, EXAM_EVALUATIONS * _seconds_per_evaluation(final_months)),
+            ("exam", "Final test (reserved)", exam, exam * _seconds_per_evaluation(final_months)),
             ("proof", "Qualification proof (reserved)", PROOF_EVALUATIONS, PROOF_EVALUATIONS * _seconds_per_evaluation(final_months)),
         ]
     )
@@ -140,7 +147,7 @@ def estimate(protocol: GoldenSearchProtocol, *, folds: int) -> StudyEstimate:
     return StudyEstimate(
         stages=tuple(StageEstimate(stage=stage, label=label, max_evaluations=count) for stage, label, count, _ in rows),
         total_max=sum(count for _, _, count, _ in rows),
-        reserved_for_exam_and_proof=EXAM_EVALUATIONS + PROOF_EVALUATIONS,
+        reserved_for_exam_and_proof=exam + PROOF_EVALUATIONS,
         serial_seconds_low=round(high * CACHE_FRIENDLY_SHARE, 1),
         serial_seconds_high=round(high, 1),
     )

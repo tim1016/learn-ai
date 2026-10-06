@@ -75,6 +75,16 @@ The exposure ledger has no foreign key to studies, and its rows can never be upd
 
 The outcome is one of **meets the stated rules**, **does not meet the rules**, **not enough evidence** or **could not evaluate**. A null result is never a pass.
 
+**Amendment, 2026-10-06 ([#2930](https://github.com/tim1016/learn-ai/issues/2930)): both fits sit the final test, and the pick follows it.** Owner decision: no candidate is locked before the final test. This replaces "Picking a candidate and opening the final test are separate commands" and "locks the candidate" above, and the pause "after the candidate pick" in decision 1.
+- Opening the final test reserves the interval for every fit whose settings differ from the incumbent's: the all-period fit and the recent fit. Two fits with the same settings are one run. Each runs once beside the frozen incumbent.
+- Each fit is judged on its own under the frozen rules and has its own outcome.
+- The approval names the fit. A retry after a technical failure must name the same fit, so a crash still resumes the same candidate, never another.
+- When two different fits ran, the final test's record and the qualified version say the fit was **chosen after the final test, from 2 fits**. That is a recorded fact with no acknowledgement of its own. The weak-evidence acknowledgement is judged on the approved fit's outcome and the interval's exposure, as before.
+- The interval is still used once. The ledger holds one reservation and one result for each fit and counts the study once.
+- The lock reserves one final-test run for the incumbent and one for each fit the plan produces.
+- A final test recorded with one locked candidate keeps its record. It reads as that one fit, picked before the test.
+- A study that was waiting with a candidate locked returns to Compare; its recorded pick stays in the trial ledger.
+
 ### 5. Approval publishes an immutable qualified version, and the default is a separate pointer
 
 **Approve golden configuration** runs as a job, using the approval intent recorded by the guarded command. It does three things:

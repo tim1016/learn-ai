@@ -10,10 +10,11 @@ from decimal import Decimal
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.research.golden_search.actions import action_refusals, permitted, presented_status
+from app.research.golden_search.actions import NOTHING_TO_TEST, action_refusals, permitted, presented_status
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.concentration import NOT_MEASURED
 from app.research.golden_search.declarations import declaration_for
+from app.research.golden_search.final_test import fits_to_test
 from app.research.golden_search.guidance import (
     WEAK_EVIDENCE_DETAIL,
     candidate_flags,
@@ -27,8 +28,17 @@ from app.research.golden_search.guidance import (
 from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.planning import protocol_from_request
 from app.research.golden_search.protocol import KnobPlan
-from app.research.golden_search.views import candidate_detail, evidence_view, knob_summary, passes_completed, run_detail
+from app.research.golden_search.views import (
+    candidate_detail,
+    evidence_view,
+    exam_view,
+    knob_summary,
+    passes_completed,
+    run_detail,
+    summary_outcome,
+)
 from app.research.golden_search.zoom import ProcedureResult, ZoomRound
+from app.schemas.golden_qualifications import GoldenQualificationResearch
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import metrics
 from tests._helpers.golden_search_study import plan_request
@@ -101,14 +111,91 @@ def test_the_exam_view_names_each_weakness_the_approval_acknowledges() -> None:
         {"code": "NET_POSITIVE", "label": "Positive net result after stated costs", "status": "fail", "detail": ""},
         {"code": "DRAWDOWN_WITHIN", "label": "Worst drawdown within your ceiling", "status": "pass", "detail": ""},
     ]
-    weak = {"outcome": "does_not_meet_rules", "claim": "exploratory", "exposure_state": "history_unknown", "checks": checks}
+    exam = {"claim": "exploratory", "exposure_state": "history_unknown"}
+    weak = {"outcome": "does_not_meet_rules", "checks": checks}
 
-    assert weakness_items(weak) == [
+    assert weakness_items(exam, weak) == [
         {"code": "EXAM_DOES_NOT_MEET_RULES", "text": "failing the stated rules (positive net result after stated costs)"},
         {"code": "EXPOSURE_HISTORY_UNKNOWN", "text": "the unknown history of this test interval"},
     ]
-    assert weakness_items({**weak, "outcome": "meets_rules", "claim": "confirmatory"}) == []
-    assert weakness_items({**weak, "outcome": None}) == []  # not scored yet
+    assert weakness_items({**exam, "claim": "confirmatory"}, {**weak, "outcome": "meets_rules"}) == []
+    assert weakness_items(exam, {**weak, "outcome": None}) == []  # not scored yet
+
+
+def _fit(key: str, outcome: str | None, *, same_as: tuple[str, ...] = ()) -> dict:
+    return {
+        "key": key, "same_as": list(same_as), "point": {"gap": 0.3 if key == "all_period" else 0.5}, "point_hash": f"h-{key}",
+        "outcome": outcome, "checks": [], "retention": None, "metrics": None,
+    }
+
+
+def _exam(*fits: dict) -> dict:
+    return {"window": {"start_ms": 0, "end_ms": 1}, "claim": "confirmatory", "exposure_state": "not_opened", "fits": list(fits), "incumbent_metrics": None}
+
+
+def test_the_final_test_runs_each_distinct_fit_and_never_the_current_settings() -> None:
+    def stored(key: str, digest: str) -> dict:
+        return {"key": key, "point": {"gap": digest}, "point_hash": digest}
+
+    both = fits_to_test([stored("incumbent", "a"), stored("all_period", "b"), stored("recent", "c")])
+    assert [(fit["key"], fit["same_as"], fit["outcome"]) for fit in both] == [("all_period", [], None), ("recent", [], None)]
+    # Two fits with one set of settings are one run, named by the first.
+    twins = fits_to_test([stored("incumbent", "a"), stored("all_period", "b"), stored("recent", "b")])
+    assert [(fit["key"], fit["same_as"]) for fit in twins] == [("all_period", ["recent"])]
+    # A fit that returned the current settings is not tested against itself.
+    assert [fit["key"] for fit in fits_to_test([stored("incumbent", "a"), stored("all_period", "a"), stored("recent", "c")])] == ["recent"]
+    assert fits_to_test([stored("incumbent", "a"), stored("all_period", "a")]) == []
+
+
+def test_the_exam_view_shows_every_fit_and_says_when_the_pick_followed_the_test() -> None:
+    stored = _exam(_fit("all_period", "meets_rules"), _fit("recent", "does_not_meet_rules"))
+
+    undecided = exam_view(stored, chosen_key=None)
+    assert [(fit["key"], fit["label"], fit["outcome"]) for fit in undecided["fits"]] == [
+        ("all_period", "All-period fit", "meets_rules"),
+        ("recent", "Recent fit", "does_not_meet_rules"),
+    ]
+    assert (undecided["pick"], undecided["chosen_key"]) == ("after_test", None)
+    assert undecided["selection_note"] == "2 fits ran on the final test. The one you approve is recorded as chosen after the final test, from 2 fits."
+    assert [item["code"] for item in undecided["fits"][1]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES"]
+
+    chosen = exam_view(stored, chosen_key="recent")
+    assert (chosen["chosen_key"], chosen["selection_note"]) == ("recent", "Chosen after the final test, from 2 fits.")
+    # A study that ended without an approval promises none.
+    assert exam_view(stored, chosen_key=None, approvable=False)["selection_note"] == "2 fits ran on the final test."
+    # One result for two fits with the same settings is no choice, so nothing is noted; either name finds it.
+    twins = exam_view(_exam(_fit("all_period", "meets_rules", same_as=("recent",))), chosen_key="recent")
+    assert (twins["fits"][0]["label"], twins["chosen_key"], twins["selection_note"]) == ("All-period and recent fit", "all_period", None)
+
+
+def test_a_final_test_recorded_with_one_locked_candidate_reads_as_that_one_fit() -> None:
+    legacy = {
+        "candidate_key": "recent", "candidate_point": {"gap": 0.5}, "candidate_point_hash": "h", "window": {"start_ms": 0, "end_ms": 1},
+        "claim": "confirmatory", "exposure_state": "not_opened", "outcome": "meets_rules", "checks": [], "retention": 0.8,
+        "candidate_metrics": metrics(1.2).as_dict(), "incumbent_metrics": metrics(1.0).as_dict(),
+    }
+
+    view = exam_view(legacy, chosen_key="recent")
+
+    (fit,) = view["fits"]
+    assert (fit["key"], fit["outcome"], fit["retention"], fit["metrics"]) == ("recent", "meets_rules", 0.8, legacy["candidate_metrics"])
+    assert (view["pick"], view["chosen_key"], view["selection_note"]) == ("before_test", "recent", None)
+
+
+def test_a_qualified_version_says_when_its_fit_was_chosen_with_two_results_in_view() -> None:
+    chosen_from_two = {"exam_outcome": "meets_rules", "fits_tested": 2, "pick": "after_test"}
+    assert GoldenQualificationResearch.from_research(chosen_from_two).selection_note == "Chosen after the final test, from 2 fits."
+    # One fit, a pick locked before the test, or research recorded before both fits sat it: nothing to note.
+    for research in ({**chosen_from_two, "fits_tested": 1}, {**chosen_from_two, "pick": "before_test"}, {"exam_outcome": "meets_rules"}):
+        assert GoldenQualificationResearch.from_research(research).selection_note is None
+
+
+def test_one_outcome_stands_for_the_final_test_the_named_fits_else_the_strongest() -> None:
+    stored = _exam(_fit("all_period", "does_not_meet_rules"), _fit("recent", "meets_rules"))
+    assert summary_outcome(stored, None) == "meets_rules"
+    assert summary_outcome(stored, "all_period") == "does_not_meet_rules"
+    # Until every fit is scored the test has no outcome.
+    assert summary_outcome(_exam(_fit("all_period", "meets_rules"), _fit("recent", None)), None) is None
 
 
 # ── Permitted actions ────────────────────────────────────────────────────
@@ -143,17 +230,17 @@ def test_a_stopped_approval_can_be_finished_revised_or_ended_by_keeping_the_curr
     assert permitted(blocked) == ["retain", "revise"]
 
 
-def test_a_candidate_can_be_changed_until_the_final_test_opens() -> None:
-    evidence = {"evidence": {"candidates": []}}
-    locked = _row(state="candidate_locked", results=evidence)
-    assert permitted(action_refusals(locked, presented="completed", resume_refusal=None)) == [
-        "select_candidate",
-        "open_exam",
-        "retain",
-        "close",
-        "revise",
-    ]
-    reviewing = _row(state="awaiting_review", exam_locked=True, results=evidence)
+def _evidence(fit_hash: str) -> dict:
+    """Stored evidence whose all-period fit has ``fit_hash``; the incumbent's is ``a``."""
+    return {"evidence": {"candidates": [{"key": "incumbent", "point": {}, "point_hash": "a"}, {"key": "all_period", "point": {}, "point_hash": fit_hash}]}}
+
+
+def test_the_final_test_opens_from_compare_once_when_a_fit_differs_from_the_current_settings() -> None:
+    comparing = _row(state="awaiting_candidate", results=_evidence("b"))
+    assert permitted(action_refusals(comparing, presented="completed", resume_refusal=None)) == ["open_exam", "retain", "close", "revise"]
+    same = action_refusals(_row(state="awaiting_candidate", results=_evidence("a")), presented="completed", resume_refusal=None)
+    assert same["open_exam"] == NOTHING_TO_TEST and permitted(same) == ["retain", "close", "revise"]
+    reviewing = _row(state="awaiting_review", exam_locked=True, results=_evidence("b"))
     assert permitted(action_refusals(reviewing, presented="completed", resume_refusal=None)) == ["approve", "retain", "close", "revise"]
 
 
@@ -161,12 +248,12 @@ def test_a_candidate_can_be_changed_until_the_final_test_opens() -> None:
     ("state", "kept"),
     [
         ("locked", ["close", "revise"]),
-        ("candidate_locked", ["select_candidate", "retain", "close", "revise"]),
+        ("awaiting_candidate", ["retain", "close", "revise"]),
         ("awaiting_review", ["retain", "close", "revise"]),
     ],
 )
 def test_moved_code_refuses_every_command_that_starts_a_stage_and_nothing_else(state: str, kept: list[str]) -> None:
-    row = _row(state=state, exam_locked=state == "awaiting_review", results={"evidence": {"candidates": []}})
+    row = _row(state=state, exam_locked=state == "awaiting_review", results=_evidence("b"))
     moved = "No new stage can run for this study: the engine or strategy code changed since launch"
 
     refusals = action_refusals(row, presented="completed", resume_refusal=None, stage_refusal=moved)
@@ -302,7 +389,7 @@ def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candida
     # The stored measure reads back as recorded; evidence recorded before it was measured says so.
     assert all_period["concentration"] == measured
     assert incumbent["concentration"] == {"status": "missing", "reason": NOT_MEASURED}
-    assert [item["exam_eligible"] for item in view["candidates"]] == [False, True, True]
+    assert view["fits_to_test"] == [{"key": "all_period", "same_as": [], "label": "All-period fit"}, {"key": "recent", "same_as": [], "label": "Recent fit"}]
     assert all_period["guidance"]["title"] == "Nearby settings lose money"
     assert all_period["flags"] == [{"code": "NEIGHBORS_LOSE_MONEY", "text": "Nearby settings lose money"}]
     assert (recent["eligible"], recent["ineligibility"]) == (False, "DRAWDOWN_ABOVE_CEILING")

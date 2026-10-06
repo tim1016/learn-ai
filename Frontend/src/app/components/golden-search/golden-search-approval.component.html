@@ -34,7 +34,7 @@
       @if (canRetain()) {
         <button pButton type="button" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="retain('keep_current')"><span>Keep current settings</span></button>
       }
-      <button pButton type="button" [disabled]="!canApprove()" (click)="approve()"><span>{{ retry() ? 'Retry qualification' : 'Approve golden configuration' }}</span></button>
+      <button pButton type="button" [disabled]="!canApprove()" (click)="approve()"><span>{{ approveLabel() }}</span></button>
     </div>
     @if (missing(); as reason) { <p class="caption caption--end">{{ reason }}</p> }
     @if (canRetain()) {
