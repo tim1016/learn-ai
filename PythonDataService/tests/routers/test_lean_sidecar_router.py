@@ -8,8 +8,12 @@ These values are known-good against the _validate_window validator.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 _GOOD_START_MS = 1_736_173_800_000
 _GOOD_END_MS = 1_736_778_600_000
@@ -88,6 +92,37 @@ def test_trusted_run_request_model_accepts_non_15_bar_minutes() -> None:
 
 
 @pytest.mark.asyncio
+def _window(first: date, exclusive_end: date) -> dict[str, object]:
+    return {
+        "run_id": "test-window-length",
+        "symbol": "SPY",
+        "start_ms_utc": session_open_ms_utc(first),
+        "end_ms_utc": session_open_ms_utc(exclusive_end),
+        "starting_cash": 100_000.0,
+    }
+
+
+def test_a_window_as_long_as_the_provider_history_is_accepted() -> None:
+    """LEAN reads the five years the provider serves (owner, 2026-10-05).
+
+    2021-10-07 through 2026-10-05 is what a 5Y range picked on 2026-10-05
+    holds: 1,253 sessions, more than the old ceiling of 504.
+    """
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    model = TrustedRunRequestModel(**_window(date(2021, 10, 7), date(2026, 10, 6)))
+
+    assert model.start_ms_utc == session_open_ms_utc(date(2021, 10, 7))
+
+
+def test_a_window_longer_than_the_provider_history_is_refused_with_its_length() -> None:
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    # Six years: 2020-10-05 through 2026-10-05.
+    with pytest.raises(ValueError, match=r"window spans 15\d\d trading days; max is 1260"):
+        TrustedRunRequestModel(**_window(date(2020, 10, 5), date(2026, 10, 6)))
+
+
 async def test_post_trusted_run_returns_502_when_metadata_staging_fails(monkeypatch) -> None:
     """Regression: when the LEAN launcher is unreachable (or the
     pinned image isn't pulled locally), ``stage_lean_metadata_from_image``
