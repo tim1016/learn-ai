@@ -183,7 +183,7 @@ class EmaPreviousCrossoverStrategyParametersModel(BaseModel):
     fast_period: int = Field(5, ge=2, le=30, strict=True)
     slow_period: int = Field(10, ge=3, le=40, strict=True)
     hold_bars: int = Field(5, ge=1, le=26, strict=True)
-    cross_max_age_bars: int = Field(1, ge=0, le=26, strict=True)
+    cross_max_age_bars: int = Field(1, ge=0, le=8, strict=True)
 
     @model_validator(mode="after")
     def _validate_rsi_band(self) -> EmaPreviousCrossoverStrategyParametersModel:

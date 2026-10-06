@@ -1243,15 +1243,16 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaPreviousCrossoverParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="e1ee049b0df0638f6ba1c27889bfbd4ebfa8e18eb229fc2a35eacec851e9a746",
+            golden_trace_root="39ea8919c9b8aea420d173de5f2b3201736afa269f8b26154b6af17736aa24ca",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
             # Same indicators as ema_crossover_signal, so the same buffer over
             # the RSI(14) warmup at the default lengths; a deploy at longer
             # ones seals the days they need (`resolved_warmup_lookback_days`).
-            # The lookback also holds far more bars than the longest cross age
-            # limit, so a bot always knows whether a cross is recent.
+            # At every legal length the lookback also holds the eight bars
+            # beyond the slow EMA's warmup that the longest cross age limit
+            # reaches back, so a bot knows whether a cross is recent.
             warmup_lookback_days=5,
             # EmaPreviousCrossoverAlgorithm.initialize() constructs exactly
             # these three named series, each fed bar.close at bar.end_ms.
@@ -1267,7 +1268,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # commit_signal_decision arms the countdown to hold_bars at entry;
             # this static value is the default five, and
             # `exit_eligibility_for` resolves a seal's own hold. The cross
-            # age is decision math rebuilt by replaying bars, not persisted
+            # is decision math rebuilt by replaying bars, not persisted
             # state, so countdown_state_persistable stays False as for every
             # other program.
             exit_eligibility=ExitEligibilityContract(
@@ -1281,12 +1282,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an "
                     "RSI(14) filter; fast/slow default to 5/10. A cross up is a bar with "
                     "EMA(fast) > EMA(slow) whose previous bar had EMA(fast) <= EMA(slow); its age "
-                    "is the bars since it, 0 on the cross bar, and it ends when EMA(fast) <= "
-                    "EMA(slow). Entry, while flat: age <= cross_max_age_bars (default 1) AND "
-                    "(EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized gap >= "
-                    "gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50-70), all on the "
-                    "bar being evaluated. Exit: hold_bars consolidated decision bars after entry "
-                    "(default 5, 75 minutes)."
+                    "on a later bar is that bar's close time minus the cross bar's, and it ends "
+                    "when EMA(fast) <= EMA(slow). Entry, while flat: age <= cross_max_age_bars x "
+                    "15 minutes (default 1 bar) AND (EMA(fast) - EMA(slow)) >= gap (default 0.20) "
+                    "AND the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max "
+                    "(default 50-70), all on the bar being evaluated. Exit: hold_bars consolidated "
+                    "decision bars after entry (default 5, 75 minutes)."
                 ),
                 reference=(
                     "The rule is the owner's (#2902, revised 2026-10-05) and has no outside source. The "
@@ -1344,17 +1345,19 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         description=(
             "Long-only intraday EMA signal generator that buys a recent cross "
             "once it has proved itself. The cross may be on the bar being "
-            "evaluated or a few bars back; the gap and the RSI band are read on "
-            "the bar being evaluated.\n"
+            "evaluated or shortly before it; the gap and the RSI band are read "
+            "on the bar being evaluated.\n"
             "\n"
             "The strategy reads minute signal bars, consolidates them into "
             "15-minute bars, and tracks a fast and a slow EMA (5 and 10 by "
             "default) and Wilders RSI(14). On each bar, while it holds nothing, "
             "it buys when three things are true on that bar: the fast EMA "
             "crossed above the slow EMA on this bar or within the cross age "
-            "limit (one bar back by default) and has stayed above since, the "
+            "limit (15 minutes by default) and has stayed above since, the "
             "gap is wide enough (0.20 by default), and RSI is inside its band "
-            "(50–70 by default). Nothing is remembered from earlier bars. A "
+            "(50–70 by default). The cross's age is clock time, so a cross "
+            "from an earlier session never counts. Nothing else is remembered "
+            "from earlier bars. A "
             "position is held for a fixed number of 15-minute bars (five, "
             "75 min, by default); the hold counts session bars only. There is "
             "no stop, no target, no scaling, and at most one position lifecycle "
@@ -1371,16 +1374,16 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    EMA_slow = ExponentialMovingAverage(slow_period)   # default 10\n"
             "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
             "\n"
-            "Cross age (updated on every bar, whatever the position)\n"
+            "Cross (tracked on every bar, whatever the position)\n"
             "    cross_up = EMA_fast > EMA_slow AND EMA_fast[-1] <= EMA_slow[-1]\n"
-            "    cross_up                 ⇒ cross_age = 0\n"
-            "    still EMA_fast > EMA_slow ⇒ cross_age += 1\n"
-            "    EMA_fast <= EMA_slow     ⇒ cross_age = none\n"
+            "    cross_up                 ⇒ cross_time = bar.end_time\n"
+            "    EMA_fast <= EMA_slow     ⇒ cross_time = none\n"
             "    fast above slow on the first bar both EMAs are ready is not a\n"
-            "    cross: cross_age stays none until a cross is seen\n"
+            "    cross: cross_time stays none until a cross is seen\n"
             "\n"
             "Alpha — entry bar (needs all three indicators ready)\n"
-            "    recent    = cross_age <= cross_max_age_bars     # default 1\n"
+            "    cross_age = bar.end_time - cross_time            # clock time\n"
+            "    recent    = cross_age <= cross_max_age_bars × 15 min   # default 1\n"
             "    gap_ok    = (EMA_fast - EMA_slow) >= gap         # default 0.20\n"
             "    rsi_ok    = rsi_min <= RSI <= rsi_max           # default 50..70\n"
             "    entry_bar = recent AND gap_ok AND rsi_ok\n"
@@ -1402,16 +1405,22 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    if still in position at the last bar: emit EXIT"
         ),
         gotchas=[
-            "The cross age limit counts 15-minute bars since the cross. At the "
-            "default of 1 the cross must be on the bar being evaluated or the "
-            "one before it; at 0 it must be on the bar being evaluated.",
-            "Nothing is remembered between bars. If an entry is not taken "
-            "(the order is refused, the bot is paused, or an earlier trade is "
-            "still held), the next bar can still enter while the cross is "
-            "recent and the gates pass.",
-            "A bot starts with no position. If it starts while a cross is "
-            "still recent, it can enter on a bar where a backtest that began "
-            "earlier is already holding the trade it took on the bar before.",
+            "The cross age limit is clock time, set in 15-minute bars. At the "
+            "default of 1 the cross bar must have closed at most 15 minutes "
+            "before the bar being evaluated; at 0 it must be that bar.",
+            "A cross on the last bar of a session is never recent on the next "
+            "session's first bar: the limit is at most two hours, and the "
+            "overnight gap is longer. A bar missing inside a session ages the "
+            "cross the same way.",
+            "Nothing else is remembered between bars. If an entry is not "
+            "taken (the order is refused, the bot is paused, or an earlier "
+            "trade is still held), the next bar can still enter while the "
+            "cross is recent and the gates pass.",
+            "A bot starts with no position. If it starts or is restarted "
+            "while a cross is still recent, it can enter on a bar where a "
+            "backtest that began earlier is already holding the trade it "
+            "took on the bar before. A bot restarted within the limit of its "
+            "own entry can therefore buy the same cross a second time.",
             "With a cross age limit longer than the hold, one cross can give "
             "a second trade after the first one exits.",
             "Fast touching slow (equal values) ends the cross. The next bar "

@@ -266,7 +266,7 @@ _EMA_PREVIOUS_DECLARATION = replace(
             unit="decision bars",
             kind="integer",
             domain_low=_d("0"),
-            domain_high=_d("26"),
+            domain_high=_d("8"),
             quantum=_d("1"),
             default_low=_d("0"),
             default_high=_d("3"),
@@ -276,8 +276,8 @@ _EMA_PREVIOUS_DECLARATION = replace(
             warmup_dependent=False,
             default_value=_d("1"),
             note=(
-                "Most bars that may have passed since the cross on the entry bar. "
-                "It stays fixed at 1 by default: the cross is on the evaluated bar or the one before."
+                "Longest time since the cross allowed on the entry bar, in 15-minute bars of clock time. "
+                "It stays fixed at 1 by default: the cross is on the evaluated bar or 15 minutes before it."
             ),
         ),
     ),

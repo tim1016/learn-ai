@@ -90,9 +90,9 @@ class EmaPreviousCrossoverParams(EmaCrossoverParams):
     cross_max_age_bars: int = Field(
         DEFAULT_CROSS_MAX_AGE_BARS,
         ge=0,
-        le=26,
+        le=8,
         title="Cross age limit",
-        description="Most decision bars (15-minute) that may have passed since the cross on the entry bar. 0 allows the cross bar only; 1 also allows the bar after it.",
+        description="Longest time since the cross allowed on the entry bar, in 15-minute bars of clock time. 0 allows the cross bar only; 1 also allows a bar that closes 15 minutes after it. A cross from an earlier session never counts.",
     )
 
     @field_validator("fast_period", "slow_period", "hold_bars", "cross_max_age_bars", mode="before")

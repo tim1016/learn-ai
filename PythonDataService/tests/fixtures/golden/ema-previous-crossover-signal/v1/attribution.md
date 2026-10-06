@@ -16,8 +16,9 @@ raw minute bars (`lean/observations.csv`) are reused as priced-data input.
   `cross_max_age_bars=1`.
 - Regenerated: 2026-10-05, after the owner replaced the entry rule the same
   day it was first built (program version `ema-previous-crossover/v2`: a
-  recent cross, with nothing remembered between bars). No bot or accepted
-  validation ran on the first rule.
+  cross at most `cross_max_age_bars` 15-minute bars old by the clock, with
+  nothing else remembered between bars). No bot or accepted validation ran
+  on the first rule.
 - Generated: 2026-10-05, by
   `python -m scripts.generate_signal_program_trace_corpus --program ema_previous_crossover --output tests/fixtures/golden/ema-previous-crossover-signal/v1/trace-corpus.json`
 - Root generation: `trace_corpus_root(entries)` in

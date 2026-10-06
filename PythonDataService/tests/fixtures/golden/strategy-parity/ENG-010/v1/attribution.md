@@ -17,8 +17,8 @@
   committed `lean/observations.csv`. The generator refuses to write unless the
   minute bars LEAN reports receiving are byte-identical to that file, so the
   parity test replays exactly what LEAN consumed.
-- Cells: `SPY_W6mo_2025-11-03_to_2026-04-30` (106 fills) and
-  `QQQ_W6mo_2025-11-03_to_2026-04-30` (118 fills), each a full six-month run
+- Cells: `SPY_W6mo_2025-11-03_to_2026-04-30` (98 fills) and
+  `QQQ_W6mo_2025-11-03_to_2026-04-30` (112 fills), each a full six-month run
   from the cell's own start date, so warmup is bar-for-bar identical on both
   sides.
 - Protocol: $100,000 initial cash and the registered default settings, passed
@@ -29,15 +29,16 @@
   ex-date. The generator derives each one from the capture's factor file with
   LEAN's formula (`Math.Round(close - close * pf_i / pf_i+1, 2)`,
   `Common/Data/Market/Dividend.cs`) and records it under `dividends`. The SPY
-  run held 155 shares over the 2026-03-20 ex-date: $1.80 a share, $279.00.
+  run held 154 shares over the 2026-03-20 ex-date: $1.80 a share, $277.20.
   QQQ collected none. `final_equity` is fills plus dividends; the generator
   refuses to write unless it equals LEAN's reported end equity
   (`lean_reported_end_equity`) to the cent. The Python engine pays no
   dividends (#2903), so the parity test credits the recorded amount.
 - Regenerated: 2026-10-05, after the owner replaced the entry rule the same
   day it was first built: the template now enters on a bar that clears the
-  gates while the cross is at most `cross_max_age_bars` old, and remembers
-  nothing between bars. No bot or accepted validation ran on the first rule.
+  gates while the cross is at most `cross_max_age_bars` 15-minute bars old by
+  the clock, and remembers nothing else between bars. No bot or accepted
+  validation ran on the first rule.
 - Generated: 2026-10-05 with
   `PYTHONPATH=. python tests/fixtures/golden/ema-previous-crossover-lean/generate.py`
   from the `PythonDataService` directory (needs podman and the pinned image).

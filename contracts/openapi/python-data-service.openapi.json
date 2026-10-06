@@ -14045,7 +14045,7 @@
         "properties": {
           "cross_max_age_bars": {
             "default": 1,
-            "maximum": 26.0,
+            "maximum": 8.0,
             "minimum": 0.0,
             "title": "Cross Max Age Bars",
             "type": "integer"

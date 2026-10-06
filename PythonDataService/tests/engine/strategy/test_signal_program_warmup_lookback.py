@@ -124,6 +124,29 @@ def test_the_resolved_lookback_holds_the_longest_series_warmup_on_every_start(
     assert _fewest_whole_decision_bars(lookback_days, decision_ms) >= bars
 
 
+def test_ema_previous_crossover_lookback_reaches_back_to_the_oldest_recent_cross() -> None:
+    """Whenever the bot starts, its replay shows whether a cross is recent, at every legal length and limit.
+
+    A cross is known only against the relation the bar before it
+    established, so the oldest recent cross sits ``cross_max_age_bars`` bars
+    back and needs the slow EMA ready one bar earlier still.
+    """
+    registration = _STRATEGY_REGISTRY["ema_previous_crossover"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    properties = registration.param_schema.model_json_schema()["properties"]
+    longest_limit = properties["cross_max_age_bars"]["maximum"]
+    slow_lengths = range(properties["slow_period"]["minimum"], properties["slow_period"]["maximum"] + 1)
+
+    for slow_period in slow_lengths:
+        params = registration.param_schema(
+            **{**contract.validated_settings, "fast_period": 2, "slow_period": slow_period}
+        )
+        lookback_days = contract.resolved_warmup_lookback_days(params)
+
+        assert _fewest_whole_decision_bars(lookback_days, contract.decision_timeframe_ms) >= slow_period + longest_limit
+
+
 @pytest.mark.parametrize(("program_key", "overrides"), _BEYOND_THE_DEFAULT_LOOKBACK)
 def test_the_default_lookback_cannot_warm_a_deploy_beyond_it(program_key: str, overrides: dict[str, int]) -> None:
     """What #2841 repaired: on some start the default lookback leaves these deploys unready.

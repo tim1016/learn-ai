@@ -1,10 +1,11 @@
 """LEAN validation twin for the EMA Previous Crossover strategy.
 
 Formula: Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars,
-gated by Wilders RSI(14). A cross up starts a count of bars: 0 on the cross
-bar, one more on each bar the fast EMA stays above the slow one. While flat,
-a bar enters when the count is at most ``cross_max_age_bars`` and the gap
-floors and the RSI band pass on that same bar. Exit after ``hold_bars`` bars.
+gated by Wilders RSI(14). A cross up is remembered by its bar's close time
+while the fast EMA stays above the slow one. While flat, a bar enters when it
+closes at most ``cross_max_age_bars`` 15-minute bars of clock time after the
+cross bar and the gap floors and the RSI band pass on that same bar. Exit
+after ``hold_bars`` bars.
 Reference: the rule is the owner's (#2902, revised 2026-10-05); no outside
 source states it. LEAN supplies the consolidation, the indicators and the
 fills.
@@ -89,8 +90,8 @@ class MyAlgorithm(QCAlgorithm):
         fast_period = self._whole_number("fast_period", self.FAST_PERIOD_DEFAULT, 2, 30)
         slow_period = self._whole_number("slow_period", self.SLOW_PERIOD_DEFAULT, 3, 40)
         self.hold_bars = self._whole_number("hold_bars", self.HOLD_BARS_DEFAULT, 1, 26)
-        self.cross_max_age_bars = self._whole_number(
-            "cross_max_age_bars", self.CROSS_MAX_AGE_BARS_DEFAULT, 0, 26
+        cross_max_age_bars = self._whole_number(
+            "cross_max_age_bars", self.CROSS_MAX_AGE_BARS_DEFAULT, 0, 8
         )
 
         bar_minutes = int(bar_minutes_str)
@@ -115,6 +116,8 @@ class MyAlgorithm(QCAlgorithm):
         self.gap_bps_min = gap_bps_min
         self.rsi_lo = rsi_lo
         self.rsi_hi = rsi_hi
+        # Clock time, so a cross from an earlier session is never recent.
+        self.cross_max_age_ms = cross_max_age_bars * bar_minutes * 60000
 
         sy, sm, sd = (int(x) for x in start.split("-"))
         ey, em, ed = (int(x) for x in end.split("-"))
@@ -142,10 +145,11 @@ class MyAlgorithm(QCAlgorithm):
         self.ema_slow = ExponentialMovingAverage(slow_period)
         self.rsi = RelativeStrengthIndex(self.RSI_PERIOD, MovingAverageType.Wilders)
 
-        # Cross age: advanced on every bar, whatever the position. None when
-        # fast is not above slow, or no cross began the current stretch.
+        # The cross bar's close time: tracked on every bar, whatever the
+        # position. None when fast is not above slow, or no cross began the
+        # current stretch.
         self.fast_was_above_slow = False
-        self.bars_since_cross = None
+        self.cross_end_ms = None
         self.bars_held = 0
         self.in_trade = False
 
@@ -186,19 +190,18 @@ class MyAlgorithm(QCAlgorithm):
 
         if not (self.ema_fast.IsReady and self.ema_slow.IsReady):
             self.fast_was_above_slow = False
-            self.bars_since_cross = None
+            self.cross_end_ms = None
             return
 
         fast = float(self.ema_fast.Current.Value)
         slow = float(self.ema_slow.Current.Value)
 
         fast_above_slow = fast > slow
+        end_ms = _to_ms_utc(bar.EndTime)
         if not fast_above_slow:
-            self.bars_since_cross = None
+            self.cross_end_ms = None
         elif relation_was_known and not self.fast_was_above_slow:
-            self.bars_since_cross = 0
-        elif self.bars_since_cross is not None:
-            self.bars_since_cross += 1
+            self.cross_end_ms = end_ms
         self.fast_was_above_slow = fast_above_slow
 
         if not self.rsi.IsReady:
@@ -211,8 +214,8 @@ class MyAlgorithm(QCAlgorithm):
         normalized_gap_ok = gap_bps >= self.gap_bps_min
         rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi
         cross_recent = (
-            self.bars_since_cross is not None
-            and self.bars_since_cross <= self.cross_max_age_bars
+            self.cross_end_ms is not None
+            and end_ms - self.cross_end_ms <= self.cross_max_age_ms
         )
         entry_bar = cross_recent and absolute_gap_ok and normalized_gap_ok and rsi_ok
 
@@ -239,7 +242,7 @@ class MyAlgorithm(QCAlgorithm):
 
         with open(self._state_path, "a") as f:
             f.write(
-                str(_to_ms_utc(bar.EndTime)) + ","
+                str(end_ms) + ","
                 + str(close) + ","
                 + str(fast) + ","
                 + str(slow) + ","

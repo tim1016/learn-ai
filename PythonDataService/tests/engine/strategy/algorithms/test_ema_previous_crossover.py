@@ -1,10 +1,10 @@
 """The EMA Previous Crossover entry rule, one branch per test (#2902).
 
-A cross up starts a count of bars: 0 on the cross bar, one more on each bar
-fast stays above slow. While flat, a bar enters when the count is at most
-``cross_max_age_bars`` and the gap floors and the RSI band pass on that same
-bar. Nothing else is remembered. A position is held for exactly ``hold_bars``
-decision bars.
+A cross up is remembered by its bar's close time while fast stays above slow.
+While flat, a bar enters when it closes at most ``cross_max_age_bars``
+15-minute bars of clock time after the cross bar and the gap floors and the
+RSI band pass on that same bar. Nothing else is remembered. A position is
+held for exactly ``hold_bars`` decision bars.
 
 Each test scripts the three indicator readings bar by bar and reads what the
 Signal Session staged, so the rule is exercised apart from EMA/RSI math.
@@ -163,23 +163,16 @@ def test_gap_and_rsi_must_pass_on_the_same_bar() -> None:
     assert run.staged == [None, None, None]
 
 
-@pytest.mark.parametrize(
-    ("limit", "staged"),
-    [
-        (0, [None, None, None, None, None]),
-        (2, [None, None, None, ENTER, None]),
-        (3, [None, None, None, ENTER, None]),
-    ],
-    ids=["cross-bar-only", "at-the-limit", "inside-the-limit"],
-)
-def test_cross_age_limit_is_inclusive_and_configurable(limit: int, staged: list[SignalIntentKind | None]) -> None:
+@pytest.mark.parametrize("limit", [2, 3], ids=["at-the-limit", "inside-the-limit"])
+def test_cross_age_limit_is_inclusive_and_configurable(limit: int) -> None:
     run = _drive([below(), above("0.05"), above("0.15"), GOOD, GOOD], cross_max_age_bars=limit)
 
-    assert run.staged == staged
+    assert run.staged == [None, None, None, ENTER, None]
 
 
-def test_cross_age_limit_of_zero_enters_on_the_cross_bar() -> None:
+def test_cross_age_limit_of_zero_allows_the_cross_bar_only() -> None:
     assert _drive([below(), GOOD], cross_max_age_bars=0).staged == [None, ENTER]
+    assert _drive([below(), above("0.05"), GOOD], cross_max_age_bars=0).staged == [None, None, None]
 
 
 @pytest.mark.parametrize(
@@ -287,18 +280,29 @@ def test_force_flat_drops_the_position_and_a_still_recent_cross_enters() -> None
     assert run.staged == [None, ENTER, ENTER, None]
 
 
-def test_entry_bar_does_not_depend_on_how_far_back_the_replay_began() -> None:
-    """The cross age is rebuilt from the bars alone, so a short replay and a long one agree."""
-    tape = [below(), above("0.05"), below(), below(), above("0.05"), GOOD, GOOD]
+def test_cross_on_a_session_s_last_bar_is_stale_on_the_next_session_s_first_bar() -> None:
+    """The age is clock time: the next bar received closes hours after the cross, not 15 minutes."""
+    first, second = _two_consecutive_sessions()
+    bars = [*_session_bars(first)[-2:], _session_bars(second)[0]]
 
-    assert _drive(tape).staged[3:] == _drive(tape[3:]).staged
+    run = _drive([below(), above("0.05"), GOOD], bars=bars)
+
+    assert run.staged == [None, None, None]
+    assert run.cross_states() == ["not_above", "crossed_up", "stale"]
+
+
+@pytest.mark.parametrize(("limit", "last"), [(1, None), (2, ENTER)], ids=["past-the-limit", "within-the-limit"])
+def test_bar_missing_after_the_cross_ages_it_by_the_clock(limit: int, last: SignalIntentKind | None) -> None:
+    """The bar after a missing one closes 30 minutes after the cross."""
+    bars = [indexed_bucket("SPY", index, _WIDTH_MS, "100") for index in (0, 1, 3)]
+
+    run = _drive([below(), above("0.05"), GOOD], bars=bars, cross_max_age_bars=limit)
+
+    assert run.staged == [None, None, last]
 
 
 def test_hold_counts_decision_bars_across_the_session_close() -> None:
-    first, second = [
-        window.session_date
-        for window in trading_calendar.session_windows_ms_utc(date(2024, 1, 2), date(2024, 1, 12))
-    ][:2]
+    first, second = _two_consecutive_sessions()
     last_two = _session_bars(first)[-2:]
     next_day = _session_bars(second)[:5]
 
@@ -308,6 +312,14 @@ def test_hold_counts_decision_bars_across_the_session_close() -> None:
     exit_intent = run.decisions[-1].intent
     assert exit_intent is not None
     assert exit_intent.bar_close_ms == next_day[4].end_ms
+
+
+def _two_consecutive_sessions() -> tuple[date, date]:
+    first, second = [
+        window.session_date
+        for window in trading_calendar.session_windows_ms_utc(date(2024, 1, 2), date(2024, 1, 12))
+    ][:2]
+    return first, second
 
 
 def _session_bars(day: date) -> list[TradeBar]:
@@ -326,8 +338,8 @@ def test_two_holds_are_two_evaluation_identities() -> None:
     assert evaluation_id(cross_max_age_bars=1) != evaluation_id(cross_max_age_bars=2)
 
 
-@pytest.mark.parametrize("value", [-1, 27, True, 1.5], ids=["negative", "past-a-session", "boolean", "fractional"])
-def test_cross_age_limit_must_be_a_whole_number_of_bars_within_a_session(value: object) -> None:
+@pytest.mark.parametrize("value", [-1, 9, True, 1.5], ids=["negative", "past-two-hours", "boolean", "fractional"])
+def test_cross_age_limit_must_be_a_whole_number_of_bars_up_to_two_hours(value: object) -> None:
     with pytest.raises(ValueError):
         EmaPreviousCrossoverParams(cross_max_age_bars=value)
 

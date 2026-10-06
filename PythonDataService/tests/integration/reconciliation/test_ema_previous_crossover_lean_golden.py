@@ -13,13 +13,13 @@ reported receiving exactly those bars.
 Accepted divergence -- dividends (owner, 2026-10-05). In raw mode LEAN pays a
 cash dividend on a position held over an ex-date; the Python engine pays none
 (#2903). The
-SPY cell holds 155 shares over the 2026-03-20 ex-date, so LEAN's cash is
-$279.00 higher from then on and some later orders are one share larger: a
+SPY cell holds 154 shares over the 2026-03-20 ex-date, so LEAN's cash is
+$277.20 higher from then on and some later orders are one share larger: a
 QUANTITY_MISMATCH with a known cause. Nothing is loosened for it. The test
 credits each dividend the fixture records to the engine's cash on the
 ex-date's first minute bar and then requires every fill, fee and the final
 equity to match exactly. The credit is necessary (without it the SPY cell diverges at
-its 97th fill) and sufficient, so the dividend is the whole of the
+its 87th fill) and sufficient, so the dividend is the whole of the
 difference. The QQQ cell collects no dividend and is credited nothing.
 """
 

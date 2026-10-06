@@ -840,7 +840,7 @@ class TestTemplateSelection:
             {"hold_bars": 27},
             {"hold_bars": True},
             {"cross_max_age_bars": -1},
-            {"cross_max_age_bars": 27},
+            {"cross_max_age_bars": 9},
             {"fast_period": 10, "slow_period": 10},
             {"rsi_min": 70, "rsi_max": 70},
             {"gap": -0.01},
