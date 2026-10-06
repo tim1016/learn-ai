@@ -53,9 +53,18 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
-from app.services.bot_binding_repository import BrokerBotBinding
+from app.schemas.traded_asset_acknowledgement import (
+    AcknowledgementFault,
+    UntestedTradedAssetWarning,
+    traded_asset_acknowledgement_fault,
+)
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
+from app.services.bot_runner_errors import (
+    TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE,
+    TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED,
+)
 from app.services.broker_v2_panel import budget_deploy
 from app.services.broker_v2_panel.bot_end_panel import resolve_deploy_end
 from app.services.broker_v2_panel.deploy_submissions import (
@@ -283,10 +292,13 @@ async def get_alpaca_paper_deploy_view(
 async def preview_alpaca_deployment_budget(
     broker: str, account_id: str, request: AlpacaPaperDeployRequest,
 ) -> DeploymentBudgetPreview:
-    """The Deploy form's review: the money preview, with the same-symbol warning beside it.
+    """The Deploy form's review: the money preview, with its two warnings beside it.
 
-    The warning is read here, not in ``preview_budget``: consent re-runs that
-    preview at Deploy, and a warning is no part of what consent binds.
+    Other bots trading the same symbol, and a traded asset the strategy was
+    never tested on. Both are attached here, not in ``preview_budget``:
+    consent re-runs that preview at Deploy, and a warning is no part of what
+    consent binds. The review asks for no acceptance of the second one; the
+    owner gives it last, and only Deploy requires it.
     """
     _view, resolved = await _deploy_preflight(broker, account_id, request)
     try:
@@ -294,7 +306,10 @@ async def preview_alpaca_deployment_budget(
         same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
     except BudgetUnavailable as exc:
         raise budget_deploy.budget_error(exc) from exc
-    return preview.model_copy(update={"same_symbol_note": same_symbol_note})
+    return preview.model_copy(update={
+        "same_symbol_note": same_symbol_note,
+        "traded_asset_warning": _untested_traded_asset_warning(request),
+    })
 
 
 def _runner() -> BotTaskRegistry:
@@ -359,7 +374,7 @@ def _sending(submission_key: str) -> Iterator[None]:
 
 
 def _submission_fingerprint(account_id: str, request: AlpacaDeploySubmission) -> str:
-    """What one submission key binds: the settings, the account, and the end the request named.
+    """What one submission key binds: the settings, the account, and the end and acceptance the request named.
 
     The end stays out of the settings' own ``fingerprint`` -- consent and the
     budget review never bind it, since the owner may change it while the bot
@@ -367,11 +382,17 @@ def _submission_fingerprint(account_id: str, request: AlpacaDeploySubmission) ->
     like any other change of settings (#2607). The request's own ``end`` is
     bound, not the end it resolved to, so the default end (none named) binds
     nothing, and every key recorded before the end existed still matches.
+
+    The acceptance of an untested traded asset is bound the same way (#2912):
+    it is kept with the bot for good, so a key resent with another reason
+    would name a different record.
     """
-    account = canonical_alpaca_account_id(account_id)
-    if request.end is None:
-        return request.fingerprint(account=account)
-    return request.fingerprint(account=account, end=request.end.model_dump_json())
+    bound_to = {"account": canonical_alpaca_account_id(account_id)}
+    if request.end is not None:
+        bound_to["end"] = request.end.model_dump_json()
+    if request.traded_asset_acknowledgement is not None:
+        bound_to["traded_asset_acknowledgement"] = request.traded_asset_acknowledgement.model_dump_json()
+    return request.fingerprint(**bound_to)
 
 
 def _settings_conflict(exc: DeploySubmissionConflict) -> PanelRunnerError:
@@ -464,6 +485,7 @@ async def deploy_alpaca_paper_bot(
         # earlier bot may have started.
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
             view, resolved_params = await _deploy_preflight(broker, account_id, request)
+            _require_traded_asset_acknowledgement(request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
@@ -482,6 +504,7 @@ async def deploy_alpaca_paper_bot(
                 strategy_key=request.strategy_key,
                 symbol=request.symbol,
                 traded_symbol=request.traded_symbol,
+                traded_asset_acknowledgement=request.traded_asset_acknowledgement,
                 use_rth=True,
                 mode="dry_run" if request.execution_mode == "dry_run" else "trade",
                 quantity=request.sizing.quantity,
@@ -618,6 +641,7 @@ async def preview_alpaca_paper_start_admission(
             strategy_key=request.strategy_key,
             symbol=request.symbol,
             traded_symbol=request.traded_symbol,
+            traded_asset_acknowledgement=request.traded_asset_acknowledgement,
             use_rth=True,
             mode="dry_run" if request.execution_mode == "dry_run" else "trade",
             quantity=request.sizing.quantity,
@@ -754,7 +778,7 @@ def _require_alpaca_deploy_request(
         _require_dry_run_deploy_request(view, strategy)
     else:
         _require_broker_deploy_request(view, strategy, request)
-        _require_the_signals_own_asset(request)
+    _refuse_an_acknowledgement_no_one_asked_for(request)
     try:
         resolved = resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
     except ValueError as exc:
@@ -780,25 +804,74 @@ def _require_alpaca_deploy_request(
     return resolved
 
 
-def _require_the_signals_own_asset(request: AlpacaPaperDeployRequest) -> None:
-    """A bot that trades a different asset than it listens to runs as a Dry Run only, for now (#2912).
+def _untested_traded_asset_warning(request: AlpacaPaperDeployRequest) -> UntestedTradedAssetWarning | None:
+    """What the owner is told about a bot that trades another asset than it listens to (#2912).
 
-    The strategy's evidence is about trading the symbol it listens to. Paper,
-    Live Shadow and Live open to a different asset once the owner can accept
-    that in writing with the Deploy; until that record exists, nothing that
-    contacts a broker takes one.
+    ``None`` for a bot that trades the symbol it listens to. A Dry Run is
+    warned and asked for nothing.
     """
     if request.traded_symbol is None:
+        return None
+    # Whether the owner is asked to accept is the acknowledgement rule's own
+    # answer for these settings with none given, so the sentence to tick and
+    # the refusal at Deploy can never disagree.
+    unacknowledged = request.model_copy(update={"traded_asset_acknowledgement": None})
+    return UntestedTradedAssetWarning.for_symbols(
+        request.symbol,
+        request.traded_symbol,
+        acceptance_required=_acknowledgement_fault(unacknowledged) == "required",
+    )
+
+
+def _acknowledgement_fault(request: AlpacaPaperDeployRequest) -> AcknowledgementFault | None:
+    """The one acknowledgement rule, asked of a Deploy request (#2912)."""
+    return traded_asset_acknowledgement_fault(
+        mode="dry_run" if request.execution_mode == "dry_run" else "trade",
+        action_plan=alpaca_v1_action_plan(request.order_symbol),
+        signal_symbol=request.symbol,
+        acknowledgement=request.traded_asset_acknowledgement,
+    )
+
+
+def _refuse_an_acknowledgement_no_one_asked_for(request: AlpacaPaperDeployRequest) -> None:
+    """An acknowledgement the bot has no use for is refused, at every review and at Deploy (#2912).
+
+    Only a Paper, Live Shadow or Live bot that trades something other than
+    the shares it listens to is asked for one. The record is kept with the
+    bot for good, so a bot that trades its own symbol, or a Dry Run, may not
+    carry one that says the owner accepted what nobody asked them to.
+    """
+    if _acknowledgement_fault(request) != "not_applicable":
         return
     raise PanelRunnerError(
-        f"A bot that listens to {request.symbol} and trades {request.traded_symbol} can run as a Dry Run only.",
+        "This bot has no untested traded asset to accept.",
         detail=(
-            f"This strategy was tested trading {request.symbol}. It is untested trading "
-            f"{request.traded_symbol}, and a Paper, Live Shadow or Live bot needs that accepted in writing, "
-            "which Deploy cannot record yet."
+            "The acknowledgement is for a Paper, Live Shadow or Live bot that trades something other "
+            "than the shares it listens to. It is kept with the bot for good."
         ),
-        next_action=f"Deploy it as a Dry Run, or trade {request.symbol}.",
+        next_action="Remove the acknowledgement and deploy again.",
         http_status=409,
+        reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE,
+    )
+
+
+def _require_traded_asset_acknowledgement(request: AlpacaPaperDeployRequest) -> None:
+    """A Paper, Live Shadow or Live bot that trades something else needs the owner's written acknowledgement (#2912).
+
+    Asked at Deploy only. The owner accepts last, above the Deploy button,
+    so the money review and the admission preview that come before it ask
+    for nothing. The runner holds the same rule for every start; it is asked
+    here first so the refusal comes before the bot has a name.
+    """
+    if _acknowledgement_fault(request) != "required":
+        return
+    warning = UntestedTradedAssetWarning.for_symbols(request.symbol, request.order_symbol, acceptance_required=True)
+    raise PanelRunnerError(
+        f"Accept that this strategy is untested trading {request.order_symbol} before deploying.",
+        detail=f"{warning.headline} {warning.detail}",
+        next_action="Tick the acknowledgement and give your reason, or deploy it as a Dry Run.",
+        http_status=409,
+        reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED,
     )
 
 

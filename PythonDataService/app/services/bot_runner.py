@@ -95,6 +95,7 @@ from app.schemas.run_admission import (
     StartRuntimeAdmissionFact,
 )
 from app.schemas.signal_program_seal import ParameterOrigin
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
 from app.services.bot_binding_authority import (
@@ -173,6 +174,7 @@ from app.services.bot_runner_errors import (
     UnknownBotError,
     raise_run_refusal,
     require_start_configuration,
+    require_traded_asset_acknowledgement,
 )
 from app.services.bot_runtime import (
     ManagedBot,
@@ -654,6 +656,9 @@ class BotTaskRegistry:
         # What the bot trades when that is not ``symbol``, the Signal stream
         # it listens to (#2912). ``None`` trades ``symbol``.
         traded_symbol: str | None = None,
+        # The owner's written acceptance that the strategy is untested
+        # trading ``traded_symbol``, kept with the bot for good.
+        traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -682,6 +687,11 @@ class BotTaskRegistry:
         require_start_configuration(
             carryover_policy,
         )
+        action_plan = alpaca_v1_action_plan(traded_symbol or symbol)
+        # Execution only: a preview comes before the owner accepts.
+        require_traded_asset_acknowledgement(
+            mode=mode, action_plan=action_plan, signal_symbol=symbol, acknowledgement=traded_asset_acknowledgement,
+        )
         self._confined_instance_dir(strategy_instance_id)
         request = make_start_request(
             broker=broker,
@@ -693,12 +703,13 @@ class BotTaskRegistry:
             quantity=quantity,
             carryover_policy=carryover_policy,
             evidence_override=evidence_override,
-            action_plan=alpaca_v1_action_plan(traded_symbol or symbol),
+            action_plan=action_plan,
             strategy_params=strategy_params,
             exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
             budget_consent=budget_consent,
             end=end,
+            traded_asset_acknowledgement=traded_asset_acknowledgement,
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --
@@ -729,6 +740,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         traded_symbol: str | None = None,
+        traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -761,6 +773,7 @@ class BotTaskRegistry:
             exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
             budget_consent=budget_consent,
+            traded_asset_acknowledgement=traded_asset_acknowledgement,
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --

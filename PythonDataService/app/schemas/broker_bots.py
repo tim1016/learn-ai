@@ -29,6 +29,10 @@ from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
+from app.schemas.traded_asset_acknowledgement import (
+    UntestedTradedAssetAcknowledgement,
+    substantive_reason,
+)
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -119,12 +123,7 @@ class AlpacaPaperEvidenceOverride(BaseModel):
     @field_validator("reason")
     @classmethod
     def _require_substantive_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if len(reason) < 10:
-            raise ValueError("evidence override reason must contain at least 10 characters")
-        if len(reason) > 500:
-            raise ValueError("evidence override reason must contain at most 500 characters")
-        return reason
+        return substantive_reason(value, what="evidence override reason")
 
 
 #: An opaque key the browser mints when the Deploy form opens (#2551): 8-64
@@ -155,6 +154,13 @@ class AlpacaPaperDeployRequest(BaseModel):
     # here is the same choice and is normalised to omitted, so one bot never
     # has two identities.
     traded_symbol: str | None = Field(default=None, min_length=1, max_length=12)
+    # The owner's written acceptance that the strategy is untested trading
+    # ``traded_symbol``. Deploy requires it for a Paper, Live Shadow or Live
+    # bot that trades another asset, and refuses it for every other bot
+    # (``traded_asset_acknowledgement_fault``). A review needs none: the
+    # owner accepts last, above the Deploy button, so it stays out of
+    # ``fingerprint``.
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
@@ -224,12 +230,18 @@ class AlpacaPaperDeployRequest(BaseModel):
         subclass's submission key or display lineage -- and never the budget's
         review token or typed phrase, which prove the final click rather than
         describe the bot. Nor the end (#2607): the owner may change it while
-        the bot runs, so it is no term the consent binds -- a resend of a
-        submission key binds the end it named through ``bound_to``
+        the bot runs, so it is no term the consent binds. Nor the acceptance
+        of an untested traded asset (#2912): the owner gives it after the
+        review, so a review token minted without it must still match the
+        Deploy that carries it. A resend of a submission key binds the end
+        and the acceptance it named through ``bound_to``
         (``panel_deploy._submission_fingerprint``). ``bound_to`` names what
         else the hash commits to (the account; for consent, also the world).
         """
-        payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields) - {"end"})
+        payload = self.model_dump(
+            mode="json",
+            include=set(AlpacaPaperDeployRequest.model_fields) - {"end", "traded_asset_acknowledgement"},
+        )
         if payload["traded_symbol"] is None:
             # Omitted when absent, so a Deploy that trades the symbol it
             # listens to keeps the fingerprint it had before the field existed.

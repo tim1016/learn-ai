@@ -6620,6 +6620,7 @@ export interface components {
             submission_key: string;
             /** Symbol */
             symbol: string;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             /** Traded Symbol */
             traded_symbol?: string | null;
         };
@@ -6838,6 +6839,7 @@ export interface components {
             strategy_key: string;
             /** Symbol */
             symbol: string;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             /** Traded Symbol */
             traded_symbol?: string | null;
         };
@@ -11401,6 +11403,7 @@ export interface components {
              * @enum {string}
              */
             state: "ready" | "unavailable" | "awaiting_price";
+            traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
             /** Unreserved Usd */
             unreserved_usd?: string | null;
             /**
@@ -22031,6 +22034,7 @@ export interface components {
             sealed_at_ms: number;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             /** Validation Event Id */
             validation_event_id: string;
             /** Validation Snapshot Sha256 */
@@ -24357,6 +24361,35 @@ export interface components {
             symbol: string;
             /** Ticket */
             ticket: string;
+        };
+        /**
+         * UntestedTradedAssetAcknowledgement
+         * @description A fixed acknowledgement plus the owner's own reason, kept with the bot for good.
+         */
+        UntestedTradedAssetAcknowledgement: {
+            /**
+             * Acknowledgement
+             * @constant
+             */
+            acknowledgement: "I_ACCEPT_UNTESTED_TRADED_ASSET_RISK";
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * UntestedTradedAssetWarning
+         * @description What the strategy's evidence does not cover, for a bot that trades another asset.
+         *
+         *     It claims nothing about profit, and it says what nothing else on Deploy
+         *     can: a ticker does not tell an inverse or leveraged fund from an ordinary
+         *     one.
+         */
+        UntestedTradedAssetWarning: {
+            /** Acceptance Label */
+            acceptance_label?: string | null;
+            /** Detail */
+            detail: string;
+            /** Headline */
+            headline: string;
         };
         /** ValidationError */
         ValidationError: {

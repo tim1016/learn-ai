@@ -8,12 +8,14 @@ Split from ``tests/services/test_bot_runner.py`` (issue #1737, seam 1).
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.marketdata.feed import ContinuityPolicy
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry, admission_guard_for
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -69,6 +71,42 @@ async def test_trade_run_registration_precedes_order_capable_task_creation(
 
         assert clerk.registered_runs == [deployed.active_run_id]
         assert not clerk.registration_saw_bot_task
+        await registry.stop("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_the_owners_acknowledgement_of_an_untested_asset_is_sealed_with_the_bot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2912: a bot that listens to SPY and trades QQQ keeps what the owner accepted, in its record and under its seal."""
+    acknowledgement = UntestedTradedAssetAcknowledgement(
+        acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+        reason="QQQ has followed SPY closely enough to try this.",
+    )
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    registry = _registry(tmp_path, _StopOrderingFeed(clerk), start_custody_guard=admission_guard_for(clerk))
+    set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
+    try:
+        await registry.deploy_with_admission(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            traded_symbol="QQQ",
+            mode="trade",
+            traded_asset_acknowledgement=acknowledgement,
+        )
+
+        binding = registry.binding_for_control("alpaca", _SID)
+        assert binding.traded_asset_acknowledgement == acknowledgement
+        assert binding.sealed_program is not None
+        assert binding.sealed_program.traded_asset_acknowledgement == acknowledgement
+        stored = tmp_path / "live_state" / _SID
+        for record in ("strategy_instance.json", "sealed_program_v2.json"):
+            assert json.loads((stored / record).read_text())["traded_asset_acknowledgement"] == acknowledgement.model_dump()
         await registry.stop("alpaca", _SID)
     finally:
         set_alpaca_clerk(None)

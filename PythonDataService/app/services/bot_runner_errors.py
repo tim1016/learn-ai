@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Literal, NoReturn
 
+from app.schemas.action_plan import ActionPlan, traded_instrument
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.traded_asset_acknowledgement import (
+    UntestedTradedAssetAcknowledgement,
+    traded_asset_acknowledgement_fault,
+)
 
 
 class BotRunnerError(Exception):
@@ -59,6 +64,12 @@ class RecoveryUncertainError(BotRunnerError):
 
 
 class CarryoverPolicyRefusedError(BotRunnerError):
+    http_status = 409
+
+
+class TradedAssetAcknowledgementRefusedError(BotRunnerError):
+    """A bot may not start with this acknowledgement of an untested traded asset, or without one (#2912)."""
+
     http_status = 409
 
 
@@ -127,6 +138,49 @@ def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
         f"{decision.operation.title()} admission was refused.",
         detail=decision.explanation,
         admission_decision=decision,
+    )
+
+
+TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED = "TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED"
+TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE = "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE"
+
+
+def require_traded_asset_acknowledgement(
+    *,
+    mode: Literal["log_only", "dry_run", "trade"],
+    action_plan: ActionPlan,
+    signal_symbol: str,
+    acknowledgement: UntestedTradedAssetAcknowledgement | None,
+) -> None:
+    """Refuse to start a bot the acknowledgement rule does not allow (#2912).
+
+    The runner is where every bot starts, so the rule is held here whatever
+    route asked. Deploy asks the same rule first, to refuse before the bot
+    has a name.
+    """
+    fault = traded_asset_acknowledgement_fault(
+        mode=mode, action_plan=action_plan, signal_symbol=signal_symbol, acknowledgement=acknowledgement,
+    )
+    if fault is None:
+        return
+    traded = traded_instrument(action_plan).underlying
+    if fault == "required":
+        raise TradedAssetAcknowledgementRefusedError(
+            f"Accept that this strategy is untested trading {traded} before deploying.",
+            detail=(
+                f"The strategy's evidence is about trading {signal_symbol}, the symbol it listens to. "
+                "A Paper, Live Shadow or Live bot that trades something else starts only with the "
+                "owner's written acknowledgement."
+            ),
+            reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED,
+        )
+    raise TradedAssetAcknowledgementRefusedError(
+        "This bot has no untested traded asset to accept.",
+        detail=(
+            "The acknowledgement is for a Paper, Live Shadow or Live bot that trades something other "
+            "than the shares it listens to. It is kept with the bot for good, so no other bot may carry one."
+        ),
+        reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE,
     )
 
 

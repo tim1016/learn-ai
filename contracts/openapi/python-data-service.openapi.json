@@ -1089,6 +1089,16 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "traded_symbol": {
             "anyOf": [
               {
@@ -1679,6 +1689,16 @@
             "minLength": 1,
             "title": "Symbol",
             "type": "string"
+          },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "traded_symbol": {
             "anyOf": [
@@ -13128,6 +13148,16 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "traded_asset_warning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetWarning"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "unreserved_usd": {
             "anyOf": [
@@ -40183,6 +40213,16 @@
             "title": "Strategy Instance Id",
             "type": "string"
           },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "validation_event_id": {
             "title": "Validation Event Id",
             "type": "string"
@@ -46016,6 +46056,57 @@
           "choices"
         ],
         "title": "UnknownOrderSettlementResponse",
+        "type": "object"
+      },
+      "UntestedTradedAssetAcknowledgement": {
+        "additionalProperties": false,
+        "description": "A fixed acknowledgement plus the owner's own reason, kept with the bot for good.",
+        "properties": {
+          "acknowledgement": {
+            "const": "I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+            "title": "Acknowledgement"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "acknowledgement",
+          "reason"
+        ],
+        "title": "UntestedTradedAssetAcknowledgement",
+        "type": "object"
+      },
+      "UntestedTradedAssetWarning": {
+        "additionalProperties": false,
+        "description": "What the strategy's evidence does not cover, for a bot that trades another asset.\n\nIt claims nothing about profit, and it says what nothing else on Deploy\ncan: a ticker does not tell an inverse or leveraged fund from an ordinary\none.",
+        "properties": {
+          "acceptance_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance Label"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "detail"
+        ],
+        "title": "UntestedTradedAssetWarning",
         "type": "object"
       },
       "ValidationError": {

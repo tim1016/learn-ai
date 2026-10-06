@@ -586,6 +586,17 @@ so they survive a broker change.
   waits the same time for its own minute's bar, then takes the newest earlier
   bar with a trade in it, and its fill records that older bar's own time.
   _Avoid_: retry window, price timeout
+- **Traded-asset acknowledgement** — the owner's written acceptance that a
+  strategy is untested trading something other than the shares it listens to:
+  a fixed phrase and the owner's own reason, kept with the bot for good and
+  sealed with it (`traded_asset_acknowledgement`). A Paper, Live Shadow or
+  Live bot that trades something else needs one to start; the runner holds
+  that rule for every start, and Deploy asks it first. A Dry Run is shown the
+  warning and needs none. No other bot may carry one, a Dry Run included,
+  because the record would say the owner accepted what nobody asked them to.
+  It is not the evidence override, which accepts a strategy whose own proof
+  is incomplete. _Avoid_: untested-asset acceptance (as the record's name),
+  traded-asset override, risk waiver
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it
   (pre-market, regular, after-hours). The window is broker capability data;

@@ -11,9 +11,20 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from app.schemas.action_plan import ActionPlan
+from app.schemas.traded_asset_acknowledgement import (
+    UntestedTradedAssetAcknowledgement,
+    strip_absent_traded_asset_acknowledgement,
+)
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 # Canonical home for "how was this parameter's effective value chosen".
@@ -339,7 +350,24 @@ class SealedBotProgram(BaseModel):
     validation_event_id: str
     validation_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     sealed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # The owner's written acceptance of an untested traded asset (#2912),
+    # under ``bot_configuration_hash`` when given. A bot that trades the
+    # symbol it listens to carries none, and its seal is written and hashed
+    # exactly as before the field existed (``_omit_an_absent_acceptance``).
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     bot_configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    # No return annotation: the seal's published schema stays this model's
+    # own fields, where an annotated ``dict`` would replace it with a bare
+    # object.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_acceptance(self, handler: SerializerFunctionWrapHandler):
+        """Leave an absent acceptance out of the stored seal and of every payload hashed from it.
+
+        The seal refuses unknown fields, so a ``null`` written here could not
+        be read back by the build before this one.
+        """
+        return strip_absent_traded_asset_acknowledgement(handler(self))
 
     @model_validator(mode="after")
     def validate_nested_hashes(self) -> SealedBotProgram:
@@ -358,6 +386,7 @@ def seal_bot_program(**values: Any) -> SealedBotProgram:
     configured = hashed.get("configured_signal")
     if isinstance(configured, BaseModel):
         hashed["configured_signal"] = configured.model_dump(mode="json")
+    strip_absent_traded_asset_acknowledgement(hashed)
     return SealedBotProgram(
         **payload,
         bot_configuration_hash=semantic_payload_hash(strip_absent_qualification(hashed)),

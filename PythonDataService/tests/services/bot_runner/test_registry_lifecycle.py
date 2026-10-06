@@ -34,6 +34,7 @@ from app.marketdata.feed import (
 from app.schemas.action_plan import traded_instrument
 from app.schemas.broker_bots import BotProcessFact
 from app.schemas.exit_terms import ExitTermsInput
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services import bot_runner as bot_runner_module
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
@@ -47,6 +48,7 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import (
     BotRunnerError,
+    TradedAssetAcknowledgementRefusedError,
 )
 from tests._helpers.bot_runner.custody import (
     _SID,
@@ -474,6 +476,58 @@ async def test_a_bot_is_bound_to_the_asset_its_deploy_names_as_traded(tmp_path: 
     assert traded_instrument(binding.action_plan).underlying == "QQQ"
     assert _strategy_instance_json(tmp_path)["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "QQQ"
     await registry.stop("alpaca", _SID)
+
+
+_ACKNOWLEDGED = UntestedTradedAssetAcknowledgement(
+    acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+    reason="QQQ has followed SPY closely enough to try this.",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deploy", "refused_as"),
+    [
+        pytest.param({"mode": "trade", "traded_symbol": "QQQ"}, "TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED", id="trades-another-asset-unacknowledged"),
+        pytest.param(
+            {"mode": "trade", "traded_asset_acknowledgement": _ACKNOWLEDGED},
+            "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE", id="trades-what-it-listens-to",
+        ),
+        pytest.param(
+            {"mode": "dry_run", "traded_symbol": "QQQ", "traded_asset_acknowledgement": _ACKNOWLEDGED},
+            "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE", id="dry-run",
+        ),
+    ],
+)
+async def test_the_runner_starts_no_bot_the_acknowledgement_rule_refuses(
+    tmp_path: Path, deploy: dict, refused_as: str
+) -> None:
+    """#2912: the rule is held where every bot starts, whatever route asked. Nothing is written for a refused one."""
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    with pytest.raises(TradedAssetAcknowledgementRefusedError) as refused:
+        await registry.deploy_with_admission(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", **deploy,
+        )
+
+    assert (refused.value.reason_code, refused.value.http_status) == (refused_as, 409)
+    assert not (tmp_path / "live_state" / _SID).exists()
+
+
+@pytest.mark.asyncio
+async def test_a_preview_asks_for_no_acknowledgement(tmp_path: Path) -> None:
+    """#2912: the owner accepts last, so the rule is held at execution only. A preview of the same bot answers."""
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    decision = await registry.preview_start_admission(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY",
+        traded_symbol="QQQ", mode="trade",
+    )
+
+    assert decision.operation == "START"
+    assert decision.reason_code not in {
+        "TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED", "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE",
+    }
 
 
 @pytest.mark.asyncio
