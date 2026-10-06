@@ -25,6 +25,7 @@ from app.schemas.run_admission import (
     StartRunFacts,
     StartRuntimeAdmissionFact,
     StrategyValidationAdmissionFact,
+    TradedAssetAdmissionFacts,
 )
 from app.services.canary_admission import apply_canary_activation, plan_canary_activation
 from app.services.market_liveness import compose_market_liveness
@@ -159,13 +160,13 @@ def _clerk(
     )
 
 
-def _liveness(state: str = "TRADABLE", *, observed_at_ms: int) -> MarketLivenessFact:
+def _liveness(state: str = "TRADABLE", *, observed_at_ms: int, symbol: str = "SPY") -> MarketLivenessFact:
     clock_state = "CLOSED" if state == "CLOSED" else "OPEN"
     symbol_status = (
         None
         if state == "CLOSED"
         else SymbolTradingStatusEvidence(
-            symbol="SPY",
+            symbol=symbol,
             state=state,
             source="test.symbol-status",
             observed_at_ms=observed_at_ms,
@@ -173,7 +174,7 @@ def _liveness(state: str = "TRADABLE", *, observed_at_ms: int) -> MarketLiveness
         )
     )
     return compose_market_liveness(
-        "SPY",
+        symbol,
         now_ms=observed_at_ms,
         market_clock=MarketClockLivenessEvidence(
             state=clock_state,
@@ -184,6 +185,25 @@ def _liveness(state: str = "TRADABLE", *, observed_at_ms: int) -> MarketLiveness
         connected=True,
         connection_changed_at_ms=observed_at_ms,
         symbol_status=symbol_status,
+    )
+
+
+def _trading_qqq(
+    bot: StartRunFacts,
+    *,
+    market_state: str = "AVAILABLE",
+    liveness_state: str = "TRADABLE",
+    observed_at_ms: int = _NOW - 1_000,
+) -> StartRunFacts:
+    """``bot``, which listens to SPY, trading QQQ instead (#2912)."""
+    return bot.model_copy(
+        update={
+            "traded_asset": TradedAssetAdmissionFacts(
+                symbol="QQQ",
+                market_data=MarketDataAdmissionFact(state=market_state, feed_id="ibkr", observed_at_ms=observed_at_ms),
+                market_liveness=_liveness(liveness_state, observed_at_ms=observed_at_ms, symbol="QQQ"),
+            )
+        }
     )
 
 
@@ -864,3 +884,92 @@ def test_a_live_launch_consults_no_arming_and_carries_no_arming_note() -> None:
     assert "arming" not in decision.explanation.lower() and "budgets" not in decision.explanation
     assert decision.next_step is None
     assert "arming" not in StartRunFacts.model_fields
+
+
+# ── A bot that trades another asset than it listens to (#2912) ───────────────
+# The running bot refuses every ENTER unless both symbols are live, so Start
+# asks about both. Each test leaves SPY, the symbol listened to, healthy.
+
+
+@pytest.mark.parametrize("mode", ["trade", "dry_run"])
+@pytest.mark.parametrize(
+    ("market_state", "reason_code"),
+    [
+        ("STALE", "MARKET_DATA_STALE"),
+        ("UNAVAILABLE", "MARKET_DATA_UNAVAILABLE"),
+        ("UNKNOWN", "MARKET_DATA_UNKNOWN"),
+    ],
+)
+def test_start_is_refused_when_the_traded_assets_market_data_is_not_ready(
+    mode: str, market_state: str, reason_code: str
+) -> None:
+    bot = _trading_qqq(_bot(mode=mode), market_state=market_state)
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code
+    assert "QQQ" in decision.explanation
+
+
+@pytest.mark.parametrize(
+    ("liveness_state", "reason_code"),
+    [
+        ("HALTED", "MARKET_LIVENESS_HALTED"),
+        ("UNKNOWN", "MARKET_LIVENESS_UNKNOWN"),
+        ("CLOSED", "MARKET_LIVENESS_CLOSED"),
+    ],
+)
+def test_start_is_refused_when_the_traded_asset_cannot_be_traded_right_now(
+    liveness_state: str, reason_code: str
+) -> None:
+    bot = _trading_qqq(_bot(), liveness_state=liveness_state)
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code
+    assert "QQQ" in decision.explanation
+
+
+def test_a_dry_run_starts_whatever_the_traded_assets_trading_status() -> None:
+    """A Dry Run sends nothing, so trading status gates neither of its symbols (#1702)."""
+    bot = _trading_qqq(_bot(mode="dry_run"), liveness_state="HALTED")
+
+    assert evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW).allowed is True
+
+
+def test_a_refusal_about_the_symbol_listened_to_names_it_for_a_bot_that_trades_another() -> None:
+    bot = _trading_qqq(_bot(liveness_state="HALTED"))
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.reason_code == "MARKET_LIVENESS_HALTED"
+    assert "SPY" in decision.explanation
+    assert "QQQ" not in decision.explanation
+
+
+def test_start_with_both_symbols_live_reports_the_older_market_fact_and_cites_both() -> None:
+    bot = _trading_qqq(_bot(), observed_at_ms=_NOW - 3_000)
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is True
+    assert decision.fact_ages_ms.market_data == 3_000
+    assert decision.fact_ages_ms.market_liveness == 3_000
+    assert any("QQQ" in ref for ref in decision.evidence_refs)
+
+
+@pytest.mark.parametrize(
+    ("traded_observed_at_ms", "reason_code"),
+    [(_NOW - 5_001, "AUTHORITY_FACT_STALE"), (_NOW + 1, "AUTHORITY_CLOCK_INVALID")],
+)
+def test_start_is_refused_when_only_the_traded_assets_facts_are_out_of_date(
+    traded_observed_at_ms: int, reason_code: str
+) -> None:
+    bot = _trading_qqq(_bot(), observed_at_ms=traded_observed_at_ms)
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code

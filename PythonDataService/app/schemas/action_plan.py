@@ -232,6 +232,18 @@ def trades_the_signals_shares(action_plan: ActionPlan, signal_symbol: str) -> bo
     return instrument.kind == "stock" and instrument.underlying.upper() == signal_symbol.upper()
 
 
+def traded_market_symbol(action_plan: ActionPlan, signal_symbol: str) -> str | None:
+    """The second symbol a bot needs live: the one its orders are in, when that is not the symbol it listens to.
+
+    ``None`` when they are one symbol, which one check covers. Start admission
+    and the running bot's ENTER gate both ask about exactly the symbol it
+    listens to and this one, so a Start never admits a bot whose every ENTER
+    would be refused over a symbol nobody asked about (#2912).
+    """
+    traded = traded_instrument(action_plan).underlying.upper()
+    return None if traded == signal_symbol.upper() else traded
+
+
 class TradedInstrumentView(BaseModel):
     """What a bot trades, when that is not shares of the symbol it listens to (#2912).
 

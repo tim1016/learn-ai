@@ -304,6 +304,21 @@ class ProgramBuildAdmissionFact(BaseModel):
         return self
 
 
+class TradedAssetAdmissionFacts(BaseModel):
+    """The market facts for the asset a bot trades (#2912).
+
+    Built only when that asset is not the symbol the bot listens to: an ENTER
+    needs both live, so a Start that asked only about the Signal stream
+    admitted a bot that could then never enter.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str
+    market_data: MarketDataAdmissionFact
+    market_liveness: MarketLivenessFact
+
+
 class StartRunFacts(BaseModel):
     """Bot-owned immutable and runtime facts for a proposed first run."""
 
@@ -323,8 +338,12 @@ class StartRunFacts(BaseModel):
     validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
+    # Both are about the symbol the bot listens to.
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
+    # ``None`` for a bot that trades the symbol it listens to: the two facts
+    # above already describe what it trades.
+    traded_asset: TradedAssetAdmissionFacts | None = None
     extended_hours: ExtendedHoursAdmissionFact
     start_window: StartWindowFact | None = None
 

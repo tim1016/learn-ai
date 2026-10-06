@@ -58,6 +58,7 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    StartWindowFact,
     StrategyValidationAdmissionFact,
 )
 from app.services.bot_binding_repository import alpaca_v1_action_plan
@@ -987,3 +988,146 @@ async def test_an_unreadable_validation_store_is_named_as_the_cause_not_a_missin
     assert not decision.allowed
     assert cause in decision.explanation
     assert "no complete v2 Signal Program seal" not in decision.explanation
+
+
+# ── A bot that trades another asset than it listens to (#2912) ───────────────
+
+
+class _SymbolFeed:
+    """A connected, idle feed that remembers which symbols were asked about."""
+
+    feed_id = "ibkr"
+
+    def __init__(self) -> None:
+        self.asked: list[str | None] = []
+
+    def health(self, symbol: str | None = None) -> FeedHealth:
+        self.asked.append(symbol)
+        return FeedHealth(
+            connected=True, stale=False, last_bar_ms=None, reason="", active_subscription_count=0, observed_at_ms=1_000
+        )
+
+
+def _start_at_a_fixed_instant(feed: object, market_liveness: object) -> BotStartAdmission:
+    """A Start at instant 1_000 whose runner, process, validation and custody facts are all ready."""
+
+    async def runtime_fact(_strategy_instance_id: str, observed_at_ms: int) -> StartRuntimeAdmissionFact:
+        return StartRuntimeAdmissionFact(state="READY", observed_at_ms=observed_at_ms, explanation="ready")
+
+    def process_fact(_binding: object, observed_at_ms: int) -> RunProcessAdmissionFact:
+        return RunProcessAdmissionFact(
+            state="ABSENT", run_id=None, process_identity=None, registry_generation="registry-1",
+            observed_at_ms=observed_at_ms,
+        )
+
+    @asynccontextmanager
+    async def custody_guard(_binding: object):
+        yield _clerk(observed_at_ms=1_000), ProgramLegPolicy.regular_only(), DEPLOY_EXIT_TERMS
+
+    async def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+        return _validation(observed_at_ms)
+
+    async def activate(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("activate must not be called by preview()")
+
+    return BotStartAdmission(
+        now_ms=lambda: 1_000, feed_resolver=lambda: feed, custody_guard=custody_guard, process_fact=process_fact,
+        runtime_fact=runtime_fact, validation_fact=validation_fact, activate=activate, market_liveness=market_liveness,
+    )
+
+
+def _spy_bot_trading(traded_symbol: str, *, mode: str = "trade") -> StartRequest:
+    return StartRequest(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, strategy_key="deployment_validation",
+        symbol="SPY", use_rth=True, mode=mode, quantity=1, carryover_policy="FORBID", evidence_override=None,
+        action_plan=alpaca_v1_action_plan(traded_symbol),
+    )
+
+
+def _status_by_symbol(**states: str):
+    """A liveness source where each named symbol has that trading status and every other is tradable."""
+
+    def market_liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
+        return compose_market_liveness(
+            symbol, now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN", source="test.clock", observed_at_ms=observed_at_ms, vendor_timestamp_ms=observed_at_ms,
+            ),
+            connected=True, connection_changed_at_ms=observed_at_ms,
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol=symbol, state=states.get(symbol, "TRADABLE"), source="test.symbol-status",
+                observed_at_ms=observed_at_ms, source_timestamp_ms=observed_at_ms,
+            ),
+        )
+
+    return market_liveness
+
+
+def _on_an_open_regular_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mid-session, on an account whose pairing with this program an operator has enabled."""
+    _session(monkeypatch, "RTH")
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("deployment_validation", "paper-account")}),
+    )
+    monkeypatch.setattr(
+        bot_start_admission, "deploy_window", lambda _now_ms: StartWindowFact(state="REGULAR", next_open_ms=None)
+    )
+
+
+async def test_start_refuses_a_bot_whose_traded_asset_is_halted_though_the_symbol_it_listens_to_is_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Start asked only about the symbol listened to, so it admitted a bot
+    the running ENTER gate would then refuse at every entry (#2912)."""
+    _on_an_open_regular_session(monkeypatch)
+    feed = _SymbolFeed()
+    admission = _start_at_a_fixed_instant(feed, _status_by_symbol(QQQ="HALTED"))
+
+    decision = await admission.preview(_spy_bot_trading("QQQ"))
+
+    assert decision.allowed is False
+    assert decision.reason_code == "MARKET_LIVENESS_HALTED"
+    assert "QQQ" in decision.explanation
+    assert feed.asked == ["SPY", "QQQ"]
+
+
+async def test_start_admits_a_bot_whose_two_symbols_are_both_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    _on_an_open_regular_session(monkeypatch)
+    admission = _start_at_a_fixed_instant(_SymbolFeed(), _status_by_symbol())
+
+    decision = await admission.preview(_spy_bot_trading("QQQ"))
+
+    assert decision.allowed is True
+
+
+async def test_start_asks_for_live_data_on_both_symbols_so_the_traded_one_is_watched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The status source watches a symbol nothing runs on only while someone asks for it."""
+    _on_an_open_regular_session(monkeypatch)
+    requested: list[str] = []
+    monkeypatch.setattr(
+        bot_start_admission,
+        "get_market_liveness_store",
+        lambda: SimpleNamespace(request_symbol=lambda symbol, *, now_ms: requested.append(symbol)),
+    )
+    admission = _start_at_a_fixed_instant(_SymbolFeed(), _status_by_symbol())
+
+    await admission.preview(_spy_bot_trading("QQQ"))
+    await admission.preview(_spy_bot_trading("SPY"))
+
+    assert requested == ["SPY", "QQQ", "SPY"]
+
+
+async def test_start_asks_about_one_symbol_for_a_bot_that_trades_what_it_listens_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _on_an_open_regular_session(monkeypatch)
+    feed = _SymbolFeed()
+    admission = _start_at_a_fixed_instant(feed, _status_by_symbol(QQQ="HALTED"))
+
+    decision = await admission.preview(_spy_bot_trading("SPY"))
+
+    assert decision.allowed is True
+    assert feed.asked == ["SPY"]

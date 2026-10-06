@@ -51,7 +51,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeed,
 )
-from app.schemas.action_plan import traded_instrument, trades_the_signals_shares
+from app.schemas.action_plan import traded_instrument, traded_market_symbol, trades_the_signals_shares
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
@@ -467,10 +467,7 @@ def _entry_liveness_refusal(
     the traded instrument its order is in (#2912). For a bot that trades the
     symbol it listens to those are one symbol and one check.
     """
-    symbols = [binding.symbol]
-    if not trades_the_signals_shares(binding.action_plan, binding.symbol):
-        symbols.append(traded_instrument(binding.action_plan).underlying)
-    for symbol in symbols:
+    for symbol in filter(None, (binding.symbol, traded_market_symbol(binding.action_plan, binding.symbol))):
         liveness = market_liveness_fact(symbol, now_ms_utc())
         if _liveness_blocks_entry(binding, liveness, session, feed):
             return liveness
