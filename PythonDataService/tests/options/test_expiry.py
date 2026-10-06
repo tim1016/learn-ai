@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.utils.session_anchors import option_expiry_anchor_ms, option_expiry_date
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
 
 _HOUR_MS = 3_600_000
 

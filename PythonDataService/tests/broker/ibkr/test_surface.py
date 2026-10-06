@@ -18,7 +18,7 @@ import pytest
 
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.surface import stream_option_surface
-from app.utils.session_anchors import option_expiry_anchor_ms
+from app.options.expiry import option_expiry_anchor_ms
 
 
 def _greeks(*, iv: float, delta: float) -> SimpleNamespace:

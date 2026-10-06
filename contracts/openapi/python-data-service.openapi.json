@@ -50398,7 +50398,8 @@
             "required": true,
             "schema": {
               "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-              "gt": 0,
+              "exclusiveMinimum": 0,
+              "maximum": 253402300799999,
               "title": "Expiry Ms",
               "type": "integer"
             }
@@ -50500,7 +50501,8 @@
             "required": true,
             "schema": {
               "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-              "gt": 0,
+              "exclusiveMinimum": 0,
+              "maximum": 253402300799999,
               "title": "Expiry Ms",
               "type": "integer"
             }
@@ -50598,7 +50600,8 @@
               "anyOf": [
                 {
                   "items": {
-                    "gt": 0,
+                    "exclusiveMinimum": 0,
+                    "maximum": 253402300799999,
                     "type": "integer"
                   },
                   "type": "array"
@@ -50772,7 +50775,8 @@
             "required": true,
             "schema": {
               "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-              "gt": 0,
+              "exclusiveMinimum": 0,
+              "maximum": 253402300799999,
               "title": "Expiry Ms",
               "type": "integer"
             }

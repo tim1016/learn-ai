@@ -36,7 +36,7 @@ column?").
 
 Some values are semantically a **date** (option expiry `2026-06-19`, a "trading date") or a **wall-clock session boundary** (`09:30` open on some date), not a point-in-time. They are **still one `int64 ms UTC` field** — there is no second date type. Construct them at a **defined ET session anchor** so the instant is unambiguous:
 
-- **Option expiry** → 16:00 ET of the expiry date, built only by `option_expiry_anchor_ms` (`app/utils/session_anchors.py`). The anchor names the date; it is not when the contract stops trading.
+- **Option expiry** → 16:00 ET of the expiry date, built only by `option_expiry_anchor_ms` (`app/options/expiry.py`). The anchor names the date; it is not when the contract stops trading.
 - **Trading date** → the session open (09:30 ET) of that date, unless a surface states another anchor.
 - **Session boundaries** → the calendar's actual `market_open` / `market_close` for that date (respects half-days).
 

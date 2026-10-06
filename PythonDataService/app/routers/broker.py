@@ -15,7 +15,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import Field
 
 from app.broker.ibkr import contracts as ibkr_contracts
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
@@ -47,9 +46,9 @@ from app.broker.ibkr.surface import (
 from app.broker.ibkr.surface import (
     stream_option_surface,
 )
+from app.options.expiry import OptionExpiryMs
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
 from app.schemas.broker_search import OptionContractMatch
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, OptionExpiryMs
 from app.utils.throttle import TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -235,7 +234,7 @@ async def list_expirations_endpoint(symbol: str) -> dict:
 @router.get("/strikes/{symbol}", response_model=IbkrStrikeList)
 async def list_strikes_endpoint(
     symbol: str,
-    expiry_ms: Annotated[OptionExpiryMs, Query(..., gt=0, le=MAX_TIMESTAMP_MS, description=_EXPIRY_MS_DESCRIPTION)],
+    expiry_ms: Annotated[OptionExpiryMs, Query(..., description=_EXPIRY_MS_DESCRIPTION)],
 ) -> IbkrStrikeList:
     """Strikes that IBKR can actually qualify for one (symbol, expiry).
 
@@ -266,7 +265,7 @@ async def list_strikes_endpoint(
 @router.get("/option-contracts/{symbol}")
 async def option_contracts_endpoint(
     symbol: str,
-    expiry_ms: Annotated[OptionExpiryMs, Query(gt=0, le=MAX_TIMESTAMP_MS, description=_EXPIRY_MS_DESCRIPTION)],
+    expiry_ms: Annotated[OptionExpiryMs, Query(description=_EXPIRY_MS_DESCRIPTION)],
     strike: Annotated[float, Query(gt=0, description="Option strike.")],
     right: Annotated[str, Query(pattern="^[CP]$", description="C for call, P for put.")],
 ) -> dict:
@@ -307,7 +306,7 @@ async def option_contracts_endpoint(
 @router.get("/option-chain/{symbol}")
 async def option_chain_stream(
     symbol: str,
-    expiry_ms: Annotated[OptionExpiryMs, Query(..., gt=0, le=MAX_TIMESTAMP_MS, description=_EXPIRY_MS_DESCRIPTION)],
+    expiry_ms: Annotated[OptionExpiryMs, Query(..., description=_EXPIRY_MS_DESCRIPTION)],
     strikes: Annotated[
         list[float] | None,
         Query(
@@ -379,7 +378,7 @@ async def option_chain_stream(
 async def option_surface_stream(
     symbol: str,
     expiry_ms: Annotated[
-        list[Annotated[OptionExpiryMs, Field(gt=0, le=MAX_TIMESTAMP_MS)]] | None,
+        list[OptionExpiryMs] | None,
         Query(
             description=(
                 "Expirations to fan over (repeated). Each value is an option "

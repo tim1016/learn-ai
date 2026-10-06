@@ -29,7 +29,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, OptionExpiryMs, option_expiry_anchor_ms, option_expiry_date
+from app.options.expiry import OptionExpiryMs, option_expiry_anchor_ms, option_expiry_date
 
 OptionRight = Literal["call", "put"]
 
@@ -83,7 +83,7 @@ class OptionContract(BaseModel):
     # The OCC root: the stock's ticker as the symbol writes it, letters only.
     root: Annotated[str, Field(pattern=_ROOT_PATTERN)]
     # The expiry date's 16:00 New York anchor (ADR 0022 (i)).
-    expiry_ms: Annotated[OptionExpiryMs, Field(gt=0, le=MAX_TIMESTAMP_MS)]
+    expiry_ms: OptionExpiryMs
     right: OptionRight
     strike_thousandths: Annotated[int, Field(gt=0, le=_MAX_STRIKE_THOUSANDTHS)]
 

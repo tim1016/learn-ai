@@ -22,7 +22,7 @@ from typing import Literal
 
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import OptionRight
-from app.utils.session_anchors import option_expiry_anchor_ms, option_expiry_date
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
 
 logger = logging.getLogger(__name__)
 

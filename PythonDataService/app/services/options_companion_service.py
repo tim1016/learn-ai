@@ -28,9 +28,9 @@ import numpy as np
 import pandas as pd
 
 from app.models.requests import OptionsCompanionConfig
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
-from app.utils.session_anchors import option_expiry_anchor_ms
 from app.volatility.solver import implied_volatility
 
 logger = logging.getLogger(__name__)

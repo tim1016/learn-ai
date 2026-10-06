@@ -171,22 +171,6 @@ async def test_surface_returns_422_when_strikes_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_surface_rejects_non_positive_expiry_ms() -> None:
-    """expiry_ms validation runs before the connection check, so a
-    negative expiry must always come back as 422, as it does on the other
-    option routes — not 503 — even with no client installed."""
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-surface/SPY",
-            params=[("expiry_ms", -1), ("strikes", 420)],
-        )
-
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
 async def test_surface_rejects_nan_strikes() -> None:
     """NaN slips past Pydantic's float coercion; the boundary guard must
     catch it before it reaches contract qualification."""
@@ -248,3 +232,30 @@ async def test_an_expiry_that_is_not_16_00_new_york_on_its_date_is_refused(
     assert "is not an option expiry" in resp.text
     # It says what the instant is, and proposes no other date to ask for.
     assert "19:00:00.000 New York time on 2027-01-15" in resp.text
+
+
+# 1969-12-30 at 16:00 New York time: on the anchor, and before the first instant these routes take.
+_ANCHOR_BEFORE_1970_MS = -97_200_000
+
+
+@pytest.mark.parametrize("path", ["strikes", "option-contracts", "option-chain", "option-surface"])
+@pytest.mark.parametrize(
+    ("expiry_ms", "error_type"),
+    [
+        pytest.param(_ANCHOR_BEFORE_1970_MS, "greater_than", id="an expiry before 1970"),
+        pytest.param(10**20, "less_than_equal", id="an instant no calendar holds"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_expiry_out_of_range_is_refused_as_out_of_range(path: str, expiry_ms: int, error_type: str) -> None:
+    """The range is checked before the date is asked for: an absurd value is a 422, never a crash."""
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/api/broker/{path}/SPY",
+            params=[("expiry_ms", expiry_ms), ("strike", 420), ("strikes", 420), ("right", "C")],
+        )
+
+    assert resp.status_code == 422
+    assert [error["type"] for error in resp.json()["detail"]] == [error_type]

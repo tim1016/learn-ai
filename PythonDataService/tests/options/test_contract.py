@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.options.contract import OptionContract, strike_thousandths
-from app.utils.session_anchors import option_expiry_anchor_ms
+from app.options.expiry import option_expiry_anchor_ms
 
 
 @pytest.mark.parametrize(
@@ -48,8 +48,6 @@ def test_a_strike_a_listing_reports_as_a_float_names_the_same_contract_as_its_de
         pytest.param(Decimal("452.5005"), id="finer than a thousandth"),
         pytest.param(0.1 + 0.2, id="float arithmetic residue"),
         pytest.param(Decimal("450.5000000000000000000000000000001"), id="too fine for the decimal context to see"),
-        pytest.param("1e10000000", id="an exponent that would take seconds to write out"),
-        pytest.param("1e-10000000", id="a negative exponent that would take seconds to write out"),
         pytest.param(float("nan"), id="not a number"),
         pytest.param(float("inf"), id="infinite"),
         pytest.param("four fifty", id="not numeric"),
@@ -59,6 +57,13 @@ def test_a_strike_a_listing_reports_as_a_float_names_the_same_contract_as_its_de
 def test_a_strike_that_is_not_a_whole_number_of_thousandths_is_refused(strike: object) -> None:
     with pytest.raises(ValueError, match="strike"):
         strike_thousandths(strike)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("strike", ["1e10000000", "1e-10000000"])
+def test_a_number_too_large_or_too_fine_to_be_a_strike_is_refused_before_it_is_written_out(strike: str) -> None:
+    """Either would otherwise be expanded digit by digit, for seconds, before being refused or accepted."""
+    with pytest.raises(ValueError, match="everyday number"):
+        strike_thousandths(strike)
 
 
 @pytest.mark.parametrize(
@@ -103,6 +108,14 @@ def test_an_expiry_that_is_not_on_the_anchor_is_refused() -> None:
 
     with pytest.raises(ValidationError, match="is not an option expiry"):
         OptionContract(root="SPY", expiry_ms=midnight_utc, right="call", strike_thousandths=450_000)
+
+
+def test_an_instant_no_calendar_holds_is_refused_as_out_of_range() -> None:
+    """Refused by its size, before its date is asked for: asking would raise from the operating system."""
+    with pytest.raises(ValidationError) as refused:
+        OptionContract(root="SPY", expiry_ms=10**20, right="call", strike_thousandths=450_000)
+
+    assert [error["type"] for error in refused.value.errors()] == ["less_than_equal"]
 
 
 def test_an_expiry_year_the_two_digits_cannot_write_is_refused() -> None:
