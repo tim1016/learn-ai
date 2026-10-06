@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.research.golden_search.qualifications import Coverage
-from app.schemas.action_plan import ActionPlan
+from app.schemas.action_plan import ActionPlan, traded_market_symbol
 from app.schemas.bot_end import BotEnd
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.deployment_budget import DeployBudgetConsent
@@ -34,6 +34,7 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    TradedAssetAdmissionFacts,
 )
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
@@ -634,7 +635,9 @@ class BotStartAdmission:
             async with self._custody_guard(binding) as (custody, policy, _stored_terms):
                 binding = seal_binding_to_custody_snapshot(binding, custody)
                 observed_at_ms = self._now_ms()
-                get_market_liveness_store().request_symbol(binding.symbol, now_ms=observed_at_ms)
+                traded_symbol = traded_market_symbol(binding.action_plan, binding.symbol)
+                for symbol in filter(None, (binding.symbol, traded_symbol)):
+                    get_market_liveness_store().request_symbol(symbol, now_ms=observed_at_ms)
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
                 # Re-captured after the await: the market clock refreshes on
                 # its own cadence (~1s) independent of this coroutine, so the
@@ -675,6 +678,16 @@ class BotStartAdmission:
                     else prove_running_program_build(binding, verified_at_ms=observed_at_ms, coverage=coverage)
                 )
                 binding = binding.model_copy(update={"program_build": program_build})
+
+                def market_data(symbol: str) -> MarketDataAdmissionFact:
+                    return market_data_admission_fact(
+                        feed,
+                        observed_at_ms,
+                        symbol=symbol,
+                        use_rth=binding.use_rth,
+                        extended_window=policy.window,
+                    )
+
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
@@ -685,16 +698,18 @@ class BotStartAdmission:
                     validation=validation,
                     runtime=runtime,
                     process=process,
-                    market_data=market_data_admission_fact(
-                        feed,
-                        observed_at_ms,
-                        symbol=binding.symbol,
-                        use_rth=binding.use_rth,
-                        extended_window=policy.window,
-                    ),
+                    market_data=market_data(binding.symbol),
                     market_liveness=self._market_liveness(
                         binding.symbol,
                         observed_at_ms,
+                    ),
+                    traded_asset=(
+                        None
+                        if traded_symbol is None
+                        else TradedAssetAdmissionFacts(
+                            market_data=market_data(traded_symbol),
+                            market_liveness=self._market_liveness(traded_symbol, observed_at_ms),
+                        )
                     ),
                     start_window=deploy_window(observed_at_ms) if binding.use_rth else None,
                     extended_hours=extended_hours_admission_fact(

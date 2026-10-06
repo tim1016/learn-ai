@@ -8,9 +8,14 @@ gate.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
+
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_NEXT_STEP,
+    MarketDataAdmissionFact,
     RunAdmissionDecision,
     RunAdmissionFactAges,
     RunAdmissionFacts,
@@ -23,6 +28,49 @@ CORPUS_UNCOVERED_ADMITTED_NOTE = (
     "Corpus coverage is UNCOVERED: Dry Run admits this exploratory configuration without broker orders. "
     "It is not citable as qualification evidence."
 )
+
+@dataclass(frozen=True)
+class _MarketSide:
+    """One symbol a Start needs live, and how a refusal about it names it."""
+
+    market_data: MarketDataAdmissionFact
+    market_liveness: MarketLivenessFact
+    #: ``None`` for a bot that trades the symbol it listens to: it has one
+    #: symbol, and a refusal about it needs no name.
+    named: str | None
+
+    def say(self, sentence: str, *, true_of_every_symbol: bool) -> str:
+        """``sentence`` under this symbol's name, unless it is as true of the bot's other symbol.
+
+        A closed market or a lost connection refuses both symbols for one
+        cause, and naming one of them would blame it.
+        """
+        return sentence if self.named is None or true_of_every_symbol else f"{self.named}: {sentence}"
+
+
+def _market_sides(bot: RunAdmissionFacts) -> tuple[_MarketSide, ...]:
+    """The symbols this Start needs live: the one the bot listens to, then the
+    asset it trades when that is another one (#2912). The same two the running
+    bot checks before every ENTER, so Start refuses what every ENTER would."""
+    traded = bot.traded_asset
+    if traded is None:
+        return (_MarketSide(bot.market_data, bot.market_liveness, named=None),)
+    return (
+        _MarketSide(
+            bot.market_data,
+            bot.market_liveness,
+            named=f"{bot.market_liveness.symbol}, which this bot listens to",
+        ),
+        _MarketSide(traded.market_data, traded.market_liveness, named=f"{traded.symbol}, which this bot trades"),
+    )
+
+
+def _worst_age(ages_ms: Iterable[int]) -> int:
+    """One age for an authority that gave several facts: a future-dated one if
+    there is any, else the oldest. Either is the one that refuses the Start."""
+    ages = tuple(ages_ms)
+    return min(ages) if min(ages) < 0 else max(ages)
+
 
 def _decision(
     bot: RunAdmissionFacts,
@@ -53,6 +101,18 @@ def _decision(
             f"{bot.market_liveness.symbol_status.source}:"
             f"{bot.market_liveness.symbol_status.observed_at_ms}"
         )
+    traded = bot.traded_asset
+    if traded is not None:
+        evidence_refs.append(
+            f"traded-market-data-feed:{traded.symbol}:"
+            f"{traded.market_data.feed_id or 'unknown'}:{traded.market_data.observed_at_ms}"
+        )
+        if traded.market_liveness.symbol_status is not None:
+            evidence_refs.append(
+                f"traded-market-liveness-symbol:{traded.symbol}:"
+                f"{traded.market_liveness.symbol_status.source}:"
+                f"{traded.market_liveness.symbol_status.observed_at_ms}"
+            )
     return RunAdmissionDecision(
         operation=bot.operation,
         allowed=allowed,
@@ -76,12 +136,13 @@ def evaluate_run_admission(
     evaluated_at_ms: int,
 ) -> RunAdmissionDecision:
     """Decide a fresh deployment from bot and Clerk facts; unknown blocks."""
+    sides = _market_sides(bot)
     fact_ages_ms = RunAdmissionFactAges(
         program_build=evaluated_at_ms - bot.program_build.verified_at_ms,
         runtime=evaluated_at_ms - bot.runtime.observed_at_ms,
         process=evaluated_at_ms - bot.process.observed_at_ms,
-        market_data=evaluated_at_ms - bot.market_data.observed_at_ms,
-        market_liveness=evaluated_at_ms - bot.market_liveness.observed_at_ms,
+        market_data=_worst_age(evaluated_at_ms - side.market_data.observed_at_ms for side in sides),
+        market_liveness=_worst_age(evaluated_at_ms - side.market_liveness.observed_at_ms for side in sides),
         clerk=evaluated_at_ms - clerk.observed_at_ms,
     )
 
@@ -226,18 +287,22 @@ def evaluate_run_admission(
                 else "Open Deploy again to review a fresh instance."
             ),
         )
-    if bot.market_data.state != "AVAILABLE":
-        reason_codes = {
-            "STALE": "MARKET_DATA_STALE",
-            "UNAVAILABLE": "MARKET_DATA_UNAVAILABLE",
-            "UNKNOWN": "MARKET_DATA_UNKNOWN",
-        }
-        return decide(
-            allowed=False,
-            reason_code=reason_codes[bot.market_data.state],
-            explanation="The required market-data feed is not proven ready for this run.",
-            next_step=f"Restore fresh market data before {bot.operation.title()}.",
-        )
+    for side in sides:
+        if side.market_data.state != "AVAILABLE":
+            reason_codes = {
+                "STALE": "MARKET_DATA_STALE",
+                "UNAVAILABLE": "MARKET_DATA_UNAVAILABLE",
+                "UNKNOWN": "MARKET_DATA_UNKNOWN",
+            }
+            return decide(
+                allowed=False,
+                reason_code=reason_codes[side.market_data.state],
+                explanation=side.say(
+                    "The required market-data feed is not proven ready for this run.",
+                    true_of_every_symbol=all(other.market_data.state == side.market_data.state for other in sides),
+                ),
+                next_step=f"Restore fresh market data before {bot.operation.title()}.",
+            )
     # One rule, no mode carve-out: whatever the Clerk will refuse per decision,
     # the gate refuses up front. A Dry Run routes every intent through the same
     # `shape_program_leg` on the synthetic authority, so admitting one with
@@ -266,21 +331,32 @@ def evaluate_run_admission(
                           explanation="Regular-session bots may start from pre-market open through the regular close.",
                           next_step=start_window_next_step(window, now_ms=evaluated_at_ms))
         permitted_liveness = {"TRADABLE", "CLOSED"} if window is not None and window.state == "PREMARKET" else {"TRADABLE"}
-        symbol_halted = bot.market_liveness.symbol_status is not None and bot.market_liveness.symbol_status.state == "HALTED"
-        if bot.market_liveness.state not in permitted_liveness or symbol_halted:
-            reason_codes = {
-                "HALTED": "MARKET_LIVENESS_HALTED",
-                "CLOSED": "MARKET_LIVENESS_CLOSED",
-                "UNKNOWN": "MARKET_LIVENESS_UNKNOWN",
-            }
-            return decide(
-                allowed=False,
-                reason_code=reason_codes["HALTED" if symbol_halted else bot.market_liveness.state],
-                explanation=bot.market_liveness.reason,
-                next_step=(
-                    f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."
-                ),
-            )
+        for side in sides:
+            liveness = side.market_liveness
+            symbol_halted = liveness.symbol_status is not None and liveness.symbol_status.state == "HALTED"
+            if liveness.state not in permitted_liveness or symbol_halted:
+                reason_codes = {
+                    "HALTED": "MARKET_LIVENESS_HALTED",
+                    "CLOSED": "MARKET_LIVENESS_CLOSED",
+                    "UNKNOWN": "MARKET_LIVENESS_UNKNOWN",
+                }
+                return decide(
+                    allowed=False,
+                    reason_code=reason_codes["HALTED" if symbol_halted else liveness.state],
+                    explanation=side.say(
+                        liveness.reason,
+                        # The same code can carry a sentence about one symbol only,
+                        # so the sentence has to be the same one too.
+                        true_of_every_symbol=all(
+                            (other.market_liveness.reason_code, other.market_liveness.reason)
+                            == (liveness.reason_code, liveness.reason)
+                            for other in sides
+                        ),
+                    ),
+                    next_step=(
+                        f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."
+                    ),
+                )
         if clerk.reconciliation_state != "clean" or not clerk.reconciliation_fresh:
             return decide(
                 allowed=False,

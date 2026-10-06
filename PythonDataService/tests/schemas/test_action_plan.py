@@ -14,7 +14,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.action_plan import ActionPlan, traded_instrument, trades_the_signals_shares
+from app.schemas.action_plan import (
+    ActionPlan,
+    traded_instrument,
+    traded_market_symbol,
+    trades_the_signals_shares,
+)
 
 
 def test_unknown_top_level_key_rejected() -> None:
@@ -303,3 +308,23 @@ def test_a_plan_whose_legs_name_two_instruments_has_no_one_answer() -> None:
 
     with pytest.raises(ValueError, match="exactly one instrument"):
         traded_instrument(plan)
+
+
+@pytest.mark.parametrize(
+    ("traded", "listens_to", "second_symbol"),
+    [("QQQ", "SPY", "QQQ"), ("qqq", "SPY", "QQQ"), ("SPY", "spy", None)],
+    ids=["another-stock", "another-stock-in-lower-case", "its-own-shares"],
+)
+def test_the_second_symbol_a_bot_needs_live_is_the_one_its_orders_are_in(
+    traded: str, listens_to: str, second_symbol: str | None
+) -> None:
+    assert traded_market_symbol(_stock_plan(traded), listens_to) == second_symbol
+
+
+def test_options_on_the_symbol_a_bot_listens_to_need_no_second_symbol_live() -> None:
+    """They are something else to trade, but the market they need live is the same one."""
+    plan = ActionPlan.model_validate(
+        {"on_enter": [_option_leg("call", "SPY")], "on_exit": [{"kind": "close_leg", "entry_leg_id": "call"}]}
+    )
+
+    assert traded_market_symbol(plan, "SPY") is None
