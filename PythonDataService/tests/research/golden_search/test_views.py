@@ -310,6 +310,8 @@ def test_a_pass_the_budget_interrupted_is_not_counted_complete() -> None:
 def test_the_parameter_sentence_reads_the_whole_tuple_and_the_fixed_one_its_held_knobs() -> None:
     point = {"symbol": "SPY", "gap": 0.15, "rsi_min": 48.0, "rsi_max": 72.0, "fast_period": 8, "slow_period": 21, "hold_bars": 4}
     assert params_sentence(EMA, point) == "Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars"
+    # The bps gap is named only when a point sets it, so a searched bps gap tells two points apart.
+    assert params_sentence(EMA, {**point, "gap_bps": 2.5}) == "Gap $0.15 · normalized gap 2.5 bps · RSI 48–72 · EMA 8/21 · hold 4 bars"
     plans = (KnobPlan("gap_bps", "fixed", 0.0, 0.0, 0.0), KnobPlan("hold_bars", "fixed", 0.0, 0.0, 5.0))
     assert fixed_sentence(EMA, plans) == "Normalized gap fixed at 0 bps · Hold time fixed at 5 decision bars"
 

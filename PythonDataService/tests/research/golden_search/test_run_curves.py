@@ -131,6 +131,17 @@ def test_one_fold_of_a_group_can_be_listed_alone_and_two_runs_never_read_the_sam
     assert len(set(described)) == len(described) == 3
 
 
+def test_two_unnamed_points_that_differ_only_in_the_bps_gap_read_differently() -> None:
+    plain = {**INCUMBENT, "gap": 0.5}
+    records = [_run("p0", "search", plain), _run("p1", "search", {**plain, "gap_bps": 2.5})]
+
+    rows = _page(records, group="search")["rows"]
+
+    assert [row["label"] for row in rows] == ["All-period search", "All-period search"]
+    assert rows[0]["params_sentence"] != rows[1]["params_sentence"]
+    assert "normalized gap 2.5 bps" in rows[1]["params_sentence"] and "bps" not in rows[0]["params_sentence"]
+
+
 def test_a_curve_is_the_return_on_starting_capital_and_the_fall_from_its_own_peak() -> None:
     days = [session_close_ms_utc(day) for day in (date(2025, 1, 6), date(2025, 1, 7), date(2025, 1, 8))]
     daily = [(days[0], 101_000.0), (days[1], 99_990.0), (days[2], 102_010.0)]

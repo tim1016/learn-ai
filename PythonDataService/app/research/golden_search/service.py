@@ -9,8 +9,8 @@
   ``dispatch``.
 * :func:`bind_dispatch` / :func:`run_stage` — the jobs boundary binds a job
   to the authorized stage once, then runs it on a worker thread.
-* :func:`detail` / :func:`summaries` / :func:`candidate` / :func:`evaluations`
-  / :func:`hide` — reads and the soft delete.
+* :func:`detail` / :func:`summaries` / :func:`candidate` / :func:`runs` /
+  :func:`run_curves` / :func:`hide` — reads and the soft delete.
 """
 
 from __future__ import annotations

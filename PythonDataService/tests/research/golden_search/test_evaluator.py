@@ -197,6 +197,14 @@ def test_a_day_end_the_calendar_refuses_costs_the_run_its_curve_and_never_its_re
     assert (result.metrics.status, result.metrics.net_profit) == ("completed", 750.0)
 
 
+def test_a_run_the_engine_kept_no_day_ends_for_has_no_curve_and_keeps_its_result() -> None:
+    result = project_response(_request(), _response(equity_curve=[], equity_day_ends=[]), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
+
+    # No curve, not an empty one: the run counts among those with no curve recorded.
+    assert result.curve is None
+    assert (result.metrics.status, result.metrics.net_profit) == ("completed", 750.0)
+
+
 def test_a_failed_engine_run_is_a_failed_evaluation_with_its_reason() -> None:
     result = project_response(_request(detail=True), _response(success=False, error="no bars"), strategy_key="ema_crossover_signal", initial_cash=1.0)
     assert (result.metrics.status, result.metrics.error, result.detail, result.curve) == ("failed", "no bars", None, None)

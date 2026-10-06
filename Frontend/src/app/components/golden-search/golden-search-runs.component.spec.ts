@@ -47,7 +47,7 @@ describe('GoldenSearchRunsComponent', () => {
   });
 
   it('draws the runs you tick together, reads each curve once, and clears', async () => {
-    const { service } = await renderRuns();
+    const { service, charts } = await renderRuns();
     expect(screen.getByText('Tick runs in the list below to draw them here.')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /^Draw All-period search · All-period fit, Gap \$0\.15/ }));
@@ -59,6 +59,13 @@ describe('GoldenSearchRunsComponent', () => {
     // The second tick asks only for the curve it does not hold yet.
     expect(service.runCurves.mock.calls.map((call) => call[1])).toEqual([['run-winner'], ['run-fold']]);
     expect(screen.getByText('2 of at most 100 drawn')).not.toBeNull();
+    // A hover names each run by what asked for it and by its settings: two runs of one step never read the same.
+    const tooltip = charts.charts.at(-1)?.options.at(-1)?.tooltip;
+    const formatter = !Array.isArray(tooltip) && typeof tooltip?.formatter === 'function' ? tooltip.formatter : null;
+    // The library hands a hover far more than the index this one reads.
+    const hover: unknown = formatter === null ? null : Reflect.apply(formatter, undefined, [[{ dataIndex: 0 }]]);
+    expect(hover).toContain('All-period search · All-period fit · Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
+    expect(hover).toContain('Fold 1 test · Fold winner · Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
     // The table names each drawn run by what asked for it and by its settings, with the server's deepest fall.
     const panel = screen.getByRole('region', { name: 'Run equity curves' });
     fireEvent.click(within(panel).getByRole('button', { name: 'Show as table' }));
@@ -125,13 +132,15 @@ describe('GoldenSearchRunsComponent', () => {
 
   it('a list that cannot be read says so and can be tried again; so can the curves', async () => {
     let listFails = true;
+    let curvesFail = true;
     const service = {
       runs: vi.fn(async () => {
         if (listFails) throw new Error('down');
         return runsPage();
       }),
-      runCurves: vi.fn(async (): Promise<RunCurves> => {
-        throw new Error('down');
+      runCurves: vi.fn(async (_id: string, keys: readonly string[]): Promise<RunCurves> => {
+        if (curvesFail) throw new Error('down');
+        return runCurves(keys);
       }),
     };
     await render(GoldenSearchRunsComponent, {
@@ -147,6 +156,12 @@ describe('GoldenSearchRunsComponent', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('The ticked runs’ curves could not be loaded.');
     expect(screen.getByRole('table')).not.toBeNull();
+
+    curvesFail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    const chart = await within(screen.getByRole('region', { name: 'Run equity curves' })).findByRole('img');
+    expect(chart.getAttribute('aria-label')).toContain('1 run drawn');
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('says so when the study has recorded no run yet', async () => {
