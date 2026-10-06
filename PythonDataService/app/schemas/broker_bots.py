@@ -488,6 +488,8 @@ class AlpacaPaperDeployView(BaseModel):
     # the form pre-fills it.
     default_end: BotEndView
     next_deploy_open_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # What a bot deployed from this view trades by default, in the owner's
+    # words: the shares of the symbol it listens to (#2912).
     action_plan_explanation: str
     carryover_available: bool
     carryover_label: str

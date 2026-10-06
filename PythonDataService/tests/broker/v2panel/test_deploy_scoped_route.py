@@ -359,8 +359,8 @@ async def test_deploy_view_is_closed_paper_only_contract(
         "Fixed one-share sizing for a first deployment.",
         "Whole-share sizing, bounded from 1 through 100 shares.",
     ]
-    assert "enter" in body["action_plan_explanation"].lower()
-    assert "close" in body["action_plan_explanation"].lower()
+    # What the bot trades unless the owner picks something else (#2912).
+    assert "listens to" in body["action_plan_explanation"]
     assert body["carryover_available"] is False
     assert body["carryover_label"]
     assert body["carryover_explanation"]

@@ -1027,9 +1027,12 @@ def build_alpaca_paper_deploy_view(
                 default_quantity=1,
             ),
         ),
+        # What a bot deployed from this view trades unless the owner picks
+        # something else: Deploy's closed "What it trades" line (#2912).
         action_plan_explanation=(
-            "The backend will author exactly one long stock ENTER leg and one "
-            "matching close-leg EXIT for the selected symbol."
+            "Trades the shares of the symbol it listens to"
+            if symbol is None
+            else f"Trades {symbol.upper()} shares, the symbol it listens to"
         ),
         carryover_available=False,
         carryover_label="Exposure carryover is not yet qualified",
