@@ -205,3 +205,28 @@ class ActionPlan(BaseModel):
                     f"{sorted(seen)}"
                 )
         return self
+
+
+def traded_instrument(action_plan: ActionPlan) -> StockInstrument | OptionInstrument:
+    """What this plan trades: the one instrument its entry legs are in, by type and identity.
+
+    The one answer to "what does this bot trade". A bot's binding symbol is
+    its Signal stream; what it trades is read here, never guessed from that.
+    """
+    instruments = {(leg.instrument.kind, leg.instrument.underlying.upper()) for leg in action_plan.on_enter}
+    if len(instruments) != 1:
+        raise ValueError(
+            "an Action Plan trades exactly one instrument; "
+            f"its entry legs name {sorted(instruments)}"
+        )
+    return action_plan.on_enter[0].instrument
+
+
+def trades_the_signals_shares(action_plan: ActionPlan, signal_symbol: str) -> bool:
+    """Whether the plan trades shares of the symbol the bot listens to.
+
+    Decided by the instrument's type and identity, not by comparing tickers:
+    options on the signal's own symbol are something else.
+    """
+    instrument = traded_instrument(action_plan)
+    return instrument.kind == "stock" and instrument.underlying.upper() == signal_symbol.upper()

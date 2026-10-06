@@ -56,6 +56,7 @@ class _RejectFirstExitClerk(_FakeClerk):
         quantity: int,
         use_rth: bool = True,
         retained_source_bar=None,
+        pricing_bar=None,
         decision_evidence=None,
     ) -> _FakeEffectResult:
         if purpose == EffectPurpose.EXIT:
@@ -70,6 +71,7 @@ class _RejectFirstExitClerk(_FakeClerk):
             quantity=quantity,
             use_rth=use_rth,
             retained_source_bar=retained_source_bar,
+            pricing_bar=pricing_bar,
             decision_evidence=decision_evidence,
         )
 

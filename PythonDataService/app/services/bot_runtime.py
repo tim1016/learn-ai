@@ -111,13 +111,14 @@ async def execute_bot_run(
     if binding.mode == "trade":
         if source_bars is None:
             raise RuntimeError("Paper trade runs require their durable source-bar ledger.")
-        await run_trade_bot(binding, run_feed, source_bars=source_bars)
+        await run_trade_bot(binding, run_feed, source_bars=source_bars, pricing_feed=feed)
     elif binding.mode == "dry_run":
         await run_dry_run_bot(
             binding,
             run_feed,
             DryRunActivityJournal(instance_dir),
             source_bars=source_bars,
+            pricing_feed=feed,
         )
     else:
         await _run_log_only_bot(binding, run_feed)

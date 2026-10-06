@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
@@ -50,6 +50,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeed,
 )
+from app.schemas.action_plan import traded_instrument, trades_the_signals_shares
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
@@ -63,6 +64,7 @@ from app.services.feed_continuity_policy import (
     DECISION_LATE_REASON_CODE,
     admit_on_delivery,
     continuity_policy_for,
+    decision_time_left_ms,
     decision_valid_until_ms,
     late_decision,
 )
@@ -71,6 +73,7 @@ from app.services.market_liveness import (
     market_data_bars_live,
     market_liveness_fact,
 )
+from app.services.pricing_bar_stream import PRICING_BAR_WAIT_MS, PricingBarStream, PricingRefusal
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.services.startup_join import LiveStartBuffer, warm_through_seam
 from app.utils.timestamps import now_ms_utc
@@ -445,13 +448,32 @@ def _liveness_blocks_entry(
     (ADR 0059 D5.2), the only proof of PRE/POST; with none, nothing is
     proven and a CLOSED clock blocks. A declared schedule is not liveness,
     so ``feed`` supplies the second half: whether the venue is actually
-    printing bars for this symbol right now.
+    printing bars right now for the symbol the fact is about.
     """
     policy = MarketEntryPolicy(
         use_rth=binding.use_rth, extended_window=session.window,
-        clock=now_ms_utc, extended_session_live=lambda: _market_data_live(feed, binding.symbol),
+        clock=now_ms_utc, extended_session_live=lambda: _market_data_live(feed, liveness.symbol),
     )
     return policy.refusal(liveness) is not None
+
+
+def _entry_liveness_refusal(
+    binding: BrokerBotBinding, session: RunDecisionSession, feed: MarketDataFeed
+) -> MarketLivenessFact | None:
+    """The liveness fact that blocks this ENTER, if one does.
+
+    An ENTER needs both sides live: the Signal stream it was decided on, and
+    the traded instrument its order is in (#2912). For a bot that trades the
+    symbol it listens to those are one symbol and one check.
+    """
+    symbols = [binding.symbol]
+    if not trades_the_signals_shares(binding.action_plan, binding.symbol):
+        symbols.append(traded_instrument(binding.action_plan).underlying)
+    for symbol in symbols:
+        liveness = market_liveness_fact(symbol, now_ms_utc())
+        if _liveness_blocks_entry(binding, liveness, session, feed):
+            return liveness
+    return None
 
 
 def _market_data_live(feed: MarketDataFeed, symbol: str) -> bool:
@@ -849,6 +871,8 @@ async def run_trade_bot(
     feed: MarketDataFeed,
     *,
     source_bars: SourceBarLedger | None = None,
+    pricing_feed: MarketDataFeed | None = None,
+    pricing_bar_wait_ms: int = PRICING_BAR_WAIT_MS,
 ) -> None:
     """Execute one admitted strategy; the Clerk owns all execution truth.
 
@@ -861,6 +885,10 @@ async def run_trade_bot(
     instance-scoped ledger and fails closed without one, and an extended run
     refuses the unretained seam outright below -- with no ledger there is no
     anchor, and every extended decision would be refused per decision.
+
+    ``pricing_feed`` is the feed a bot that trades a different asset reads
+    that asset's bars from (``_pricing_stream_scope``). A bot that trades the
+    symbol it listens to never opens it.
     """
     clerk = get_alpaca_clerk()
     if clerk is None:
@@ -906,7 +934,8 @@ async def run_trade_bot(
             continuity=continuity,
         )
     )
-    async with run_feed_scope as run_feed:
+    pricing_scope = _pricing_stream_scope(binding, pricing_feed, source_bars, wait_ms=pricing_bar_wait_ms)
+    async with run_feed_scope as run_feed, pricing_scope as pricing:
         async for evaluation in strategy_evaluations(
             binding,
             run_feed,
@@ -966,8 +995,8 @@ async def run_trade_bot(
             # cancellation primitive is ever added, it must be exempted the
             # same way for the same reason.
             if intent.kind is SignalIntentKind.ENTER:
-                liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-                if _liveness_blocks_entry(binding, liveness, session, feed):
+                liveness = _entry_liveness_refusal(binding, session, feed)
+                if liveness is not None:
                     # Settle the staged candidate as refused. The strategy has not
                     # taken the position — it mutates position custody only in
                     # ``commit_signal_decision``, which never ran — so DISCARD is
@@ -990,11 +1019,18 @@ async def run_trade_bot(
                             "strategy_instance_id": binding.strategy_instance_id,
                             "strategy_key": binding.strategy_key,
                             "symbol": binding.symbol,
+                            "blocked_symbol": liveness.symbol,
                             "market_liveness_state": liveness.state,
                             "reason_code": liveness.reason_code,
                         },
                     )
                     continue
+            priced = await _price_decision(
+                decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
+                pricing=pricing, continuity=continuity,
+            )
+            if priced.refused:
+                continue
             logger.info(
                 "Trade bot decision",
                 extra={
@@ -1023,6 +1059,7 @@ async def run_trade_bot(
                 quantity=binding.quantity,
                 use_rth=binding.use_rth,
                 retained_source_bar=retained,
+                pricing_bar=priced.bar,
                 decision_evidence=decision_evidence,
             )
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
@@ -1114,6 +1151,7 @@ def _append_decision_receipt(
     intent_id: str | None = None,
     order_ref: str = "",
     liveness: MarketLivenessFact | None = None,
+    refusal_reason: str | None = None,
 ) -> None:
     facts: dict[str, object] = {
         "bar_ref": _decision_bar_ref(binding, evaluation),
@@ -1134,6 +1172,9 @@ def _append_decision_receipt(
         facts["explanation"] = evaluation.explanation.model_dump(mode="json")
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
+    if refusal_reason is not None:
+        # The key the Clerk's own pre-custody refusals use for their plain words.
+        facts["refusal_reason"] = refusal_reason
     receipts.append(
         outcome=outcome,
         symbol=binding.symbol,
@@ -1279,6 +1320,104 @@ def _refused_on_the_closing_bar(
     return True
 
 
+def _pricing_stream_scope(
+    binding: BrokerBotBinding,
+    pricing_feed: MarketDataFeed | None,
+    source_bars: SourceBarLedger | None,
+    *,
+    wait_ms: int,
+) -> AbstractAsyncContextManager[PricingBarStream | None]:
+    """The run's second bar stream, opened only for a bot that trades a different asset (#2912).
+
+    The stream reads ``pricing_feed``, not the run's own feed: that one is
+    the Signal stream's, and it refuses a second symbol.
+    """
+    if trades_the_signals_shares(binding.action_plan, binding.symbol):
+        return nullcontext(None)
+    if pricing_feed is None or source_bars is None:
+        raise RuntimeError(
+            "A bot that trades a different asset than it listens to needs that asset's price feed "
+            "and its source-bar ledger."
+        )
+    return PricingBarStream(
+        pricing_feed,
+        source_bars,
+        symbol=traded_instrument(binding.action_plan).underlying,
+        run_id=binding.run_id,
+        wait_ms=wait_ms,
+    )
+
+
+@dataclass(frozen=True)
+class _PricedDecision:
+    """What the pricing step decided for one staged decision.
+
+    ``refused`` -- the candidate was disposed of here and must not reach the
+    Clerk. ``bar`` -- the traded instrument's bar for the decision's minute,
+    or ``None`` for a bot that trades the symbol it listens to (the Clerk
+    prices it from its decision bar) and for an EXIT whose bar is not in hand.
+    """
+
+    refused: bool
+    bar: RetainedSourceBar | None = None
+
+
+_PRICED_BY_ITS_DECISION_BAR = _PricedDecision(refused=False)
+
+
+async def _price_decision(
+    decision_receipts: SqliteDecisionReceipts,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+    pricing: PricingBarStream | None,
+    continuity: ContinuityPolicy | None,
+) -> _PricedDecision:
+    """Find the traded instrument's bar for this decision's minute (#2912).
+
+    Shared by both runners. An ENTER waits for a bar not yet in hand, and one
+    that ends without a usable bar is refused: DISCARD, plus a protected
+    ``blocked`` receipt naming which of the stream's reasons it was. A price is
+    never carried over from another minute. An EXIT never waits and is never
+    refused here: it takes the bar if it has arrived.
+    """
+    if pricing is None:
+        return _PRICED_BY_ITS_DECISION_BAR
+    if intent.kind is SignalIntentKind.EXIT:
+        return _PricedDecision(refused=False, bar=pricing.bar_closing_at(intent.bar_close_ms))
+    priced = await pricing.bar_for_entry(
+        intent.bar_close_ms,
+        time_left_ms=decision_time_left_ms(continuity, evaluation.decision_bar_close_ms),
+    )
+    if not isinstance(priced, PricingRefusal):
+        return _PricedDecision(refused=False, bar=priced)
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code=priced.reason_code,
+        refusal_reason=priced.why,
+    )
+    logger.warning(
+        "Bot entry not sent: the traded instrument has no price for the decision's minute",
+        extra={
+            "action": "bot_entry_unpriced",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "traded_symbol": pricing.symbol,
+            "reason_code": priced.reason_code,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+        },
+    )
+    return _PricedDecision(refused=True)
+
+
 def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
     return (
         f"decision-bar:{evaluation.bar.feed_id}:{binding.symbol}:"
@@ -1349,6 +1488,8 @@ async def run_dry_run_bot(
     journal: DryRunActivityJournal,
     *,
     source_bars: SourceBarLedger | None,
+    pricing_feed: MarketDataFeed | None = None,
+    pricing_bar_wait_ms: int = PRICING_BAR_WAIT_MS,
 ) -> None:
     """Run the signal session through its isolated synthetic Clerk authority."""
     from app.services.bot_dry_run import DryRunActivity
@@ -1369,13 +1510,14 @@ async def run_dry_run_bot(
     )
     session = require_decision_session(binding, window=clerk.program_leg_policy.window)
     continuity = continuity_policy_for(binding, source_bars, session=session)
+    pricing_scope = _pricing_stream_scope(binding, pricing_feed, source_bars, wait_ms=pricing_bar_wait_ms)
     async with _RetainedSourceBarFeed(
         feed,
         source_bars,
         run_id=binding.run_id,
         session=session,
         continuity=continuity,
-    ) as retained_feed:
+    ) as retained_feed, pricing_scope as pricing:
         async for evaluation in strategy_evaluations(
             binding,
             retained_feed,
@@ -1437,6 +1579,12 @@ async def run_dry_run_bot(
             )
             if lateness.refused:
                 continue
+            priced = await _price_decision(
+                decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
+                pricing=pricing, continuity=continuity,
+            )
+            if priced.refused:
+                continue
             side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
             retained, decision_evidence = _decision_bar_evidence(
                 binding,
@@ -1455,6 +1603,7 @@ async def run_dry_run_bot(
                 quantity=binding.quantity,
                 use_rth=binding.use_rth,
                 retained_source_bar=retained,
+                pricing_bar=priced.bar,
                 decision_evidence=decision_evidence,
             )
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
@@ -1483,12 +1632,13 @@ async def run_dry_run_bot(
                     bar_ref=retained.bar_ref,
                     intent=intent.kind.value,
                     order_ref=order_ref,
-                    symbol=binding.symbol,
+                    symbol=traded_instrument(binding.action_plan).underlying,
                     side=side,
                     quantity=float(binding.quantity),
-                    # A Dry Run fills at the decision bar's close on purpose
-                    # (#2599): it needs a price at the moment it decides.
-                    fill_price=float(retained.close),
+                    # A Dry Run fills at the close of the decision's minute on
+                    # purpose (#2599): it needs a price at the moment it
+                    # decides. The price is the traded instrument's (#2912).
+                    fill_price=float((priced.bar or retained).close),
                 )
             )
             logger.info(

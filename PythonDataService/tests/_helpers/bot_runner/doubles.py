@@ -265,10 +265,11 @@ class _CustodyClerk:
         quantity: int,
         use_rth: bool = True,
         retained_source_bar=None,
+        pricing_bar=None,
         decision_evidence=None,
     ) -> EffectOperationReceipt:
         del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth
-        del retained_source_bar, decision_evidence
+        del retained_source_bar, pricing_bar, decision_evidence
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -583,6 +584,7 @@ class _FakeClerk:
         quantity: int,
         use_rth: bool = True,
         retained_source_bar=None,
+        pricing_bar=None,
         decision_evidence=None,
     ) -> _FakeEffectResult:
         if self._should_raise is not None:
@@ -601,6 +603,9 @@ class _FakeClerk:
             # real path hands it over.
             "use_rth": use_rth,
             "retained_source_bar": retained_source_bar,
+            # The traded instrument's bar for the decision's minute (#2912):
+            # None for a bot that trades the symbol it listens to.
+            "pricing_bar": pricing_bar,
             "decision_evidence": decision_evidence,
         }
         self.calls.append(call)
