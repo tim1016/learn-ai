@@ -1,8 +1,4 @@
-"""Slice 1B — cross-language fixture-driven validation tests.
-
-These exercise the same JSON files the Frontend Vitest suite uses, so
-cross-language validation parity is *tested*, not assumed. Add a new
-fixture here only when the frontend will also exercise it.
+"""Action Plans as they are written down: JSON files validated as stored.
 
 Layout: ``PythonDataService/tests/fixtures/action_plan/``.
 """

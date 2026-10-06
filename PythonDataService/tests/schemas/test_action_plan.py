@@ -128,7 +128,7 @@ def test_orphan_close_leg_referencing_unknown_entry_id_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Slice 1C (#596) — option entry leg + strike/expiry selectors.
+# Option legs, their strike and expiry rules, and the option structure (#2913).
 
 _OPTION_LEG: dict = {
     "leg_id": "spy_long_call",
@@ -140,9 +140,24 @@ _OPTION_LEG: dict = {
     "expiry": {"selector": "min_dte", "days": 14},
 }
 
+# 2026-12-18 at 16:00 New York time.
+_EXPIRY_ANCHOR_MS = 1_797_627_600_000
+
+
+def _leg(leg_id: str, **changes: object) -> dict:
+    return dict(_OPTION_LEG, leg_id=leg_id, **changes)
+
+
+def _structure(*legs: dict) -> ActionPlan:
+    """A plan that opens ``legs`` and closes each of them once."""
+    return ActionPlan(
+        on_enter=list(legs),
+        on_exit=[{"kind": "close_leg", "entry_leg_id": leg["leg_id"]} for leg in legs],
+    )
+
 
 def test_single_option_entry_leg_round_trips() -> None:
-    plan = ActionPlan(on_enter=[_OPTION_LEG], on_exit=[])
+    plan = _structure(_OPTION_LEG)
 
     assert plan.model_dump()["on_enter"] == [_OPTION_LEG]
 
@@ -151,110 +166,371 @@ def test_option_entry_leg_missing_right_rejected() -> None:
     bad = dict(_OPTION_LEG)
     del bad["right"]
     with pytest.raises(ValidationError, match=r"right"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+        _structure(bad)
 
 
 def test_option_entry_leg_missing_strike_rejected() -> None:
     bad = dict(_OPTION_LEG)
     del bad["strike"]
     with pytest.raises(ValidationError, match=r"strike"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+        _structure(bad)
 
 
 def test_option_entry_leg_missing_expiry_rejected() -> None:
     bad = dict(_OPTION_LEG)
     del bad["expiry"]
     with pytest.raises(ValidationError, match=r"expiry"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+        _structure(bad)
 
 
 def test_unknown_strike_selector_rejected() -> None:
-    bad = dict(_OPTION_LEG, strike={"selector": "wild_guess"})
     with pytest.raises(ValidationError, match=r"selector"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+        _structure(_leg("a", strike={"selector": "wild_guess"}))
 
 
-def test_delta_strike_selector_deliberately_unavailable() -> None:
-    """ADR 0012 / Slice 1C — ``delta`` is hidden from the
-    deployable schema until Slice 6 ships its resolver. An operator must
-    not be able to deploy a plan the engine cannot run."""
+@pytest.mark.parametrize(
+    ("declared", "stored"),
+    [
+        pytest.param({"selector": "atm"}, {"selector": "atm"}, id="at the money"),
+        pytest.param(
+            {"selector": "atm_offset", "offset": -3}, {"selector": "atm_offset", "offset": -3}, id="steps from the money"
+        ),
+        pytest.param(
+            {"selector": "absolute", "strike": 452.5}, {"selector": "absolute", "strike": 452.5}, id="a named strike"
+        ),
+        pytest.param(
+            {"selector": "delta", "target": 0.3},
+            {"selector": "delta", "target": 0.3, "tolerance_delta": 0.05},
+            id="a delta target, within 0.05 unless told otherwise",
+        ),
+        pytest.param(
+            {"selector": "percent", "percent": -2.0},
+            {"selector": "percent", "percent": -2.0, "tolerance_percent": 0.5},
+            id="percent from the price, within half a percent unless told otherwise",
+        ),
+    ],
+)
+def test_a_strike_rule_is_kept_with_its_tolerance(declared: dict, stored: dict) -> None:
+    """A rule's tolerance is part of the plan, so it is written out even when the owner left the default."""
+    plan = _structure(_leg("a", strike=declared))
 
-    bad = dict(_OPTION_LEG, strike={"selector": "delta", "target": 0.3})
-    with pytest.raises(ValidationError, match=r"selector"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+    assert plan.model_dump()["on_enter"][0]["strike"] == stored
 
 
-def test_atm_offset_selector_round_trips() -> None:
-    plan = ActionPlan(
-        on_enter=[dict(_OPTION_LEG, strike={"selector": "atm_offset", "offset": 5})],
-        on_exit=[],
-    )
+def test_a_strike_measured_from_another_leg_must_land_on_a_listed_strike_unless_told_otherwise() -> None:
+    plan = _structure(_leg("near"), _leg("far", strike={"selector": "leg_distance", "leg_id": "near", "dollars": 5}))
 
-    assert plan.on_enter[0].strike.selector == "atm_offset"
+    assert plan.model_dump()["on_enter"][1]["strike"] == {
+        "selector": "leg_distance",
+        "leg_id": "near",
+        "dollars": 5.0,
+        "tolerance_dollars": 0.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("strike", "refused"),
+    [
+        pytest.param({"selector": "delta", "target": 0}, "target", id="a delta target of zero"),
+        pytest.param({"selector": "delta", "target": 1}, "target", id="a delta target of one"),
+        pytest.param(
+            {"selector": "delta", "target": -0.3}, "target", id="a signed delta target; the leg's put gives the sign"
+        ),
+        pytest.param(
+            {"selector": "delta", "target": 0.3, "tolerance_delta": 0}, "tolerance_delta", id="a delta tolerance of zero"
+        ),
+        pytest.param(
+            {"selector": "delta", "target": 0.3, "tolerance_delta": 1}, "tolerance_delta", id="a delta tolerance of the whole range"
+        ),
+        pytest.param(
+            {"selector": "delta", "target": 0.3, "tolerance": 0.01},
+            "tolerance",
+            id="a misspelt tolerance, which would otherwise take the default unnoticed",
+        ),
+        pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": float("nan")}, "dollars", id="a distance that is no number"
+        ),
+        pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": 2.5005}, "dollars", id="a distance finer than strikes are listed"
+        ),
+        pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": 5, "tolerance_dollars": -1},
+            "tolerance_dollars",
+            id="a negative dollar tolerance",
+        ),
+        pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": 5, "tolerance_dollars": 0.0005},
+            "tolerance_dollars",
+            id="a dollar tolerance finer than strikes are listed",
+        ),
+        pytest.param({"selector": "percent", "percent": -100}, "percent", id="a strike of zero or less"),
+        pytest.param({"selector": "percent", "percent": float("inf")}, "percent", id="an infinite percent"),
+        pytest.param({"selector": "percent", "percent": 1000.1}, "percent", id="a strike eleven times the price"),
+        pytest.param(
+            {"selector": "percent", "percent": 2, "tolerance_percent": 100.1},
+            "tolerance_percent",
+            id="a percent tolerance wider than the price itself",
+        ),
+        pytest.param(
+            {"selector": "percent", "percent": 2, "tolerance": 1}, "tolerance", id="a misspelt percent tolerance"
+        ),
+        pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": 5, "tolerance": 1},
+            "tolerance",
+            id="a misspelt distance tolerance",
+        ),
+        pytest.param({"selector": "atm", "offset": -5}, "offset", id="a steps rule spelt as at the money"),
+        pytest.param(
+            {"selector": "absolute", "strike": 100, "tolerance_dollars": 1}, "tolerance_dollars", id="a tolerance on a named strike"
+        ),
+        pytest.param({"selector": "percent", "percent": float("nan")}, "percent", id="a percent that is no number"),
+        pytest.param(
+            {"selector": "percent", "percent": 2, "tolerance_percent": 0},
+            "tolerance_percent",
+            id="a percent tolerance of zero, which no listed strike meets",
+        ),
+        pytest.param(
+            {"selector": "percent", "percent": 2, "tolerance_percent": float("nan")},
+            "tolerance_percent",
+            id="a percent tolerance that is no number",
+        ),
+        pytest.param({"selector": "absolute", "strike": 100.0005}, "strike", id="a named strike finer than strikes are listed"),
+        pytest.param({"selector": "absolute", "strike": 100000}, "strike", id="a named strike no contract symbol can write"),
+    ],
+)
+def test_a_strike_rule_no_listed_strike_could_satisfy_is_refused(strike: dict, refused: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        _structure(_leg("a"), _leg("b", strike=strike))
+
+    assert [failure["loc"][-1] for failure in error.value.errors()] == [refused]
+
+
+@pytest.mark.parametrize(
+    ("strike", "field"),
+    [
+        ({"selector": "leg_distance", "leg_id": "a", "dollars": -0.0}, "dollars"),
+        ({"selector": "percent", "percent": -0.0}, "percent"),
+    ],
+    ids=["a distance", "a percent"],
+)
+def test_minus_zero_is_stored_as_zero(strike: dict, field: str) -> None:
+    """One strike, one spelling: -0.0 would hash apart from 0.0."""
+    plan = _structure(_leg("a"), _leg("b", right="put", strike=strike))
+
+    assert str(plan.model_dump()["on_enter"][1]["strike"][field]) == "0.0"
+
+
+@pytest.mark.parametrize(
+    "expiry",
+    [{"selector": "same_day", "days": 0}, {"selector": "nearest_weekly", "days": 30}],
+    ids=["same day", "nearest weekly"],
+)
+def test_an_expiry_rule_with_a_key_it_does_not_have_is_refused(expiry: dict) -> None:
+    """A rule that takes no days must not swallow them: the owner would believe they counted."""
+    with pytest.raises(ValidationError, match="days"):
+        _structure(_leg("a", expiry=expiry))
+
+
+@pytest.mark.parametrize(
+    "expiry",
+    [
+        {"selector": "min_dte", "days": 14},
+        {"selector": "nearest_weekly"},
+        {"selector": "same_day"},
+        {"selector": "absolute", "expiration_ms": _EXPIRY_ANCHOR_MS},
+    ],
+    ids=["at least N days", "nearest weekly", "same day", "a named date"],
+)
+def test_an_expiry_rule_round_trips(expiry: dict) -> None:
+    plan = _structure(_leg("a", expiry=expiry))
+
+    assert plan.model_dump()["on_enter"][0]["expiry"] == expiry
 
 
 def test_min_dte_days_below_one_rejected() -> None:
-    bad = dict(_OPTION_LEG, expiry={"selector": "min_dte", "days": 0})
     with pytest.raises(ValidationError, match=r"days"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+        _structure(_leg("a", expiry={"selector": "min_dte", "days": 0}))
 
 
 def test_absolute_expiry_missing_expiration_ms_rejected() -> None:
-    bad = dict(_OPTION_LEG, expiry={"selector": "absolute"})
     with pytest.raises(ValidationError, match=r"expiration_ms"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+        _structure(_leg("a", expiry={"selector": "absolute"}))
 
 
-def test_absolute_expiry_round_trips_as_int64_ms() -> None:
-    """Repo timestamp policy (ADR 0022) — wire format is
-    ``int64`` ms UTC. Display conversion to ``America/New_York`` lives at
-    the UI boundary, not in the schema."""
-
-    plan = ActionPlan(
-        on_enter=[
-            dict(
-                _OPTION_LEG,
-                expiry={"selector": "absolute", "expiration_ms": 1_750_000_000_000},
-            )
-        ],
-        on_exit=[],
-    )
-
-    assert plan.on_enter[0].expiry.expiration_ms == 1_750_000_000_000
+@pytest.mark.parametrize(
+    ("expiration_ms", "reason"),
+    [
+        pytest.param(1_797_552_000_000, "is not an option expiry", id="midnight UTC on 2026-12-18, not 16:00 New York"),
+        pytest.param(10**20, "less than or equal to", id="an instant no calendar holds"),
+        pytest.param(-97_200_000, "greater than 0", id="1969-12-30, on the anchor but before the first instant"),
+        pytest.param(4_103_125_200_000, "two digits", id="2100-01-08, a year no contract symbol can write"),
+    ],
+)
+def test_a_named_expiry_no_contract_could_carry_is_refused(expiration_ms: int, reason: str) -> None:
+    """ADR 0022 (i): one instant per expiry date, so two plans naming one date cannot hash apart."""
+    with pytest.raises(ValidationError, match=reason):
+        _structure(_leg("a", expiry={"selector": "absolute", "expiration_ms": expiration_ms}))
 
 
-def test_nearest_weekly_round_trips() -> None:
-    plan = ActionPlan(
-        on_enter=[dict(_OPTION_LEG, expiry={"selector": "nearest_weekly"})],
-        on_exit=[],
-    )
-
-    assert plan.on_enter[0].expiry.selector == "nearest_weekly"
+_SHORT = {"position": "short"}
+_PUT = {"right": "put"}
 
 
-def test_vertical_spread_two_option_legs_round_trips() -> None:
-    """Two option legs sharing expiry — the multi-leg structure
-    Slice 1C unblocks. ADR 0012 §3: each leg keeps its own stable
-    ``leg_id`` so the future resolver maps each to a distinct
-    ``conId`` even when they share strike-resolution inputs."""
+@pytest.mark.parametrize(
+    "legs",
+    [
+        pytest.param([_leg("call")], id="a bought call"),
+        pytest.param([_leg("put", **_PUT)], id="a bought put"),
+        pytest.param(
+            [_leg("bought"), _leg("sold", **_SHORT, strike={"selector": "atm_offset", "offset": 5})],
+            id="a call spread",
+        ),
+        pytest.param(
+            [
+                _leg("call"),
+                _leg("put", **_PUT, strike={"selector": "leg_distance", "leg_id": "call", "dollars": 0}),
+            ],
+            id="a straddle, the put at the call's strike",
+        ),
+        pytest.param(
+            [
+                _leg("bought", instrument={"kind": "option", "underlying": "spy"}),
+                _leg("sold", **_SHORT, strike={"selector": "atm_offset", "offset": 5}),
+            ],
+            id="one underlying written in two cases",
+        ),
+        pytest.param(
+            [
+                _leg("low", strike={"selector": "atm_offset", "offset": -5}),
+                _leg("body", **_SHORT, qty_ratio=2),
+                _leg("high", strike={"selector": "atm_offset", "offset": 5}),
+            ],
+            id="a call butterfly: two sold calls, one bought on each side",
+        ),
+        pytest.param(
+            [
+                _leg("sold_put", **_SHORT, **_PUT, strike={"selector": "delta", "target": 0.2}),
+                _leg("bought_put", **_PUT, strike={"selector": "leg_distance", "leg_id": "sold_put", "dollars": -5}),
+                _leg("sold_call", **_SHORT, strike={"selector": "delta", "target": 0.2}),
+                _leg("bought_call", strike={"selector": "leg_distance", "leg_id": "sold_call", "dollars": 5}),
+            ],
+            id="an iron condor by delta, wings five dollars out",
+        ),
+    ],
+)
+def test_a_structure_one_order_can_carry_is_accepted(legs: list[dict]) -> None:
+    assert len(_structure(*legs).on_enter) == len(legs)
 
-    long_call = dict(_OPTION_LEG, leg_id="long_atm_call")
-    short_call = dict(
-        _OPTION_LEG,
-        leg_id="short_otm_call",
-        strike={"selector": "atm_offset", "offset": 5},
-    )
 
-    plan = ActionPlan(
-        on_enter=[long_call, short_call],
-        on_exit=[
-            {"kind": "close_leg", "entry_leg_id": "long_atm_call"},
-            {"kind": "close_leg", "entry_leg_id": "short_otm_call"},
-        ],
-    )
+@pytest.mark.parametrize(
+    ("legs", "reason"),
+    [
+        pytest.param(
+            [_leg("a"), _leg("b"), _leg("c"), _leg("d"), _leg("e")],
+            "one to 4 legs",
+            id="five legs",
+        ),
+        pytest.param(
+            [_leg("a"), _leg("b", instrument={"kind": "option", "underlying": "QQQ"})],
+            "one underlying",
+            id="legs on two underlyings",
+        ),
+        pytest.param(
+            [_leg("a"), {"leg_id": "shares", "instrument": {"kind": "stock", "underlying": "SPY"}, "position": "long", "qty_ratio": 100}],
+            "no stock leg",
+            id="a stock leg beside an option leg",
+        ),
+        pytest.param([_leg("a", qty_ratio=2)], "lowest terms", id="one leg written as two"),
+        pytest.param(
+            [_leg("a", qty_ratio=2), _leg("b", **_SHORT, qty_ratio=2)],
+            "lowest terms",
+            id="a two-by-two spread, which is a one-by-one spread opened twice",
+        ),
+        pytest.param([_leg("a", **_SHORT)], "sells 1 call", id="a sold call nothing covers"),
+        pytest.param(
+            [_leg("a"), _leg("b", **_SHORT, qty_ratio=2)],
+            "sells 2 call",
+            id="two sold calls against one bought",
+        ),
+        pytest.param(
+            [_leg("a"), _leg("b", **_SHORT, **_PUT)],
+            "sells 1 put",
+            id="a sold put covered only by a bought call",
+        ),
+        pytest.param(
+            [_leg("a", strike={"selector": "leg_distance", "leg_id": "nobody", "dollars": 5})],
+            "not a leg of this plan",
+            id="a strike measured from a leg the plan does not have",
+        ),
+        pytest.param(
+            [_leg("a", strike={"selector": "leg_distance", "leg_id": "a", "dollars": 5})],
+            "a -> a",
+            id="a strike measured from itself",
+        ),
+        pytest.param(
+            [
+                _leg("a", strike={"selector": "leg_distance", "leg_id": "b", "dollars": 5}),
+                _leg("b", strike={"selector": "leg_distance", "leg_id": "a", "dollars": -5}),
+            ],
+            "a -> b -> a",
+            id="two strikes measured from each other",
+        ),
+        pytest.param(
+            [
+                _leg("a", strike={"selector": "leg_distance", "leg_id": "b", "dollars": 5}),
+                _leg("b", strike={"selector": "leg_distance", "leg_id": "c", "dollars": 5}),
+                _leg("c", strike={"selector": "leg_distance", "leg_id": "b", "dollars": -5}),
+            ],
+            "b -> c -> b",
+            id="a loop the first leg leads into but is not part of",
+        ),
+        pytest.param(
+            [
+                _leg("a", strike={"selector": "leg_distance", "leg_id": "d", "dollars": 5}),
+                _leg("b", strike={"selector": "leg_distance", "leg_id": "c", "dollars": 5}),
+                _leg("c", strike={"selector": "leg_distance", "leg_id": "b", "dollars": -5}),
+                _leg("d", **_SHORT),
+            ],
+            "b -> c -> b",
+            id="a loop the first leg has nothing to do with",
+        ),
+    ],
+)
+def test_a_structure_one_order_cannot_carry_is_refused_with_the_reason(legs: list[dict], reason: str) -> None:
+    with pytest.raises(ValidationError, match=reason):
+        _structure(*legs)
 
-    assert len(plan.on_enter) == 2
-    assert len(plan.on_exit) == 2
+
+@pytest.mark.parametrize(
+    ("exits", "reason"),
+    [
+        pytest.param(["bought"], "'sold' is closed 0 times", id="a leg the exit leaves open"),
+        pytest.param(["bought", "sold", "sold"], "'sold' is closed 2 times", id="a leg the exit closes twice"),
+    ],
+)
+def test_an_exit_that_does_not_close_exactly_what_the_entry_opened_is_refused(exits: list[str], reason: str) -> None:
+    """Asymmetric exits were once to be a warning (ADR 0012 §8). For an option structure they are a refusal."""
+    with pytest.raises(ValidationError, match=reason):
+        ActionPlan(
+            on_enter=[_leg("bought"), _leg("sold", **_SHORT, strike={"selector": "atm_offset", "offset": 5})],
+            on_exit=[{"kind": "close_leg", "entry_leg_id": leg_id} for leg_id in exits],
+        )
+
+
+def test_a_stock_plan_is_not_held_to_the_option_rules() -> None:
+    """Stock plans keep the validation they had. This one breaks every option rule and still reads:
+    six legs, two underlyings, ratios with a common divisor, a sold leg nothing covers, and no exit."""
+    legs = [
+        {
+            "leg_id": f"leg_{index}",
+            "instrument": {"kind": "stock", "underlying": "SPY" if index % 2 else "QQQ"},
+            "position": "short" if index == 0 else "long",
+            "qty_ratio": 2,
+        }
+        for index in range(6)
+    ]
+
+    assert len(ActionPlan(on_enter=legs, on_exit=[]).on_enter) == 6
 
 
 # ---- what a plan trades (#2912) --------------------------------------------
@@ -304,7 +580,14 @@ def test_options_on_the_signals_own_symbol_are_something_else() -> None:
 
 
 def test_a_plan_whose_legs_name_two_instruments_has_no_one_answer() -> None:
-    plan = ActionPlan.model_validate({"on_enter": [_option_leg("a", "SPY"), _option_leg("b", "QQQ")]})
+    plan = ActionPlan.model_validate(
+        {
+            "on_enter": [
+                {"leg_id": leg_id, "instrument": {"kind": "stock", "underlying": underlying}, "position": "long", "qty_ratio": 1}
+                for leg_id, underlying in (("a", "SPY"), ("b", "QQQ"))
+            ]
+        }
+    )
 
     with pytest.raises(ValueError, match="exactly one instrument"):
         traded_instrument(plan)
