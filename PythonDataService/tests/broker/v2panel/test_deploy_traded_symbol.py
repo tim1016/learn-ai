@@ -20,13 +20,14 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAsset
 from app.broker.contract.registry import get_broker_registry
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.services import market_liveness
 from app.services.bot_binding_repository import alpaca_v1_action_plan
 from app.services.broker_v2_panel import budget_deploy, sqlite_roster_status
-from tests.broker.v2panel.conftest import _BODY
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS
 from tests.broker.v2panel.fixtures import ACCT
 from tests.broker.v2panel.test_budget_deploy import (
     NOON,
@@ -163,6 +164,63 @@ async def test_an_asset_alpaca_cannot_trade_is_refused_before_the_bot_exists(
     assert response.status_code == 409
     assert "Alpaca cannot trade XYZ" in response.text
     assert registry.deploy_calls == []
+
+
+async def test_alpaca_being_unreachable_is_not_a_verdict_on_the_asset(
+    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing was learned about QQQ, so the Deploy may be sent again: a 503, never a refusal of the asset."""
+    app, registry = deploy_app
+
+    async def unreachable(symbol: str) -> BrokerAsset | None:
+        raise BrokerUnavailable("Alpaca did not answer.", broker="alpaca")
+
+    monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "get_asset", unreachable, raising=False)
+
+    response = await _deploy(app, execution_mode="dry_run", traded_symbol="QQQ")
+
+    assert response.status_code == 503
+    assert "could not be asked whether it trades QQQ" in response.text
+    assert response.json()["detail"]["submission_settled"] is True
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.parametrize("review", ["budget-preview", "admission"])
+async def test_each_review_refuses_an_asset_alpaca_cannot_trade(deploy_app, alpaca: _Alpaca, review: str) -> None:
+    """The owner learns it at the first review, not at the final click."""
+    app, _registry = deploy_app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"{_BOTS}/{review}", json={**_SETTINGS, "execution_mode": "dry_run", "traded_symbol": "XYZ"},
+        )
+
+    assert response.status_code == 409
+    assert "Alpaca cannot trade XYZ" in response.text
+    assert alpaca.asked == ["XYZ"]
+
+
+async def test_the_admission_preview_is_of_the_bot_that_trades_the_named_asset(
+    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, registry = deploy_app
+    previewed: list[dict] = []
+    answer = registry.preview_start_admission
+
+    async def recording(**kwargs: object):
+        previewed.append(kwargs)
+        return await answer(**kwargs)
+
+    monkeypatch.setattr(registry, "preview_start_admission", recording)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"{_BOTS}/admission", json={**_SETTINGS, "execution_mode": "dry_run", "traded_symbol": "QQQ"},
+        )
+
+    assert response.status_code == 200, response.text
+    [call] = previewed
+    assert (call["symbol"], call["traded_symbol"]) == ("SPY", "QQQ")
 
 
 async def test_a_deploy_that_names_no_traded_asset_is_sent_as_it_always_was(deploy_app, alpaca: _Alpaca) -> None:

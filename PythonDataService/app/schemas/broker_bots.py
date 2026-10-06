@@ -15,9 +15,7 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
-    SerializerFunctionWrapHandler,
     field_validator,
-    model_serializer,
     model_validator,
 )
 from pydantic.json_schema import SkipJsonSchema
@@ -276,16 +274,6 @@ class BotDeployPrefill(BaseModel):
     # ``None`` when the source bot's terms were never recorded in full: the
     # form then starts from this account's defaults.
     exit_terms: ExitTermsInput | None = None
-
-    # No return annotation: the response's schema stays this model's own
-    # fields, where an annotated ``dict`` would replace it with a bare object.
-    @model_serializer(mode="wrap")
-    def _omit_an_absent_traded_symbol(self, handler: SerializerFunctionWrapHandler):
-        """A bot that traded the symbol it listened to answers exactly as it did before the field existed."""
-        payload = handler(self)
-        if payload.get("traded_symbol") is None:
-            payload.pop("traded_symbol", None)
-        return payload
 
 
 class AlpacaPaperDeployEligibility(BaseModel):

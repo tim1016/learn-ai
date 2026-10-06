@@ -34,12 +34,12 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _ord
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.marketdata.feed import MarketDataBar
 from app.schemas.deployment_budget import DeployBudgetConsent
-from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeReadPort, _FakeTradePort, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.alpaca.clerk.sqlite.test_exit import _broker_order, _FakeTrade
@@ -73,17 +73,6 @@ def _retained(symbol: str, *, close: str, end_ms: int = NOON, account_id: str = 
     return RetainedSourceBar.from_market_bar(
         seq=1, account_id=account_id, bar=_minute_bar(symbol, close=close, end_ms=end_ms)
     )
-
-
-def _publish_quotes(at_ms: int, **asks: float) -> None:
-    """Publish one fresh IBKR book for each symbol: a Deploy prices its minimum position at the traded asset's ask."""
-    market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
-        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=at_ms, connection_changed_at_ms=at_ms,
-        symbol_statuses=(), quotes=tuple(
-            TopOfBookQuote(symbol=symbol, bid=ask, ask=ask, source="ibkr.market_data.status", observed_at_ms=at_ms)
-            for symbol, ask in asks.items()
-        ),
-    ), now_ms=at_ms)
 
 
 class _EchoingTradePort(_FakeTradePort):
@@ -361,16 +350,6 @@ async def test_a_live_shadow_sell_with_no_bar_of_its_minute_fills_at_the_newest_
         evidence.close()
 
 
-def _publish_qqq_quote(at_ms: int) -> None:
-    """A fresh IBKR book for the traded asset, as the status source publishes it."""
-    market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
-        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=at_ms, connection_changed_at_ms=at_ms,
-        symbol_statuses=(), quotes=(
-            TopOfBookQuote(symbol=TRADED, bid=40.0, ask=40.2, source="ibkr.market_data.status", observed_at_ms=at_ms),
-        ),
-    ), now_ms=at_ms)
-
-
 async def _shadow_holding_qqq(tmp_path: Path, *, exit_ms: int, clock: _Clock) -> tuple[Any, ...]:
     """A Live Shadow that listens to SPY, bought QQQ at 10:01 for $40.10, and decides EXIT at ``exit_ms``."""
     ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
@@ -463,7 +442,7 @@ async def test_a_sale_that_reaches_the_clerk_after_the_close_is_not_filled_at_an
     )
     try:
         clock.now_ms = et_minute_of_day_ms(DAY, 960) + 30_000  # 16:00:30 ET
-        _publish_qqq_quote(clock.now_ms)  # a resting limit could be priced, so only the refusal stops it
+        publish_quotes(clock.now_ms, QQQ=40.0)  # a resting limit could be priced, so only the refusal stops it
 
         late = await facade.execute_for_instance(
             strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="exit-1", purpose=EffectPurpose.EXIT,
@@ -500,7 +479,7 @@ async def test_a_sale_accepted_before_the_close_and_sent_after_it_is_refused_at_
     )
     try:
         clock.now_ms = et_minute_of_day_ms(DAY, 960) + 30_000  # 16:00:30 ET
-        _publish_qqq_quote(clock.now_ms)
+        publish_quotes(clock.now_ms, QQQ=40.0)
         # The acceptance check alone still reads the session as open.
         monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.runtime.market_leg_sendable", lambda _now_ms: True)
 
@@ -545,7 +524,7 @@ async def test_a_dry_run_fills_at_the_traded_assets_close(tmp_path: Path) -> Non
         ),
     )
     market_liveness.reset_market_liveness_store_for_testing()
-    _publish_quotes(NOON, SPY=100.0, QQQ=40.0)
+    publish_quotes(NOON, SPY=100.0, QQQ=40.0)
     authority = SyntheticBindingAuthority(
         binding=binding, artifacts_root=tmp_path,
         lifecycle_repo_for=lambda _sid: pytest.fail("a Dry Run's entry never reads the runner's lifecycle state"),
@@ -600,12 +579,12 @@ async def test_a_deploy_is_committed_at_the_price_of_the_asset_the_bot_buys(tmp_
         runtime = get_clerk_runtime(binding.sealed_account_id or "")
         assert runtime is not None and runtime.clerk is not None
 
-        _publish_quotes(NOON, SPY=30.0)
+        publish_quotes(NOON, SPY=30.0)
         with pytest.raises(BudgetUnavailable, match="fresh IBKR price"):
             await runtime.clerk.register_strategy_run(binding)
 
         # $50 covers one QQQ at $40. It would not cover one at SPY's $500.
-        _publish_quotes(NOON, SPY=500.0, QQQ=40.0)
+        publish_quotes(NOON, SPY=500.0, QQQ=40.0)
         await runtime.clerk.register_strategy_run(binding)
     finally:
         await close_synthetic_clerk_runtimes()

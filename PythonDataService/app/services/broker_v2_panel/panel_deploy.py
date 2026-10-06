@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.errors import BrokerError
+from app.broker.contract.models import is_active_tradable_us_equity
 from app.broker.contract.registry import get_broker_registry
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -287,9 +288,7 @@ async def preview_alpaca_deployment_budget(
     The warning is read here, not in ``preview_budget``: consent re-runs that
     preview at Deploy, and a warning is no part of what consent binds.
     """
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-    resolved = _require_alpaca_deploy_request(view, request)
-    await _require_tradable_traded_asset(broker, request)
+    _view, resolved = await _deploy_preflight(broker, account_id, request)
     try:
         preview = budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
         same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
@@ -464,9 +463,7 @@ async def deploy_alpaca_paper_bot(
         # committed. A budget-less Deploy has no commit to read, so its
         # earlier bot may have started.
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
-            view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-            resolved_params = _require_alpaca_deploy_request(view, request)
-            await _require_tradable_traded_asset(broker, request)
+            view, resolved_params = await _deploy_preflight(broker, account_id, request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
@@ -603,9 +600,7 @@ async def preview_alpaca_paper_start_admission(
     The bot has no name yet, so the checks run against the name a Deploy
     claimed now would get: they describe the bot the Deploy would create.
     """
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-    resolved_params = _require_alpaca_deploy_request(view, request)
-    await _require_tradable_traded_asset(broker, request)
+    _view, resolved_params = await _deploy_preflight(broker, account_id, request)
     # The end the Deploy would refuse is refused here too (#2607).
     resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run")
     registry = _runner()
@@ -699,6 +694,21 @@ def _owner_parameters(binding: BrokerBotBinding) -> dict[str, object]:
     if origins is None:
         return public
     return {name: value for name, value in public.items() if origins.get(name) == "deploy_override"}
+
+
+async def _deploy_preflight(
+    broker: str, account_id: str, request: AlpacaPaperDeployRequest,
+) -> tuple[AlpacaPaperDeployView, ResolvedDeployParams]:
+    """The checks the money review, the admission preview and Deploy all make, in one place.
+
+    One function so the three cannot drift: what a review accepts, Deploy
+    accepts, and a traded asset Alpaca cannot trade is refused at the first
+    review rather than at the final click.
+    """
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
+    resolved = _require_alpaca_deploy_request(view, request)
+    await _require_tradable_traded_asset(broker, request)
+    return view, resolved
 
 
 def _require_alpaca_deploy_request(
@@ -812,12 +822,7 @@ async def _require_tradable_traded_asset(broker: str, request: AlpacaPaperDeploy
             next_action="Try again once Alpaca can be reached.",
             http_status=503,
         ) from exc
-    if (
-        asset is None
-        or asset.asset_class.lower() != "us_equity"
-        or asset.status.lower() != "active"
-        or not asset.tradable
-    ):
+    if not is_active_tradable_us_equity(asset):
         raise PanelRunnerError(
             f"Alpaca cannot trade {symbol}. Choose another asset.",
             detail=f"{symbol} is not an active, tradable US stock or ETF at Alpaca.",

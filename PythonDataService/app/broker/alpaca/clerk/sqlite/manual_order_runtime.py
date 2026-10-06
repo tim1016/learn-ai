@@ -27,7 +27,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerAccountSnapshot, OrderSide, OrderType, TimeInForce
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    OrderSide,
+    OrderType,
+    TimeInForce,
+    is_active_tradable_us_equity,
+)
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.identity import validate_strategy_instance_id
 
@@ -137,12 +143,7 @@ async def _manual_asset_unavailable(
             "ASSET_EVIDENCE_UNAVAILABLE",
             "Manual order preview requires fresh broker asset eligibility evidence.",
         )
-    if (
-        asset is None
-        or asset.asset_class.lower() != "us_equity"
-        or asset.status.lower() != "active"
-        or not asset.tradable
-    ):
+    if not is_active_tradable_us_equity(asset):
         return ManualOrderUnavailable(
             "UNSUPPORTED_MANUAL_ASSET",
             "The selected symbol is not an active, tradable US equity in Alpaca.",
