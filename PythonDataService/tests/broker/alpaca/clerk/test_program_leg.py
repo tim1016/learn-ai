@@ -332,8 +332,8 @@ def test_an_extended_limit_is_anchored_to_the_traded_assets_bar_not_the_signals(
 def test_an_extended_leg_with_no_bar_of_the_traded_asset_is_refused_never_priced_from_the_signal() -> None:
     with pytest.raises(ProgramLegRefused) as refused:
         shape_program_leg(
-            side=OrderSide.SELL,
-            purpose=EffectPurpose.EXIT,
+            side=OrderSide.BUY,
+            purpose=EffectPurpose.ENTER,
             use_rth=False,
             decision_bar=_bar(18, 30),
             pricing_bar=None,

@@ -22,7 +22,7 @@ import pytest
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
-from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED
+from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, LIVE_ENVELOPE_UNOBSERVED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
@@ -86,14 +86,15 @@ class _EchoingTradePort(_FakeTradePort):
 
 
 async def _b_decides_enter(
-    account: _OneAccount, *, quantity: int, pricing_bar: RetainedSourceBar | None
+    account: _OneAccount, *, quantity: int, pricing_bar: RetainedSourceBar | None, with_decision_bar: bool = True
 ) -> EffectOperationReceipt:
     """Bot B, whose budget is $500, decides ENTER on SPY's $100 noon bar and trades QQQ."""
     decision_bar = _retained(SIGNAL, close="100")
     decision = _decision_of("b")
     return await account.clerk.execute_for_instance(
         strategy_instance_id="b", run_id="run-b", decision_id=decision, purpose=EffectPurpose.ENTER,
-        action_plan=_TRADES_QQQ, quantity=quantity, retained_source_bar=decision_bar, pricing_bar=pricing_bar,
+        action_plan=_TRADES_QQQ, quantity=quantity,
+        retained_source_bar=decision_bar if with_decision_bar else None, pricing_bar=pricing_bar,
         decision_evidence=EffectDecisionEvidence(
             evaluation_id=decision, bar_ref=decision_bar.bar_ref, symbol=SIGNAL, outcome="enter_intent",
             observed_at_ms=NOON, decision_bar_close_ms=NOON, decision_valid_until_ms=_ON_TIME_UNTIL_MS,
@@ -156,12 +157,21 @@ async def test_a_bar_of_another_asset_or_another_minute_never_prices_the_order(
     assert one_account.trade.submitted_legs == []
 
 
-async def test_a_bot_that_trades_what_it_listens_to_is_priced_by_its_own_decision_bar(
+async def test_a_price_offered_with_no_decision_bar_admits_nothing(
     one_account: _OneAccount,  # noqa: F811 -- the imported fixture
 ) -> None:
-    """No pricing bar is passed for an ordinary bot: five SPY at the bar's $100 fill its $500 budget."""
-    fits = await one_account.decides_enter(quantity=4)
-    assert fits.state is not EffectOperationState.REJECTED, fits.explanation
+    """With no decision bar nothing says which minute was decided, so no bar can be shown to be its price.
+
+    The QQQ bar here closed half an hour before the decision. Offered alone,
+    it must not turn the refusal a market ENTER gets with no bar at all into
+    an admitted entry at a stale price.
+    """
+    stale = _retained(TRADED, close="40", end_ms=NOON - 30 * MINUTE_MS)
+    receipt = await _b_decides_enter(one_account, quantity=10, pricing_bar=stale, with_decision_bar=False)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith(LIVE_ENVELOPE_UNOBSERVED), receipt.explanation
+    assert one_account.trade.submitted_legs == []
 
 
 # ── a broker-sent EXIT needs no price ───────────────────────────────────
@@ -231,6 +241,8 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
         update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
     )
     await facade.register_strategy_run(binding)
+    # A Resume registers the same bot again: it must still match its own registration.
+    await facade.register_strategy_run(binding)
 
     async def decide(purpose: EffectPurpose, decision_id: str, **bars: Any) -> EffectOperationReceipt:
         return await facade.execute_for_instance(
@@ -251,7 +263,10 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
         assert _fill_prices(repo, bought) == [40.10]
         assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
 
-        # No price is invented for a sell either: the position stays until QQQ has a bar.
+        # Interim (#2912): a synthesized sell with no QQQ bar is refused, so no
+        # price is invented and nothing crashes. The PRD's rule is that it
+        # fills at the newest retained QQQ price, carrying that price's age;
+        # that lands in a later slice and replaces these four lines.
         held = await decide(EffectPurpose.EXIT, "exit-0", retained_source_bar=spy_at_exit)
         assert held.state is EffectOperationState.REJECTED
         assert held.explanation.startswith("PRICING_BAR_UNAVAILABLE"), held.explanation

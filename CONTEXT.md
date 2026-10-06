@@ -569,12 +569,13 @@ so they survive a broker change.
   Inside the regular session a program leg stays a market order. _Avoid_:
   slippage limit, aggressive limit, extended-hours price
 - **Pricing bar** — the traded instrument's one-minute bar whose close time
-  equals the decision bar's close time. Every price an order uses is read from
+  equals the decision bar's close time. A program order's prices are read from
   it: the cash check at an ENTER, the marketable limit anchor, and a fill a Dry
-  Run or a Live Shadow synthesizes. For a bot that trades the symbol it listens
-  to, it is the decision bar itself. A bar of any other asset or any other
-  minute never stands in for it. _Avoid_: reference bar, signal price,
-  carried-over price
+  Run or a Live Shadow synthesizes for that decision. For a bot that trades the
+  symbol it listens to, it is the decision bar itself. A bar of any other asset
+  or any other minute never stands in for it. Orders no decision prices — a
+  recovery reduction, a flatten, a run-end close — read the live quote or the
+  last bar instead. _Avoid_: reference bar, signal price, carried-over price
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it
   (pre-market, regular, after-hours). The window is broker capability data;

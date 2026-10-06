@@ -1,10 +1,12 @@
-"""Shape one program leg from the decision bar, the session, and the operator's allowances (ADR 0059 D5.3).
+"""Shape one program leg from its decision and pricing bars, the session, and the operator's allowances (ADR 0059 D5.3).
 
 Inside the regular session a program leg is a market DAY order, exactly as
 before this slice. Outside it — in the broker's declared PRE or POST window,
 after-hours ending at the calendar's scheduled close on an early-close day —
 the leg is a marketable DAY limit flagged for extended hours, anchored to the
-decision bar's close and widened by the policy's allowance. For an
+pricing bar's close and widened by the policy's allowance. The pricing bar is
+the traded instrument's own bar for the decision's minute: the decision bar
+itself for a bot that trades the symbol it listens to (#2912). For an
 extended-hours run anything else (closed, no anchor, no window, no allowance)
 is a typed refusal the Clerk turns into a rejected receipt; a program leg is
 never guessed.
@@ -395,7 +397,7 @@ EXTENDED_ANCHOR_UNAVAILABLE = LegRefusal(
 EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
     reason_code="EXTENDED_ANCHOR_UNPRICEABLE",
     explanation=(
-        "The decision bar's close and the configured allowance price this leg at or "
+        "The pricing bar's close and the configured allowance price this leg at or "
         "below zero, which is not a submittable limit."
     ),
     next_step=(
@@ -426,7 +428,6 @@ PRICING_BAR_MISMATCH = LegRefusal(
     ),
     next_step="No order was sent. A price is never carried over from another minute or another asset.",
 )
-
 
 
 def session_closed_at_decision(phase: str) -> LegRefusal:

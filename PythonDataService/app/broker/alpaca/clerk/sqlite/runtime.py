@@ -270,7 +270,7 @@ def _entry_wait_ending(outcome: EntryReadingOutcome, *, run_active: bool) -> str
     return None if outcome == "covered" else outcome
 
 
-class _DecisionBarBoundTradePort:
+class _PricingBarBoundTradePort:
     """Bind each synthetic Clerk order to the one immutable retained bar that prices it."""
 
     def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar) -> None:
@@ -1233,34 +1233,33 @@ class SqliteAlpacaClerkFacade:
                     next_step="Replay or ingest the decision bar, then retry through the sealed program.",
                 )
             entry = _entry_leg(action_plan)
-            priced_by, unpriced = _order_pricing_bar(
-                entry.instrument.underlying, decision_bar=retained_source_bar, pricing_bar=pricing_bar
+            priced_by = _order_pricing_bar(
+                entry.instrument.underlying,
+                purpose=purpose,
+                synthesized=self.binds_decision_bar,
+                decision_bar=retained_source_bar,
+                pricing_bar=pricing_bar,
             )
-            if unpriced is not None:
+            if isinstance(priced_by, LegRefusal):
                 logger.warning(
-                    "an effect carries no bar of its traded instrument for the decision's minute",
+                    "an effect was refused: no bar of its traded instrument prices it",
                     extra={
                         "action": "effect_pricing_bar_refused",
                         "account_id": self._repo.account_id,
                         "strategy_instance_id": strategy_instance_id,
                         "decision_id": decision_id,
                         "purpose": purpose.value,
-                        "reason_code": unpriced.reason_code,
+                        "reason_code": priced_by.reason_code,
                         "traded_symbol": entry.instrument.underlying,
                         "decision_bar_symbol": None if retained_source_bar is None else retained_source_bar.symbol,
                         "pricing_bar_symbol": None if pricing_bar is None else pricing_bar.symbol,
                     },
                 )
-                # An ENTER is never priced from another asset or another minute.
-                # A synthesized fill of either purpose is that bar's close, so
-                # without it there is nothing to fill at. A broker-sent EXIT
-                # goes on: a regular-session market leg needs no price.
-                if purpose is EffectPurpose.ENTER or self.binds_decision_bar:
-                    return rejected(
-                        reason_code=unpriced.reason_code,
-                        explanation=unpriced.explanation,
-                        next_step=unpriced.next_step,
-                    )
+                return rejected(
+                    reason_code=priced_by.reason_code,
+                    explanation=priced_by.explanation,
+                    next_step=priced_by.next_step,
+                )
             durable_decision_id = _durable_decision_id(decision_id)
             atomic_receipt = (
                 None
@@ -1490,7 +1489,7 @@ class SqliteAlpacaClerkFacade:
         trade: BrokerTradePort
         if self.binds_decision_bar:
             assert priced_by is not None
-            trade = _DecisionBarBoundTradePort(self._trade, priced_by)
+            trade = _PricingBarBoundTradePort(self._trade, priced_by)
         else:
             trade = self._trade
 
@@ -2030,10 +2029,12 @@ def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:
 def _order_pricing_bar(
     traded_symbol: str,
     *,
+    purpose: EffectPurpose,
+    synthesized: bool,
     decision_bar: RetainedSourceBar | None,
     pricing_bar: RetainedSourceBar | None,
-) -> tuple[RetainedSourceBar | None, LegRefusal | None]:
-    """The one bar every price of this effect's order is read from, or why there is none (#2912).
+) -> RetainedSourceBar | LegRefusal | None:
+    """The one bar this effect's program order is priced from, or why it has none (#2912).
 
     The cash reservation, an extended-session limit's anchor and a synthesized
     fill all read this bar, so no caller prices an order from the Signal
@@ -2044,21 +2045,30 @@ def _order_pricing_bar(
     decision bar of the traded instrument is its own pricing bar, which is
     every bot that trades the symbol it listens to.
 
-    With no bar from either stream there is no refusal here: that case keeps
-    the refusals it always had (a synthesized authority's unproven source bar,
-    a market ENTER with nothing to bound it against cash).
+    ``None`` means the order goes on with no pricing bar:
+
+    - With no decision bar nothing says when the decision closed, so no bar
+      can be shown to close with it and none is accepted. That case keeps the
+      refusals it always had (a synthesized authority's unproven source bar,
+      a market ENTER with nothing to bound it against cash).
+    - A broker-sent EXIT is not held for a price: a regular-session market
+      leg needs none.
+
+    An ENTER is never priced from another asset or another minute, and a
+    synthesized fill of either purpose is the pricing bar's close, so those
+    are refused when the bar is missing or is not the order's own.
     """
+    if decision_bar is None:
+        return None
     if pricing_bar is None:
-        if decision_bar is None:
-            return None, None
         if _same_symbol(decision_bar.symbol, traded_symbol):
-            return decision_bar, None
-        return None, PRICING_BAR_UNAVAILABLE
-    if not _same_symbol(pricing_bar.symbol, traded_symbol):
-        return None, PRICING_BAR_MISMATCH
-    if decision_bar is not None and pricing_bar.end_ms != decision_bar.end_ms:
-        return None, PRICING_BAR_MISMATCH
-    return pricing_bar, None
+            return decision_bar
+        unpriced = PRICING_BAR_UNAVAILABLE
+    elif _same_symbol(pricing_bar.symbol, traded_symbol) and pricing_bar.end_ms == decision_bar.end_ms:
+        return pricing_bar
+    else:
+        unpriced = PRICING_BAR_MISMATCH
+    return unpriced if purpose is EffectPurpose.ENTER or synthesized else None
 
 
 def _same_symbol(left: str, right: str) -> bool:
