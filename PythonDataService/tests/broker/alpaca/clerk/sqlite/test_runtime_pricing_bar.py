@@ -211,6 +211,25 @@ async def test_a_broker_sent_exit_goes_out_with_no_bar_of_the_traded_asset(tmp_p
         repo.close()
 
 
+async def test_a_bot_that_trades_another_asset_can_be_started_again(tmp_path: Path) -> None:
+    """A Resume registers the same bot again, and it must still match its own registration.
+
+    The Clerk registers a bot under the symbol it trades. Comparing the next
+    registration against the symbol it listens to would refuse every Resume.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode="paper")
+    binding = _binding(use_rth=True).model_copy(update={"action_plan": _TRADES_QQQ})
+    try:
+        await facade.register_strategy_run(binding)
+        await facade.register_strategy_run(binding)
+
+        registered = repo.strategy_instance(binding.strategy_instance_id)
+        assert registered is not None and registered["symbol"] == TRADED
+    finally:
+        repo.close()
+
+
 # ── the fill a Live Shadow synthesizes ──────────────────────────────────
 
 _SHADOW_ACCOUNT = "shadow:9LIVE0001"
@@ -240,8 +259,6 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
     binding = _binding(use_rth=True).model_copy(
         update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
     )
-    await facade.register_strategy_run(binding)
-    # A Resume registers the same bot again: it must still match its own registration.
     await facade.register_strategy_run(binding)
 
     async def decide(purpose: EffectPurpose, decision_id: str, **bars: Any) -> EffectOperationReceipt:

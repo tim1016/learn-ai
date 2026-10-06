@@ -329,11 +329,23 @@ def test_an_extended_limit_is_anchored_to_the_traded_assets_bar_not_the_signals(
     assert program_leg.shape.limit_price == 40.04
 
 
-def test_an_extended_leg_with_no_bar_of_the_traded_asset_is_refused_never_priced_from_the_signal() -> None:
+@pytest.mark.parametrize(
+    ("side", "purpose"),
+    [
+        pytest.param(OrderSide.BUY, EffectPurpose.ENTER, id="enter"),
+        # Interim (#2912): an EXIT is never to be refused for want of a price,
+        # and no source for an extended-session one is decided yet. What must
+        # hold meanwhile is the other half: it is not anchored to the signal.
+        pytest.param(OrderSide.SELL, EffectPurpose.EXIT, id="exit-interim"),
+    ],
+)
+def test_an_extended_leg_with_no_bar_of_the_traded_asset_is_refused_never_priced_from_the_signal(
+    side: OrderSide, purpose: EffectPurpose
+) -> None:
     with pytest.raises(ProgramLegRefused) as refused:
         shape_program_leg(
-            side=OrderSide.BUY,
-            purpose=EffectPurpose.ENTER,
+            side=side,
+            purpose=purpose,
             use_rth=False,
             decision_bar=_bar(18, 30),
             pricing_bar=None,

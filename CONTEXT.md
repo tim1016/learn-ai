@@ -573,7 +573,7 @@ so they survive a broker change.
   it: the cash check at an ENTER, the marketable limit anchor, and a fill a Dry
   Run or a Live Shadow synthesizes for that decision. For a bot that trades the
   symbol it listens to, it is the decision bar itself. A bar of any other asset
-  or any other minute never stands in for it. Orders no decision prices — a
+  or any other minute never stands in for it. Orders that no decision prices — a
   recovery reduction, a flatten, a run-end close — read the live quote or the
   last bar instead. _Avoid_: reference bar, signal price, carried-over price
 - **Decision session** — the phases a sealed instance decides in: the

@@ -1260,6 +1260,24 @@ class SqliteAlpacaClerkFacade:
                     explanation=priced_by.explanation,
                     next_step=priced_by.next_step,
                 )
+            if pricing_bar is not None and priced_by is not pricing_bar:
+                # The order goes on without it (no decision bar to close with,
+                # or a broker-sent EXIT that needs no price), but a bar the
+                # caller offered and the Clerk would not use is a caller fault.
+                logger.warning(
+                    "a pricing bar offered for an effect was not used",
+                    extra={
+                        "action": "effect_pricing_bar_ignored",
+                        "account_id": self._repo.account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                        "decision_id": decision_id,
+                        "purpose": purpose.value,
+                        "traded_symbol": entry.instrument.underlying,
+                        "decision_bar_end_ms": None if retained_source_bar is None else retained_source_bar.end_ms,
+                        "pricing_bar_symbol": pricing_bar.symbol,
+                        "pricing_bar_end_ms": pricing_bar.end_ms,
+                    },
+                )
             durable_decision_id = _durable_decision_id(decision_id)
             atomic_receipt = (
                 None
@@ -2045,14 +2063,14 @@ def _order_pricing_bar(
     decision bar of the traded instrument is its own pricing bar, which is
     every bot that trades the symbol it listens to.
 
-    ``None`` means the order goes on with no pricing bar:
+    ``None`` means the order is shaped with no pricing bar:
 
     - With no decision bar nothing says when the decision closed, so no bar
       can be shown to close with it and none is accepted. That case keeps the
       refusals it always had (a synthesized authority's unproven source bar,
       a market ENTER with nothing to bound it against cash).
-    - A broker-sent EXIT is not held for a price: a regular-session market
-      leg needs none.
+    - A broker-sent EXIT is not refused here: a regular-session market leg
+      needs no price. An extended-session leg does, and its shaper refuses it.
 
     An ENTER is never priced from another asset or another minute, and a
     synthesized fill of either purpose is the pricing bar's close, so those

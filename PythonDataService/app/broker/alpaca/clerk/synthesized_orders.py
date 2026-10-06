@@ -221,10 +221,10 @@ class SynthesizedOrderLedger:
     def path(self) -> Path:
         return self._orders.path
 
-    # ── decision-bar binding ────────────────────────────────────────────
+    # ── pricing-bar binding ─────────────────────────────────────────────
 
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
-        """Bind one minted Clerk order identity to one exact retained decision bar.
+        """Bind one minted Clerk order identity to the one exact retained bar that prices it.
 
         The binding is consumed by that exact ``client_order_id`` on submit.
         Rebinding the same id deterministically replaces an unconsumed binding,
