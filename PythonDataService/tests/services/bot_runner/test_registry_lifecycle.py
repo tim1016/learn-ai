@@ -515,6 +515,22 @@ async def test_the_runner_starts_no_bot_the_acknowledgement_rule_refuses(
 
 
 @pytest.mark.asyncio
+async def test_a_preview_asks_for_no_acknowledgement(tmp_path: Path) -> None:
+    """#2912: the owner accepts last, so the rule is held at execution only. A preview of the same bot answers."""
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    decision = await registry.preview_start_admission(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY",
+        traded_symbol="QQQ", mode="trade",
+    )
+
+    assert decision.operation == "START"
+    assert decision.reason_code not in {
+        "TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED", "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE",
+    }
+
+
+@pytest.mark.asyncio
 async def test_the_admission_preview_judges_the_bot_the_deploy_would_bind(tmp_path: Path) -> None:
     """#2912: a preview of SPY-trades-QQQ is no preview of SPY-trades-SPY; naming SPY itself is naming nothing."""
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))

@@ -485,7 +485,7 @@ async def deploy_alpaca_paper_bot(
         # earlier bot may have started.
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
             view, resolved_params = await _deploy_preflight(broker, account_id, request)
-            _require_untested_asset_acceptance(request)
+            _require_traded_asset_acknowledgement(request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
@@ -812,10 +812,14 @@ def _untested_traded_asset_warning(request: AlpacaPaperDeployRequest) -> Unteste
     """
     if request.traded_symbol is None:
         return None
+    # Whether the owner is asked to accept is the acknowledgement rule's own
+    # answer for these settings with none given, so the sentence to tick and
+    # the refusal at Deploy can never disagree.
+    unacknowledged = request.model_copy(update={"traded_asset_acknowledgement": None})
     return UntestedTradedAssetWarning.for_symbols(
         request.symbol,
         request.traded_symbol,
-        acceptance_required=request.execution_mode != "dry_run",
+        acceptance_required=_acknowledgement_fault(unacknowledged) == "required",
     )
 
 
@@ -851,7 +855,7 @@ def _refuse_an_acknowledgement_no_one_asked_for(request: AlpacaPaperDeployReques
     )
 
 
-def _require_untested_asset_acceptance(request: AlpacaPaperDeployRequest) -> None:
+def _require_traded_asset_acknowledgement(request: AlpacaPaperDeployRequest) -> None:
     """A Paper, Live Shadow or Live bot that trades something else needs the owner's written acknowledgement (#2912).
 
     Asked at Deploy only. The owner accepts last, above the Deploy button,
@@ -861,10 +865,10 @@ def _require_untested_asset_acceptance(request: AlpacaPaperDeployRequest) -> Non
     """
     if _acknowledgement_fault(request) != "required":
         return
-    warning = _untested_traded_asset_warning(request)
+    warning = UntestedTradedAssetWarning.for_symbols(request.symbol, request.order_symbol, acceptance_required=True)
     raise PanelRunnerError(
         f"Accept that this strategy is untested trading {request.order_symbol} before deploying.",
-        detail="" if warning is None else f"{warning.headline} {warning.detail}",
+        detail=f"{warning.headline} {warning.detail}",
         next_action="Tick the acknowledgement and give your reason, or deploy it as a Dry Run.",
         http_status=409,
         reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED,

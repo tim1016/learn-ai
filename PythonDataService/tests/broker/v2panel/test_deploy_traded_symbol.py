@@ -181,7 +181,8 @@ async def test_a_bot_that_trades_another_asset_is_refused_until_the_owner_accept
     assert response.status_code == 409, response.text
     refusal = response.json()["detail"]
     assert refusal["reason_code"] == _REQUIRED
-    assert "SPY" in response.text and "QQQ" in response.text, "it names what was tested and what was not"
+    assert "QQQ" in refusal["message"] and "SPY" not in refusal["message"], "the untested asset is the traded one"
+    assert "SPY" in response.text, "and it says what the strategy was tested trading"
     assert refusal["submission_settled"] is True
     assert registry.deploy_calls == []
 
@@ -287,13 +288,17 @@ def test_a_key_resent_with_another_reason_is_another_deploy() -> None:
 
 
 @pytest.mark.parametrize(
-    ("execution_mode", "asks_the_owner_to_accept"), [("paper", True), ("dry_run", False)],
+    ("execution_mode", "view_of", "asks_the_owner_to_accept"),
+    [("paper", None, True), ("shadow", _shadow_view, True), ("live", _live_view, True), ("dry_run", None, False)],
+    ids=["paper", "live-shadow", "live", "dry-run"],
 )
 async def test_the_review_carries_the_warning_and_asks_only_a_broker_bot_to_accept_it(
-    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch, execution_mode: str, asks_the_owner_to_accept: bool
+    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch,
+    execution_mode: str, view_of: Callable | None, asks_the_owner_to_accept: bool,
 ) -> None:
     """The review is read before the owner accepts, so it is never refused for want of the acceptance."""
     app, _registry = deploy_app
+    _serve(monkeypatch, view_of)
     money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
@@ -306,9 +311,13 @@ async def test_the_review_carries_the_warning_and_asks_only_a_broker_bot_to_acce
 
     assert response.status_code == 200, response.text
     warning = response.json()["traded_asset_warning"]
-    assert "SPY" in warning["headline"] and "QQQ" in warning["headline"], "it names both symbols"
+    tested, untested = warning["headline"].index("SPY"), warning["headline"].index("QQQ")
+    assert tested < untested, "tested trading what it listens to, untested trading what it trades"
     assert "inverse or leveraged" in warning["detail"], "it says what a ticker cannot tell"
-    assert (warning["acceptance_label"] is not None) is asks_the_owner_to_accept
+    assert "profitable" in warning["detail"], "and that nothing here is evidence of profit"
+    label = warning["acceptance_label"]
+    assert (label is not None) is asks_the_owner_to_accept
+    assert label is None or ("QQQ" in label and "SPY" not in label), "what the owner accepts is the traded asset"
     assert own_symbol.json()["traded_asset_warning"] is None
 
 
