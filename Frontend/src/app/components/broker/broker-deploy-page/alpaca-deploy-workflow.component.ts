@@ -205,6 +205,31 @@ function ticketOf(settings: DeployTicketSettings): AlpacaDeployTicket {
   return { ...settings, overrideAcknowledged: false, overrideReason: '', tradedAcknowledged: false, tradedReason: '' };
 }
 
+/** The ticket on another strategy, at that strategy's validation case. Both
+ * acknowledgements were given for the strategy the owner was looking at, so
+ * neither carries over. */
+function onStrategy(ticket: AlpacaDeployTicket, strategy: DeployBotStrategy): AlpacaDeployTicket {
+  return ticketOf({
+    ...settingsOf(ticket),
+    strategyKey: strategy.strategy_key,
+    parameters: { ...strategy.validation_case_parameters },
+  });
+}
+
+/** The ticket listening to another symbol. What the owner accepted about the
+ * traded asset was said of the old pair, so it is asked again; and a traded
+ * pick the signal has caught up with is no longer a pick. */
+function listeningTo(ticket: AlpacaDeployTicket, symbol: string): AlpacaDeployTicket {
+  if (ticket.symbol === symbol) return ticket;
+  return {
+    ...ticket,
+    symbol,
+    tradedSymbol: ticket.tradedSymbol === symbol ? null : ticket.tradedSymbol,
+    tradedAcknowledged: false,
+    tradedReason: '',
+  };
+}
+
 type ExitTermSettings = Pick<DeployTicketSettings, 'exitAllowanceBps' | 'bandMultiple' | 'spreadCapBps'>;
 
 /** Exit terms as the form holds them; none leaves them for the view's
@@ -1341,13 +1366,8 @@ export class AlpacaDeployWorkflowComponent {
         // evidence-only acknowledgement must never carry into the new one.
         this.clearAdmission();
         this.overrideReasonTouched.set(false);
-        this.ticket.update((ticket) => ({
-          ...ticket,
-          strategyKey,
-          parameters: { ...strategy.validation_case_parameters },
-          overrideAcknowledged: false,
-          overrideReason: '',
-        }));
+        this.tradedReasonTouched.set(false);
+        this.ticket.update((ticket) => onStrategy(ticket, strategy));
       } else if (scopeChanged && priorParametersRemainIntact) {
         this.ticket.update((ticket) => ({
           ...ticket,
@@ -1630,16 +1650,11 @@ export class AlpacaDeployWorkflowComponent {
     const symbol = current.symbol && current.symbol !== previous?.validation_case_symbol
       ? current.symbol
       : strategy.validation_case_symbol;
-    this.ticket.update((ticket) => ({
-      ...ticket,
-      strategyKey: strategy.strategy_key,
-      parameters: { ...strategy.validation_case_parameters },
-      overrideAcknowledged: false,
-      overrideReason: '',
-    }));
+    this.ticket.update((ticket) => onStrategy(ticket, strategy));
     this.lastValidationScope = validationScopeSeed(strategy);
     this.applySymbol(symbol);
     this.overrideReasonTouched.set(false);
+    this.tradedReasonTouched.set(false);
   }
 
   /** The owner picked what the bot trades, or went back to the symbol it
@@ -1695,8 +1710,8 @@ export class AlpacaDeployWorkflowComponent {
       && this.invalidParameterFields().size === 0) return;
     this.clearAdmission();
     this.invalidParameterFields.set(new Set());
-    this.ticket.update(ticket => ({ ...ticket, symbol: configuration.symbol, parameters: { ...configuration.parameters } }));
-    this.scheduleSymbolScope(configuration.symbol);
+    this.ticket.update(ticket => ({ ...ticket, parameters: { ...configuration.parameters } }));
+    this.applySymbol(configuration.symbol);
   }
 
   protected setInvalidParameterFields(fields: ReadonlySet<string>): void {
@@ -1725,9 +1740,12 @@ export class AlpacaDeployWorkflowComponent {
    * re-seeds.
    */
   private applySymbol(symbol: string): void {
-    this.ticket.update((current) =>
-      current.symbol === symbol ? current : { ...current, symbol },
-    );
+    const current = untracked(this.ticket);
+    const moved = listeningTo(current, symbol);
+    if (moved !== current) {
+      this.tradedReasonTouched.set(false);
+      this.ticket.set(moved);
+    }
     this.scheduleSymbolScope(symbol);
   }
 

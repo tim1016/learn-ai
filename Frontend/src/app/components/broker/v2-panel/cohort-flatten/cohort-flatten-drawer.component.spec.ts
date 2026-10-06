@@ -284,6 +284,40 @@ describe('CohortFlattenDrawerComponent', () => {
     expect(service.runCohortFlatten).not.toHaveBeenCalled();
   });
 
+  it('names in the confirmation the asset the bots hold, not the symbol their cohort listens to (#2912)', async () => {
+    // Two bots listening to SPY that both trade QQQ.
+    const listeners = cohort(
+      [leg(), leg({ strategy_instance_id: 'qqq-2', concurrency_token: 'tok-2', exposure: { QQQ: -4 } })],
+      { symbol: 'SPY' },
+    );
+    await open(fakeService([listeners]));
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await user.click(screen.getByRole('button', { name: 'Review flatten of 2' }));
+    const dialog = await screen.findByRole('dialog');
+
+    expect(within(dialog).getByTitle('QQQ')).toBeTruthy();
+    expect(within(dialog).queryByTitle('SPY')).toBeNull();
+  });
+
+  it('names no single asset in the confirmation when the bots hold different ones (#2912)', async () => {
+    const mixed = cohort(
+      [leg(), leg({ strategy_instance_id: 'iwm-1', concurrency_token: 'tok-2', exposure: { IWM: 3 } })],
+      { symbol: 'SPY' },
+    );
+    await open(fakeService([mixed]));
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await user.click(screen.getByRole('button', { name: 'Review flatten of 2' }));
+    const dialog = await screen.findByRole('dialog');
+
+    expect(dialog.querySelector('app-asset-identity')).toBeNull();
+    expect(dialog.textContent).toContain('qqq-1 +10 QQQ');
+    expect(dialog.textContent).toContain('iwm-1 +3 IWM');
+  });
+
   it('returns focus to the review control when the confirmation is cancelled', async () => {
     const service = fakeService([QQQ_COHORT]);
     await open(service);

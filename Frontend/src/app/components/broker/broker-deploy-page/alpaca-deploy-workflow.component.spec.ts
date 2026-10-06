@@ -2335,6 +2335,29 @@ describe('AlpacaDeployWorkflowComponent — a traded asset the strategy was neve
     return service.deployBudgetBot.mock.calls[0][1] as DeploySubmissionBody;
   }
 
+  /** Pick what the bot listens to, in the What step's first picker. */
+  function listenTo(fixture: ComponentFixture<unknown>, symbol: string): void {
+    const pickers = fixture.debugElement.queryAll(By.directive(SymbolPickerComponent));
+    (pickers[0].componentInstance as SymbolPickerComponent).symbol.set(symbol);
+    fixture.detectChanges();
+  }
+
+  /** Tick the acceptance and give the reason, at Confirm. */
+  async function acceptAtConfirm(): Promise<void> {
+    const confirm = stepRegion('Confirm');
+    fireEvent.click(within(confirm).getByRole('checkbox', { name: /untested trading QQQ/ }));
+    fireEvent.input(within(confirm).getByRole('textbox', { name: 'Your reason' }), { target: { value: REASON } });
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+  }
+
+  function acceptance(): { ticked: boolean; reason: string } {
+    const confirm = stepRegion('Confirm');
+    return {
+      ticked: within(confirm).getByRole<HTMLInputElement>('checkbox', { name: /untested trading QQQ/ }).checked,
+      reason: within(confirm).getByRole<HTMLTextAreaElement>('textbox', { name: 'Your reason' }).value,
+    };
+  }
+
   it('trades the symbol it listens to unless the owner opens the line and picks something else', async () => {
     const service = mockService();
     await renderWorkflow(service);
@@ -2445,5 +2468,47 @@ describe('AlpacaDeployWorkflowComponent — a traded asset the strategy was neve
     await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
     expect(sentBody(service).traded_symbol).toBeUndefined();
     expect(sentBody(service).traded_asset_acknowledgement).toBeUndefined();
+  });
+
+  it('asks the owner to accept again once the bot listens to another symbol', async () => {
+    const { fixture } = await renderWorkflow();
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+    await acceptAtConfirm();
+
+    await openStep('What');
+    listenTo(fixture, 'IWM');
+    await chooseMoney('1200.00');
+
+    await within(stepRegion('Confirm')).findByText('Tested trading IWM. Untested trading QQQ.');
+    expect(acceptance()).toEqual({ ticked: false, reason: '' });
+  });
+
+  it('asks the owner to accept again once the bot runs another strategy', async () => {
+    const { fixture } = await renderWorkflow();
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+    await acceptAtConfirm();
+
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
+    await chooseMoney('1200.00');
+
+    expect(acceptance()).toEqual({ ticked: false, reason: '' });
+  });
+
+  it('drops a traded pick once the bot listens to that same symbol, so a later signal does not bring it back', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture);
+
+    listenTo(fixture, 'QQQ');
+    expect(within(stepRegion('What')).getByRole<HTMLInputElement>('radio', { name: 'Same as signal' }).checked).toBe(true);
+    listenTo(fixture, 'IWM');
+    await chooseMoney();
+
+    expect(service.previewBudget.mock.calls.at(-1)?.[1]).toMatchObject({ symbol: 'IWM' });
+    expect(service.previewBudget.mock.calls.at(-1)?.[1].traded_symbol).toBeUndefined();
+    expect(screen.queryByText('Untested traded asset')).toBeNull();
   });
 });

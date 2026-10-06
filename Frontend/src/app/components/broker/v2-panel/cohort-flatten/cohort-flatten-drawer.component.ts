@@ -65,14 +65,26 @@ function defaultSelection(armed: readonly ArmedFlattenLeg[]): ReadonlySet<string
 }
 
 /**
+ * The one asset the legs hold between them; `null` when they hold several, or
+ * none. A cohort is bots listening to one symbol and each may trade another
+ * (#2912), so the cohort's symbol does not say what a flatten reduces: only
+ * each leg's attributed exposure does.
+ */
+function heldAsset(legs: readonly CohortFlattenLeg[]): string | null {
+  const held = new Set(legs.flatMap((leg) => Object.keys(leg.exposure)));
+  const [only] = held;
+  return held.size === 1 ? only : null;
+}
+
+/**
  * Everything the confirmation shows, frozen when the operator asked to
- * review — its legs and symbol — so nothing a later
+ * review — its legs and the asset they hold — so nothing a later
  * read or directory refresh does can change or silently drop what they
  * confirm.
  */
 interface PendingWave {
   readonly legs: readonly ArmedFlattenLeg[];
-  readonly symbol: string;
+  readonly heldAsset: string | null;
   readonly heading: string;
   readonly message: string;
   readonly confirmLabel: string;
@@ -304,7 +316,7 @@ export class CohortFlattenDrawerComponent {
     const legs = this.selectedLegs();
     this.pending.set({
       legs,
-      symbol: cohort.symbol,
+      heldAsset: heldAsset(legs),
       heading: COHORT_FLATTEN_COPY.confirmHeading(legs.length),
       message: COHORT_FLATTEN_COPY.confirmMessage(this.accountId(), cohort.strategy_label, legs),
       confirmLabel: COHORT_FLATTEN_COPY.confirmLabel(legs.length),
