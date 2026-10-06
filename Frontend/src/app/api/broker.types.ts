@@ -9343,6 +9343,8 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /** Symbol */
+            symbol?: string | null;
         };
         /** ChartGapDetail */
         ChartGapDetail: {

@@ -1080,6 +1080,9 @@ class ChartFillMarker(BaseModel):
     side: Literal["buy", "sell"]
     quantity: float
     price: float
+    # The asset the fill was in (#2912): what the bot trades, which is not
+    # always what its chart draws. ``None`` only on a marker built without one.
+    symbol: str | None = None
     order_ref: str
     # Stable per-fill identity (mirrors FillRecord.event_key) — distinct
     # from order_ref, which is shared by every partial fill of one order.

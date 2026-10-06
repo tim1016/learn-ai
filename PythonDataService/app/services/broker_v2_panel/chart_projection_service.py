@@ -186,6 +186,7 @@ def fill_to_marker(fill: FillRecord) -> ChartFillMarker:
         side=side,
         quantity=fill.quantity,
         price=fill.fill_price,
+        symbol=fill.symbol,
         order_ref=fill.order_ref,
         event_key=fill.event_key,
     )
@@ -196,11 +197,21 @@ def markers_in_window(
     *,
     from_ms: int,
     to_ms: int,
+    charted_symbol: str,
 ) -> list[ChartFillMarker]:
+    """The window's fills as markers for a chart of ``charted_symbol``.
+
+    A marker is drawn at its fill's price, so only a fill in the charted
+    asset belongs on its candles. A bot that listens to one symbol and trades
+    another has fills in the traded asset, and those are left off the chart
+    of the symbol it listens to rather than drawn at another asset's price
+    (#2912). The bot's own fills list shows every fill with its asset.
+    """
+    charted = charted_symbol.upper()
     return [
         fill_to_marker(fill)
         for fill in sorted(fills, key=lambda fill: (fill.filled_at_ms, fill.event_key))
-        if from_ms <= fill.filled_at_ms < to_ms
+        if from_ms <= fill.filled_at_ms < to_ms and fill.symbol.upper() == charted
     ]
 
 
@@ -332,7 +343,7 @@ def build_live_chart(
     open_ms, close_ms = window
 
     bars = aggregator_bars_to_chart_bars(chart_window.bars)
-    markers = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
+    markers = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms, charted_symbol=symbol)
     notices = [notice_view(notice) for notice in chart_window.overlay_notices]
     return ChartLiveResponse(
         strategy_instance_id=strategy_instance_id,
@@ -451,7 +462,7 @@ async def build_run_window_chart(
         indicator_bars=bars,
         indicator_bar_budget=0,
         indicator_bar_budget_satisfied=True,
-        fill_markers=markers_in_window(fills, from_ms=from_ms, to_ms=to_ms),
+        fill_markers=markers_in_window(fills, from_ms=from_ms, to_ms=to_ms, charted_symbol=symbol),
         truncated=needed > required or not reached_start,
         overlay_notices=list(batch.overlay_notices),
         as_of_ms=now_ms,
@@ -514,7 +525,7 @@ async def build_history_chart(
     indicator_bars = polygon_bars[-plan.indicator_bars :]
     bars = indicator_bars[-plan.display_bars :]
     display_from_ms = bars[0].start_ms if bars else plan.display_from_ms
-    markers = markers_in_window(fills, from_ms=display_from_ms, to_ms=plan.to_ms)
+    markers = markers_in_window(fills, from_ms=display_from_ms, to_ms=plan.to_ms, charted_symbol=symbol)
     return ChartHistoryResponse(
         strategy_instance_id=strategy_instance_id,
         symbol=symbol,
