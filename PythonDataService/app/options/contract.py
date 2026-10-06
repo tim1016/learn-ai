@@ -29,12 +29,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, option_expiry_anchor_ms, option_expiry_date
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, OptionExpiryMs, option_expiry_anchor_ms, option_expiry_date
 
 OptionRight = Literal["call", "put"]
 
 _ROOT_PATTERN = r"^[A-Z]{1,6}$"
-_OCC_SYMBOL = re.compile(r"^(?P<root>[A-Z]{1,6})(?P<yymmdd>\d{6})(?P<right>[CP])(?P<strike>\d{8})$")
+_OCC_SYMBOL = re.compile(r"^(?P<root>[A-Z]{1,6})(?P<yymmdd>[0-9]{6})(?P<right>[CP])(?P<strike>[0-9]{8})$")
 _RIGHT_LETTER: dict[OptionRight, str] = {"call": "C", "put": "P"}
 _RIGHT_OF_LETTER: dict[str, OptionRight] = {letter: right for right, letter in _RIGHT_LETTER.items()}
 
@@ -43,6 +43,9 @@ _FIRST_SYMBOL_YEAR = 2000
 _LAST_SYMBOL_YEAR = 2099
 _MAX_STRIKE_THOUSANDTHS = 99_999_999
 _THOUSANDTHS_PER_DOLLAR = 1000
+# How large and how fine a number is read at all before it is judged as a strike.
+_MAX_STRIKE_DIGITS = 12
+_MAX_STRIKE_DECIMALS = 40
 
 
 def strike_thousandths(strike: Decimal | int | float | str) -> int:
@@ -60,6 +63,9 @@ def strike_thousandths(strike: Decimal | int | float | str) -> int:
         raise ValueError(f"a strike must be a number of dollars, got {strike!r}") from exc
     if not dollars.is_finite():
         raise ValueError(f"a strike must be a finite number of dollars, got {strike!r}")
+    # Bounded before the exact ratio below, which writes out every digit an exponent implies.
+    if dollars.adjusted() > _MAX_STRIKE_DIGITS or dollars.as_tuple().exponent < -_MAX_STRIKE_DECIMALS:
+        raise ValueError(f"a strike is an everyday number of dollars, got {strike!r}")
     # The exact ratio, so no decimal context rounds a too-fine strike into an acceptable one.
     numerator, denominator = dollars.as_integer_ratio()
     thousandths, remainder = divmod(numerator * _THOUSANDTHS_PER_DOLLAR, denominator)
@@ -71,12 +77,13 @@ def strike_thousandths(strike: Decimal | int | float | str) -> int:
 class OptionContract(BaseModel):
     """One listed option contract: what an order names and a position holds."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    # Strict: an identity is not coerced into being. ``True`` is not a strike of a thousandth.
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     # The OCC root: the stock's ticker as the symbol writes it, letters only.
     root: Annotated[str, Field(pattern=_ROOT_PATTERN)]
-    # The expiry date's 16:00 New York anchor (ADR 0022 (a)).
-    expiry_ms: Annotated[int, Field(gt=0, le=MAX_TIMESTAMP_MS)]
+    # The expiry date's 16:00 New York anchor (ADR 0022 (i)).
+    expiry_ms: Annotated[OptionExpiryMs, Field(gt=0, le=MAX_TIMESTAMP_MS)]
     right: OptionRight
     strike_thousandths: Annotated[int, Field(gt=0, le=_MAX_STRIKE_THOUSANDTHS)]
 

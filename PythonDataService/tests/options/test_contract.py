@@ -48,6 +48,8 @@ def test_a_strike_a_listing_reports_as_a_float_names_the_same_contract_as_its_de
         pytest.param(Decimal("452.5005"), id="finer than a thousandth"),
         pytest.param(0.1 + 0.2, id="float arithmetic residue"),
         pytest.param(Decimal("450.5000000000000000000000000000001"), id="too fine for the decimal context to see"),
+        pytest.param("1e10000000", id="an exponent that would take seconds to write out"),
+        pytest.param("1e-10000000", id="a negative exponent that would take seconds to write out"),
         pytest.param(float("nan"), id="not a number"),
         pytest.param(float("inf"), id="infinite"),
         pytest.param("four fifty", id="not numeric"),
@@ -60,20 +62,40 @@ def test_a_strike_that_is_not_a_whole_number_of_thousandths_is_refused(strike: o
 
 
 @pytest.mark.parametrize(
-    ("root", "strike"),
+    ("root", "strike", "refused_field"),
     [
-        pytest.param("AAPL1", "100", id="an adjusted contract's root carries a digit"),
-        pytest.param("TOOLONG", "100", id="a root longer than six letters"),
-        pytest.param("brk", "100", id="a lower-case root"),
-        pytest.param("BRK.B", "100", id="a dotted ticker is not a root"),
-        pytest.param("SPY", "0", id="a zero strike"),
-        pytest.param("SPY", "-5", id="a negative strike"),
-        pytest.param("SPY", "100000", id="a strike the eight digits cannot hold"),
+        pytest.param("AAPL1", "100", "root", id="an adjusted contract's root carries a digit"),
+        pytest.param("TOOLONG", "100", "root", id="a root longer than six letters"),
+        pytest.param("brk", "100", "root", id="a lower-case root"),
+        pytest.param("BRK.B", "100", "root", id="a dotted ticker is not a root"),
+        pytest.param("SPY", "0", "strike_thousandths", id="a zero strike"),
+        pytest.param("SPY", "-5", "strike_thousandths", id="a negative strike"),
+        pytest.param("SPY", "100000", "strike_thousandths", id="a strike the eight digits cannot hold"),
     ],
 )
-def test_a_contract_the_symbol_cannot_spell_is_refused(root: str, strike: str) -> None:
-    with pytest.raises(ValidationError):
+def test_a_contract_the_symbol_cannot_spell_is_refused(root: str, strike: str, refused_field: str) -> None:
+    with pytest.raises(ValidationError) as refused:
         OptionContract.of(root=root, expiry_date=date(2026, 12, 18), right="call", strike=Decimal(strike))
+
+    assert [error["loc"] for error in refused.value.errors()] == [(refused_field,)]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("strike_thousandths", True, id="True is not a strike of a thousandth"),
+        pytest.param("strike_thousandths", "450000", id="text is not a strike"),
+        pytest.param("strike_thousandths", 450000.0, id="a float is not a whole number of thousandths"),
+        pytest.param("expiry_ms", "1797627600000", id="text is not an instant"),
+    ],
+)
+def test_a_contract_is_not_coerced_into_being(field: str, value: object) -> None:
+    fields = {"root": "SPY", "expiry_ms": 1_797_627_600_000, "right": "call", "strike_thousandths": 450_000}
+
+    with pytest.raises(ValidationError) as refused:
+        OptionContract(**(fields | {field: value}))
+
+    assert [error["loc"] for error in refused.value.errors()] == [(field,)]
 
 
 def test_an_expiry_that_is_not_on_the_anchor_is_refused() -> None:
@@ -88,19 +110,24 @@ def test_an_expiry_year_the_two_digits_cannot_write_is_refused() -> None:
         OptionContract.of(root="SPY", expiry_date=date(2100, 1, 15), right="call", strike=450)
 
 
+_NOT_A_SYMBOL = "is not an option contract symbol"
+
+
 @pytest.mark.parametrize(
-    "symbol",
+    ("symbol", "reason"),
     [
-        pytest.param("AAPL1240119C00100000", id="an adjusted root"),
-        pytest.param("O:AAPL240119C00100000", id="a vendor prefix"),
-        pytest.param("AAPL  240119C00100000", id="a space-padded root"),
-        pytest.param("AAPL240119X00100000", id="neither call nor put"),
-        pytest.param("AAPL241319C00100000", id="a month that does not exist"),
-        pytest.param("AAPL240119C0010000", id="seven strike digits"),
-        pytest.param("AAPL240119C00000000", id="a zero strike"),
-        pytest.param("AAPL", id="a stock symbol"),
+        pytest.param("AAPL1240119C00100000", _NOT_A_SYMBOL, id="an adjusted root"),
+        pytest.param("O:AAPL240119C00100000", _NOT_A_SYMBOL, id="a vendor prefix"),
+        pytest.param("AAPL  240119C00100000", _NOT_A_SYMBOL, id="a space-padded root"),
+        pytest.param("AAPL240119X00100000", _NOT_A_SYMBOL, id="neither call nor put"),
+        pytest.param("AAPL240119C0010000", _NOT_A_SYMBOL, id="seven strike digits"),
+        pytest.param("AAPL", _NOT_A_SYMBOL, id="a stock symbol"),
+        pytest.param("AAPL24011\u0669C00100000", _NOT_A_SYMBOL, id="an Arabic-Indic digit in the date"),
+        pytest.param("AAPL240119C0010000\uff10", _NOT_A_SYMBOL, id="a full-width digit in the strike"),
+        pytest.param("AAPL241319C00100000", "241319 is not a date", id="a month that does not exist"),
+        pytest.param("AAPL240119C00000000", "strike_thousandths", id="a zero strike"),
     ],
 )
-def test_text_that_is_not_a_contract_symbol_is_refused(symbol: str) -> None:
-    with pytest.raises(ValueError):
+def test_text_that_is_not_a_contract_symbol_is_refused(symbol: str, reason: str) -> None:
+    with pytest.raises(ValueError, match=reason):
         OptionContract.from_occ_symbol(symbol)

@@ -7,10 +7,7 @@ that runs against a live Gateway in dev.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
 from types import SimpleNamespace
-
-import pytest
 
 from app.broker.ibkr import contracts as contracts_module
 from app.broker.ibkr.contracts import (
@@ -19,7 +16,6 @@ from app.broker.ibkr.contracts import (
     list_qualified_strikes,
     yyyymmdd_to_expiry_ms,
 )
-from app.utils.session_anchors import option_expiry_anchor_ms
 
 
 def test_expiry_round_trips() -> None:
@@ -29,15 +25,8 @@ def test_expiry_round_trips() -> None:
 
 
 def test_expiry_is_the_dates_16_00_new_york_anchor() -> None:
-    assert yyyymmdd_to_expiry_ms("20260515") == option_expiry_anchor_ms(date(2026, 5, 15))
-
-
-def test_an_instant_that_is_not_an_expiry_is_refused() -> None:
-    """Midnight UTC is how these expiries used to be stored; it names no expiry now."""
-    midnight_utc = int(datetime(2026, 5, 15, tzinfo=UTC).timestamp() * 1000)
-
-    with pytest.raises(ValueError, match="is not an option expiry"):
-        expiry_ms_to_yyyymmdd(midnight_utc)
+    # 2026-05-15 is under daylight time: 16:00 New York is 20:00 UTC.
+    assert yyyymmdd_to_expiry_ms("20260515") == 1_778_875_200_000
 
 
 def _mock_client_with_qualify_result(qualified: list):

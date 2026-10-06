@@ -173,8 +173,8 @@ async def test_surface_returns_422_when_strikes_missing() -> None:
 @pytest.mark.asyncio
 async def test_surface_rejects_non_positive_expiry_ms() -> None:
     """expiry_ms validation runs before the connection check, so a
-    negative expiry must always come back as 400 — not 503 — even with
-    no client installed. Guards the ordering inside the handler."""
+    negative expiry must always come back as 422, as it does on the other
+    option routes — not 503 — even with no client installed."""
     set_client(None)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -183,7 +183,7 @@ async def test_surface_rejects_non_positive_expiry_ms() -> None:
             params=[("expiry_ms", -1), ("strikes", 420)],
         )
 
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -245,4 +245,6 @@ async def test_an_expiry_that_is_not_16_00_new_york_on_its_date_is_refused(
         resp = await ac.get(path, params=params)
 
     assert resp.status_code == 422
-    assert "is not an option expiry" in resp.json()["detail"]
+    assert "is not an option expiry" in resp.text
+    # It says what the instant is, and proposes no other date to ask for.
+    assert "19:00:00.000 New York time on 2027-01-15" in resp.text

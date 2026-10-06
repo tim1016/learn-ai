@@ -17,7 +17,10 @@ invalidates every committed golden qualification receipt.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Annotated
 from zoneinfo import ZoneInfo
+
+from pydantic import AfterValidator
 
 from app.utils.timestamps import now_ms_utc, to_ms_utc
 
@@ -106,11 +109,25 @@ def option_expiry_date(expiry_ms: int) -> date:
     """The expiry date an anchor instant names; refuses an instant that is not an expiry anchor."""
     expiry_date = et_date_at_ms(expiry_ms)
     if option_expiry_anchor_ms(expiry_date) != expiry_ms:
+        # Says what the instant is and proposes no date: one stored the old way,
+        # as midnight UTC, falls on the evening before the date it meant.
+        in_new_york = datetime.fromtimestamp(expiry_ms / 1000, tz=UTC).astimezone(_NY)
         raise ValueError(
             f"{expiry_ms} is not an option expiry: an expiry is 16:00 New York time on its date, "
-            f"which for {expiry_date.isoformat()} is {option_expiry_anchor_ms(expiry_date)}."
+            f"and this is {in_new_york:%H:%M:%S}.{in_new_york.microsecond // 1000:03d} New York time "
+            f"on {expiry_date.isoformat()}."
         )
     return expiry_date
+
+
+def _an_option_expiry(expiry_ms: int) -> int:
+    option_expiry_date(expiry_ms)
+    return expiry_ms
+
+
+#: An ``int64 ms UTC`` value that must be an option expiry. The one way a schema
+#: field or a query parameter says so; each declares its own numeric bounds.
+OptionExpiryMs = Annotated[int, AfterValidator(_an_option_expiry)]
 
 
 def calendar_days_to_expiry(expiration_date: str, now_ms: int | None = None) -> int:

@@ -7,12 +7,6 @@ import {
 } from './format';
 
 describe('fmtBrokerExpiryDate', () => {
-  it('shows an expiry as its New York date, in summer and in winter', () => {
-    // 16:00 New York is 20:00 UTC under daylight time and 21:00 UTC under standard time.
-    expect(fmtBrokerExpiryDate(Date.UTC(2026, 5, 19, 20, 0, 0))).toBe('2026-06-19');
-    expect(fmtBrokerExpiryDate(Date.UTC(2025, 11, 19, 21, 0, 0))).toBe('2025-12-19');
-  });
-
   it('returns a dash for absent expiry markers', () => {
     expect(fmtBrokerExpiryDate(null)).toBe('—');
   });

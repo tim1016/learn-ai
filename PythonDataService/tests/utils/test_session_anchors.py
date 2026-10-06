@@ -45,3 +45,15 @@ def test_option_expiry_date_reads_back_the_date_an_anchor_names(expiry_date: dat
 def test_option_expiry_date_refuses_an_instant_that_is_not_an_anchor(off_anchor_ms: int) -> None:
     with pytest.raises(ValueError, match="is not an option expiry"):
         option_expiry_date(off_anchor_ms)
+
+
+def test_the_refusal_says_what_the_instant_is_and_proposes_no_other_date() -> None:
+    """A Friday expiry stored the old way, as midnight UTC, falls on Thursday evening in New York.
+    Naming Thursday's anchor as the fix would send the caller to Thursday's contracts."""
+    friday_2027_01_15_at_midnight_utc = _utc(2027, 1, 15, 0)
+
+    with pytest.raises(ValueError) as refused:
+        option_expiry_date(friday_2027_01_15_at_midnight_utc)
+
+    assert "this is 19:00:00.000 New York time on 2027-01-14" in str(refused.value)
+    assert str(option_expiry_anchor_ms(date(2027, 1, 14))) not in str(refused.value)
