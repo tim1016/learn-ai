@@ -517,6 +517,31 @@ class WorkingOrderView(BaseModel):
     observed_at_ms: int
 
 
+class TradedFeedLaneEvent(BaseModel):
+    """One entry refused because the traded asset had no usable price for its minute."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # The close of the decision bar the entry was decided on.
+    at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # Three different facts, kept apart: a minute with no trade, a price that
+    # arrived too late to use, and a feed that was not delivering. ``conflict``
+    # is a minute delivered with two different prices.
+    state: Literal["no_trade", "late", "unhealthy", "conflict"]
+    reason_code: str
+    # The sentence recorded with the refusal; ``None`` when none was.
+    sentence: str | None
+
+
+class TradedFeedLaneView(BaseModel):
+    """The traded asset's lane under a bot's chart (#2915)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    events: list[TradedFeedLaneEvent]
+
+
 class RecentDecisionView(BaseModel):
     """Bounded backend-authored decision receipt shown on the bot page."""
 
@@ -705,6 +730,9 @@ class BotPanelView(BaseModel):
     # (#2912): its halt state and its feed's recency. ``market_pulse`` is the
     # symbol the bot listens to; the run depends on both.
     traded_market_pulse: MarketPulseView | None = None
+    # The entries the traded asset's price feed cost this bot, for the lane
+    # under its chart (#2915). ``None`` for a bot that trades what it listens to.
+    traded_feed_lane: TradedFeedLaneView | None = None
     feed_continuity: FeedContinuityView
     # ``None`` for a fresh run, a run whose ledger is unreadable, or a run
     # that has not reached warmup yet.
@@ -1110,6 +1138,39 @@ class ChartOverlayNoticeView(BaseModel):
     source: Literal["polygon"]
 
 
+class ChartPositionPoint(BaseModel):
+    """What the position pane draws on one of the chart's own bars."""
+
+    model_config = ConfigDict(frozen=True)
+
+    start_ms: int
+    # ``None`` is a bar with no price for the traded asset. It is sent as
+    # missing and drawn as a gap, never bridged from a neighbouring bar.
+    value: str | None
+
+
+class ChartPositionPane(BaseModel):
+    """The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
+
+    ``points`` has one entry per bar of the chart it comes with, in the same
+    order, so the pane shares the chart's time axis exactly. ``kind`` says
+    what a value is: ``price`` is the traded stock's or ETF's own bar close.
+    ``fill_markers`` are the bot's fills in the traded asset, which the
+    chart of the symbol it listens to leaves off.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["price"]
+    symbol: str
+    heading: str
+    points: list[ChartPositionPoint]
+    fill_markers: list[ChartFillMarker]
+    # Why the traded asset's bars could not be read, when they could not: the
+    # pane then has no line, and says so rather than looking like a quiet day.
+    overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
+
+
 class ChartFeedView(BaseModel):
     """The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).
 
@@ -1157,6 +1218,8 @@ class ChartLiveResponse(BaseModel):
     overlay_notices: list[ChartOverlayNoticeView]
     feed: ChartFeedView
     as_of_ms: int
+    # Present only for a bot that trades another asset than it listens to.
+    position: ChartPositionPane | None = None
 
 
 class BotPanelLiveSnapshot(BaseModel):
@@ -1230,6 +1293,8 @@ class ChartHistoryResponse(BaseModel):
     truncated: bool
     overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
     as_of_ms: int
+    # Present only for a bot that trades another asset than it listens to.
+    position: ChartPositionPane | None = None
 
 # ── Lane attention (one lane's bell items, #2228) ────────────────────────────
 

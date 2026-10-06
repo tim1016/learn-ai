@@ -64,6 +64,8 @@ export class BotDayChartComponent {
     () => this.histChart()?.indicator_bar_budget_satisfied ?? true,
   );
   protected readonly histFillMarkers = computed(() => this.histChart()?.fill_markers ?? []);
+  protected readonly livePosition = computed(() => this.liveChart()?.position ?? null);
+  protected readonly histPosition = computed(() => this.histChart()?.position ?? null);
   /** A settled zero-bar history that is unavailable rather than empty (#2211 FR-002). */
   protected readonly histChartUnavailableNotice = computed(() => historyUnavailableNotice(this.histChart()));
 

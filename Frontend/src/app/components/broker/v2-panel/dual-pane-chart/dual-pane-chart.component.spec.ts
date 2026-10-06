@@ -372,6 +372,45 @@ describe('DualPaneChartComponent', () => {
     });
   });
 
+  describe('the position pane of a bot that trades another asset (#2915)', () => {
+    const MINUTE = 60_000;
+    const bars = [0, 1, 2].map((index) => liveBar(1_700_060_400_000 + index * MINUTE, 1_700_060_400_000 + (index + 1) * MINUTE));
+    const paneLines = () => chartMocks.addSeries.mock.calls.filter(([type, , pane]) => type === 'LineSeries' && pane === 1);
+
+    it('draws the traded asset under the candles, a bar with no price as a gap, and says what it is', async () => {
+      await render(DualPaneChartComponent, {
+        inputs: {
+          symbol: 'SPY',
+          liveBars: bars,
+          histBars: [],
+          livePosition: {
+            kind: 'price',
+            symbol: 'QQQ',
+            heading: 'QQQ · what it trades',
+            points: [
+              { start_ms: bars[0].start_ms, value: '512.40' },
+              { start_ms: bars[1].start_ms, value: null },
+              { start_ms: bars[2].start_ms, value: '512.90' },
+            ],
+            fill_markers: [],
+            overlay_notices: [],
+          },
+        },
+      });
+
+      expect(screen.getByText('QQQ · what it trades')).toBeTruthy();
+      // One line either side of the bar with no price: nothing joins them.
+      expect(paneLines()).toHaveLength(2);
+    });
+
+    it('draws no such pane for a bot that trades what it listens to', async () => {
+      await render(DualPaneChartComponent, { inputs: { symbol: 'SPY', liveBars: bars, histBars: [] } });
+
+      expect(screen.queryByText(/what it trades/)).toBeNull();
+      expect(paneLines()).toHaveLength(0);
+    });
+  });
+
   it('renders all Polygon timeframe buttons after switching source', async () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },

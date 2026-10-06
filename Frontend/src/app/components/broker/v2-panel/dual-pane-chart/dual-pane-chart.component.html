@@ -194,6 +194,14 @@
             }
           </ul>
         }
+        @if (activePosition(); as position) {
+          <p class="chart-position-caption">
+            <strong>{{ position.heading }}</strong>
+            @for (notice of position.overlay_notices; track notice.code) {
+              <span>{{ notice.message }}</span>
+            }
+          </p>
+        }
         @if (activePane() === 'polygon' && historyUnavailable()) {
           <div class="chart-state" role="status">
             <strong>Polygon history unavailable</strong>

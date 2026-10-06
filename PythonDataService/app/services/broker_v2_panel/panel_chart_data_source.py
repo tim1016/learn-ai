@@ -11,7 +11,7 @@ from typing import Literal
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.config import settings
-from app.schemas.action_plan import order_symbol
+from app.schemas.action_plan import TradedInstrumentView, order_symbol
 from app.schemas.broker_v2_panel import (
     BotPanelView,
     ChartAsset,
@@ -27,6 +27,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     build_run_window_chart,
     history_fill_window,
     live_window,
+    position_pane,
     run_chart_window,
 )
 from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
@@ -105,6 +106,15 @@ async def _build_live_chart_from_fills(
     )
 
 
+def _position_pane_symbol(traded: TradedInstrumentView | None) -> str | None:
+    """The asset a bot's position pane draws, or ``None`` when its chart has no such pane (#2915).
+
+    A pane of bar closes is a stock's or an ETF's. An option structure's pane
+    is a mark from its legs' quotes, which this cannot draw.
+    """
+    return traded.symbol if traded is not None and traded.kind == "stock" else None
+
+
 async def resolve_symbol_and_fills(
     broker: str,
     account_id: str,
@@ -170,6 +180,12 @@ async def get_live_snapshot_parts(
         resolution=resolution,
         now_ms=observed_at_ms,
     )
+    traded_symbol = _position_pane_symbol(panel.traded)
+    if traded_symbol is not None:
+        traded_chart = await _build_live_chart_from_fills(
+            sid, traded_symbol, fills, resolution=resolution, now_ms=observed_at_ms
+        )
+        chart = chart.model_copy(update={"position": position_pane(chart, traded_chart)})
     return panel, chart
 
 
@@ -205,7 +221,9 @@ async def get_history_chart(
     ``asset`` chooses whose candles: the symbol the bot listens to, or the
     asset it trades (#2912). They are the same chart for a bot that trades
     what it listens to. For one that trades something else, the traded
-    asset's chart is where its fills are drawn, at their own prices.
+    asset's chart is where its fills are drawn, at their own prices; the
+    chart of the symbol it listens to carries that asset's price and fills
+    as its position pane (#2915), read for the same window and bar size.
 
     Issue #2204: this Clerk-side assembly never calls Polygon directly —
     every Fleet Clerk boots with a present-but-empty ``POLYGON_API_KEY``
@@ -241,23 +259,32 @@ async def get_history_chart(
         )
     status = evidence.status
     fills = evidence.fills.fills
-    symbol = order_symbol(status.symbol, status.traded) if asset == "trades" else status.symbol
+    batch_provider = build_history_batch_provider()
 
-    if window is not None:
-        return await build_run_window_chart(
+    async def chart_of(symbol: str) -> ChartHistoryResponse:
+        if window is not None:
+            return await build_run_window_chart(
+                timeframe,
+                fills,
+                strategy_instance_id=sid,
+                symbol=symbol,
+                batch_provider=batch_provider,
+                window=(from_ms, to_ms),
+                now_ms=observed_at_ms,
+            )
+        return await build_history_chart(
             timeframe,
             fills,
             strategy_instance_id=sid,
             symbol=symbol,
-            batch_provider=build_history_batch_provider(),
-            window=(from_ms, to_ms),
+            batch_provider=batch_provider,
             now_ms=observed_at_ms,
         )
-    return await build_history_chart(
-        timeframe,
-        fills,
-        strategy_instance_id=sid,
-        symbol=symbol,
-        batch_provider=build_history_batch_provider(),
-        now_ms=observed_at_ms,
-    )
+
+    if asset == "trades":
+        return await chart_of(order_symbol(status.symbol, status.traded))
+    chart = await chart_of(status.symbol)
+    traded_symbol = _position_pane_symbol(status.traded)
+    if traded_symbol is None:
+        return chart
+    return chart.model_copy(update={"position": position_pane(chart, await chart_of(traded_symbol))})

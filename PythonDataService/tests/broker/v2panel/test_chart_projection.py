@@ -28,7 +28,7 @@ from app.lean_sidecar.trading_calendar import (
 )
 from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import ChartBar, ChartOverlayNoticeView
+from app.schemas.broker_v2_panel import ChartBar, ChartLiveResponse, ChartOverlayNoticeView
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.broker_v2_panel import (
     chart_projection_service,
@@ -785,7 +785,7 @@ async def test_live_snapshot_uses_its_captured_sqlite_fills(
     captured: list[tuple[FillRecord, ...]] = []
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        return SimpleNamespace(symbol="SPY", market_pulse=None), [], expected_fills
+        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None), [], expected_fills
 
     async def build_from_fills(
         _sid: str,
@@ -883,12 +883,12 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
 
 
 @pytest.mark.parametrize(
-    ("asset", "charted", "drawn"),
-    [("listens", "SPY", []), ("trades", "QQQ", ["qqq-fill"])],
+    ("asset", "charted", "drawn", "read"),
+    [("listens", "SPY", [], ["SPY", "QQQ"]), ("trades", "QQQ", ["qqq-fill"], ["QQQ"])],
     ids=["what-it-listens-to", "what-it-trades"],
 )
 async def test_the_history_chart_can_be_asked_for_the_asset_the_bot_trades(
-    monkeypatch: pytest.MonkeyPatch, asset: str, charted: str, drawn: list[str]
+    monkeypatch: pytest.MonkeyPatch, asset: str, charted: str, drawn: list[str], read: list[str]
 ) -> None:
     """#2912: a bot listens to SPY and trades QQQ. Its QQQ fill belongs on QQQ's candles, never on SPY's."""
     qqq_fill = replace(_sqlite_fill(event_key="qqq-fill", filled_at_ms=_NOW - 1), symbol="QQQ")
@@ -921,8 +921,132 @@ async def test_the_history_chart_can_be_asked_for_the_asset_the_bot_trades(
     chart = await panel_chart_data_source.get_history_chart("alpaca", "paper-account", SID, "1m", asset=asset)
 
     assert chart.symbol == charted
-    assert set(asked_for) == {charted}
+    assert asked_for == read
     assert [marker.event_key for marker in chart.fill_markers] == drawn
+
+
+def _minute_bar(start_ms: int, close: str) -> ChartBar:
+    return ChartBar(
+        start_ms=start_ms, end_ms=start_ms + 60_000, open=close, high=close, low=close, close=close, volume=10,
+        source="polygon",
+    )
+
+
+def _spy_bot(traded: TradedInstrumentView | None) -> BotStatusView:
+    return BotStatusView(
+        strategy_instance_id=SID, broker="alpaca", symbol="SPY", traded=traded, mode="trade", quantity=1,
+        running=True, phase="ON_DUTY", desired_state="RUNNING", active_run_id="run-1", duty_outcome=None,
+        binding_created_at_ms=_NOW - 60_000, last_transition_at_ms=_NOW - 60_000,
+    )
+
+
+async def _history_chart_of(
+    monkeypatch: pytest.MonkeyPatch, status: BotStatusView, bars: dict[str, list[ChartBar]], fills: tuple = ()
+):
+    """The bot's history chart, read from a vendor that holds ``bars`` for each symbol."""
+    asked_for: list[str] = []
+
+    async def validate_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def chart_evidence(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=fills))
+
+    async def batch_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        asked_for.append(query.symbol)
+        return HistoryBatchResponse(
+            bars=bars[query.symbol], source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms
+        )
+
+    monkeypatch.setattr(panel_chart_data_source, "validate_account", validate_account)
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(
+        panel_chart_data_source, "history_fill_window", lambda timeframe, now_ms: (_NOW - 86_400_000, now_ms)
+    )
+    monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
+    monkeypatch.setattr(panel_chart_data_source, "build_history_batch_provider", lambda: batch_provider)
+    chart = await panel_chart_data_source.get_history_chart("alpaca", "paper-account", SID, "1m")
+    return chart, asked_for
+
+
+async def test_a_bot_that_trades_another_asset_gets_its_price_on_the_charts_own_bars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2915: QQQ's price is drawn under SPY's candles, bar for bar, and a minute QQQ did not trade is sent as missing."""
+    first = _NOW - 180_000
+    qqq_fill = replace(_sqlite_fill(event_key="qqq-fill", filled_at_ms=first + 1), symbol="QQQ")
+    chart, _asked = await _history_chart_of(
+        monkeypatch,
+        _spy_bot(TradedInstrumentView(kind="stock", symbol="QQQ")),
+        {
+            "SPY": [_minute_bar(first, "450.00"), _minute_bar(first + 60_000, "450.10"), _minute_bar(first + 120_000, "450.20")],
+            "QQQ": [_minute_bar(first, "512.40"), _minute_bar(first + 120_000, "512.90")],
+        },
+        fills=(qqq_fill,),
+    )
+
+    pane = chart.position
+    assert pane is not None and (pane.kind, pane.symbol) == ("price", "QQQ")
+    assert "QQQ" in pane.heading
+    assert [(point.start_ms, point.value) for point in pane.points] == [
+        (first, "512.40"),
+        (first + 60_000, None),
+        (first + 120_000, "512.90"),
+    ]
+    assert [marker.event_key for marker in pane.fill_markers] == ["qqq-fill"]
+    assert chart.fill_markers == [], "a QQQ fill is never drawn on SPY's candles"
+
+
+async def test_a_bot_that_trades_what_it_listens_to_has_no_position_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+    chart, asked_for = await _history_chart_of(monkeypatch, _spy_bot(None), {"SPY": [_minute_bar(_NOW - 60_000, "450.00")]})
+
+    assert chart.position is None
+    assert asked_for == ["SPY"]
+
+
+async def test_an_option_bot_has_no_price_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pane of bar closes is a stock's; an option structure's mark is not drawn from its underlying's shares."""
+    chart, asked_for = await _history_chart_of(
+        monkeypatch,
+        _spy_bot(TradedInstrumentView(kind="option", symbol="SPY")),
+        {"SPY": [_minute_bar(_NOW - 60_000, "450.00")]},
+    )
+
+    assert chart.position is None
+    assert asked_for == ["SPY"]
+
+
+async def test_the_live_chart_carries_the_traded_assets_price_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    first = _NOW - 120_000
+    live_bars = {
+        "SPY": [_minute_bar(first, "450.00"), _minute_bar(first + 60_000, "450.10")],
+        "QQQ": [_minute_bar(first + 60_000, "512.90")],
+    }
+
+    async def panel_with_entries(*_args: object, **_kwargs: object):
+        panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"))
+        return panel, [], ()
+
+    async def live_chart_of(sid: str, symbol: str, _fills: object, *, resolution: str, now_ms: int):
+        return ChartLiveResponse(
+            strategy_instance_id=sid, symbol=symbol, trading_date_open_ms=first, trading_date_close_ms=now_ms,
+            resolution=resolution, bars=live_bars[symbol], fill_markers=[], overlay_notices=[],
+            feed=chart_feed_view(CHART_FEED_NOT_EXPECTED), as_of_ms=now_ms,
+        )
+
+    monkeypatch.setattr(panel_chart_data_source, "get_panel_with_chart_fills", panel_with_entries)
+    monkeypatch.setattr(panel_chart_data_source, "_build_live_chart_from_fills", live_chart_of)
+
+    _panel, chart = await panel_chart_data_source.get_live_snapshot_parts(
+        "alpaca", "paper-account", SID, resolution="1m"
+    )
+
+    assert chart.symbol == "SPY"
+    assert chart.position is not None
+    assert [(point.start_ms, point.value) for point in chart.position.points] == [
+        (first, None),
+        (first + 60_000, "512.90"),
+    ]
 
 
 async def test_get_history_chart_under_clerk_agent_never_reaches_polygon_directly(

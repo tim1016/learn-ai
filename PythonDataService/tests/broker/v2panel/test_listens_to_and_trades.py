@@ -51,7 +51,7 @@ from app.services.broker_v2_panel import (
 from app.services.broker_v2_panel.action_execution_service import reset_idempotency_store_for_testing
 from app.services.broker_v2_panel.bot_page_projection import _manual_order_entry
 from app.services.broker_v2_panel.catalog_projection_service import SqliteCatalogProjectionUnavailable
-from app.services.broker_v2_panel.panel_projection_service import _recent_decision_views
+from app.services.broker_v2_panel.panel_projection_service import _recent_decision_views, traded_feed_lane
 from app.services.broker_v2_panel.sqlite_panel_adapter import _working_order_view
 from app.services.broker_v2_panel.sqlite_panel_source import _uncleanly_ended, home_roster
 from app.services.fleet_bot_history import BotHistoryFilters, merge_bot_history
@@ -356,6 +356,38 @@ def test_a_refused_entrys_recorded_sentence_reaches_its_row_on_the_bot_page(monk
     ]
 
 
+def test_the_traded_assets_lane_holds_the_entries_its_price_feed_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2915: a quiet minute, a late price and a broken feed are three different things on the lane."""
+    stored = [
+        _stored_decision(1, "blocked", reason_code="PRICING_BAR_NO_TRADE", refusal_reason=_NO_TRADE),
+        _stored_decision(2, "no_action", reason_code="NO_SIGNAL"),
+        _stored_decision(3, "blocked", reason_code="PRICING_BAR_LATE"),
+        _stored_decision(4, "blocked", reason_code="PRICING_FEED_UNHEALTHY"),
+        _stored_decision(5, "blocked", reason_code="MARKET_LIVENESS_HALTED"),
+    ]
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: SimpleNamespace(
+        account_id="PA-1", account_mode="paper", repository=SimpleNamespace(decision_receipt_tail=lambda **_: stored),
+    ))
+    receipts = sqlite_panel_source.read_sqlite_decision_receipts("alpaca", "bot")
+    assert receipts is not None
+    decisions = _recent_decision_views(receipts)
+
+    lane = traded_feed_lane(TradedInstrumentView(kind="stock", symbol="QQQ"), decisions)
+
+    assert lane is not None and "QQQ" in lane.title
+    assert sorted((event.state, event.sentence) for event in lane.events) == [
+        ("late", None),
+        ("no_trade", _NO_TRADE),
+        ("unhealthy", None),
+    ]
+    by_reason = {row.reason_code: row for row in decisions}
+    assert {event.at_ms for event in lane.events} == {
+        by_reason[code].decision_bar_close_ms or by_reason[code].recorded_at_ms
+        for code in ("PRICING_BAR_NO_TRADE", "PRICING_BAR_LATE", "PRICING_FEED_UNHEALTHY")
+    }
+    assert traded_feed_lane(None, decisions) is None
+
+
 # ── the bot page, read whole ────────────────────────────────────────────
 
 _PAGE_RTH_MS = 1_700_060_400_000  # 2023-11-15 10:00 ET, a Wednesday
@@ -428,6 +460,7 @@ async def test_the_bot_page_of_a_bot_that_trades_another_asset(
     assert "SPY" in page["traded_asset_warning"]["headline"] and "QQQ" in page["traded_asset_warning"]["headline"]
     assert page["traded_market_pulse"] is not None
     assert page["market_pulse"] is not None
+    assert "QQQ" in page["traded_feed_lane"]["title"]
     assert clerk_card_symbols == ["QQQ"], "the Clerk's submission gate reads the feed of the asset its orders are in"
 
 
@@ -448,4 +481,5 @@ async def test_the_bot_page_of_a_bot_that_trades_what_it_listens_to_is_unchanged
 
     assert page["symbol"] == "SPY"
     assert (page["traded"], page["traded_asset_warning"], page["traded_market_pulse"]) == (None, None, None)
+    assert page["traded_feed_lane"] is None
     assert clerk_card_symbols == ["SPY"]

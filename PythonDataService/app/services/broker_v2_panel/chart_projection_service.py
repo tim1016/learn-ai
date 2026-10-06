@@ -58,6 +58,8 @@ from app.schemas.broker_v2_panel import (
     ChartHistoryTimeframe,
     ChartLiveResponse,
     ChartOverlayNoticeView,
+    ChartPositionPane,
+    ChartPositionPoint,
 )
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.dataset_service import INDICATOR_CONFIGS
@@ -213,6 +215,28 @@ def markers_in_window(
         for fill in sorted(fills, key=lambda fill: (fill.filled_at_ms, fill.event_key))
         if from_ms <= fill.filled_at_ms < to_ms and fill.symbol.upper() == charted
     ]
+
+
+def position_pane(
+    chart: ChartLiveResponse | ChartHistoryResponse,
+    traded_chart: ChartLiveResponse | ChartHistoryResponse,
+) -> ChartPositionPane:
+    """The traded asset's price on the bars of the chart of the symbol a bot listens to (#2915).
+
+    ``traded_chart`` is the same window and bar size read for the traded
+    asset. Each of ``chart``'s bars gets the close of the traded bar that
+    starts at the same instant; a bar with none is a missing point. A point is
+    never carried over from an earlier bar, so a quiet minute stays visible.
+    """
+    closes = {bar.start_ms: bar.close for bar in traded_chart.bars}
+    return ChartPositionPane(
+        kind="price",
+        symbol=traded_chart.symbol,
+        heading=f"{traded_chart.symbol} · what it trades",
+        points=[ChartPositionPoint(start_ms=bar.start_ms, value=closes.get(bar.start_ms)) for bar in chart.bars],
+        fill_markers=traded_chart.fill_markers,
+        overlay_notices=list(traded_chart.overlay_notices),
+    )
 
 
 def live_window(now_ms: int) -> tuple[int, int]:

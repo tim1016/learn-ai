@@ -8344,6 +8344,7 @@ export interface components {
             traded?: components["schemas"]["TradedInstrumentView"] | null;
             traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+            traded_feed_lane?: components["schemas"]["TradedFeedLaneView"] | null;
             traded_market_pulse?: components["schemas"]["MarketPulseView"] | null;
             /** Updated At Ms */
             updated_at_ms: number;
@@ -9427,6 +9428,7 @@ export interface components {
             indicator_bars: components["schemas"]["ChartBar"][];
             /** Overlay Notices */
             overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
+            position?: components["schemas"]["ChartPositionPane"] | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
@@ -9583,6 +9585,7 @@ export interface components {
             fill_markers: components["schemas"]["ChartFillMarker"][];
             /** Overlay Notices */
             overlay_notices: components["schemas"]["ChartOverlayNoticeView"][];
+            position?: components["schemas"]["ChartPositionPane"] | null;
             /**
              * Resolution
              * @enum {string}
@@ -9611,6 +9614,43 @@ export interface components {
              * @constant
              */
             source: "polygon";
+        };
+        /**
+         * ChartPositionPane
+         * @description The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
+         *
+         *     ``points`` has one entry per bar of the chart it comes with, in the same
+         *     order, so the pane shares the chart's time axis exactly. ``kind`` says
+         *     what a value is: ``price`` is the traded stock's or ETF's own bar close.
+         *     ``fill_markers`` are the bot's fills in the traded asset, which the
+         *     chart of the symbol it listens to leaves off.
+         */
+        ChartPositionPane: {
+            /** Fill Markers */
+            fill_markers: components["schemas"]["ChartFillMarker"][];
+            /** Heading */
+            heading: string;
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "price";
+            /** Overlay Notices */
+            overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
+            /** Points */
+            points: components["schemas"]["ChartPositionPoint"][];
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * ChartPositionPoint
+         * @description What the position pane draws on one of the chart's own bars.
+         */
+        ChartPositionPoint: {
+            /** Start Ms */
+            start_ms: number;
+            /** Value */
+            value: string | null;
         };
         /**
          * ChartQualityReport
@@ -24159,6 +24199,33 @@ export interface components {
             source: string;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * TradedFeedLaneEvent
+         * @description One entry refused because the traded asset had no usable price for its minute.
+         */
+        TradedFeedLaneEvent: {
+            /** At Ms */
+            at_ms: number;
+            /** Reason Code */
+            reason_code: string;
+            /** Sentence */
+            sentence: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "no_trade" | "late" | "unhealthy" | "conflict";
+        };
+        /**
+         * TradedFeedLaneView
+         * @description The traded asset's lane under a bot's chart (#2915).
+         */
+        TradedFeedLaneView: {
+            /** Events */
+            events: components["schemas"]["TradedFeedLaneEvent"][];
+            /** Title */
+            title: string;
         };
         /**
          * TradedInstrumentView

@@ -5,6 +5,7 @@ import type {
   ChartFillMarker,
   FeedContinuityView,
   StrategyViewResponse,
+  TradedFeedLaneView,
 } from '../lib/broker-v2-panel.types';
 import {
   coordinateOfLogical,
@@ -30,9 +31,11 @@ export interface StrategyRunContext {
   readonly workingOrders: readonly WorkingOrder[];
   /** Market-data continuity, including the partial first minute a mid-minute join omits. */
   readonly feedEvents: readonly FeedEvent[];
+  /** The entries the traded asset's price feed refused (#2915); `null` for a bot that trades what it listens to. */
+  readonly tradedFeed: TradedFeedLaneView | null;
 }
 
-export type LaneKey = 'decisions' | 'orders' | 'market' | 'bot';
+export type LaneKey = 'decisions' | 'orders' | 'market' | 'traded' | 'bot';
 export type LaneGlyph = 'up' | 'down' | 'dot' | 'ring' | 'span' | 'tick' | 'dashed';
 export type LaneTone = 'bull' | 'bear' | 'neutral' | 'muted' | 'warn' | 'accent';
 
@@ -132,6 +135,27 @@ function marketLane(context: StrategyRunContext, clock: LaneClock): ChartLane {
   return { key: 'market', title: 'Market data', marks };
 }
 
+type TradedFeedState = TradedFeedLaneView['events'][number]['state'];
+
+/** A quiet minute, a late price, a feed that was not delivering and a minute with two prices each look different. */
+const TRADED_FEED_MARKS: Readonly<Record<TradedFeedState, Pick<LaneMark, 'glyph' | 'tone'>>> = {
+  no_trade: { glyph: 'ring', tone: 'muted' },
+  late: { glyph: 'dot', tone: 'warn' },
+  unhealthy: { glyph: 'tick', tone: 'bear' },
+  conflict: { glyph: 'tick', tone: 'warn' },
+};
+
+function tradedLane(feed: TradedFeedLaneView, clock: LaneClock): ChartLane {
+  const marks = feed.events.map((event): LaneMark => ({
+    key: `traded:${event.at_ms}:${event.reason_code}`,
+    atMs: event.at_ms,
+    endMs: null,
+    ...TRADED_FEED_MARKS[event.state],
+    label: `${minuteOf(event.at_ms, clock)} · ${event.sentence ?? formatReceiptLabel(event.reason_code)}`,
+  }));
+  return { key: 'traded', title: feed.title, marks };
+}
+
 function botLane(view: StrategyViewResponse, context: StrategyRunContext, clock: LaneClock): ChartLane {
   const marks: LaneMark[] = [];
   const started = view.run_started_at_ms ?? null;
@@ -163,12 +187,13 @@ function botLane(view: StrategyViewResponse, context: StrategyRunContext, clock:
 }
 
 /**
- * The four lanes under the strategy chart (#2794 R4), on the chart's clock:
+ * The lanes under the strategy chart (#2794 R4), on the chart's clock:
  * the bot's decisions and before-start evaluations, its fills and working
  * orders, market-data continuity (gaps -- the partial first minute a
  * mid-minute join omits among them -- and recoveries) and the run's start,
- * end and next decision. Every word that is not a time comes from the
- * backend or its receipt labels.
+ * end and next decision. A bot that trades another asset than it listens to
+ * has a fifth, for the entries that asset's price feed refused (#2915). Every
+ * word that is not a time comes from the backend or its receipt labels.
  */
 export function chartLanes(
   view: StrategyViewResponse,
@@ -176,7 +201,11 @@ export function chartLanes(
   clock: LaneClock = 'local',
 ): readonly ChartLane[] {
   return [
-    decisionLane(view, clock), orderLane(context, clock), marketLane(context, clock), botLane(view, context, clock),
+    decisionLane(view, clock),
+    orderLane(context, clock),
+    marketLane(context, clock),
+    ...(context.tradedFeed === null ? [] : [tradedLane(context.tradedFeed, clock)]),
+    botLane(view, context, clock),
   ];
 }
 
