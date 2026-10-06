@@ -67,6 +67,13 @@
       "loss_at_expiry_cents": 42500
     },
     {
+      "case": "bought_for_less_than_it_must_be_worth_has_no_loss_to_estimate",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 150000,
+      "commitment_before_fees_cents": 150000,
+      "loss_at_expiry_cents": 0
+    },
+    {
       "case": "iron_condor_two_units",
       "broker_requirement_cents": 100000,
       "net_entry_premium_cents": -35200,
@@ -94,6 +101,14 @@
       "net_entry_premium_cents": 11000,
       "commitment_before_fees_cents": 11000,
       "loss_at_expiry_cents": 11000
+    },
+    {
+      "case": "quoted_call_butterfly_three_units_counts_the_body_twice",
+      "broker_requirement_cents": 0,
+      "net_entry_premium_cents": 30000,
+      "commitment_before_fees_cents": 30000,
+      "loss_at_expiry_cents": 30000,
+      "round_trip_cost_cents": 4800
     },
     {
       "case": "broken_wing_call_butterfly_loses_past_its_body",
@@ -145,6 +160,10 @@
     {
       "case": "sold_leg_covered_by_a_later_expiry_is_not_worked_out",
       "refusal": "OPTION_STRUCTURE_MIXED_EXPIRY_WITH_SOLD_LEG"
+    },
+    {
+      "case": "sold_call_nothing_covers_is_unbounded_whatever_its_expiries",
+      "refusal": "OPTION_STRUCTURE_LOSS_UNBOUNDED"
     },
     {
       "case": "credit_larger_than_the_width_is_refused",

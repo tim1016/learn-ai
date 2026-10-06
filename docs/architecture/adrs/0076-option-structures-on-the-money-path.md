@@ -1,6 +1,6 @@
 # ADR 0076 — Option structures on the money path
 
-**Status:** Accepted 2026-10-06. Written in parts: each section lands with the code that makes it true, and the sections still to come are named at the end.
+**Status:** Accepted 2026-10-06. It gains a section as each part of #2913 it decides is built.
 **Provenance:** Owner decisions in [#2913](https://github.com/tim1016/learn-ai/issues/2913), grilled on 2026-10-05 and revised on 2026-10-06 after a review against the code and Alpaca's documents.
 **Related:** ADR 0012 (the Action Plan, and its 2026-10-06 amendment that defines an option structure), ADR 0022 (i) (the option expiry anchor), ADR 0059 (the live envelope and the budget, which cover US equities only until this ADR's later sections extend them), ADR 0068 (Python owns the math).
 
@@ -8,7 +8,7 @@
 
 A bot may listen to one symbol's signal and trade option structures on any underlying. Nothing on the trading side could do that: an order was one stock leg, money was counted per share, and no rule said what an option position costs to hold or what the bot must have before it opens one.
 
-Alpaca has no call that says, before an order, what the order will cost. So the bot works that out itself from Alpaca's published rule, and compares with what Alpaca took afterwards.
+Alpaca's order and account references (read 2026-10-06) describe no call that says, before an order, what that order will cost. So the bot works it out itself from Alpaca's published rule, and compares with what Alpaca took afterwards.
 
 ## Decision
 
@@ -16,11 +16,11 @@ Alpaca has no call that says, before an order, what the order will cost. So the 
 
 An option contract is its root symbol, its expiry, call or put, and its strike. The expiry is the date's 16:00 New York anchor. The strike is held in whole thousandths of a dollar, which is the unit the OCC symbol writes it in, so no float decides which contract an order names. The symbol Alpaca uses (`AAPL240119C00100000`) is built from those four and read back from them, and anything that is not such a symbol is refused.
 
-A symbol cannot say that a contract delivers 100 shares or is American. Those are checked against the listing where a contract is picked. The one thing the spelling shows is an adjusted contract, whose root carries a digit; it is refused.
+A symbol cannot say that a contract delivers 100 shares or is American. Those are facts of the listing, to be checked where a contract is picked. The one thing the spelling shows is an adjusted contract, whose root carries a digit; it is refused.
 
 ### 2. Five money quantities, kept apart
 
-All are whole cents. Nothing is rounded; an amount that does not come to whole cents is refused.
+All are whole cents. The fee provision is the one figure that rounds, up to the next cent, where it is worked out. Nothing else is rounded; an amount that does not come to whole cents is refused.
 
 | Quantity | What it is | Sign |
 |---|---|---|
@@ -28,7 +28,7 @@ All are whole cents. Nothing is rounded; an amount that does not come to whole c
 | **Broker requirement** | Alpaca's maintenance requirement by its published rule. Premiums are left out | Zero or more |
 | **Entry commitment** | What the bot sets aside when an entry is accepted: requirement plus premium plus the fee provision, for the structures requested | Above zero |
 | **Loss at expiry, estimate** | The most the structure loses if every leg has the same expiry, is held to it, is never exercised or assigned early, and settles at its exercise value, before fees | Zero or more |
-| **Budget free** | What the bot's budget has left for a new entry (ADR 0059) | Can go below zero |
+| **Free budget** | What the bot's budget has left for a new entry (ADR 0059) | Can go below zero |
 
 - **The requirement and the commitment are different numbers by design.** A $5-wide call spread sold for $3.07 has a requirement of $500.00 and a commitment of $193.00 before fees. Comparing the two is never an error.
 - **None of them is a cap.** The commitment decides whether an entry may start. A market exit, fees, an early assignment or a close that does not complete can each cost more than the estimate.
@@ -37,8 +37,10 @@ All are whole cents. Nothing is rounded; an amount that does not come to whole c
 
 The requirement sums every leg's exercise payoff as a function of the underlying's price and takes the lowest point. It is read at a price of zero, at every strike, and from the slope above the highest strike. The strikes alone are not enough: a put structure can be at its worst at zero, and a call structure can keep losing above its last strike.
 
-- A loss that grows without limit above the highest strike is refused.
+- A loss that grows without limit above the highest strike is refused. That reason is given first, ahead of any about expiries.
+- Alpaca's page says to find the price with the lowest payoff. Reading it at zero and from the slope above the top strike is this repo's way of finding it.
 - A requirement plus premium of zero or less is refused. Such a result means the prices do not belong together.
+- A structure bought for less than it must be worth at expiry is admitted, with a loss estimate of zero. Those prices do not belong together either; whether to refuse them too is the owner's to say.
 - A bounded payoff does not prove Alpaca will take the structure as one order. Cover is a separate check.
 
 ### 4. Mixed expiries
@@ -64,12 +66,8 @@ A per-leg limit on the bid-ask gap does not bound what a structure costs to trad
 
 Nothing on the money path calls these yet.
 
-## Still to come
-
-Each lands as a section here with its code: the check of a structure once its contracts are picked; the American pricing model and delta; the contract resolver and its evidence; option quotes and the shared IBKR allowance; the order contract and the order lifecycle; custody and fees with a multiplier; scheduled closes; assignment, exercise and expiry; market exits; and the extension of ADR 0059's live envelope to option structures.
-
 ## Alternatives considered
 
-- **Ask Alpaca what an order costs.** There is no such call. A rejected order is the only pre-trade answer Alpaca gives, and it arrives after the bot has committed to the entry.
+- **Ask Alpaca what an order costs.** Its references describe no such call. The account does report an option buying power, which Deploy is to read as a second check, but that is an account-wide figure and not the cost of one order.
 - **Use the loss at expiry as the amount to set aside.** Rejected: Alpaca holds the requirement, not the loss, and the loss is not estimated at all when expiries are mixed. Keeping both lets the bot compare its own figure with Alpaca's.
 - **Check the payoff only at the strikes.** Rejected: it reports zero for one bought 450 put against two sold 440 puts, whose payoff is above zero at both strikes and falls to minus $430 a share at a price of zero.

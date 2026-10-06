@@ -257,6 +257,32 @@
       }
     },
     {
+      "case": "bought_for_less_than_it_must_be_worth_has_no_loss_to_estimate",
+      "source": "hand-derived: the same 440 call and 460 put, worth at least $2,000 at expiry, bought for $1,500. The estimate stops at zero; it does not report a negative loss",
+      "legs": [
+        {
+          "leg_id": "call",
+          "position": "long",
+          "right": "call",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "put",
+          "position": "long",
+          "right": "put",
+          "strike": "460",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "call": "7.60",
+        "put": "7.40"
+      }
+    },
+    {
       "case": "iron_condor_two_units",
       "units": 2,
       "legs": [
@@ -421,6 +447,51 @@
         "high": "9.10",
         "body": "5.90",
         "low": "3.80"
+      }
+    },
+    {
+      "case": "quoted_call_butterfly_three_units_counts_the_body_twice",
+      "source": "hand-derived: four-cent gaps on three legs, the body twice, three structures: 4 x 4 cents x 100 x 3",
+      "units": 3,
+      "legs": [
+        {
+          "leg_id": "low",
+          "position": "long",
+          "right": "call",
+          "strike": "445",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "body",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 2,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "high",
+          "position": "long",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "low": [
+          "9.66",
+          "9.70"
+        ],
+        "body": [
+          "6.40",
+          "6.44"
+        ],
+        "high": [
+          "4.06",
+          "4.10"
+        ]
       }
     },
     {
@@ -624,6 +695,28 @@
           "position": "long",
           "right": "call",
           "strike": "450",
+          "ratio": 1,
+          "expiry": "270115"
+        }
+      ]
+    },
+    {
+      "case": "sold_call_nothing_covers_is_unbounded_whatever_its_expiries",
+      "source": "hand-derived: a sold December call beside a bought January put. The loss has no limit, and that is the reason given, ahead of the mixed expiries",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "put",
+          "strike": "440",
           "ratio": 1,
           "expiry": "270115"
         }

@@ -14,6 +14,14 @@ this fixture pins:
 - the cost of an order is that requirement plus the net premium, a credit
   entering as a negative number.
 
+The page says to find the price with the lowest payoff. Reading the payoff at
+a price of zero, at every strike, and from its slope above the highest strike
+is this repo's way of finding it, and the hand-derived cases are what pin it.
+
+That a multi-leg price is positive for a debit and negative for a credit is
+from Alpaca's order reference, `POST /v2/orders`, field `limit_price`,
+https://docs.alpaca.markets/reference/postorder (read 2026-10-06).
+
 Two of the cases are the page's own worked examples, numbers unchanged:
 
 - `alpaca_documented_four_calls_offset_to_nothing`: long $100 call, short $110

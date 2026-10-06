@@ -18,13 +18,13 @@ from golden_support.registry import default as registry  # noqa: E402
 
 from app.options.contract import OptionContract  # noqa: E402
 from app.options.requirement import (  # noqa: E402
+    EntrySize,
     LegQuote,
     StructureMoneyRefused,
-    broker_requirement_cents,
+    broker_requirement,
     entry_money,
-    natural_entry_prices,
-    net_entry_premium_cents,
-    round_trip_cost_cents,
+    natural_net_price,
+    round_trip_cost,
 )
 from app.options.structure import ResolvedLeg, ResolvedStructure  # noqa: E402
 
@@ -58,22 +58,20 @@ def _structure(case: dict[str, Any]) -> ResolvedStructure:
 
 def _worked_out(case: dict[str, Any]) -> dict[str, Any]:
     """Everything the fixture states for a case, from the canonical functions."""
-    structure, units, multiplier = _structure(case), case.get("units", 1), _INPUTS["multiplier"]
+    structure = _structure(case)
+    size = EntrySize(multiplier=_INPUTS["multiplier"], units=case.get("units", 1))
     try:
-        actual: dict[str, Any] = {
-            "broker_requirement_cents": broker_requirement_cents(structure, multiplier=multiplier, units=units)
-        }
+        actual: dict[str, Any] = {"broker_requirement_cents": broker_requirement(structure, size)}
         quotes = {leg_id: LegQuote(Decimal(bid), Decimal(ask)) for leg_id, (bid, ask) in case.get("quotes", {}).items()}
         if quotes:
-            prices = natural_entry_prices(structure, quotes)
+            net_price = natural_net_price(structure, quotes)
         elif "leg_prices" in case:
-            prices = {leg_id: Decimal(price) for leg_id, price in case["leg_prices"].items()}
+            # A case that states each leg's price states both sides of the market as that price.
+            stated = {leg_id: LegQuote(Decimal(price), Decimal(price)) for leg_id, price in case["leg_prices"].items()}
+            net_price = natural_net_price(structure, stated)
         else:
             return actual
-        premium = net_entry_premium_cents(structure, prices, multiplier=multiplier, units=units)
-        money = entry_money(
-            structure, net_entry_premium_cents=premium, fee_provision_cents=0, multiplier=multiplier, units=units
-        )
+        money = entry_money(structure, size, net_price=net_price, fee_provision_cents=0)
     except StructureMoneyRefused as refused:
         return {"refusal": refused.reason.value}
     actual |= {
@@ -83,7 +81,7 @@ def _worked_out(case: dict[str, Any]) -> dict[str, Any]:
     }
     assert money.broker_requirement_cents == actual["broker_requirement_cents"]
     if quotes:
-        actual["round_trip_cost_cents"] = round_trip_cost_cents(structure, quotes, multiplier=multiplier, units=units)
+        actual["round_trip_cost_cents"] = round_trip_cost(structure, quotes, size)
     return actual
 
 

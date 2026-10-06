@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.options.contract import OptionContract
+from app.schemas.action_plan import MAX_OPTION_LEGS
 
 LegPosition = Literal["long", "short"]
 
@@ -36,7 +37,7 @@ class ResolvedStructure(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    legs: Annotated[tuple[ResolvedLeg, ...], Field(min_length=1)]
+    legs: Annotated[tuple[ResolvedLeg, ...], Field(min_length=1, max_length=MAX_OPTION_LEGS)]
 
     @model_validator(mode="after")
     def _one_underlying_and_distinct_legs(self) -> ResolvedStructure:

@@ -139,6 +139,19 @@ CASES: list[dict[str, Any]] = [
         },
     },
     {
+        "case": "bought_for_less_than_it_must_be_worth_has_no_loss_to_estimate",
+        "source": "hand-derived: the same 440 call and 460 put, worth at least $2,000 at expiry, bought for $1,500. "
+        "The estimate stops at zero; it does not report a negative loss",
+        "legs": [_leg("call", "long", "call", "440"), _leg("put", "long", "put", "460")],
+        "leg_prices": {"call": "7.60", "put": "7.40"},
+        "expected": {
+            "broker_requirement_cents": 0,
+            "net_entry_premium_cents": 150_000,
+            "commitment_before_fees_cents": 150_000,
+            "loss_at_expiry_cents": 0,
+        },
+    },
+    {
         "case": "iron_condor_two_units",
         "units": 2,
         "legs": [
@@ -205,6 +218,24 @@ CASES: list[dict[str, Any]] = [
             "net_entry_premium_cents": 11_000,
             "commitment_before_fees_cents": 11_000,
             "loss_at_expiry_cents": 11_000,
+        },
+    },
+    {
+        "case": "quoted_call_butterfly_three_units_counts_the_body_twice",
+        "source": "hand-derived: four-cent gaps on three legs, the body twice, three structures: 4 x 4 cents x 100 x 3",
+        "units": 3,
+        "legs": [
+            _leg("low", "long", "call", "445"),
+            _leg("body", "short", "call", "450", ratio=2),
+            _leg("high", "long", "call", "455"),
+        ],
+        "quotes": {"low": ["9.66", "9.70"], "body": ["6.40", "6.44"], "high": ["4.06", "4.10"]},
+        "expected": {
+            "broker_requirement_cents": 0,
+            "net_entry_premium_cents": 30_000,
+            "commitment_before_fees_cents": 30_000,
+            "loss_at_expiry_cents": 30_000,
+            "round_trip_cost_cents": 4_800,
         },
     },
     {
@@ -300,6 +331,16 @@ CASES: list[dict[str, Any]] = [
         "expected": {"refusal": "OPTION_STRUCTURE_MIXED_EXPIRY_WITH_SOLD_LEG"},
     },
     {
+        "case": "sold_call_nothing_covers_is_unbounded_whatever_its_expiries",
+        "source": "hand-derived: a sold December call beside a bought January put. The loss has no limit, and that "
+        "is the reason given, ahead of the mixed expiries",
+        "legs": [
+            _leg("sold", "short", "call", "450"),
+            _leg("bought", "long", "put", "440", expiry=LATER_EXPIRY),
+        ],
+        "expected": {"refusal": "OPTION_STRUCTURE_LOSS_UNBOUNDED"},
+    },
+    {
         "case": "credit_larger_than_the_width_is_refused",
         "source": "hand-derived: a $5-wide spread cannot honestly be sold for $5.10",
         "legs": [_leg("sold", "short", "call", "450"), _leg("bought", "long", "call", "455")],
@@ -342,6 +383,12 @@ def _scanned_low(legs: list[dict[str, Any]]) -> Fraction | None:
     return min(_payoff(legs, Fraction(step, 1000)) for step in range(steps + 1))
 
 
+def _whole(amount: Fraction) -> int:
+    if amount.denominator != 1:
+        raise SystemExit(f"{amount} is not a whole number of cents")
+    return amount.numerator
+
+
 def _entry_prices(case: dict[str, Any]) -> dict[str, Fraction] | None:
     if "leg_prices" in case:
         return {leg_id: Fraction(price) for leg_id, price in case["leg_prices"].items()}
@@ -365,7 +412,7 @@ def _scanned(case: dict[str, Any]) -> dict[str, Any]:
     if sold and not one_expiry:
         return {"refusal": "OPTION_STRUCTURE_MIXED_EXPIRY_WITH_SOLD_LEG"}
     in_cents = units * MULTIPLIER * 100
-    scanned: dict[str, Any] = {"broker_requirement_cents": int(max(Fraction(0), -low) * in_cents)}
+    scanned: dict[str, Any] = {"broker_requirement_cents": _whole(max(Fraction(0), -low) * in_cents)}
     prices = _entry_prices(case)
     if prices is None:
         return scanned
@@ -374,12 +421,12 @@ def _scanned(case: dict[str, Any]) -> dict[str, Any]:
     ) * in_cents
     if scanned["broker_requirement_cents"] + premium <= 0:
         return {"refusal": "OPTION_STRUCTURE_COMMITMENT_NOT_POSITIVE"}
-    scanned["net_entry_premium_cents"] = int(premium)
-    scanned["commitment_before_fees_cents"] = int(scanned["broker_requirement_cents"] + premium)
-    scanned["loss_at_expiry_cents"] = int(max(Fraction(0), premium - low * in_cents)) if one_expiry else None
+    scanned["net_entry_premium_cents"] = _whole(premium)
+    scanned["commitment_before_fees_cents"] = _whole(scanned["broker_requirement_cents"] + premium)
+    scanned["loss_at_expiry_cents"] = _whole(max(Fraction(0), premium - low * in_cents)) if one_expiry else None
     if "quotes" in case:
         by_leg = {leg["leg_id"]: leg for leg in legs}
-        scanned["round_trip_cost_cents"] = int(
+        scanned["round_trip_cost_cents"] = _whole(
             sum(by_leg[leg_id]["ratio"] * (Fraction(ask) - Fraction(bid)) for leg_id, (bid, ask) in case["quotes"].items())
             * in_cents
         )

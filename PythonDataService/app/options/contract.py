@@ -29,6 +29,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.options.exact import whole_units
 from app.options.expiry import OptionExpiryMs, option_expiry_anchor_ms, option_expiry_date
 
 OptionRight = Literal["call", "put"]
@@ -43,9 +44,6 @@ _FIRST_SYMBOL_YEAR = 2000
 _LAST_SYMBOL_YEAR = 2099
 MAX_STRIKE_THOUSANDTHS = 99_999_999
 _THOUSANDTHS_PER_DOLLAR = 1000
-# How large and how fine a number is read at all before it is judged as a strike.
-_MAX_STRIKE_DIGITS = 12
-_MAX_STRIKE_DECIMALS = 40
 
 
 def strike_thousandths(strike: Decimal | int | float | str) -> int:
@@ -61,17 +59,9 @@ def strike_thousandths(strike: Decimal | int | float | str) -> int:
         dollars = strike if isinstance(strike, Decimal) else Decimal(str(strike))
     except InvalidOperation as exc:
         raise ValueError(f"a strike must be a number of dollars, got {strike!r}") from exc
-    if not dollars.is_finite():
-        raise ValueError(f"a strike must be a finite number of dollars, got {strike!r}")
-    # Bounded before the exact ratio below, which writes out every digit an exponent implies.
-    if dollars.adjusted() > _MAX_STRIKE_DIGITS or dollars.as_tuple().exponent < -_MAX_STRIKE_DECIMALS:
-        raise ValueError(f"a strike is an everyday number of dollars, got {strike!r}")
-    # The exact ratio, so no decimal context rounds a too-fine strike into an acceptable one.
-    numerator, denominator = dollars.as_integer_ratio()
-    thousandths, remainder = divmod(numerator * _THOUSANDTHS_PER_DOLLAR, denominator)
-    if remainder:
-        raise ValueError(f"a strike is listed to a thousandth of a dollar at the finest, got {strike!r}")
-    return thousandths
+    return whole_units(
+        dollars, units_per_one=_THOUSANDTHS_PER_DOLLAR, what="a strike", unit="thousandths of a dollar"
+    )
 
 
 def require_symbol_expiry(expiry_ms: int) -> int:
