@@ -11,7 +11,7 @@ import pytest
 
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeedError
 from app.services.pricing_bar_stream import PricingBarStream, PricingRefusal
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger, SourceBarRetentionLimitError
 
 _MINUTE_MS = 60_000
 _T0 = 1_788_000_000_000
@@ -35,7 +35,8 @@ class _Subscriptions:
         self.opened = 0
         self.connected = True
         self.stale = False
-        self.opened_at: list[float] = []
+        # Set by a test to keep every subscription after the first silent until released.
+        self.hold_before_delivering: asyncio.Event | None = None
 
     async def stream_bars(
         self, symbol: str, *, use_rth: bool = True, continuity: ContinuityPolicy | None = None
@@ -43,7 +44,8 @@ class _Subscriptions:
         del symbol, use_rth, continuity
         script = self._subscriptions[self.opened] if self.opened < len(self._subscriptions) else []
         self.opened += 1
-        self.opened_at.append(asyncio.get_running_loop().time())
+        if self.opened > 1 and self.hold_before_delivering is not None:
+            await self.hold_before_delivering.wait()
         for step in script:
             if isinstance(step, Exception):
                 raise step
@@ -138,31 +140,86 @@ async def test_a_stream_that_is_down_waits_for_the_connection_before_it_asks_aga
     assert feed.opened == 2
 
 
-async def test_a_stream_that_keeps_failing_asks_less_and_less_often(ledger: SourceBarLedger) -> None:
-    """Each attempt can spend one of the connection's paced requests, which every bot shares."""
-    failing = [[MarketDataFeedError("no line", reason="stall")] for _ in range(5)]
-    feed = _Subscriptions(*failing)
+async def test_a_stream_that_keeps_failing_asks_less_and_less_often_until_a_bar_arrives(
+    ledger: SourceBarLedger,
+) -> None:
+    """Each attempt can spend one of the connection's paced requests, which every bot shares.
+
+    The pause doubles to its ceiling while the stream keeps failing, and is
+    back to the first pause once a bar has been retained.
+    """
+    failure = MarketDataFeedError("no line", reason="stall")
+    feed = _Subscriptions([failure], [failure], [failure], [failure], [_qqq(_T0), failure], [])
+    pauses: list[float] = []
+
+    async def pause(seconds: float) -> None:
+        pauses.append(seconds)
+        await asyncio.sleep(0)
+
     async with PricingBarStream(
-        feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=0, resubscribe_delay_s=0.02, resubscribe_max_delay_s=0.08
+        feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=0,
+        resubscribe_delay_s=2.0, resubscribe_max_delay_s=5.0, sleep=pause,
     ):
-        while feed.opened < 5:
-            await asyncio.sleep(0.01)
+        while feed.opened < 6:
+            await asyncio.sleep(0)
 
-    pauses = [later - earlier for earlier, later in zip(feed.opened_at, feed.opened_at[1:], strict=False)]
-    # 0.02 s, then doubling to the 0.08 s ceiling. A pause is never shorter than asked for.
-    assert all(pause >= asked * 0.9 for pause, asked in zip(pauses, [0.02, 0.04, 0.08, 0.08], strict=True)), pauses
+    assert pauses == [2.0, 4.0, 5.0, 5.0, 2.0]
 
 
-async def test_a_late_bar_on_a_stream_that_recovered_is_late_not_a_broken_feed(ledger: SourceBarLedger) -> None:
-    feed = _Subscriptions([MarketDataFeedError("minute incomplete", reason="MINUTE_INCOMPLETE")], [])
+async def test_a_stream_whose_bars_can_no_longer_be_kept_stops_and_says_so(
+    ledger: SourceBarLedger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking the feed again cannot cure a full ledger, and each attempt would spend a request."""
+
+    def full(*_args: object, **_kwargs: object) -> RetainedSourceBar:
+        raise SourceBarRetentionLimitError("SOURCE_BAR_RETENTION_LIMIT: fake:QQQ reached its retained bars")
+
+    monkeypatch.setattr(ledger, "append", full)
+    feed = _Subscriptions([_qqq(_T0)], [_qqq(_T0)])
     async with PricingBarStream(
-        feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=20, resubscribe_delay_s=0.01
+        feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=50, resubscribe_delay_s=0.001
     ) as stream:
-        while feed.opened < 2:
-            await asyncio.sleep(0.01)
         refused = await stream.bar_for_entry(_T0, time_left_ms=20_000)
 
-    assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_BAR_LATE"
+    assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_FEED_UNHEALTHY"
+    assert "can no longer be retained" in refused.why
+    assert feed.opened == 1
+
+
+async def test_a_stream_that_failed_says_what_failed_until_a_bar_arrives_again(ledger: SourceBarLedger) -> None:
+    """Asked for again is not delivering yet. Once a bar has come, a missing one is merely late."""
+    feed = _Subscriptions([MarketDataFeedError("minute incomplete", reason="MINUTE_INCOMPLETE")], [_qqq(_T0)])
+    feed.hold_before_delivering = asyncio.Event()
+    async with PricingBarStream(
+        feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=20, resubscribe_delay_s=0.001
+    ) as stream:
+        while feed.opened < 2:
+            await asyncio.sleep(0)
+        asked_again = await stream.bar_for_entry(_T0, time_left_ms=20_000)
+
+        feed.hold_before_delivering.set()
+        delivering = await stream.bar_for_entry(_T0, time_left_ms=20_000)
+        merely_late = await stream.bar_for_entry(_T0 + _MINUTE_MS, time_left_ms=20_000)
+
+    assert isinstance(asked_again, PricingRefusal)
+    assert asked_again.reason_code == "PRICING_FEED_UNHEALTHY" and "MINUTE_INCOMPLETE" in asked_again.why
+    assert isinstance(delivering, RetainedSourceBar)
+    assert isinstance(merely_late, PricingRefusal) and merely_late.reason_code == "PRICING_BAR_LATE"
+
+
+async def test_a_feed_that_says_it_is_disconnected_is_a_broken_feed_not_a_late_bar(ledger: SourceBarLedger) -> None:
+    feed = _Subscriptions([])
+    feed.connected = False
+    async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=20) as stream:
+        refused = await stream.bar_for_entry(_T0, time_left_ms=20_000)
+
+    assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_FEED_UNHEALTHY"
+
+
+async def test_a_plan_spelt_in_lower_case_still_finds_its_bars(ledger: SourceBarLedger) -> None:
+    """The feed stamps bars with the upper-cased symbol; a plan's own spelling is not normalized."""
+    async with PricingBarStream(_Subscriptions([_qqq(_T0)]), ledger, symbol="qqq", run_id="run-1", wait_ms=2_000) as stream:
+        assert isinstance(await stream.bar_for_entry(_T0, time_left_ms=20_000), RetainedSourceBar)
 
 
 async def test_a_line_that_stalled_without_failing_is_a_broken_feed_not_a_late_bar(ledger: SourceBarLedger) -> None:
@@ -175,7 +232,7 @@ async def test_a_line_that_stalled_without_failing_is_a_broken_feed_not_a_late_b
 
 
 async def test_a_minute_with_no_trade_is_not_a_price_for_a_sell_either(ledger: SourceBarLedger) -> None:
-    """A sell is never held back for it; it is simply handed no bar."""
+    """The sell is handed no bar for that minute, as if none had arrived."""
     feed = _Subscriptions([_qqq(_T0, volume=0), _qqq(_T0 + _MINUTE_MS)])
     async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=2_000) as stream:
         await stream.bar_for_entry(_T0 + _MINUTE_MS, time_left_ms=20_000)

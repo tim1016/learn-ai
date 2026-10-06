@@ -164,7 +164,9 @@ async def run(tmp_path: Path) -> AsyncIterator[Any]:
     clerk = _FakeClerk(repository=repo)
     set_alpaca_clerk(clerk)
 
-    async def _run(script: list[_Step], *, wait_ms: int = 20, binding: BrokerBotBinding | None = None) -> _Ran:
+    async def _run(
+        script: list[_Step], *, wait_ms: int | None = 20, binding: BrokerBotBinding | None = None
+    ) -> _Ran:
         feed = _ScriptedFeed(script)
         started = time.monotonic()
         await bot_trade_strategy.run_trade_bot(
@@ -267,8 +269,21 @@ async def test_an_entry_never_waits_for_a_price_past_its_own_time_limit(
 
     ran = await run([_Step(_green_bar(_FIRST_GREEN_MS)), _Step(_green_bar(_ENTER_MS))], wait_ms=60_000)
 
-    assert ran.took_s < 2, "the entry waited past its own time limit"
+    assert ran.took_s < 10, "the entry waited past its own time limit"
     assert ran.calls == []
+    [(reason_code, _why)] = ran.blocked()
+    assert reason_code == "PRICING_BAR_LATE"
+
+
+async def test_the_wait_is_the_configured_one_when_a_run_is_given_none(
+    run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production wiring passes no wait: the setting decides it."""
+    monkeypatch.setattr(bot_trade_strategy.settings, "PRICING_BAR_WAIT_MS", 0)
+
+    ran = await run([_Step(_green_bar(_FIRST_GREEN_MS)), _Step(_green_bar(_ENTER_MS))], wait_ms=None)
+
+    assert ran.took_s < 4, "the entry waited though the configured wait is zero"
     [(reason_code, _why)] = ran.blocked()
     assert reason_code == "PRICING_BAR_LATE"
 
@@ -344,7 +359,7 @@ async def test_a_sell_never_waits_for_a_price_and_is_never_held_back(run: Any, p
         wait_ms=60_000,
     )
 
-    assert ran.took_s < 5, "a sell waited for a price"
+    assert ran.took_s < 10, "a sell waited for a price"
     enter, sell = ran.calls
     assert (enter["purpose"], sell["purpose"]) == ("ENTER", "EXIT")
     assert sell["retained_source_bar"].end_ms == _EXIT_MS

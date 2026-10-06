@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final
 
@@ -90,23 +91,30 @@ class PricingBarStream:
         wait_ms: int,
         resubscribe_delay_s: float = RESUBSCRIBE_DELAY_S,
         resubscribe_max_delay_s: float = RESUBSCRIBE_MAX_DELAY_S,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._feed = feed
         self._ledger = ledger
-        self._symbol = symbol
+        # The feed stamps its bars with the upper-cased symbol, and the ledger
+        # is read back by that.
+        self._symbol = symbol.upper()
         self._run_id = run_id
         self._wait_ms = wait_ms
         self._resubscribe_delay_s = resubscribe_delay_s
         self._resubscribe_max_delay_s = resubscribe_max_delay_s
+        self._sleep = sleep
         # Minutes delivered twice with different prices: neither prices an order.
         self._conflicted: set[int] = set()
         self._arrived = asyncio.Event()
-        # Why the stream is not subscribed, from the failure that ended a
-        # subscription until the next one is asked for. None while subscribed.
+        # Why the stream stopped delivering, from the failure that ended a
+        # subscription until the next bar is retained. None while it delivers.
         self._down: str | None = None
-        # A "stopped delivering" line was logged and no "delivering again" since:
-        # an outage is two log lines, however many attempts it takes.
+        # One outage, however many attempts it takes, is logged once as down
+        # and once as back, with one stack for a failure the feed did not name
+        # and one for a health probe that could not be read.
         self._outage_logged = False
+        self._unnamed_failure_logged = False
+        self._unreadable_health_logged = False
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -195,10 +203,11 @@ class PricingBarStream:
     def _not_delivering(self) -> str | None:
         """Why the feed is not delivering this symbol's bars right now, or None when it is.
 
-        Read when an ENTER's wait ends, so a bar that is merely late on a
-        healthy stream is not blamed on a failure the stream has already
-        recovered from, and a line that stalled without raising is not called
-        late.
+        Read when an ENTER's wait ends. A stream that failed is not delivering
+        until a bar arrives again, and says what failed. One that has
+        delivered since is judged by the feed's own health, so a bar that is
+        merely late is not blamed on a failure already recovered from, and a
+        line that stalled without raising is not called late.
         """
         if self._down is not None:
             return self._down
@@ -236,7 +245,8 @@ class PricingBarStream:
                 # raises the transport's own error, not the feed's. The Signal
                 # stream rides such a drop out; so must this one.
                 why = f"{type(exc).__name__}: {exc}"
-                if not self._outage_logged:
+                if not self._unnamed_failure_logged:
+                    self._unnamed_failure_logged = True
                     logger.warning(
                         "the pricing stream failed on an error the feed did not name",
                         exc_info=True,
@@ -254,21 +264,29 @@ class PricingBarStream:
                 )
             self._down = why
             self._arrived.set()
-            await asyncio.sleep(delay)
+            await self._sleep(delay)
             while not self._connected():
-                await asyncio.sleep(delay)
+                await self._sleep(delay)
             delay = min(delay * 2, self._resubscribe_max_delay_s)
-            # Asked for again. Until a bar arrives, the feed's own health says
-            # whether it is delivering.
-            self._down = None
 
     def _connected(self) -> bool:
         """Whether the feed's connection is up, so that subscribing again can succeed."""
         try:
             return self._feed.health().connected
         except Exception:
-            # A health probe that raises proves nothing about the feed; the
-            # refusal an ENTER gets meanwhile logs the failure itself.
+            # A health probe that raises proves nothing about the feed, so the
+            # stream keeps waiting. Said once per outage: this is polled.
+            if not self._unreadable_health_logged:
+                self._unreadable_health_logged = True
+                logger.warning(
+                    "the pricing stream cannot read its feed's health; it will not subscribe again until it can",
+                    exc_info=True,
+                    extra={
+                        "action": "pricing_stream_connection_unreadable",
+                        "symbol": self._symbol,
+                        "run_id": self._run_id,
+                    },
+                )
             return False
 
     def _retain(self, bar: MarketDataBar) -> None:
@@ -297,6 +315,8 @@ class PricingBarStream:
             raise _LedgerFailure(str(exc)) from exc
         self._down = None
         self._arrived.set()
+        self._unnamed_failure_logged = False
+        self._unreadable_health_logged = False
         if self._outage_logged:
             self._outage_logged = False
             logger.info(
