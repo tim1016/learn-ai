@@ -1081,7 +1081,7 @@ def build_alpaca_paper_deploy_receipt(
         sizing=request.sizing,
         carryover_policy=request.carryover_policy,
         evidence_override=request.evidence_override,
-        action_plan=alpaca_v1_action_plan(request.symbol),
+        action_plan=alpaca_v1_action_plan(request.order_symbol),
         admission=admission,
         bot=bot,
         parameters=resolved_params.effective,

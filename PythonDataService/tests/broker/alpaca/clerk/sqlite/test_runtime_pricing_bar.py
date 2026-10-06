@@ -21,6 +21,7 @@ import pytest
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, LIVE_ENVELOPE_UNOBSERVED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
@@ -50,7 +51,6 @@ from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import (
     one_account,  # noqa: F401 -- pytest fixture, used by name
 )
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, MINUTE_MS, _Clock, _LiveRead
-from tests.broker.v2panel.test_dry_run_recovery import _publish_quote
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
 pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
@@ -73,6 +73,17 @@ def _retained(symbol: str, *, close: str, end_ms: int = NOON, account_id: str = 
     return RetainedSourceBar.from_market_bar(
         seq=1, account_id=account_id, bar=_minute_bar(symbol, close=close, end_ms=end_ms)
     )
+
+
+def _publish_quotes(at_ms: int, **asks: float) -> None:
+    """Publish one fresh IBKR book for each symbol: a Deploy prices its minimum position at the traded asset's ask."""
+    market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
+        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=at_ms, connection_changed_at_ms=at_ms,
+        symbol_statuses=(), quotes=tuple(
+            TopOfBookQuote(symbol=symbol, bid=ask, ask=ask, source="ibkr.market_data.status", observed_at_ms=at_ms)
+            for symbol, ask in asks.items()
+        ),
+    ), now_ms=at_ms)
 
 
 class _EchoingTradePort(_FakeTradePort):
@@ -534,7 +545,7 @@ async def test_a_dry_run_fills_at_the_traded_assets_close(tmp_path: Path) -> Non
         ),
     )
     market_liveness.reset_market_liveness_store_for_testing()
-    _publish_quote(NOON, bid=100.0, ask=100.0)
+    _publish_quotes(NOON, SPY=100.0, QQQ=40.0)
     authority = SyntheticBindingAuthority(
         binding=binding, artifacts_root=tmp_path,
         lifecycle_repo_for=lambda _sid: pytest.fail("a Dry Run's entry never reads the runner's lifecycle state"),
@@ -561,6 +572,41 @@ async def test_a_dry_run_fills_at_the_traded_assets_close(tmp_path: Path) -> Non
 
         assert bought.state is not EffectOperationState.REJECTED, bought.explanation
         assert _fill_prices(runtime.clerk.repository, bought) == [40.10]
+    finally:
+        await close_synthetic_clerk_runtimes()
+        market_liveness.reset_market_liveness_store_for_testing()
+
+
+async def test_a_deploy_is_committed_at_the_price_of_the_asset_the_bot_buys(tmp_path: Path) -> None:
+    """One estimated position is one QQQ. SPY's price commits nothing for it: the Deploy waits for QQQ's."""
+    clock = _TestClock(NOON)
+    sid = "dry-commit-qqq"
+    binding = BrokerBotBinding(
+        strategy_instance_id=sid, strategy_key="ema_crossover_signal", broker="alpaca", symbol=SIGNAL,
+        mode="dry_run", quantity=1, action_plan=_TRADES_QQQ, run_id="run-dry", created_at_ms=0,
+        sealed_account_id=synthetic_account_id_for_strategy(sid), exit_terms=TERMS,
+        budget_consent=DeployBudgetConsent(
+            committed_cents=5_000, risk_revision=0, actor="owner", request_fingerprint="reviewed", world="synthetic",
+        ),
+    )
+    market_liveness.reset_market_liveness_store_for_testing()
+    authority = SyntheticBindingAuthority(
+        binding=binding, artifacts_root=tmp_path,
+        lifecycle_repo_for=lambda _sid: pytest.fail("a Dry Run's Deploy never reads the runner's lifecycle state"),
+        runtime_in_use=lambda _sid: True, brokers={}, clock=clock,
+    )
+    try:
+        await authority.ensure_recoverable()
+        runtime = get_clerk_runtime(binding.sealed_account_id or "")
+        assert runtime is not None and runtime.clerk is not None
+
+        _publish_quotes(NOON, SPY=30.0)
+        with pytest.raises(BudgetUnavailable, match="fresh IBKR price"):
+            await runtime.clerk.register_strategy_run(binding)
+
+        # $50 covers one QQQ at $40. It would not cover one at SPY's $500.
+        _publish_quotes(NOON, SPY=500.0, QQQ=40.0)
+        await runtime.clerk.register_strategy_run(binding)
     finally:
         await close_synthetic_clerk_runtimes()
         market_liveness.reset_market_liveness_store_for_testing()

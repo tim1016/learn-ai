@@ -1088,6 +1088,19 @@
             "minLength": 1,
             "title": "Symbol",
             "type": "string"
+          },
+          "traded_symbol": {
+            "anyOf": [
+              {
+                "maxLength": 12,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traded Symbol"
           }
         },
         "required": [
@@ -1666,6 +1679,19 @@
             "minLength": 1,
             "title": "Symbol",
             "type": "string"
+          },
+          "traded_symbol": {
+            "anyOf": [
+              {
+                "maxLength": 12,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traded Symbol"
           }
         },
         "required": [
@@ -4417,6 +4443,17 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "traded_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traded Symbol"
           }
         },
         "required": [

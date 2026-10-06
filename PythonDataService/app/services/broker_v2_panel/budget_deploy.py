@@ -60,6 +60,7 @@ from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker_configuration.runtime import get_broker_configuration_service
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.account_authority import AuthorityKind
+from app.schemas.action_plan import ActionPlan, traded_instrument
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
     AccountMoneyView,
@@ -135,7 +136,9 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
     assert repo is not None
     now = repo.clock()
     try:
-        quote = prepared_top_of_book(request.symbol, now)
+        # The entry is priced from the asset it buys, never from the Signal
+        # stream's symbol when the two differ (#2912).
+        quote = prepared_top_of_book(request.order_symbol, now)
         if quote is None:
             if not status_stream_connected(now):
                 # Not a short wait, and re-checking cannot help until the
@@ -152,7 +155,12 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
             # The read above asked IBKR for this symbol; its quote arrives with
             # a later snapshot, so the client re-checks instead of giving up.
             return DeploymentBudgetPreview(
-                state="awaiting_price", detail="Wait for a fresh IBKR price for this instrument, then review the budget.",
+                state="awaiting_price",
+                detail=(
+                    "Wait for a fresh IBKR price for this instrument, then review the budget."
+                    if request.traded_symbol is None
+                    else f"Waiting for a {request.traded_symbol} price from IBKR."
+                ),
                 world=world, custody_account_id=custody_id, bot_name_note=name_note,
             )
         requirement, _ = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
@@ -254,7 +262,9 @@ def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str 
         return None
     repo = runtime.sqlite_repository
     assert repo is not None
-    symbol = request.symbol.upper()
+    # Both sides are what a bot trades: the roster's symbol is the one the
+    # Clerk registered the bot under, which is the asset its orders are in.
+    symbol = request.order_symbol.upper()
     try:
         roster = home_roster(repo, world=world)
     except (sqlite3.Error, MoneyInputError):
@@ -399,9 +409,15 @@ async def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
 
 
 class _EntryConfiguration(BaseModel):
-    """Only custody-sealed quantity and symbol contribute to this money read."""
+    """Only custody-sealed quantity and traded asset contribute to this money read."""
     symbol: str = Field(min_length=1)
     quantity: int = Field(strict=True, gt=0)
+    action_plan: ActionPlan | None = None
+
+    @property
+    def order_symbol(self) -> str:
+        """The asset an entry buys: the sealed plan's, which is ``symbol`` unless the bot trades something else."""
+        return self.symbol if self.action_plan is None else traded_instrument(self.action_plan).underlying
 
 
 def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
@@ -482,7 +498,7 @@ def _next_entry(
     if config is None:
         raise BudgetUnavailable("The immutable position sizing is unavailable. Resolve deployment configuration evidence.")
     terms = _EntryConfiguration.model_validate_json(config.config_json)
-    quote = prepared_top_of_book(terms.symbol, repo.clock())
+    quote = prepared_top_of_book(terms.order_symbol, repo.clock())
     if quote is None:
         return _NextEntry(False, _WAITS, "Wait for a fresh IBKR price to judge the next position's cost.")
     decision = budget_entry_decision(projected, strategy_instance_id=sid, quantity=terms.quantity, price=quote.ask, at_ms=repo.clock())
