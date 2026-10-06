@@ -37,8 +37,8 @@ describe('offerQuickRanges', () => {
     // One month ending Monday 2026-09-14 starts on Saturday 2026-08-15.
     const bounds = heldBounds('QQQ', '2024-09-03', '2026-09-14');
 
-    expect(offerQuickRanges(['1M'], bounds, SESSIONS, LAST_COMPLETED, false)[0].range).toEqual({ from: '2026-08-15', to: '2026-09-14' });
-    expect(offerQuickRanges(['1M'], bounds, SESSIONS, LAST_COMPLETED, true)[0].range).toEqual({ from: '2026-08-17', to: '2026-09-14' });
+    expect(offerQuickRanges(['1M'], bounds, SESSIONS, LAST_COMPLETED, { sessionsOnly: false })[0].range).toEqual({ from: '2026-08-15', to: '2026-09-14' });
+    expect(offerQuickRanges(['1M'], bounds, SESSIONS, LAST_COMPLETED, { sessionsOnly: true })[0].range).toEqual({ from: '2026-08-17', to: '2026-09-14' });
   });
 
   it('refuses a range that starts before the first held day, with the reason', () => {
@@ -80,11 +80,22 @@ describe('offerQuickRanges', () => {
     });
 
     it('is refused once it falls more than a week short', () => {
-      const anyDay = (min: string) => offerQuickRanges(['5Y'], servedFrom(min), SESSIONS, LAST_COMPLETED, false)[0];
+      const anyDay = (min: string) => offerQuickRanges(['5Y'], servedFrom(min), SESSIONS, LAST_COMPLETED, { sessionsOnly: false })[0];
 
       // The exact start is 2021-10-02: seven days short is served, eight is not.
       expect(anyDay('2021-10-09').range).toEqual({ from: '2021-10-09', to: '2026-10-01' });
       expect(anyDay('2021-10-10')).toEqual({ key: '5Y', range: null, unavailable: 'The provider serves bars from 2021-10-10.' });
+    });
+
+    it('counts the week from the calendar start, not from the session the start moves to', () => {
+      // The start, Saturday 2021-10-02, moves to Monday the 4th, six days before the 10th; the range is still eight days short.
+      expect(offer('5Y', servedFrom('2021-10-10'))).toEqual({ key: '5Y', range: null, unavailable: 'The provider serves bars from 2021-10-10.' });
+    });
+
+    it('is refused however little it falls short, for a host whose ranges must be exact', () => {
+      const exact = offerQuickRanges(['5Y'], servedFrom('2021-10-05'), SESSIONS, LAST_COMPLETED, { exact: true })[0];
+
+      expect(exact).toEqual({ key: '5Y', range: null, unavailable: 'The provider serves bars from 2021-10-05.' });
     });
 
     it('carries no note when the page reads all five years', () => {

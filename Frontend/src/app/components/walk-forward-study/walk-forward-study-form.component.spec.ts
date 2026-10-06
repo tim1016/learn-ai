@@ -1,4 +1,5 @@
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import type { TickerOption } from '../../shared/ticker-range-picker/ticker-range-picker.types';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -41,17 +42,24 @@ const PREFILL: GridSearchSpecRequest = {
   min_trades: 3,
 };
 
-async function renderForm(service: Partial<WalkForwardStudyService>, inputs: Record<string, unknown> = {}) {
+async function renderForm(service: Partial<WalkForwardStudyService>, inputs: Record<string, unknown> = {}, pool?: readonly TickerOption[]) {
   return render(WalkForwardStudyFormComponent, {
     inputs: { strategies: [strategy()], preflightDebounceMs: 0, ...inputs },
     providers: [
-      ...fakePickerWorld().providers,
+      ...fakePickerWorld(pool).providers,
       { provide: WalkForwardStudyService, useValue: { preflight: vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN), launch: vi.fn(async (_spec: WalkForwardStudySpecRequest) => 'job-1'), ...service } },
     ],
   });
 }
 
 describe('WalkForwardStudyFormComponent', () => {
+  it('keeps 5Y greyed when the lake holds a day or two short of five years: the fold planner needs whole months', async () => {
+    // Five years ending Friday 2026-09-18 start on 2021-09-19.
+    await renderForm({}, {}, [{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2021-09-21', lastHeld: '2026-09-18' }]);
+
+    expect(await screen.findByRole('button', { name: '5Y, unavailable: SPY is held from 2021-09-21.' })).not.toBeNull();
+  });
+
   it('preflights the embedded grid plus the two month lengths and shows the fold plan', async () => {
     const preflight = vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN);
     await renderForm({ preflight });

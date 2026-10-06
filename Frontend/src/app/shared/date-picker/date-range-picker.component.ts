@@ -55,6 +55,8 @@ export class DateRangePickerComponent {
   readonly hostOffers = input<readonly QuickRangeOffer[] | null>(null);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
+  /** Whether a quick range must be exactly its label. A host whose planner counts whole months sets it; 5Y is then greyed when it falls short at all. */
+  readonly exactRanges = input(false);
   /**
    * Days the host's own dates stand on, such as a plan its server laid out.
    * Typed or shown, they are not refused for the bounds or the calendar: the
@@ -83,7 +85,9 @@ export class DateRangePickerComponent {
   protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions(), hostDays: this.hostDays() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
   protected readonly offers = computed(
-    () => this.hostOffers() ?? offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), this.sessionsOnly()),
+    () =>
+      this.hostOffers() ??
+      offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), { sessionsOnly: this.sessionsOnly(), exact: this.exactRanges() }),
   );
   protected readonly active = computed(() => activeQuickRanges(this.offers(), this.checked().from.date, this.checked().to.date));
 

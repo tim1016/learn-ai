@@ -22,6 +22,14 @@ export interface QuickRangeOffer {
   readonly note?: string;
 }
 
+/** What a host's run asks of its quick ranges. */
+export interface QuickRangeRules {
+  /** Whether both ends must be trading sessions. */
+  readonly sessionsOnly?: boolean;
+  /** Whether a range must be exactly its label, as a planner that counts whole months needs: 5Y then has no leeway. */
+  readonly exact?: boolean;
+}
+
 /**
  * How many days short of five years 5Y may start and still be offered.
  *
@@ -76,15 +84,16 @@ function calendarStart(key: QuickRangeKey, end: IsoDate): IsoDate | null {
  * 2026-04-30, a day more than six months); a planner refuses such a range in
  * its own words. With ``sessionsOnly`` the start then moves forward to the
  * next session, so a range never reaches past its label. A range whose start falls before ``bounds.min`` is refused with the
- * bound's own reason. 5Y is the exception: up to ``FIVE_YEAR_LEEWAY_DAYS``
- * short, it starts on ``bounds.min`` and carries a note saying so.
+ * bound's own reason. 5Y is the exception: with its calendar start up to
+ * ``FIVE_YEAR_LEEWAY_DAYS`` before ``bounds.min``, it starts on ``bounds.min``
+ * and carries a note saying so, unless the host's ranges must be ``exact``.
  */
 export function offerQuickRanges(
   keys: readonly QuickRangeKey[],
   bounds: DateBounds,
   sessions: TradingSessions | null,
   lastCompleted: IsoDate | null,
-  sessionsOnly = true,
+  { sessionsOnly = true, exact = false }: QuickRangeRules = {},
 ): QuickRangeOffer[] {
   const refuseAll = (reason: string): QuickRangeOffer[] => keys.map((key) => ({ key, range: null, unavailable: reason }));
   if (bounds.unknown !== null) return refuseAll(bounds.unknown);
@@ -102,7 +111,7 @@ export function offerQuickRanges(
     if (from === null || from > end) return refuse(`No trading session between ${start} and ${end}.`);
     if (bounds.min === null || from >= bounds.min) return { key, range: { from, to: end }, unavailable: null };
     const reason = bounds.minReason ?? `The first day is ${bounds.min}.`;
-    if (key !== '5Y' || from < addDays(bounds.min, -FIVE_YEAR_LEEWAY_DAYS)) return refuse(reason);
+    if (key !== '5Y' || exact || start < addDays(bounds.min, -FIVE_YEAR_LEEWAY_DAYS)) return refuse(reason);
     const first = sessionsOnly ? sessions.onOrAfter(bounds.min) : bounds.min;
     if (first === null || first > end) return refuse(reason);
     return { key, range: { from: first, to: end }, unavailable: null, note: `Starts on ${first}. ${reason}` };

@@ -84,7 +84,8 @@ Targets Angular 22.
   run on it; never substitute a date.
 - Quick ranges come from the picker's list. A page may pass a shorter `ranges`; it never
   adds labels or computes its own ranges in the browser. A page whose ranges are resolved
-  on the server passes them as `hostOffers`.
+  on the server passes them as `hostOffers`. A page whose planner counts whole months
+  passes `exactRanges`, so a 5Y that falls a few days short stays greyed.
 - The trading calendar comes from `TradingCalendarService`. Never hardcode which days
   trade, and never keep a second calendar in the browser.
 - A spec that renders a picker provides `fakePickerWorld()` or `provideFakeDateWorld()`,

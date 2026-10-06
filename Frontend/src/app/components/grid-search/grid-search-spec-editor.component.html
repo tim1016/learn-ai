@@ -15,7 +15,7 @@
 
     <div class="field field--window">
       <span>Window</span>
-      <app-date-range-picker label="Window" [from]="fromDate()" [to]="toDate()" [bounds]="bounds()" [gaps]="gaps()" [sessionsOnly]="false" (changed)="setDates($event)" />
+      <app-date-range-picker label="Window" [from]="fromDate()" [to]="toDate()" [bounds]="bounds()" [gaps]="gaps()" [sessionsOnly]="false" [exactRanges]="exactRanges()" (changed)="setDates($event)" />
     </div>
   </div>
 
