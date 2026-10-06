@@ -50,6 +50,8 @@ from app.broker.alpaca.clerk.models import (
     RecoveryEvaluationObservation,
 )
 from app.broker.alpaca.clerk.program_leg import (
+    PRICING_BAR_MISMATCH,
+    PRICING_BAR_UNAVAILABLE,
     LegRefusal,
     ProgramLegPolicy,
     ProgramLegRefused,
@@ -269,7 +271,7 @@ def _entry_wait_ending(outcome: EntryReadingOutcome, *, run_active: bool) -> str
 
 
 class _DecisionBarBoundTradePort:
-    """Bind each synthetic Clerk order to one immutable retained decision bar."""
+    """Bind each synthetic Clerk order to the one immutable retained bar that prices it."""
 
     def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar) -> None:
         self._inner = inner
@@ -764,20 +766,25 @@ class SqliteAlpacaClerkFacade:
             config_hash = configuration_hash(binding)
             config_json = canonicalize(immutable_configuration_payload(binding))
             display_name = _strategy_display_name(binding.strategy_key)
+            # The Clerk keeps custody, so the symbol it registers a bot under is
+            # the one the bot's orders are in: the Action Plan's traded
+            # instrument, which is the Signal stream's symbol only when the
+            # bot trades what it listens to (#2912).
+            traded_symbol = _entry_leg(binding.action_plan).instrument.underlying
             existing = self._repo.strategy_instance(binding.strategy_instance_id)
             if existing is None:
                 if binding.exit_terms is None or binding.exit_terms.provenance != "deployed":
                     raise StrategyRegistrationConflictError("Explicit exit terms are required for a new Start.")
                 self._repo.register_strategy_instance(
                     strategy_instance_id=binding.strategy_instance_id,
-                    symbol=binding.symbol,
+                    symbol=traded_symbol,
                     config_hash=config_hash,
                     strategy_key=binding.strategy_key,
                     display_name=display_name,
                     config_json=config_json,
                     exit_terms=binding.exit_terms,
                 )
-            elif existing["symbol"].upper() != binding.symbol.upper() or existing["config_hash"] != config_hash:
+            elif existing["symbol"].upper() != traded_symbol.upper() or existing["config_hash"] != config_hash:
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} conflicts with "
                     "its SQLite authority registration"
@@ -1018,6 +1025,7 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool = True,
         retained_source_bar: RetainedSourceBar | None = None,
+        pricing_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
@@ -1026,6 +1034,12 @@ class SqliteAlpacaClerkFacade:
         caller therefore cannot cancel a broker request whose durable command
         and effect were already accepted; the task finishes or the periodic
         reconciliation sweep recovers its exact identity.
+
+        ``retained_source_bar`` is the Signal stream's decision bar: it says
+        when the decision closed. ``pricing_bar`` is the traded instrument's
+        own bar for that minute, and prices the order. A bot that trades the
+        symbol it listens to passes none: its decision bar is its pricing bar
+        (``_order_pricing_bar``).
         """
         key = (strategy_instance_id, decision_id)
         if decision_evidence is not None and decision_evidence.evaluation_id != decision_id:
@@ -1042,6 +1056,7 @@ class SqliteAlpacaClerkFacade:
                     quantity=quantity,
                     use_rth=use_rth,
                     retained_source_bar=retained_source_bar,
+                    pricing_bar=pricing_bar,
                     decision_evidence=decision_evidence,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
@@ -1088,6 +1103,7 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool = True,
         retained_source_bar: RetainedSourceBar | None = None,
+        pricing_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
         """Judge one decision; an ENTER behind the account reading waits for a new one (#2623).
@@ -1113,6 +1129,7 @@ class SqliteAlpacaClerkFacade:
                 quantity=quantity,
                 use_rth=use_rth,
                 retained_source_bar=retained_source_bar,
+                pricing_bar=pricing_bar,
                 decision_evidence=decision_evidence,
                 reading_outcome=reading_outcome,
             )
@@ -1150,6 +1167,7 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool,
         retained_source_bar: RetainedSourceBar | None,
+        pricing_bar: RetainedSourceBar | None,
         decision_evidence: EffectDecisionEvidence | None,
         reading_outcome: EntryReadingOutcome | None,
     ) -> EffectOperationReceipt | _AwaitReading:
@@ -1215,6 +1233,34 @@ class SqliteAlpacaClerkFacade:
                     next_step="Replay or ingest the decision bar, then retry through the sealed program.",
                 )
             entry = _entry_leg(action_plan)
+            priced_by, unpriced = _order_pricing_bar(
+                entry.instrument.underlying, decision_bar=retained_source_bar, pricing_bar=pricing_bar
+            )
+            if unpriced is not None:
+                logger.warning(
+                    "an effect carries no bar of its traded instrument for the decision's minute",
+                    extra={
+                        "action": "effect_pricing_bar_refused",
+                        "account_id": self._repo.account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                        "decision_id": decision_id,
+                        "purpose": purpose.value,
+                        "reason_code": unpriced.reason_code,
+                        "traded_symbol": entry.instrument.underlying,
+                        "decision_bar_symbol": None if retained_source_bar is None else retained_source_bar.symbol,
+                        "pricing_bar_symbol": None if pricing_bar is None else pricing_bar.symbol,
+                    },
+                )
+                # An ENTER is never priced from another asset or another minute.
+                # A synthesized fill of either purpose is that bar's close, so
+                # without it there is nothing to fill at. A broker-sent EXIT
+                # goes on: a regular-session market leg needs no price.
+                if purpose is EffectPurpose.ENTER or self.binds_decision_bar:
+                    return rejected(
+                        reason_code=unpriced.reason_code,
+                        explanation=unpriced.explanation,
+                        next_step=unpriced.next_step,
+                    )
             durable_decision_id = _durable_decision_id(decision_id)
             atomic_receipt = (
                 None
@@ -1252,6 +1298,7 @@ class SqliteAlpacaClerkFacade:
                     purpose=purpose,
                     use_rth=use_rth,
                     decision_bar=retained_source_bar,
+                    pricing_bar=priced_by,
                     policy=(self.exit_policy_for_instance(strategy_instance_id)
                             if purpose is EffectPurpose.EXIT else self.program_leg_policy),
                 )
@@ -1350,13 +1397,9 @@ class SqliteAlpacaClerkFacade:
                         leg=operation_leg,
                         decision_receipt=atomic_receipt,
                         envelope=self._live_envelope,
-                        # Preserve the recorded decision price through the
+                        # Preserve the recorded pricing-bar price through the
                         # canonical Decimal normalization boundary.
-                        reference_price=(
-                            None
-                            if retained_source_bar is None
-                            else retained_source_bar.close
-                        ),
+                        reference_price=None if priced_by is None else priced_by.close,
                     )
                 except AdmissionBlockedError as exc:
                     # #2623: the one refusal a newer account reading can lift
@@ -1446,8 +1489,8 @@ class SqliteAlpacaClerkFacade:
 
         trade: BrokerTradePort
         if self.binds_decision_bar:
-            assert retained_source_bar is not None
-            trade = _DecisionBarBoundTradePort(self._trade, retained_source_bar)
+            assert priced_by is not None
+            trade = _DecisionBarBoundTradePort(self._trade, priced_by)
         else:
             trade = self._trade
 
@@ -1982,6 +2025,44 @@ def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:
     if len(action_plan.on_enter) != 1 or not isinstance(action_plan.on_enter[0], StockEntryLeg):
         raise ValueError("SQLite Alpaca effects require exactly one stock entry leg")
     return action_plan.on_enter[0]
+
+
+def _order_pricing_bar(
+    traded_symbol: str,
+    *,
+    decision_bar: RetainedSourceBar | None,
+    pricing_bar: RetainedSourceBar | None,
+) -> tuple[RetainedSourceBar | None, LegRefusal | None]:
+    """The one bar every price of this effect's order is read from, or why there is none (#2912).
+
+    The cash reservation, an extended-session limit's anchor and a synthesized
+    fill all read this bar, so no caller prices an order from the Signal
+    stream by reading the decision bar directly.
+
+    The Clerk checks the bar itself rather than trusting the caller's label: it
+    must be the traded instrument's, and it must close with the decision. A
+    decision bar of the traded instrument is its own pricing bar, which is
+    every bot that trades the symbol it listens to.
+
+    With no bar from either stream there is no refusal here: that case keeps
+    the refusals it always had (a synthesized authority's unproven source bar,
+    a market ENTER with nothing to bound it against cash).
+    """
+    if pricing_bar is None:
+        if decision_bar is None:
+            return None, None
+        if _same_symbol(decision_bar.symbol, traded_symbol):
+            return decision_bar, None
+        return None, PRICING_BAR_UNAVAILABLE
+    if not _same_symbol(pricing_bar.symbol, traded_symbol):
+        return None, PRICING_BAR_MISMATCH
+    if decision_bar is not None and pricing_bar.end_ms != decision_bar.end_ms:
+        return None, PRICING_BAR_MISMATCH
+    return pricing_bar, None
+
+
+def _same_symbol(left: str, right: str) -> bool:
+    return left.upper() == right.upper()
 
 
 def _append_pre_custody_refusal(

@@ -117,6 +117,7 @@ class ActiveAlpacaClerk(Protocol):
         quantity: int,
         use_rth: bool = True,
         retained_source_bar: RetainedSourceBar | None = None,
+        pricing_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt: ...
 

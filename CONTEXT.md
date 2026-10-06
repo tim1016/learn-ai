@@ -564,10 +564,17 @@ so they survive a broker change.
   equities. Fees the broker charged are the truth; the schedule predicts them.
   _Avoid_: commission, trading fee, broker fee
 - **Marketable limit anchor** — the price a program leg carries outside the
-  regular session: the decision bar's close moved by an operator-set allowance
+  regular session: the **pricing bar**'s close moved by an operator-set allowance
   in the direction of the trade, as a day limit flagged for extended hours.
   Inside the regular session a program leg stays a market order. _Avoid_:
   slippage limit, aggressive limit, extended-hours price
+- **Pricing bar** — the traded instrument's one-minute bar whose close time
+  equals the decision bar's close time. Every price an order uses is read from
+  it: the cash check at an ENTER, the marketable limit anchor, and a fill a Dry
+  Run or a Live Shadow synthesizes. For a bot that trades the symbol it listens
+  to, it is the decision bar itself. A bar of any other asset or any other
+  minute never stands in for it. _Avoid_: reference bar, signal price,
+  carried-over price
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it
   (pre-market, regular, after-hours). The window is broker capability data;

@@ -79,7 +79,7 @@ def test_a_regular_hours_leg_is_always_a_market_day_leg(
     send-time rule in ``sqlite/exit_resolution.py``, not shaped here.
     """
     program_leg = shape_program_leg(
-        side=side, purpose=purpose, use_rth=True, decision_bar=decision_bar, policy=_POLICY
+        side=side, purpose=purpose, use_rth=True, decision_bar=decision_bar, pricing_bar=decision_bar, policy=_POLICY
     )
 
     assert program_leg == ProgramLeg(regular_session_shape(side))
@@ -98,6 +98,7 @@ def test_extended_binding_inside_the_regular_session_is_a_market_day_leg() -> No
         purpose=EffectPurpose.ENTER,
         use_rth=False,
         decision_bar=_bar(10, 0),
+        pricing_bar=_bar(10, 0),
         policy=_POLICY,
     )
 
@@ -128,6 +129,7 @@ def test_extended_binding_outside_the_regular_session_is_a_marketable_day_limit(
         purpose=purpose,
         use_rth=False,
         decision_bar=_bar(hour, minute),
+        pricing_bar=_bar(hour, minute),
         policy=_POLICY,
     )
 
@@ -155,6 +157,7 @@ def test_an_extended_leg_decided_at_a_half_days_close_is_bounded_by_its_after_ho
         purpose=EffectPurpose.EXIT,
         use_rth=False,
         decision_bar=_bar(13, 0, day=_HALF_DAY),
+        pricing_bar=_bar(13, 0, day=_HALF_DAY),
         policy=_POLICY,
     )
     inside = shape_program_leg(
@@ -162,6 +165,7 @@ def test_an_extended_leg_decided_at_a_half_days_close_is_bounded_by_its_after_ho
         purpose=EffectPurpose.EXIT,
         use_rth=False,
         decision_bar=_bar(12, 59, day=_HALF_DAY),
+        pricing_bar=_bar(12, 59, day=_HALF_DAY),
         policy=_POLICY,
     )
 
@@ -179,6 +183,7 @@ def test_an_extended_leg_decided_after_a_half_days_after_hours_close_is_refused(
             purpose=EffectPurpose.EXIT,
             use_rth=False,
             decision_bar=_bar(17, 30, day=date(2026, 11, 27)),
+            pricing_bar=_bar(17, 30, day=date(2026, 11, 27)),
             policy=_POLICY,
         )
     assert refused.value.reason_code == "SESSION_CLOSED_AT_DECISION"
@@ -209,6 +214,7 @@ def test_refusals(policy: ProgramLegPolicy, bar: RetainedSourceBar | None, reaso
             purpose=EffectPurpose.ENTER,
             use_rth=False,
             decision_bar=bar,
+            pricing_bar=bar,
             policy=policy,
         )
 
@@ -225,6 +231,7 @@ def test_allowance_unset_inside_the_regular_session_still_shapes_a_market_leg() 
             purpose=EffectPurpose.ENTER,
             use_rth=False,
             decision_bar=_bar(11, 0),
+            pricing_bar=_bar(11, 0),
             policy=policy,
         )
         == ProgramLeg(regular_session_shape(OrderSide.BUY))
@@ -243,6 +250,7 @@ def test_apply_uses_the_side_the_shape_was_priced_for() -> None:
         purpose=EffectPurpose.EXIT,
         use_rth=False,
         decision_bar=_bar(18, 30),
+        pricing_bar=_bar(18, 30),
         policy=_POLICY,
     )
 
@@ -268,6 +276,7 @@ def test_an_unpriceable_anchor_is_a_typed_refusal_not_a_validation_error() -> No
             purpose=EffectPurpose.EXIT,
             use_rth=False,
             decision_bar=_bar(18, 0, close="0.0100"),
+            pricing_bar=_bar(18, 0, close="0.0100"),
             policy=policy,
         )
 
@@ -304,3 +313,45 @@ def test_a_program_leg_never_travels_without_the_bound_its_shape_needs(
     """
     with pytest.raises(ValueError, match="end of the session"):
         ProgramLeg(shape, valid_until_ms=valid_until_ms)
+
+
+def test_an_extended_limit_is_anchored_to_the_traded_assets_bar_not_the_signals() -> None:
+    """The signal closed at $500 and the traded asset at $40: the limit is ten bps over $40 (#2912)."""
+    program_leg = shape_program_leg(
+        side=OrderSide.BUY,
+        purpose=EffectPurpose.ENTER,
+        use_rth=False,
+        decision_bar=_bar(5, 0, close="500.00"),
+        pricing_bar=_bar(5, 0, close="40.00"),
+        policy=_POLICY,
+    )
+
+    assert program_leg.shape.limit_price == 40.04
+
+
+def test_an_extended_leg_with_no_bar_of_the_traded_asset_is_refused_never_priced_from_the_signal() -> None:
+    with pytest.raises(ProgramLegRefused) as refused:
+        shape_program_leg(
+            side=OrderSide.SELL,
+            purpose=EffectPurpose.EXIT,
+            use_rth=False,
+            decision_bar=_bar(18, 30),
+            pricing_bar=None,
+            policy=_POLICY,
+        )
+
+    assert refused.value.reason_code == "PRICING_BAR_UNAVAILABLE"
+
+
+def test_a_market_leg_needs_no_bar_of_the_traded_asset() -> None:
+    """Inside the regular session a leg is a market order, so the decision's time is all it needs."""
+    program_leg = shape_program_leg(
+        side=OrderSide.SELL,
+        purpose=EffectPurpose.EXIT,
+        use_rth=False,
+        decision_bar=_bar(10, 0),
+        pricing_bar=None,
+        policy=_POLICY,
+    )
+
+    assert program_leg == ProgramLeg(regular_session_shape(OrderSide.SELL))

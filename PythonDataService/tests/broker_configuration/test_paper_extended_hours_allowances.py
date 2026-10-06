@@ -664,6 +664,7 @@ async def test_an_applied_paper_pair_admits_a_regular_hours_run_and_prices_an_af
         purpose=EffectPurpose.EXIT,
         use_rth=False,
         decision_bar=_bar(16, 0),
+        pricing_bar=_bar(16, 0),
         policy=policy,
     )
     cover = shape_program_leg(
@@ -671,6 +672,7 @@ async def test_an_applied_paper_pair_admits_a_regular_hours_run_and_prices_an_af
         purpose=EffectPurpose.EXIT,
         use_rth=False,
         decision_bar=_bar(16, 0),
+        pricing_bar=_bar(16, 0),
         policy=policy,
     )
 
