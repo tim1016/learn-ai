@@ -78,6 +78,8 @@ export class GridSearchSpecEditorComponent {
   readonly initial = input<GridSearchSpecRequest | null>(null);
   /** Debounce between an edit and its `specChanged`; tests set 0. */
   readonly debounceMs = input(300);
+  /** Whether the window's quick ranges must be exactly their labels: Walk-Forward's fold planner counts whole months. */
+  readonly exactRanges = input(false);
   /** Fires synchronously on every edit, before the debounce: the host must drop what it preflighted. */
   readonly edited = output();
   readonly specChanged = output<GridSpecEdit>();

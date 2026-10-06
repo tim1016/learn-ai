@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { heldBounds, type DataGaps, type DateBounds } from './date-bounds';
+import { UNBOUNDED, heldBounds, type DataGaps, type DateBounds } from './date-bounds';
 import { DateRangePickerComponent } from './date-range-picker.component';
 import { QUICK_RANGES, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
 import { fakeSessions, fakeTradingCalendar, sessionOpenMs, type FakeTradingCalendar } from './testing/fake-trading-calendar';
@@ -21,6 +21,7 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
     [bounds]="bounds()"
     [ranges]="ranges()"
     [sessionsOnly]="sessionsOnly()"
+    [exactRanges]="exactRanges()"
     [hostOffers]="hostOffers()"
     [hostDays]="hostDays()"
     [gaps]="gaps()"
@@ -39,6 +40,7 @@ class HostComponent {
   readonly bounds = signal<DateBounds>(QQQ);
   readonly ranges = signal<readonly QuickRangeKey[]>(QUICK_RANGES);
   readonly sessionsOnly = signal(true);
+  readonly exactRanges = signal(false);
 
   onPicked(key: QuickRangeKey): void {
     this.picked.set(key);
@@ -216,6 +218,32 @@ describe('DateRangePickerComponent', () => {
     await userEvent.click(quick('5Y'));
 
     expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
+  });
+
+  it('offers 5Y from the first day where five years fall a few days short, says so, and lights it beside Max', async () => {
+    const { view, host, quick } = await renderPicker();
+    host.bounds.set({ ...UNBOUNDED, min: '2021-10-05', minReason: 'The provider serves bars from 2021-10-05.' });
+    await view.fixture.whenStable();
+
+    expect(quick('5Y').getAttribute('aria-disabled')).toBe('false');
+    expect(screen.getByRole('button', { name: '5Y. Starts on 2021-10-05. The provider serves bars from 2021-10-05.' })).toBe(quick('5Y'));
+
+    await userEvent.click(quick('5Y'));
+
+    // The last completed session is Thursday 2026-10-01, and Max is the same dates here.
+    expect([host.from(), host.to()]).toEqual(['2021-10-05', '2026-10-01']);
+    expect(quick('5Y').getAttribute('aria-pressed')).toBe('true');
+    expect(quick('Max').getAttribute('aria-pressed')).toBe('true');
+    expect(quick('2Y').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps a 5Y that falls a day short greyed for a host whose ranges must be exact', async () => {
+    const { view, host, quick } = await renderPicker();
+    host.bounds.set({ ...UNBOUNDED, min: '2021-10-05', minReason: 'The provider serves bars from 2021-10-05.' });
+    host.exactRanges.set(true);
+    await view.fixture.whenStable();
+
+    expect(screen.getByRole('button', { name: '5Y, unavailable: The provider serves bars from 2021-10-05.' })).toBe(quick('5Y'));
   });
 
   it('offers only the quick ranges the page asks for', async () => {

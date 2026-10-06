@@ -7,7 +7,7 @@ import type { IsoDate } from '../date/iso-date';
 import { UNBOUNDED, type DataGaps, type DateBounds } from './date-bounds';
 import { DateCalendarComponent } from './date-calendar.component';
 import { checkRange, fieldText, showFieldText } from './date-check';
-import { QUICK_RANGES, activeQuickRange, offerQuickRanges, type DateRange, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
+import { QUICK_RANGES, activeQuickRanges, offerQuickRanges, type DateRange, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
 import { TradingCalendarService } from './trading-calendar.service';
 
 let nextNoteId = 0;
@@ -55,6 +55,8 @@ export class DateRangePickerComponent {
   readonly hostOffers = input<readonly QuickRangeOffer[] | null>(null);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
+  /** Whether a quick range must be exactly its label. A host whose planner counts whole months sets it; 5Y is then greyed when it falls short at all. */
+  readonly exactRanges = input(false);
   /**
    * Days the host's own dates stand on, such as a plan its server laid out.
    * Typed or shown, they are not refused for the bounds or the calendar: the
@@ -83,9 +85,11 @@ export class DateRangePickerComponent {
   protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions(), hostDays: this.hostDays() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
   protected readonly offers = computed(
-    () => this.hostOffers() ?? offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), this.sessionsOnly()),
+    () =>
+      this.hostOffers() ??
+      offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), { sessionsOnly: this.sessionsOnly(), exact: this.exactRanges() }),
   );
-  protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
+  protected readonly active = computed(() => activeQuickRanges(this.offers(), this.checked().from.date, this.checked().to.date));
 
   /** The sessions the host's data lacks, as the ET dates the fields and the calendar speak. */
   protected readonly unheldDays = computed<ReadonlySet<IsoDate> | null>(() => {
@@ -170,6 +174,12 @@ export class DateRangePickerComponent {
     // was last bound with would never come back down, and the field would keep
     // the typed date (#2883). After a render the host's write is a change.
     afterNextRender(() => this.picked.emit(offer.key), { injector: this.injector });
+  }
+
+  /** A quick range's accessible name where its label alone does not say what a click does; null to use the label. */
+  protected offerName(offer: QuickRangeOffer): string | null {
+    if (offer.unavailable !== null) return `${offer.key}, unavailable: ${offer.unavailable}`;
+    return offer.note === undefined ? null : `${offer.key}. ${offer.note}`;
   }
 
   protected retryCalendar(): void {

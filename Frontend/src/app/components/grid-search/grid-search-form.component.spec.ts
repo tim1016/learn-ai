@@ -5,6 +5,7 @@ import type { DateBounds } from '../../shared/date-picker';
 import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
+import type { TickerOption } from '../../shared/ticker-range-picker/ticker-range-picker.types';
 import { HeldGapsService } from '../../shared/ticker-catalog';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { sweepableStrategy as strategy } from './testing/fixtures';
@@ -23,15 +24,22 @@ const PLAN: GridSearchPreflight = {
   run_up: { data_start_ms: 1704171600000, evaluation_start_ms: 1705035600000, evaluation_end_ms: 1735621200000, required_samples: 31, bar_span_ms: 900000, run_up_sessions: 2, carved_from_range: true },
 };
 
-async function renderForm(strategies: StrategyInfo[], service: Partial<GridSearchService>) {
+async function renderForm(strategies: StrategyInfo[], service: Partial<GridSearchService>, pool?: readonly TickerOption[]) {
   const view = await render(GridSearchFormComponent, {
     inputs: { strategies, preflightDebounceMs: 0 },
-    providers: [...fakePickerWorld().providers, { provide: GridSearchService, useValue: { preflight: vi.fn(async (_spec: GridSearchSpecRequest) => PLAN), launch: vi.fn(async (_spec: GridSearchSpecRequest) => 'job-1'), ...service } }],
+    providers: [...fakePickerWorld(pool).providers, { provide: GridSearchService, useValue: { preflight: vi.fn(async (_spec: GridSearchSpecRequest) => PLAN), launch: vi.fn(async (_spec: GridSearchSpecRequest) => 'job-1'), ...service } }],
   });
   return view;
 }
 
 describe('GridSearchFormComponent', () => {
+  it('offers 5Y from the first held day when the lake holds a day or two short of five years', async () => {
+    // Five years ending Friday 2026-09-18 start on 2021-09-19.
+    await renderForm([strategy()], {}, [{ symbol: 'SPY', name: 'SPDR S&P 500', firstHeld: '2021-09-21', lastHeld: '2026-09-18' }]);
+
+    expect(await screen.findByRole('button', { name: '5Y. Starts on 2021-09-21. SPY is held from 2021-09-21.' })).not.toBeNull();
+  });
+
   it('renders the selected strategy public parameters as fixed values with vary toggles', async () => {
     await renderForm([strategy()], {});
 
