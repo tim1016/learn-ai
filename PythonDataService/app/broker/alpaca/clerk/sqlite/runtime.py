@@ -1286,9 +1286,29 @@ class SqliteAlpacaClerkFacade:
                 # An older price fills a market order only. Once the regular
                 # session cannot take one, the sale would be re-priced as a
                 # limit to rest, and no limit is anchored to an older price.
+                assert priced_by is not None and retained_source_bar is not None
+                logger.warning(
+                    "a simulated sale priced from an earlier minute arrived after a market order could be sent",
+                    extra={
+                        "action": "effect_pricing_bar_refused",
+                        "account_id": self._repo.account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                        "decision_id": decision_id,
+                        "purpose": purpose.value,
+                        "reason_code": PRICING_BAR_UNAVAILABLE.reason_code,
+                        "cause": "older_price_after_market_close",
+                        "traded_symbol": entry.instrument.underlying,
+                        "pricing_bar_end_ms": priced_by.end_ms,
+                        "decision_bar_end_ms": retained_source_bar.end_ms,
+                    },
+                )
                 return rejected(
                     reason_code=PRICING_BAR_UNAVAILABLE.reason_code,
-                    explanation=PRICING_BAR_UNAVAILABLE.explanation,
+                    explanation=(
+                        f"{entry.instrument.underlying} has no bar for the decision's minute, and the regular "
+                        "session can no longer take a market order. An earlier minute's price fills a market "
+                        "sale only, so this sale was not simulated."
+                    ),
                     next_step=PRICING_BAR_UNAVAILABLE.next_step,
                 )
             if pricing_bar is not None and priced_by is not pricing_bar:
@@ -2111,10 +2131,11 @@ def _order_pricing_bar(
     synthesized fill of either purpose is a bar's close, so those are refused
     when no bar of the order's own can price them.
 
-    A synthesized EXIT alone may be priced from an earlier minute. A sell is
-    never held back for want of a price, so when the traded instrument has no
-    bar for the decision's minute its runner offers the newest earlier one,
-    and the fill carries that bar's own time beside the decision's.
+    A synthesized EXIT alone may be priced from an earlier minute. When the
+    traded instrument has no bar for the decision's minute its runner offers
+    the newest earlier one, and the fill carries that bar's own time beside
+    the decision's. That price fills a market sale only: the caller refuses
+    the sale once a market order can no longer be sent.
     """
     if decision_bar is None:
         return None

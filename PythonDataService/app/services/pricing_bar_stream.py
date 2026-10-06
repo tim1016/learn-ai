@@ -12,7 +12,7 @@ never used for that decision. An EXIT sent to a broker never waits: it is a
 market order, and takes the bar only if it is already there. An EXIT a Dry
 Run or a Live Shadow fills itself does need a price: it waits the same short
 time for its own minute's bar, and failing that takes the newest earlier bar
-with a trade in it, so a sell is never held back for want of a price.
+with a trade in it. With no such bar at all, that sale is refused.
 
 Nothing that happens here ends the run, pauses the Signal Session or
 quarantines a decision bar. A feed error of any kind, a minute the feed
