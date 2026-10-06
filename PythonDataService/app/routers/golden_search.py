@@ -3,7 +3,7 @@
 ``router`` — ``/api/research/golden-search``, mounted behind the data-plane
 control guard (every unsafe method needs the control secret): capabilities,
 defaults, preflight, the study record and its one command endpoint, the
-evaluation ledger and candidate detail. ``jobs_router`` —
+runs with their curves and candidate detail. ``jobs_router`` —
 ``POST /api/jobs-internal/golden-search``, dispatched by the .NET jobs
 boundary with a minted ``job_id``. It is unguarded like Grid Search's, but it
 can only run a stage a guarded command already authorized: the request must
@@ -26,7 +26,7 @@ from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.golden_search import service
 from app.research.golden_search.models import CandidateKey, GoldenSearchRefusal, RefusalKind, StudyRow
-from app.research.golden_search.run_curves import MAX_CURVES
+from app.research.golden_search.run_curves import MAX_CURVES, RunGroup, RunSort
 from app.routers import research_records as records
 from app.schemas.golden_search import (
     GoldenSearchCandidateDetail,
@@ -34,7 +34,6 @@ from app.schemas.golden_search import (
     GoldenSearchCommandRequest,
     GoldenSearchCreateStudyRequest,
     GoldenSearchDefaults,
-    GoldenSearchEvaluationPage,
     GoldenSearchJobAccepted,
     GoldenSearchJobRequest,
     GoldenSearchPlanCharts,
@@ -198,27 +197,12 @@ async def hide_study(study_id: StudyId) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/studies/{study_id}/evaluations", response_model=GoldenSearchEvaluationPage, responses=_REFUSALS)
-async def list_evaluations(
-    study_id: StudyId,
-    stage: str | None = Query(None, max_length=32, description="The step that asked for the evaluation, e.g. search or validation."),
-    fold_index: int | None = Query(None, ge=0),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=500),
-) -> GoldenSearchEvaluationPage:
-    try:
-        result = await service.evaluations(study_id, stage=stage, fold_index=fold_index, page=page, page_size=page_size)
-    except GoldenSearchRefusal as exc:
-        raise await _refused(exc) from exc
-    return GoldenSearchEvaluationPage.model_validate(result)
-
-
 @router.get("/studies/{study_id}/runs", response_model=GoldenSearchRunsPage, responses=_REFUSALS)
 async def list_runs(
     study_id: StudyId,
-    group: str | None = Query(None, max_length=32, description="What asked for the runs, e.g. search, fold_test or final."),
+    group: RunGroup | None = Query(None, description="What asked for the runs."),
     fold_index: int | None = Query(None, ge=0),
-    sort: str = Query("recorded", max_length=32, description="recorded, or the measure to order by."),
+    sort: RunSort = Query("recorded", description="The order: as recorded, or by a measure."),
     descending: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),

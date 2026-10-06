@@ -18,6 +18,7 @@ from app.engine.engine import ClosingBarSkip
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.lean_sidecar.closing_bar import ClosingBarConvention
 from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
+from app.research.golden_search.evidence import daily_equity
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services.engine_backtest_service import _aggregate_backtest_response
 
@@ -134,6 +135,16 @@ def test_a_summary_run_keeps_one_equity_point_a_day_and_no_per_bar_curve() -> No
 
     assert response.equity_curve == []
     assert response.equity_day_ends == [{"timestamp": _NOW_MS + 45 * 60_000, "equity": 9_900.0}]
+
+
+def test_a_full_runs_day_ends_are_its_per_bar_curve_read_at_each_days_last_sample() -> None:
+    """The same aggregation a summary run skips: both forms of the curve come from one set of engine samples."""
+    response = _aggregate(_request(summary_only=False))
+
+    assert len(response.equity_curve) == len(_marked_curve())
+    last = response.equity_curve[-1]
+    assert response.equity_day_ends == [{"timestamp": last["timestamp"], "equity": last["equity"]}]
+    assert daily_equity(response.equity_day_ends) == daily_equity(response.equity_curve)
 
 
 def test_a_compatibility_pair_grades_the_marked_equity_curve() -> None:

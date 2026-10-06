@@ -98,7 +98,7 @@ def test_the_page_lists_one_group_sorted_with_unmeasured_runs_last_beside_every_
     assert [row["evaluation_key"] for row in best_first["rows"]] == ["s2", "s4", "s1", "s3"]
     # A run without the measure stays last when the sort turns round: it is not the worst, it is unmeasured.
     assert [row["evaluation_key"] for row in _page(records, group="search", sort="total_return_pct")["rows"]] == ["s1", "s4", "s2", "s3"]
-    assert best_first["total"] == 4
+    assert (best_first["total"], best_first["sort"], best_first["folds"]) == (4, "total_return_pct", 2)
     assert best_first["groups"] == [
         # The failed run never had a curve to keep; it is not one recorded before curves.
         {"key": "search", "label": "All-period search", "runs": 4, "completed": 3, "with_curve": 3},
@@ -116,6 +116,21 @@ def test_the_page_lists_one_group_sorted_with_unmeasured_runs_last_beside_every_
         _page(records, page=0)
 
 
+def test_one_fold_of_a_group_can_be_listed_alone_and_two_runs_never_read_the_same() -> None:
+    records = [
+        _run("a0", "validation", fold_index=0, window_start_ms=0, window_end_ms=100),
+        _run("b0", "validation", INCUMBENT, fold_index=0, window_start_ms=0, window_end_ms=100),
+        _run("a1", "validation", fold_index=1, window_start_ms=100, window_end_ms=200),
+    ]
+
+    first_fold = _page(records, group="fold_training", fold_index=0)
+
+    assert [row["evaluation_key"] for row in first_fold["rows"]] == ["a0", "b0"]
+    # The same settings trained in two folds differ by label; two points of one fold differ by their settings.
+    described = [(row["label"], row["params_sentence"]) for row in _page(records, group="fold_training")["rows"]]
+    assert len(set(described)) == len(described) == 3
+
+
 def test_a_curve_is_the_return_on_starting_capital_and_the_fall_from_its_own_peak() -> None:
     days = [session_close_ms_utc(day) for day in (date(2025, 1, 6), date(2025, 1, 7), date(2025, 1, 8))]
     daily = [(days[0], 101_000.0), (days[1], 99_990.0), (days[2], 102_010.0)]
@@ -126,11 +141,13 @@ def test_a_curve_is_the_return_on_starting_capital_and_the_fall_from_its_own_pea
     assert view["cumulative_return"] == pytest.approx([0.01, -0.0001, 0.0201], abs=1e-12, rel=0)
     assert view["drawdown"] == pytest.approx([0.0, 99_990.0 / 101_000.0 - 1.0, 0.0], abs=1e-12, rel=0)
     assert view["drawdown"] == [value for _, value in drawdown_series(daily)]
+    # The deepest fall is the series' own lowest point, worked out here and not in the browser.
+    assert view["deepest_drawdown"] == pytest.approx(99_990.0 / 101_000.0 - 1.0, abs=1e-12, rel=0)
 
 
 def test_a_run_whose_equity_never_rose_above_zero_has_a_return_and_no_fall_from_peak() -> None:
     view = curve_view("k", [(1, 0.0), (2, 0.0)], 100_000.0)
-    assert view["cumulative_return"] == [-1.0, -1.0] and view["drawdown"] is None
+    assert view["cumulative_return"] == [-1.0, -1.0] and view["drawdown"] is None and view["deepest_drawdown"] is None
 
 
 def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_not_drawn() -> None:
@@ -139,4 +156,4 @@ def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_n
     view = curves_view(["a", "old", "b"], stored, 100.0)
 
     assert [curve["evaluation_key"] for curve in view["curves"]] == ["a", "b"]
-    assert view["not_recorded"] == ["old"] and view["capital"] == 100.0
+    assert view["not_recorded"] == ["old"]

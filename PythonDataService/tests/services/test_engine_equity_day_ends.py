@@ -11,6 +11,8 @@ from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.engine import EquitySnapshot
 from app.services.engine_backtest_service import equity_day_ends
 
@@ -63,3 +65,13 @@ def test_a_day_without_a_sample_has_no_point_and_an_empty_run_has_none() -> None
 
     assert [point["equity"] for point in equity_day_ends(curve)] == [10.0, 11.0]
     assert equity_day_ends([]) == []
+
+
+
+def test_samples_out_of_time_order_are_refused_never_searched() -> None:
+    late_first = [_sample(_at(2025, 3, 7, 16, 0), "10"), _sample(_at(2025, 3, 6, 16, 0), "11")]
+    repeated = [_sample(_at(2025, 3, 6, 16, 0), "10"), _sample(_at(2025, 3, 6, 16, 0), "11")]
+
+    for curve in (late_first, repeated):
+        with pytest.raises(ValueError, match="strictly increasing"):
+            equity_day_ends(curve)

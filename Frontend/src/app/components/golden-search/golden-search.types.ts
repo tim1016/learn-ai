@@ -265,15 +265,6 @@ export interface StudyListFilters {
   limit?: number;
 }
 
-export interface EvaluationQuery {
-  stage?: string;
-  fold_index?: number;
-  page: number;
-  page_size: number;
-}
-
-export type EvaluationRow = Omit<Schemas['GoldenSearchEvaluationRow'], 'point'> & { point: Point };
-export type EvaluationPage = Omit<Schemas['GoldenSearchEvaluationPage'], 'rows'> & { rows: EvaluationRow[] };
 
 export type DailyEquityPoint = Schemas['GoldenSearchEquityPoint'];
 export type DrawdownPoint = Schemas['GoldenSearchDrawdownPoint'];
@@ -327,18 +318,20 @@ export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
 export type RunGroupKey = Schemas['GoldenSearchRunGroup']['key'];
 export type RunGroup = Schemas['GoldenSearchRunGroup'];
 /** One engine run of a study (#2930), under the step that first asked for it. */
-export type StudyRun = Omit<Schemas['GoldenSearchRun'], 'point'> & { point: Point };
-export type RunsPage = Omit<Schemas['GoldenSearchRunsPage'], 'rows'> & { rows: StudyRun[] };
-export const RUN_SORTS = ['recorded', 'total_return_pct', 'sharpe_ratio', 'max_drawdown_pct', 'total_trades', 'net_profit'] as const;
-export type RunSort = (typeof RUN_SORTS)[number];
+export type StudyRun = Schemas['GoldenSearchRun'];
+export type RunsPage = Schemas['GoldenSearchRunsPage'];
+/** The order of a page of runs: as recorded, or by a measure. */
+export type RunSort = RunsPage['sort'];
 export interface RunsQuery {
   group: RunGroupKey | null;
+  /** One fold of the fold groups; null for every fold. */
+  fold_index: number | null;
   sort: RunSort;
   descending: boolean;
   page: number;
   page_size: number;
 }
-/** One run's daily curve as parallel lists over its session closes; `drawdown` is null when its peak never rose above 0. */
+/** One run's daily curve as parallel lists over its session closes; `drawdown` and `deepest_drawdown` are null when its peak never rose above 0. */
 export type RunCurve = Schemas['GoldenSearchRunCurve'];
 /** The named runs' curves, and the runs among them that kept none. */
 export type RunCurves = Schemas['GoldenSearchRunCurves'];

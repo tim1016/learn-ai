@@ -1,8 +1,7 @@
-import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { dataIndexOf, NOT_RECORDED, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
-import type { ChartOption } from './charts/golden-search-echarts';
+import { NOT_RECORDED, signedPercentOrNotRecorded, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import { DEVELOPMENT_NOTE, percentText, signedPercentText } from './golden-search-display';
+import { alignToSessions, lastValue, sessionAxis, sessionCurvesOption, type SessionLine } from './golden-search-session-curves';
 import type { CandidateKey, CumulativeReturnPoint, DrawdownPoint } from './golden-search.types';
 
 /** One candidate's development detail run as the server sent it; both lists are empty when no run is recorded. */
@@ -38,20 +37,19 @@ export const DEVELOPMENT_EQUITY: EquityPeriod = { label: 'Development cumulative
  * engine's bar-by-bar fall, which can be deeper than these session closes.
  */
 export function equityChartSpec(lines: readonly EquityLine[], featured: CandidateKey, ceiling: number, period: EquityPeriod = DEVELOPMENT_EQUITY): ChartSpec {
-  const sessions = [...new Set(lines.flatMap((line) => [...line.returns.map((p) => p.ms), ...line.falls.map((p) => p.ms)]))].sort((a, b) => a - b);
-  const dates = sessions.map((ms) => formatTimestampDisplay(ms, { mode: 'date-et' }));
+  const { sessions, dates } = sessionAxis(lines.flatMap((line) => [line.returns.map((p) => p.ms), line.falls.map((p) => p.ms)]));
   const aligned: AlignedLine[] = lines.map((line) => ({
     line,
     recorded: line.returns.length > 0,
-    returns: align(sessions, line.returns.map((p) => [p.ms, p.value])),
-    falls: align(sessions, line.falls.map((p) => [p.ms, p.drawdown])),
+    returns: alignToSessions(sessions, line.returns.map((p) => p.ms), line.returns.map((p) => p.value)),
+    falls: alignToSessions(sessions, line.falls.map((p) => p.ms), line.falls.map((p) => p.drawdown)),
   }));
   const ends = aligned.map(({ line, recorded, returns }) => `${line.label} ${recorded ? signedPercentText(lastValue(returns)) : NOT_RECORDED}`);
   return {
     label: period.label,
     summary: `Ends at ${ends.join(', ')}; beneath, each line's fall from its own peak at every session close.`,
     featured,
-    option: (theme) => option(aligned, dates, featured, ceiling, period, theme),
+    option: (theme) => sessionCurvesOption(drawn(aligned, featured, theme), dates, ceiling, (index) => tooltip(aligned, dates[index], index, ceiling, period, theme), theme),
     table: {
       caption: `${period.label} at each session close (ET); — marks a value the run did not record`,
       columns: ['Session', ...lines.flatMap((line) => [`${line.label} return`, `${line.label} fall from peak`])],
@@ -63,72 +61,14 @@ export function equityChartSpec(lines: readonly EquityLine[], featured: Candidat
   };
 }
 
-function option(aligned: readonly AlignedLine[], dates: readonly string[], featured: CandidateKey, ceiling: number, period: EquityPeriod, theme: ChartTheme): ChartOption {
-  const axisLabel = { color: theme.textSecondary, fontSize: 11 };
-  const axisLine = { lineStyle: { color: theme.axis } };
-  const splitLine = { lineStyle: { color: theme.gridLine } };
-  const drawn = aligned.filter((a) => a.recorded);
-  const limitOn = drawn[0]?.line.key;
-  return {
-    grid: [
-      { left: 56, right: 76, top: 12, height: '54%' },
-      { left: 56, right: 76, top: '66%', bottom: 28 },
-    ],
-    axisPointer: { link: [{ xAxisIndex: 'all' }], lineStyle: { color: theme.textSecondary } },
-    tooltip: {
-      ...tooltipFrame(theme),
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const index = dataIndexOf(params);
-        return index === null ? '' : tooltip(aligned, dates[index], index, ceiling, period, theme);
-      },
-    },
-    xAxis: [
-      { type: 'category', gridIndex: 0, data: [...dates], boundaryGap: false, axisLine, axisTick: { show: false }, axisLabel: { show: false } },
-      { type: 'category', gridIndex: 1, data: [...dates], boundaryGap: false, axisLine, axisLabel: { ...axisLabel, hideOverlap: true } },
-    ],
-    yAxis: [
-      { type: 'value', gridIndex: 0, splitNumber: 4, axisLabel: { ...axisLabel, formatter: (value: number) => signedPercentText(value) }, splitLine },
-      {
-        type: 'value',
-        gridIndex: 1,
-        max: 0,
-        // Room for the limit line when every fall stays above it.
-        min: (extent: { min: number }) => Math.min(extent.min, -ceiling),
-        splitNumber: 2,
-        axisLabel: { ...axisLabel, formatter: (value: number) => signedPercentText(value) },
-        splitLine,
-      },
-    ],
-    series: drawn.flatMap(({ line, returns, falls }) => {
-      const color = theme.candidates[line.key];
+/** The recorded lines as drawn: the featured one thicker and filled, the current settings dashed. */
+function drawn(aligned: readonly AlignedLine[], featured: CandidateKey, theme: ChartTheme): SessionLine[] {
+  return aligned
+    .filter((a) => a.recorded)
+    .map(({ line, returns, falls }) => {
       const isFeatured = line.key === featured;
-      const lineStyle = { color, width: isFeatured ? 2.5 : 1.5, type: line.key === 'incumbent' ? ('dashed' as const) : ('solid' as const) };
-      const common = { type: 'line' as const, name: line.label, showSymbol: false, connectNulls: false, z: isFeatured ? 3 : 2, lineStyle, itemStyle: { color }, emphasis: { focus: 'series' as const, blurScope: 'global' as const, lineStyle: { width: 'bolder' as const } } };
-      return [
-        { ...common, id: `equity:${line.key}`, xAxisIndex: 0, yAxisIndex: 0, data: plotted(returns), endLabel: { show: true, color, fontSize: 11, formatter: () => signedPercentText(lastValue(returns)) } },
-        {
-          ...common,
-          id: `fall:${line.key}`,
-          xAxisIndex: 1,
-          yAxisIndex: 1,
-          data: plotted(falls),
-          ...(isFeatured ? { areaStyle: { color, opacity: 0.15 } } : {}),
-          ...(line.key === limitOn
-            ? {
-                markLine: {
-                  silent: true,
-                  symbol: 'none',
-                  lineStyle: { color: theme.warn, type: 'dashed' as const, width: 1 },
-                  label: { color: theme.warn, fontSize: 11, position: 'insideStartTop' as const, formatter: `${percentText(ceiling)} limit` },
-                  data: [{ yAxis: -ceiling }],
-                },
-              }
-            : {}),
-        },
-      ];
-    }),
-  };
+      return { key: line.key, name: line.label, returns, falls, color: theme.candidates[line.key], width: isFeatured ? 2.5 : 1.5, dashed: line.key === 'incumbent', z: isFeatured ? 3 : 2, endLabel: true, filled: isFeatured };
+    });
 }
 
 function tooltip(aligned: readonly AlignedLine[], date: string, index: number, ceiling: number, period: EquityPeriod, theme: ChartTheme): string {
@@ -148,23 +88,4 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
     },
     theme,
   );
-}
-
-/** ECharts' empty point is `'-'`: a session the run did not record leaves a gap, never a zero. */
-function plotted(values: readonly (number | null)[]): (number | '-')[] {
-  return values.map((value) => value ?? '-');
-}
-
-/** Each session's value, or null where this run recorded none. */
-function align(sessions: readonly number[], points: readonly (readonly [number, number])[]): (number | null)[] {
-  const byMs = new Map(points);
-  return sessions.map((ms) => byMs.get(ms) ?? null);
-}
-
-function lastValue(values: readonly (number | null)[]): number | null {
-  for (let i = values.length - 1; i >= 0; i--) {
-    const value = values[i];
-    if (value !== null) return value;
-  }
-  return null;
 }

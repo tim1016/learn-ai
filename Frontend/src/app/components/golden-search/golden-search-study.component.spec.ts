@@ -6,14 +6,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchStudyComponent } from './golden-search-study.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
-import type { PlanCharts, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { emaCapability, frequencyProtocol, planCharts, QUALIFICATION_FAILURE, studyDetail, tradeActivity } from './testing/fixtures';
+import type { PlanCharts, RunsPage, RunsQuery, StudyCommandRequest, StudyDetail } from './golden-search.types';
+import { emaCapability, frequencyProtocol, planCharts, QUALIFICATION_FAILURE, runsPage, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
   get: ReturnType<typeof vi.fn<(id: string) => Promise<StudyDetail>>>;
   command: ReturnType<typeof vi.fn<(id: string, request: StudyCommandRequest) => Promise<CommandOutcome>>>;
   hide: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
   planCharts: ReturnType<typeof vi.fn<(id: string) => Promise<PlanCharts>>>;
+  runs: ReturnType<typeof vi.fn<(id: string, query: RunsQuery) => Promise<RunsPage>>>;
 }
 
 function fakeService(study: StudyDetail): FakeService {
@@ -22,6 +23,7 @@ function fakeService(study: StudyDetail): FakeService {
     command: vi.fn(async (_id: string, _request: StudyCommandRequest) => ({ study, jobId: null })),
     hide: vi.fn(async (_id: string) => undefined),
     planCharts: vi.fn(async (_id: string) => planCharts()),
+    runs: vi.fn(async (_id: string, _query: RunsQuery) => runsPage()),
   };
 }
 
@@ -370,6 +372,25 @@ describe('GoldenSearchStudyComponent', () => {
     expect(within(activity).getByText('Minimum trades for each training window')).not.toBeNull();
     expect(screen.queryByText('Minimum completed trades')).toBeNull();
     expect(screen.queryByText('Minimum final-test trades')).toBeNull();
+  });
+
+  it('All runs opens in place of the selected step, and choosing a step closes it', async () => {
+    const service = fakeService(studyDetail('awaiting_validation'));
+    await renderStudy(service);
+    const toggle = screen.getByRole('button', { name: /all runs/i });
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(await screen.findByText(/Every engine run of this study/)).not.toBeNull();
+    expect(service.runs).toHaveBeenCalledWith('study-0001-aaaa', expect.objectContaining({ group: null, sort: 'recorded' }));
+    // No step is the current one while All runs is open.
+    expect(within(screen.getByRole('navigation', { name: 'Research steps' })).queryByRole('button', { current: 'step' })).toBeNull();
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Research steps' })).getByRole('button', { name: /search/i }));
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByText(/Every engine run of this study/)).toBeNull();
   });
 
   it('Hide asks once, then hides the study and reports it', async () => {

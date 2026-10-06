@@ -185,6 +185,7 @@ export class GoldenSearchStudyComponent {
         this.awaitingClaimPolls = 0;
         // A review belongs to the study it started on; another study starts without one.
         this.reviewing.set(null);
+        this.runsOpen.set(false);
         this.review.stop.set(null);
         void this.reload(id);
       });

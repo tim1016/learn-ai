@@ -1,14 +1,15 @@
-import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { dataIndexOf, NOT_RECORDED, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
-import type { ChartOption } from './charts/golden-search-echarts';
+import { NOT_RECORDED, signedPercentOrNotRecorded, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import { percentText, signedPercentText } from './golden-search-display';
+import { alignToSessions, lastValue, sessionAxis, sessionCurvesOption, type SessionLine } from './golden-search-session-curves';
 import type { RunCurve } from './golden-search.types';
 
-/** One run to draw: what the All runs list calls it, and its curve as the server sent it. */
+/** One run to draw: what asked for it, its settings in words, and its curve as the server sent it. */
 export interface RunLine {
   readonly key: string;
   readonly label: string;
+  /** The run's settings sentence: with the label it tells any two runs apart. */
+  readonly settings: string;
   readonly curve: RunCurve;
 }
 
@@ -24,110 +25,60 @@ const HOVER_ROWS = 12;
 const END_LABELS = 8;
 
 /**
- * The runs the owner ticked, drawn together (#2930): each run's cumulative
- * return on top and its fall from its own peak beneath, on one session axis.
- * Runs over different windows share the axis and each spans only its own
- * sessions; a session a run did not score stays empty, never zero. Every
- * value is the server's.
+ * The runs the owner ticked, drawn together (#2930) on the shared session
+ * chart. Runs over different windows share the axis and each spans only its
+ * own sessions. Every value is the server's, the deepest fall included.
  */
 export function runCurvesSpec(lines: readonly RunLine[], ceiling: number): ChartSpec {
-  const sessions = [...new Set(lines.flatMap((line) => line.curve.close_ms))].sort((a, b) => a - b);
-  const dates = sessions.map((ms) => formatTimestampDisplay(ms, { mode: 'date-et' }));
+  const { sessions, dates } = sessionAxis(lines.map((line) => line.curve.close_ms));
   const aligned: AlignedRun[] = lines.map((line) => ({
     line,
-    returns: align(sessions, line.curve.close_ms, line.curve.cumulative_return),
-    falls: line.curve.drawdown === null ? sessions.map(() => null) : align(sessions, line.curve.close_ms, line.curve.drawdown),
+    returns: alignToSessions(sessions, line.curve.close_ms, line.curve.cumulative_return),
+    falls: line.curve.drawdown === null ? sessions.map(() => null) : alignToSessions(sessions, line.curve.close_ms, line.curve.drawdown),
   }));
+  const sessionDate = (line: RunLine, at: 0 | -1): string => {
+    const ms = line.curve.close_ms.at(at);
+    return ms === undefined ? '—' : dates[sessions.indexOf(ms)];
+  };
   return {
     label: 'Run cumulative return and fall from peak',
     summary: `${lines.length} run${lines.length === 1 ? '' : 's'} drawn at every session close; beneath, each run's fall from its own peak.`,
     featured: lines[0]?.key ?? null,
-    option: (theme) => option(aligned, dates, ceiling, theme),
+    option: (theme) => sessionCurvesOption(drawn(aligned, theme), dates, ceiling, (index) => tooltip(aligned, dates[index], index, ceiling, theme), theme),
     table: {
-      caption: 'Each drawn run: where it ended and its deepest fall at a session close; — marks a value the run did not record',
-      columns: ['Run', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
-      rows: aligned.map(({ line, returns, falls }) => ({
+      caption: 'Each drawn run: its settings, where it ended and its deepest fall at a session close; — marks a value the run did not record',
+      columns: ['Run', 'Settings', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
+      rows: aligned.map(({ line, returns }) => ({
         key: line.key,
-        cells: [line.label, dateText(line.curve.close_ms.at(0)), dateText(line.curve.close_ms.at(-1)), signedPercentText(lastValue(returns)), signedPercentText(lowest(falls))],
+        cells: [line.label, line.settings, sessionDate(line, 0), sessionDate(line, -1), signedPercentText(lastValue(returns)), signedPercentText(line.curve.deepest_drawdown)],
       })),
     },
   };
 }
 
-function option(aligned: readonly AlignedRun[], dates: readonly string[], ceiling: number, theme: ChartTheme): ChartOption {
-  const axisLabel = { color: theme.textSecondary, fontSize: 11 };
-  const axisLine = { lineStyle: { color: theme.axis } };
-  const splitLine = { lineStyle: { color: theme.gridLine } };
-  const colorOf = (index: number): string => theme.series[index % theme.series.length];
-  const crowded = aligned.length > END_LABELS;
-  return {
-    grid: [
-      { left: 56, right: crowded ? 16 : 76, top: 12, height: '54%' },
-      { left: 56, right: crowded ? 16 : 76, top: '66%', bottom: 28 },
-    ],
-    axisPointer: { link: [{ xAxisIndex: 'all' }], lineStyle: { color: theme.textSecondary } },
-    tooltip: {
-      ...tooltipFrame(theme),
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const index = dataIndexOf(params);
-        return index === null ? '' : tooltip(aligned, dates[index], index, ceiling, colorOf, theme);
-      },
-    },
-    xAxis: [
-      { type: 'category', gridIndex: 0, data: [...dates], boundaryGap: false, axisLine, axisTick: { show: false }, axisLabel: { show: false } },
-      { type: 'category', gridIndex: 1, data: [...dates], boundaryGap: false, axisLine, axisLabel: { ...axisLabel, hideOverlap: true } },
-    ],
-    yAxis: [
-      { type: 'value', gridIndex: 0, splitNumber: 4, axisLabel: { ...axisLabel, formatter: (value: number) => signedPercentText(value) }, splitLine },
-      {
-        type: 'value',
-        gridIndex: 1,
-        max: 0,
-        // Room for the limit line when every fall stays above it.
-        min: (extent: { min: number }) => Math.min(extent.min, -ceiling),
-        splitNumber: 2,
-        axisLabel: { ...axisLabel, formatter: (value: number) => signedPercentText(value) },
-        splitLine,
-      },
-    ],
-    series: aligned.flatMap(({ line, returns, falls }, index) => {
-      const color = colorOf(index);
-      const common = {
-        type: 'line' as const,
-        name: line.label,
-        showSymbol: false,
-        connectNulls: false,
-        lineStyle: { color, width: crowded ? 1 : 1.75, opacity: crowded ? 0.7 : 1 },
-        itemStyle: { color },
-        emphasis: { focus: 'series' as const, blurScope: 'global' as const, lineStyle: { width: 'bolder' as const } },
-      };
-      return [
-        { ...common, id: `equity:${line.key}`, xAxisIndex: 0, yAxisIndex: 0, data: plotted(returns), endLabel: { show: !crowded, color, fontSize: 11, formatter: () => signedPercentText(lastValue(returns)) } },
-        {
-          ...common,
-          id: `fall:${line.key}`,
-          xAxisIndex: 1,
-          yAxisIndex: 1,
-          data: plotted(falls),
-          ...(index === 0
-            ? {
-                markLine: {
-                  silent: true,
-                  symbol: 'none',
-                  lineStyle: { color: theme.warn, type: 'dashed' as const, width: 1 },
-                  label: { color: theme.warn, fontSize: 11, position: 'insideStartTop' as const, formatter: `${percentText(ceiling)} limit` },
-                  data: [{ yAxis: -ceiling }],
-                },
-              }
-            : {}),
-        },
-      ];
-    }),
-  };
+function colorOf(index: number, theme: ChartTheme): string {
+  return theme.series[index % theme.series.length];
 }
 
-function tooltip(aligned: readonly AlignedRun[], date: string, index: number, ceiling: number, colorOf: (index: number) => string, theme: ChartTheme): string {
+/** Each run in the next palette colour; a crowd of them thins out and loses its end labels. */
+function drawn(aligned: readonly AlignedRun[], theme: ChartTheme): SessionLine[] {
+  const crowded = aligned.length > END_LABELS;
+  return aligned.map(({ line, returns, falls }, index) => ({
+    key: line.key,
+    name: line.label,
+    returns,
+    falls,
+    color: colorOf(index, theme),
+    width: crowded ? 1 : 1.75,
+    ...(crowded ? { opacity: 0.7 } : {}),
+    dashed: false,
+    z: 2,
+    endLabel: !crowded,
+    filled: false,
+  }));
+}
+
+function tooltip(aligned: readonly AlignedRun[], date: string, index: number, ceiling: number, theme: ChartTheme): string {
   // The runs that scored this session, best return first.
   const scored = aligned.map((run, at) => ({ run, at })).filter(({ run }) => run.returns[index] !== null);
   scored.sort((a, b) => (b.run.returns[index] ?? 0) - (a.run.returns[index] ?? 0));
@@ -140,40 +91,12 @@ function tooltip(aligned: readonly AlignedRun[], date: string, index: number, ce
       title: `${date} · at the session close`,
       columns: ['Return', 'Fall from peak'],
       rows: shown.map(({ run, at }) => ({
-        label: run.line.label,
-        swatch: { color: colorOf(at), dashed: false },
+        label: `${run.line.label} · ${run.line.settings}`,
+        swatch: { color: colorOf(at, theme), dashed: false },
         values: [signedPercentOrNotRecorded(run.returns[index]), run.line.curve.drawdown === null ? NOT_RECORDED : signedPercentOrNotRecorded(run.falls[index])],
       })),
       notes,
     },
     theme,
   );
-}
-
-function dateText(ms: number | undefined): string {
-  return ms === undefined ? '—' : formatTimestampDisplay(ms, { mode: 'date-et' });
-}
-
-/** ECharts' empty point is `'-'`: a session the run did not score leaves a gap, never a zero. */
-function plotted(values: readonly (number | null)[]): (number | '-')[] {
-  return values.map((value) => value ?? '-');
-}
-
-/** Each session's value, or null where this run scored none. */
-function align(sessions: readonly number[], closes: readonly number[], values: readonly number[]): (number | null)[] {
-  const byMs = new Map(closes.map((ms, i) => [ms, values[i]] as const));
-  return sessions.map((ms) => byMs.get(ms) ?? null);
-}
-
-function lastValue(values: readonly (number | null)[]): number | null {
-  for (let i = values.length - 1; i >= 0; i--) {
-    const value = values[i];
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function lowest(values: readonly (number | null)[]): number | null {
-  const recorded = values.filter((value): value is number => value !== null);
-  return recorded.length === 0 ? null : Math.min(...recorded);
 }

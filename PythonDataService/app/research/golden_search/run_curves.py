@@ -5,9 +5,11 @@ study's starting capital ``C``:
   * cumulative return ``r_t = E_t / C − 1``;
   * fall from peak ``d_t = E_t / max_{s ≤ t} E_s − 1``
     (``evidence.drawdown_series``); undefined, and read as none, while the
-    peak is not above 0.
-These are the two series a candidate's detail read draws
-(``views.run_detail``). A run recorded before runs kept their curve has
+    peak is not above 0;
+  * deepest fall ``min_t d_t``, at a session close: the engine's
+    ``max_drawdown_pct`` reads every bar and can be deeper.
+The two series are the ones a candidate's detail read draws
+(``views.run_detail``), from the same functions. A run recorded before runs kept their curve has
 none: it reads as not recorded, never as a flat line.
 
 A run belongs to the group of the step that first asked for it; a point a
@@ -33,17 +35,16 @@ from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 from app.research.golden_search.declarations import SearchDeclaration, point_hash
-from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series
+from app.research.golden_search.evidence import CANDIDATE_LABELS, cumulative_return_series, drawdown_series
 from app.research.golden_search.guidance import params_sentence
 from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.protocol import BASE_SCENARIO
 
 RunGroup = Literal["search", "pair_audit", "recent", "fold_training", "fold_test", "candidate", "neighbor", "stress", "final"]
-RunSort = Literal["recorded", "total_return_pct", "sharpe_ratio", "max_drawdown_pct", "total_trades", "net_profit"]
+RunSort = Literal["recorded", "total_return_pct", "sharpe_ratio", "max_drawdown_pct", "total_trades"]
 
 RUN_GROUPS: tuple[RunGroup, ...] = get_args(RunGroup)
-RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
 GROUP_LABELS: dict[RunGroup, str] = {
     "search": "All-period search",
     "pair_audit": "Pair audit",
@@ -120,7 +121,11 @@ def run_view(
     scenario_labels: Mapping[str, str],
     declaration: SearchDeclaration,
 ) -> dict[str, Any]:
-    """One run as the All runs page lists it: what asked for it, its settings, its window and its numbers."""
+    """One run as the All runs page lists it: what asked for it, its settings, its window and its numbers.
+
+    ``label`` with ``params_sentence`` tells any two runs of a study apart: a
+    step scores a set of settings once per window, fold and cost scenario.
+    """
     parts = [GROUP_LABELS[group] if record.fold_index is None else f"Fold {record.fold_index + 1} {'test' if group == 'fold_test' else 'training'}"]
     if record.scenario != BASE_SCENARIO:
         parts.append(scenario_labels.get(record.scenario, record.scenario))
@@ -128,18 +133,14 @@ def run_view(
     return {
         "evaluation_key": record.evaluation_key,
         "group": group,
-        "group_label": GROUP_LABELS[group],
         "fold_index": record.fold_index,
         "label": " · ".join(parts),
-        "names": list(names),
-        "point": dict(record.point),
         "params_sentence": params_sentence(declaration, record.point),
         "window_start_ms": record.window_start_ms,
         "window_end_ms": record.window_end_ms,
         "scenario": record.scenario,
         "status": record.status,
         "total_trades": record.total_trades,
-        "net_profit": _metric(record, "net_profit"),
         "total_return_pct": _metric(record, "total_return_pct"),
         "sharpe_ratio": _metric(record, "sharpe_ratio"),
         "max_drawdown_pct": _metric(record, "max_drawdown_pct"),
@@ -172,7 +173,7 @@ def runs_page(
     names = named_points(row)
     scenario_labels = {item["key"]: item["label"] for item in row.protocol.get("stress", [])}
     grouped = [(group_of(record, by_fold), record) for record in records]
-    # Per group: every run, the completed ones, and those that kept a curve. A completed run without one predates curves.
+    # Per group: every run, the completed ones, and those that kept a curve.
     counts = {key: [0, 0, 0] for key in RUN_GROUPS}
     for key, record in grouped:
         counts[key][0] += 1
@@ -191,6 +192,8 @@ def runs_page(
         "total": len(chosen),
         "page": page,
         "page_size": page_size,
+        "sort": sort,
+        "folds": len(folds),
         "groups": [
             {"key": key, "label": GROUP_LABELS[key], "runs": counts[key][0], "completed": counts[key][1], "with_curve": counts[key][2]}
             for key in RUN_GROUPS
@@ -213,15 +216,15 @@ def curve_view(evaluation_key: str, daily: Sequence[tuple[int, float]], capital:
     return {
         "evaluation_key": evaluation_key,
         "close_ms": [ms for ms, _ in daily],
-        "cumulative_return": [equity / capital - 1.0 for _, equity in daily],
+        "cumulative_return": [value for _, value in cumulative_return_series(daily, capital)],
         "drawdown": falls,
+        "deepest_drawdown": min(falls) if falls else None,
     }
 
 
 def curves_view(evaluation_keys: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> dict[str, Any]:
     """The curves of the named runs, in the order asked, and the runs among them that kept none."""
     return {
-        "capital": capital,
         "curves": [curve_view(key, stored[key], capital) for key in evaluation_keys if key in stored],
         "not_recorded": [key for key in evaluation_keys if key not in stored],
     }

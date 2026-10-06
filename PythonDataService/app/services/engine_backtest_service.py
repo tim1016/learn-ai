@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from itertools import takewhile
+from itertools import pairwise, takewhile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -1004,14 +1004,16 @@ def equity_day_ends(curve: Sequence[EquitySnapshot]) -> list[dict[str, Any]]:
     """The last equity sample of each ET date the curve covers, oldest first.
 
     One point a day is enough to draw a run, and small enough for a caller that
-    keeps thousands of runs, so this is built on a summary run too. The samples
-    arrive in time order; each day's last one is found by bisecting on the next
-    ET midnight (resolved through the NY zone), so the cost is one pass over the
-    timestamps however long the run.
+    keeps thousands of runs, so this is built on a summary run too. The engine
+    appends one sample per bar, so they arrive in time order; a curve that
+    does not is refused, never searched. Each day's last sample is found by
+    bisecting on the next ET midnight (resolved through the NY zone).
     """
     if not curve:
         return []
     stamps = [sample.timestamp_ms for sample in curve]
+    if any(later <= earlier for earlier, later in pairwise(stamps)):
+        raise ValueError("equity samples must be in strictly increasing time order")
     ends: list[dict[str, Any]] = []
     day, last_day = et_date_at_ms(stamps[0]), et_date_at_ms(stamps[-1])
     start = 0

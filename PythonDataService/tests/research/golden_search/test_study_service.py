@@ -848,7 +848,7 @@ async def test_both_fits_sit_the_final_test_and_the_owner_names_one_afterwards(c
     # Each fit is judged on its own run; the incumbent ran once beside them.
     assert [fit["outcome"] for fit in exam["fits"]] == ["meets_rules", "meets_rules"]
     assert exam["fits"][0]["metrics"]["sharpe_ratio"] != exam["fits"][1]["metrics"]["sharpe_ratio"]
-    assert (await service.evaluations(row.id, stage="exam", page=1, page_size=10))["total"] == 3
+    assert (await service.runs(row.id, group="final"))["total"] == 3
     assert (exam["pick"], exam["chosen_key"]) == ("after_test", None)
     assert exam["selection_note"].startswith("2 fits ran on the final test.")
     # The interval is used once, with a reservation and a result for each fit.
@@ -956,7 +956,8 @@ async def test_every_run_keeps_its_daily_curve_and_the_runs_read_groups_them(con
     assert curve["close_ms"] == [point["ms"] for point in detail["cumulative_return"]]
     assert curve["cumulative_return"] == pytest.approx([point["value"] for point in detail["cumulative_return"]], abs=1e-12, rel=0)
     assert curve["drawdown"] == pytest.approx([point["drawdown"] for point in detail["drawdown"]], abs=1e-12, rel=0)
-    assert (curves["capital"], curves["not_recorded"]) == (row.protocol["execution"]["initial_cash"], [])
+    assert curves["not_recorded"] == []
+    assert curve["deepest_drawdown"] == min(point["drawdown"] for point in detail["drawdown"])
 
 
 async def test_a_run_recorded_before_runs_kept_their_curve_reads_not_recorded(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
@@ -974,10 +975,6 @@ async def test_a_run_recorded_before_runs_kept_their_curve_reads_not_recorded(co
     assert [curve["evaluation_key"] for curve in curves["curves"]] == [second["evaluation_key"]]
     listed = {run["evaluation_key"]: run["has_curve"] for run in (await service.runs(row.id, group="search"))["rows"]}
     assert (listed[first["evaluation_key"]], listed[second["evaluation_key"]]) == (False, True)
-    for query, field in (({"group": "everything"}, "group"), ({"sort": "luck"}, "sort")):
-        with pytest.raises(GoldenSearchRefusal) as refused:
-            await service.runs(row.id, **query)
-        assert (refused.value.code, refused.value.field) == ("RUNS_QUERY_INVALID", field)
     with pytest.raises(GoldenSearchRefusal) as none_named:
         await service.run_curves(row.id, [])
     assert none_named.value.code == "RUNS_QUERY_INVALID"
@@ -1254,8 +1251,5 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark
 
     # One fit (both chose the same settings) and the incumbent.
-    page = await service.evaluations(row.id, stage="exam", page=1, page_size=10)
-    assert page["total"] == 2 and {item["detail"] for item in page["rows"]} == {True}
-    with pytest.raises(GoldenSearchRefusal) as refused:
-        await service.evaluations(row.id, page=0)
-    assert refused.value.code == "PAGE_INVALID"
+    final = await service.runs(row.id, group="final")
+    assert final["total"] == 2 and all(run["has_curve"] for run in final["rows"])
