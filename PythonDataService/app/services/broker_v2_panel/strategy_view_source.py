@@ -39,7 +39,7 @@ async def get_strategy_view(broker: str, account_id: str, sid: str) -> StrategyV
                 detail="Restore the selected authority, then refresh.",
             )
         try:
-            view = ResolvedStrategyView.for_settings(
+            view = ResolvedStrategyView.for_saved_settings(
                 binding.strategy_key, binding.strategy_params, symbol=binding.symbol
             )
         except StrategyViewUnavailableError as exc:

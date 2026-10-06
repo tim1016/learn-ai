@@ -146,29 +146,40 @@ def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_an
     assert "39 days" in preset.explanation
 
 
+@pytest.fixture
+def sma_hides_its_long_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No registered strategy hides a parameter today, so these tests hide one."""
+    registration = _STRATEGY_REGISTRY["sma_crossover"]
+    monkeypatch.setitem(
+        _STRATEGY_REGISTRY, "sma_crossover", dataclasses.replace(registration, hidden_params={"long_window"})
+    )
+
+
+@pytest.mark.usefixtures("sma_hides_its_long_window")
 def test_a_ready_default_is_offered_without_the_parameter_deploy_sets_itself() -> None:
     """#2841: the form submits the preset as it stands, and Deploy refuses a hidden parameter it is sent."""
-    default, _ = _ready_default_of("deployment_validation", "SPY", trade_symbol="SPY")
+    default, _ = _ready_default_of("sma_crossover", "SPY")
 
-    preset = _qualified_configuration("deployment_validation", "SPY", {("deployment_validation", "SPY"): default})
+    preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
 
     assert preset is not None
     assert preset.golden_qualification_id == default.qualification.id
-    assert "trade_symbol" not in preset.parameters
-    resolved = resolve_deploy_strategy_params("deployment_validation", preset.symbol, dict(preset.parameters))
-    assert resolved.effective["trade_symbol"] == default.qualification.params["trade_symbol"]
+    assert "long_window" not in preset.parameters
+    resolved = resolve_deploy_strategy_params("sma_crossover", preset.symbol, dict(preset.parameters))
+    assert resolved.effective["long_window"] == default.qualification.params["long_window"]
 
 
+@pytest.mark.usefixtures("sma_hides_its_long_window")
 def test_a_ready_default_deploy_cannot_reach_is_not_offered() -> None:
-    """Deploy sets the traded stock to the signal stock, so a default approved on another one is out of its reach."""
-    default, registry_parameters = _ready_default_of("deployment_validation", "SPY", trade_symbol="QQQ")
+    """Deploy sets a hidden parameter itself, so a default approved at another value of it is out of its reach."""
+    default, registry_parameters = _ready_default_of("sma_crossover", "SPY", long_window=40)
 
-    preset = _qualified_configuration("deployment_validation", "SPY", {("deployment_validation", "SPY"): default})
+    preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
 
     assert preset is not None
     assert preset.golden_qualification_id is None
     assert preset.parameters == registry_parameters
-    assert "The Golden Search default for SPY is not offered: Deploy sets trade_symbol itself" in preset.explanation
+    assert "The Golden Search default for SPY is not offered: Deploy sets long_window itself" in preset.explanation
 
 
 def test_another_stocks_default_leaves_this_stock_on_the_registry_point() -> None:

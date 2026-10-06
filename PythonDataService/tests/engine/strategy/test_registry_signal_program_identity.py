@@ -8,7 +8,7 @@ Issue #1728 defect 1: ``_STRATEGY_REGISTRY["ema_crossover_2_bps"]`` and
 not explicitly overridden, including ``signal_program_contract`` and
 ``signal_program_factory`` — so two strategies with genuinely different math
 (a relative basis-point gap vs. EMA's absolute-price gap; a
-``action_plan_contract="none"`` legacy wrapper vs. the canonical program)
+legacy wrapper vs. the canonical program)
 ended up claiming EMA's qualification receipt
 (``program_version``, ``golden_trace_root``, ``validated_settings``,
 ``artifact_paths``) as their own.

@@ -5,16 +5,16 @@
       "schema_version": 2,
       "program_key": "deployment_validation",
       "program_version": "deployment-validation/v1",
-      "golden_trace_root": "5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
-      "artifact_digest": "3bf54b3a85551e7bef194222404aa728ed0a5f07c22b10fc406e412ef5c27857",
-      "wiring_digest": "d93d64d3ee31025c65523cfcef652ed417cf8818c7780d3d83d2eb2ff6b8fe10",
+      "golden_trace_root": "f2427abee699b896822b2180b86b5c56f8af45eebe84e98e21251aaba4028dcc",
+      "artifact_digest": "66c9c77cd9c82d883efbe07462f5c03edc5f3a0b1ebee7c22bc2d7202a17c32b",
+      "wiring_digest": "0c9b1b418fd318aec33cd6500a6dded94699634bff7551d2fbbcf2bc47f4d93f",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[deployment_validation]",
-      "qualified_at_ms": 1790908565161,
+      "qualified_at_ms": 1791324415362,
       "git_provenance": {
-        "commit_sha": "450073fb974a90a040d49e8ceb033d4043649a5b",
+        "commit_sha": "75f74581e69a20d0fe6beaf5f68502dc6c8183d0",
         "dirty": false
       },
-      "receipt_hash": "bb4eb6c28ccac04256242d13ced00758fb4cf5f76c0725fd22184fcfa4438b5f"
+      "receipt_hash": "51629fc0963b15a73a02ed645c4b332d2b5d5f1a32a57436442aadeb86118572"
     },
     {
       "schema_version": 2,

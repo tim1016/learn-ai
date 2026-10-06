@@ -264,7 +264,7 @@ _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
 # Insight framework at all — evaluate_signal_bar reads only bar.open/
 # bar.close and the calendar-derived session window, and
 # commit_signal_decision calls ctx.set_holdings/ctx.liquidate directly
-# (instrument_surface="explicit") rather than ctx.emit_signal_intent or
+# rather than ctx.emit_signal_intent or
 # ctx.emit_insight — but portfolio.py, insight.py, and insight_manager.py
 # are still transitively reached through strategy/base.py's own
 # general, strategy-agnostic imports (StrategyContext holds a Portfolio and
