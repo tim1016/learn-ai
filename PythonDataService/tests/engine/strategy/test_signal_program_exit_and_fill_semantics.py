@@ -194,7 +194,7 @@ def _arm_exit_ema(_strategy: Strategy) -> None:
 
 
 def _arm_entry_ema_previous(strategy: Strategy) -> None:
-    """A cross up on the driven bar that already clears both gates, so it is that cross's entry bar."""
+    """A cross up on the driven bar that already clears both gates, so that bar enters."""
     strategy._ema_fast = _ReadyIndicator(Decimal("500.50"))  # type: ignore[attr-defined]
     strategy._ema_slow = _ReadyIndicator(Decimal("500.00"))  # type: ignore[attr-defined]
     strategy._rsi = _ReadyIndicator(Decimal("60"))  # type: ignore[attr-defined]

@@ -100,18 +100,28 @@ def test_ema_declaration_names_only_declared_searchable_knobs_in_rules_and_audit
     assert violates(_EMA_DECLARATION, {k.name: k.default_value for k in _EMA_DECLARATION.knobs}) is None
 
 
-def test_ema_previous_crossover_is_searched_like_ema_crossover_signal() -> None:
+def test_ema_previous_crossover_searches_the_ema_knobs_and_holds_its_cross_age_limit_fixed() -> None:
     declaration = declaration_for(EMA_PREVIOUS)
 
     assert declaration is not None
-    assert (declaration.knobs, declaration.fixed, declaration.constraints, declaration.default_pair_audits) == (
+    *shared, cross_age = declaration.knobs
+    assert (tuple(shared), declaration.fixed, declaration.constraints, declaration.default_pair_audits) == (
         _EMA_DECLARATION.knobs,
         _EMA_DECLARATION.fixed,
         _EMA_DECLARATION.constraints,
         _EMA_DECLARATION.default_pair_audits,
     )
-    settings = set(public_params_schema(_STRATEGY_REGISTRY[EMA_PREVIOUS])["properties"]) - {"symbol"}
-    assert {k.name for k in declaration.knobs} == settings
+    assert (cross_age.name, cross_age.searchable_by_default, cross_age.default_value) == (
+        "cross_max_age_bars",
+        False,
+        Decimal("1"),
+    )
+    schema = public_params_schema(_STRATEGY_REGISTRY[EMA_PREVIOUS])["properties"]
+    assert {k.name for k in declaration.knobs} == set(schema) - {"symbol"}
+    assert (cross_age.domain_low, cross_age.domain_high) == (
+        Decimal(schema["cross_max_age_bars"]["minimum"]),
+        Decimal(schema["cross_max_age_bars"]["maximum"]),
+    )
     assert unavailable_reason(EMA_PREVIOUS) is None
 
 

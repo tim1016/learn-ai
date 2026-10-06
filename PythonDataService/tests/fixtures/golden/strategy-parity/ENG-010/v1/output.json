@@ -1,6 +1,6 @@
 {
   "lean_image_digest": "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771",
-  "algorithm_source_sha256": "ffac97672c9679c070e9d8ea1f783b80137a3deb7a34997881e764d96d05cca3",
+  "algorithm_source_sha256": "f77722cdadb642d0e2c32eb87249f51791511bd373b9387e7b34caaf47bab707",
   "parameters": {
     "gap": "0.2",
     "gap_bps": "0.0",
@@ -8,25 +8,12 @@
     "rsi_max": "70.0",
     "fast_period": "5",
     "slow_period": "10",
-    "hold_bars": "5"
+    "hold_bars": "5",
+    "cross_max_age_bars": "1"
   },
   "cells": {
     "SPY_W6mo_2025-11-03_to_2026-04-30": {
       "filled_order_events": [
-        {
-          "ms_utc": 1762356600000,
-          "direction": "buy",
-          "fill_price": "677.44",
-          "fill_quantity": 147,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762361100000,
-          "direction": "sell",
-          "fill_price": "679.05",
-          "fill_quantity": -147,
-          "order_fee": "1.0"
-        },
         {
           "ms_utc": 1762457400000,
           "direction": "buy",
@@ -42,632 +29,324 @@
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1762544700000,
-          "direction": "buy",
-          "fill_price": "669.37",
-          "fill_quantity": 148,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762785060000,
-          "direction": "sell",
-          "fill_price": "677.235",
-          "fill_quantity": -148,
-          "order_fee": "1.0"
-        },
-        {
           "ms_utc": 1762882200000,
           "direction": "buy",
           "fill_price": "681.0306",
-          "fill_quantity": 148,
+          "fill_quantity": 146,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1762886700000,
           "direction": "sell",
           "fill_price": "682.92",
-          "fill_quantity": -148,
+          "fill_quantity": -146,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1762970400000,
           "direction": "buy",
           "fill_price": "683.63",
-          "fill_quantity": 147,
+          "fill_quantity": 145,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1762974900000,
           "direction": "sell",
           "fill_price": "682.99",
-          "fill_quantity": -147,
+          "fill_quantity": -145,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763137800000,
           "direction": "buy",
           "fill_price": "674.395",
-          "fill_quantity": 149,
+          "fill_quantity": 147,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763142300000,
           "direction": "sell",
           "fill_price": "674.81",
-          "fill_quantity": -149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1763150400000,
-          "direction": "buy",
-          "fill_price": "674.65",
-          "fill_quantity": 149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1763390700000,
-          "direction": "sell",
-          "fill_price": "671.985",
-          "fill_quantity": -149,
+          "fill_quantity": -147,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763488800000,
           "direction": "buy",
           "fill_price": "663.67",
-          "fill_quantity": 151,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763493300000,
           "direction": "sell",
           "fill_price": "663.96",
-          "fill_quantity": -151,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763564400000,
           "direction": "buy",
           "fill_price": "665.67",
-          "fill_quantity": 151,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763568900000,
           "direction": "sell",
           "fill_price": "662.29",
-          "fill_quantity": -151,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763584200000,
           "direction": "buy",
           "fill_price": "663.5",
-          "fill_quantity": 151,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763651700000,
           "direction": "sell",
           "fill_price": "673.17",
-          "fill_quantity": -151,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763743500000,
           "direction": "buy",
           "fill_price": "657.35",
-          "fill_quantity": 154,
+          "fill_quantity": 153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763748000000,
           "direction": "sell",
           "fill_price": "660.16",
-          "fill_quantity": -154,
+          "fill_quantity": -153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763996400000,
           "direction": "buy",
           "fill_price": "664.04",
-          "fill_quantity": 153,
+          "fill_quantity": 152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764000900000,
           "direction": "sell",
           "fill_price": "668.11",
-          "fill_quantity": -153,
+          "fill_quantity": -152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764085500000,
           "direction": "buy",
           "fill_price": "670.42",
-          "fill_quantity": 153,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764090000000,
           "direction": "sell",
           "fill_price": "671.72",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764343800000,
-          "direction": "buy",
-          "fill_price": "681.69",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764348300000,
-          "direction": "sell",
-          "fill_price": "682.59",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764611100000,
-          "direction": "buy",
-          "fill_price": "682.5784",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764615600000,
-          "direction": "sell",
-          "fill_price": "682.8205",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764688500000,
-          "direction": "buy",
-          "fill_price": "682.995",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764693000000,
-          "direction": "sell",
-          "fill_price": "680.01",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764706500000,
-          "direction": "buy",
-          "fill_price": "682.43",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764774000000,
-          "direction": "sell",
-          "fill_price": "680.87",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764780300000,
-          "direction": "buy",
-          "fill_price": "683.2",
-          "fill_quantity": 149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764784800000,
-          "direction": "sell",
-          "fill_price": "683.89",
-          "fill_quantity": -149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764945900000,
-          "direction": "buy",
-          "fill_price": "685.83",
-          "fill_quantity": 149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764950400000,
-          "direction": "sell",
-          "fill_price": "686.67",
-          "fill_quantity": -149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765292400000,
-          "direction": "buy",
-          "fill_price": "684.44",
-          "fill_quantity": 149,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765296900000,
-          "direction": "sell",
-          "fill_price": "684.85",
-          "fill_quantity": -149,
+          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1765395000000,
           "direction": "buy",
           "fill_price": "684.21",
-          "fill_quantity": 150,
+          "fill_quantity": 148,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1765399500000,
           "direction": "sell",
           "fill_price": "688.375",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765474200000,
-          "direction": "buy",
-          "fill_price": "687.355",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765478700000,
-          "direction": "sell",
-          "fill_price": "688.53",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765916100000,
-          "direction": "buy",
-          "fill_price": "678.32",
-          "fill_quantity": 152,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765983600000,
-          "direction": "sell",
-          "fill_price": "679.26",
-          "fill_quantity": -152,
+          "fill_quantity": -148,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766069100000,
           "direction": "buy",
           "fill_price": "676.28",
-          "fill_quantity": 153,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766073600000,
           "direction": "sell",
           "fill_price": "680.03",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1766083500000,
-          "direction": "buy",
-          "fill_price": "678.89",
-          "fill_quantity": 153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1766088000000,
-          "direction": "sell",
-          "fill_price": "675.72",
-          "fill_quantity": -153,
+          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766155500000,
           "direction": "buy",
           "fill_price": "679.41",
-          "fill_quantity": 152,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766160000000,
           "direction": "sell",
           "fill_price": "678.98",
-          "fill_quantity": -152,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1766416500000,
-          "direction": "buy",
-          "fill_price": "682.97",
-          "fill_quantity": 151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1766421000000,
-          "direction": "sell",
-          "fill_price": "684.67",
           "fill_quantity": -151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767038400000,
-          "direction": "buy",
-          "fill_price": "688.3",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767105900000,
-          "direction": "sell",
-          "fill_price": "687.12",
-          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767383100000,
           "direction": "buy",
           "fill_price": "683.565",
-          "fill_quantity": 151,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767623460000,
           "direction": "sell",
           "fill_price": "686.54",
-          "fill_quantity": -151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767714300000,
-          "direction": "buy",
-          "fill_price": "689.79",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767718800000,
-          "direction": "sell",
-          "fill_price": "689.43",
           "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767720600000,
-          "direction": "buy",
-          "fill_price": "690.39",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767725100000,
-          "direction": "sell",
-          "fill_price": "691.37",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767969900000,
-          "direction": "buy",
-          "fill_price": "691.38",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767974400000,
-          "direction": "sell",
-          "fill_price": "691.93",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768242600000,
-          "direction": "buy",
-          "fill_price": "695.125",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768247100000,
-          "direction": "sell",
-          "fill_price": "695.625",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768422600000,
-          "direction": "buy",
-          "fill_price": "689.15",
-          "fill_quantity": 151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768490100000,
-          "direction": "sell",
-          "fill_price": "694.0",
-          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769007600000,
           "direction": "buy",
           "fill_price": "682.49",
-          "fill_quantity": 154,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769012100000,
           "direction": "sell",
           "fill_price": "684.18",
-          "fill_quantity": -154,
+          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769023800000,
           "direction": "buy",
           "fill_price": "684.4",
-          "fill_quantity": 153,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769028300000,
           "direction": "sell",
           "fill_price": "685.45",
-          "fill_quantity": -153,
+          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769184000000,
           "direction": "buy",
           "fill_price": "690.48",
-          "fill_quantity": 152,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769188500000,
           "direction": "sell",
           "fill_price": "690.245",
-          "fill_quantity": -152,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769438700000,
           "direction": "buy",
           "fill_price": "692.185",
-          "fill_quantity": 152,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769443200000,
           "direction": "sell",
           "fill_price": "692.975",
-          "fill_quantity": -152,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769526000000,
           "direction": "buy",
           "fill_price": "695.17",
-          "fill_quantity": 151,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769530500000,
           "direction": "sell",
           "fill_price": "696.215",
-          "fill_quantity": -151,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769612400000,
           "direction": "buy",
           "fill_price": "697.12",
-          "fill_quantity": 151,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769616900000,
           "direction": "sell",
           "fill_price": "696.01",
-          "fill_quantity": -151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1769714100000,
-          "direction": "buy",
-          "fill_price": "691.58",
-          "fill_quantity": 152,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1769718600000,
-          "direction": "sell",
-          "fill_price": "691.57",
-          "fill_quantity": -152,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769801400000,
           "direction": "buy",
           "fill_price": "691.34",
-          "fill_quantity": 152,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769805900000,
           "direction": "sell",
           "fill_price": "691.16",
-          "fill_quantity": -152,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1770043500000,
-          "direction": "buy",
-          "fill_price": "692.59",
-          "fill_quantity": 152,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1770048000000,
-          "direction": "sell",
-          "fill_price": "694.73",
-          "fill_quantity": -152,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770215460000,
           "direction": "buy",
           "fill_price": "690.35",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770219900000,
           "direction": "sell",
           "fill_price": "689.59",
-          "fill_quantity": -153,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770235200000,
           "direction": "buy",
           "fill_price": "688.27",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770302700000,
           "direction": "sell",
           "fill_price": "682.94",
-          "fill_quantity": -153,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770389100000,
           "direction": "buy",
           "fill_price": "685.55",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770393600000,
           "direction": "sell",
           "fill_price": "685.8",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1770737400000,
-          "direction": "buy",
-          "fill_price": "695.92",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1770741900000,
-          "direction": "sell",
-          "fill_price": "694.645",
           "fill_quantity": -150,
           "order_fee": "1.0"
         },
@@ -675,588 +354,350 @@
           "ms_utc": 1770831900000,
           "direction": "buy",
           "fill_price": "693.72",
-          "fill_quantity": 151,
+          "fill_quantity": 148,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770836400000,
           "direction": "sell",
           "fill_price": "692.73",
-          "fill_quantity": -151,
+          "fill_quantity": -148,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770838200000,
           "direction": "buy",
           "fill_price": "693.74",
-          "fill_quantity": 150,
+          "fill_quantity": 148,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770842700000,
           "direction": "sell",
           "fill_price": "692.5",
-          "fill_quantity": -150,
+          "fill_quantity": -148,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771001100000,
           "direction": "buy",
           "fill_price": "684.54",
-          "fill_quantity": 152,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771005600000,
           "direction": "sell",
           "fill_price": "685.1",
-          "fill_quantity": -152,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771346700000,
           "direction": "buy",
           "fill_price": "681.8",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771351200000,
           "direction": "sell",
           "fill_price": "681.0103",
-          "fill_quantity": -153,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771353000000,
           "direction": "buy",
           "fill_price": "682.39",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771357500000,
           "direction": "sell",
           "fill_price": "684.72",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771598700000,
-          "direction": "buy",
-          "fill_price": "684.74",
-          "fill_quantity": 153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771603200000,
-          "direction": "sell",
-          "fill_price": "688.83",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771613100000,
-          "direction": "buy",
-          "fill_price": "688.7",
-          "fill_quantity": 153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771617600000,
-          "direction": "sell",
-          "fill_price": "688.05",
-          "fill_quantity": -153,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771944300000,
           "direction": "buy",
           "fill_price": "684.32",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771948800000,
           "direction": "sell",
           "fill_price": "685.37",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772032500000,
-          "direction": "buy",
-          "fill_price": "690.4999",
-          "fill_quantity": 152,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772037000000,
-          "direction": "sell",
-          "fill_price": "691.47",
-          "fill_quantity": -152,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772134200000,
           "direction": "buy",
           "fill_price": "688.61",
-          "fill_quantity": 153,
+          "fill_quantity": 149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772138700000,
           "direction": "sell",
           "fill_price": "689.32",
-          "fill_quantity": -153,
+          "fill_quantity": -149,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772224200000,
           "direction": "buy",
           "fill_price": "685.5901",
-          "fill_quantity": 154,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772464500000,
           "direction": "sell",
           "fill_price": "684.9197",
-          "fill_quantity": -154,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772469900000,
           "direction": "buy",
           "fill_price": "686.44",
-          "fill_quantity": 153,
+          "fill_quantity": 150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772474400000,
           "direction": "sell",
           "fill_price": "687.2199",
-          "fill_quantity": -153,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772562600000,
-          "direction": "buy",
-          "fill_price": "679.82",
-          "fill_quantity": 155,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772567100000,
-          "direction": "sell",
-          "fill_price": "681.94",
-          "fill_quantity": -155,
+          "fill_quantity": -150,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772743500000,
           "direction": "buy",
           "fill_price": "679.98",
-          "fill_quantity": 155,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772811000000,
           "direction": "sell",
           "fill_price": "674.17",
-          "fill_quantity": -155,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1773073800000,
-          "direction": "buy",
-          "fill_price": "670.87",
-          "fill_quantity": 156,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1773078300000,
-          "direction": "sell",
-          "fill_price": "668.22",
-          "fill_quantity": -156,
+          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773081900000,
           "direction": "buy",
           "fill_price": "670.8599",
-          "fill_quantity": 156,
+          "fill_quantity": 152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773149460000,
           "direction": "sell",
           "fill_price": "677.72",
-          "fill_quantity": -156,
+          "fill_quantity": -152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773322260000,
           "direction": "buy",
           "fill_price": "671.16",
-          "fill_quantity": 156,
+          "fill_quantity": 152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773326700000,
           "direction": "sell",
           "fill_price": "668.955",
-          "fill_quantity": -156,
+          "fill_quantity": -152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773409500000,
           "direction": "buy",
           "fill_price": "671.94",
-          "fill_quantity": 156,
+          "fill_quantity": 153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773414000000,
           "direction": "sell",
           "fill_price": "665.33",
-          "fill_quantity": -156,
+          "fill_quantity": -153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773668700000,
           "direction": "buy",
           "fill_price": "669.64",
-          "fill_quantity": 155,
+          "fill_quantity": 152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773673200000,
           "direction": "sell",
           "fill_price": "669.83",
-          "fill_quantity": -155,
+          "fill_quantity": -152,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773755100000,
           "direction": "buy",
           "fill_price": "673.51",
-          "fill_quantity": 155,
+          "fill_quantity": 151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773759600000,
           "direction": "sell",
           "fill_price": "673.03",
-          "fill_quantity": -155,
+          "fill_quantity": -151,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773947700000,
           "direction": "buy",
           "fill_price": "661.85",
-          "fill_quantity": 157,
+          "fill_quantity": 154,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774015200000,
           "direction": "sell",
           "fill_price": "653.15",
-          "fill_quantity": -157,
+          "fill_quantity": -154,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774273500000,
           "direction": "buy",
           "fill_price": "657.995",
-          "fill_quantity": 156,
+          "fill_quantity": 153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774278000000,
           "direction": "sell",
           "fill_price": "661.05",
-          "fill_quantity": -156,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1774290600000,
-          "direction": "buy",
-          "fill_price": "657.39",
-          "fill_quantity": 157,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1774295100000,
-          "direction": "sell",
-          "fill_price": "657.92",
-          "fill_quantity": -157,
+          "fill_quantity": -153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774367100000,
           "direction": "buy",
           "fill_price": "656.24",
-          "fill_quantity": 158,
+          "fill_quantity": 154,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774371600000,
           "direction": "sell",
           "fill_price": "655.15",
-          "fill_quantity": -158,
+          "fill_quantity": -154,
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1774379700000,
+          "ms_utc": 1774446300000,
           "direction": "buy",
-          "fill_price": "655.65",
-          "fill_quantity": 158,
+          "fill_price": "658.9",
+          "fill_quantity": 153,
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1774447200000,
+          "ms_utc": 1774450800000,
           "direction": "sell",
-          "fill_price": "656.49",
-          "fill_quantity": -158,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1774885500000,
-          "direction": "buy",
-          "fill_price": "637.99",
-          "fill_quantity": 162,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1774890000000,
-          "direction": "sell",
-          "fill_price": "635.3",
-          "fill_quantity": -162,
+          "fill_price": "658.69",
+          "fill_quantity": -153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774964700000,
           "direction": "buy",
           "fill_price": "639.26",
-          "fill_quantity": 161,
+          "fill_quantity": 158,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774969200000,
           "direction": "sell",
           "fill_price": "638.68",
-          "fill_quantity": -161,
+          "fill_quantity": -158,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775142900000,
           "direction": "buy",
           "fill_price": "655.25",
-          "fill_quantity": 157,
+          "fill_quantity": 154,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775147400000,
           "direction": "sell",
           "fill_price": "652.72",
-          "fill_quantity": -157,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775482260000,
-          "direction": "buy",
-          "fill_price": "655.86",
-          "fill_quantity": 156,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775486700000,
-          "direction": "sell",
-          "fill_price": "657.68",
-          "fill_quantity": -156,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775502000000,
-          "direction": "buy",
-          "fill_price": "658.29",
-          "fill_quantity": 156,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775569500000,
-          "direction": "sell",
-          "fill_price": "654.98",
-          "fill_quantity": -156,
+          "fill_quantity": -154,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775580300000,
           "direction": "buy",
           "fill_price": "656.08",
-          "fill_quantity": 156,
+          "fill_quantity": 153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775584800000,
           "direction": "sell",
           "fill_price": "656.725",
-          "fill_quantity": -156,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775655060000,
-          "direction": "buy",
-          "fill_price": "676.39",
-          "fill_quantity": 155,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775659500000,
-          "direction": "sell",
-          "fill_price": "673.4",
-          "fill_quantity": -155,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775742300000,
-          "direction": "buy",
-          "fill_price": "675.5377",
-          "fill_quantity": 151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775746800000,
-          "direction": "sell",
-          "fill_price": "675.31",
-          "fill_quantity": -151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775748600000,
-          "direction": "buy",
-          "fill_price": "675.93",
-          "fill_quantity": 151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775753100000,
-          "direction": "sell",
-          "fill_price": "679.35",
-          "fill_quantity": -151,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776092400000,
-          "direction": "buy",
-          "fill_price": "680.5213",
-          "fill_quantity": 150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776096900000,
-          "direction": "sell",
-          "fill_price": "679.875",
-          "fill_quantity": -150,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776447000000,
-          "direction": "buy",
-          "fill_price": "709.88",
-          "fill_quantity": 144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776451500000,
-          "direction": "sell",
-          "fill_price": "710.12",
-          "fill_quantity": -144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776779100000,
-          "direction": "buy",
-          "fill_price": "709.69",
-          "fill_quantity": 144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776783600000,
-          "direction": "sell",
-          "fill_price": "707.59",
-          "fill_quantity": -144,
+          "fill_quantity": -153,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1776799800000,
           "direction": "buy",
           "fill_price": "707.725",
-          "fill_quantity": 144,
+          "fill_quantity": 142,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1776867300000,
           "direction": "sell",
           "fill_price": "710.1",
-          "fill_quantity": -144,
+          "fill_quantity": -142,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777038300000,
           "direction": "buy",
           "fill_price": "709.97",
-          "fill_quantity": 144,
+          "fill_quantity": 142,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777042800000,
           "direction": "sell",
           "fill_price": "711.42",
-          "fill_quantity": -144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777311000000,
-          "direction": "buy",
-          "fill_price": "714.6",
-          "fill_quantity": 144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777315500000,
-          "direction": "sell",
-          "fill_price": "714.895",
-          "fill_quantity": -144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777402800000,
-          "direction": "buy",
-          "fill_price": "711.52",
-          "fill_quantity": 144,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777470300000,
-          "direction": "sell",
-          "fill_price": "710.04",
-          "fill_quantity": -144,
+          "fill_quantity": -142,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777491000000,
           "direction": "buy",
           "fill_price": "710.87",
-          "fill_quantity": 144,
+          "fill_quantity": 142,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777558500000,
           "direction": "sell",
           "fill_price": "711.65",
-          "fill_quantity": -144,
+          "fill_quantity": -142,
           "order_fee": "1.0"
         }
       ],
@@ -1264,1237 +705,803 @@
         {
           "held_through_ms": 1773950400000,
           "per_share": "1.80",
-          "shares": 157,
-          "cash": "282.60"
+          "shares": 154,
+          "cash": "277.20"
         }
       ],
-      "final_equity": "103122.4383",
-      "lean_reported_end_equity": "103122.44"
+      "final_equity": "101737.3176",
+      "lean_reported_end_equity": "101737.32"
     },
     "QQQ_W6mo_2025-11-03_to_2026-04-30": {
       "filled_order_events": [
         {
-          "ms_utc": 1762358400000,
-          "direction": "buy",
-          "fill_price": "622.81",
-          "fill_quantity": 160,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762362900000,
-          "direction": "sell",
-          "fill_price": "623.92",
-          "fill_quantity": -160,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762544700000,
-          "direction": "buy",
-          "fill_price": "608.03",
-          "fill_quantity": 164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762785060000,
-          "direction": "sell",
-          "fill_price": "618.92",
-          "fill_quantity": -164,
-          "order_fee": "1.0"
-        },
-        {
           "ms_utc": 1762884900000,
           "direction": "buy",
           "fill_price": "621.16",
-          "fill_quantity": 163,
+          "fill_quantity": 160,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1762889400000,
           "direction": "sell",
           "fill_price": "621.93",
-          "fill_quantity": -163,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762972200000,
-          "direction": "buy",
-          "fill_price": "620.745",
-          "fill_quantity": 164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1762976700000,
-          "direction": "sell",
-          "fill_price": "620.07",
-          "fill_quantity": -164,
+          "fill_quantity": -160,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763136000000,
           "direction": "buy",
           "fill_price": "609.73",
-          "fill_quantity": 166,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763140500000,
           "direction": "sell",
           "fill_price": "613.02",
-          "fill_quantity": -166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1763150400000,
-          "direction": "buy",
-          "fill_price": "611.782",
-          "fill_quantity": 167,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1763390700000,
-          "direction": "sell",
-          "fill_price": "610.17",
-          "fill_quantity": -167,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763399700000,
           "direction": "buy",
           "fill_price": "610.28",
-          "fill_quantity": 167,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763404200000,
           "direction": "sell",
           "fill_price": "605.92",
-          "fill_quantity": -167,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763488800000,
           "direction": "buy",
           "fill_price": "600.4",
-          "fill_quantity": 168,
+          "fill_quantity": 166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763493300000,
           "direction": "sell",
           "fill_price": "600.525",
-          "fill_quantity": -168,
+          "fill_quantity": -166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763564400000,
           "direction": "buy",
           "fill_price": "603.9",
-          "fill_quantity": 167,
+          "fill_quantity": 165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763568900000,
           "direction": "sell",
           "fill_price": "599.6",
-          "fill_quantity": -167,
+          "fill_quantity": -165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763584200000,
           "direction": "buy",
           "fill_price": "600.92",
-          "fill_quantity": 167,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763651700000,
           "direction": "sell",
           "fill_price": "611.0",
-          "fill_quantity": -167,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763744400000,
           "direction": "buy",
           "fill_price": "591.59",
-          "fill_quantity": 172,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763748900000,
           "direction": "sell",
           "fill_price": "588.2",
-          "fill_quantity": -172,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1763995500000,
           "direction": "buy",
           "fill_price": "597.72",
-          "fill_quantity": 170,
+          "fill_quantity": 167,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764000000000,
           "direction": "sell",
           "fill_price": "601.47",
-          "fill_quantity": -170,
+          "fill_quantity": -167,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764090000000,
           "direction": "buy",
           "fill_price": "604.52",
-          "fill_quantity": 169,
+          "fill_quantity": 166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764094500000,
           "direction": "sell",
           "fill_price": "606.97",
-          "fill_quantity": -169,
+          "fill_quantity": -166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764342000000,
           "direction": "buy",
           "fill_price": "616.31",
-          "fill_quantity": 166,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764346500000,
           "direction": "sell",
           "fill_price": "617.7641",
-          "fill_quantity": -166,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764608400000,
           "direction": "buy",
           "fill_price": "617.96",
-          "fill_quantity": 166,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764612900000,
           "direction": "sell",
           "fill_price": "618.97",
-          "fill_quantity": -166,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764686700000,
           "direction": "buy",
           "fill_price": "621.94",
-          "fill_quantity": 165,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764691200000,
           "direction": "sell",
           "fill_price": "623.2",
-          "fill_quantity": -165,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764696600000,
           "direction": "buy",
           "fill_price": "622.19",
-          "fill_quantity": 166,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1764701100000,
           "direction": "sell",
           "fill_price": "621.05",
-          "fill_quantity": -166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764783000000,
-          "direction": "buy",
-          "fill_price": "622.63",
-          "fill_quantity": 165,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764787500000,
-          "direction": "sell",
-          "fill_price": "623.42",
-          "fill_quantity": -165,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764945900000,
-          "direction": "buy",
-          "fill_price": "625.09",
-          "fill_quantity": 165,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1764950400000,
-          "direction": "sell",
-          "fill_price": "625.94",
-          "fill_quantity": -165,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765205100000,
-          "direction": "buy",
-          "fill_price": "627.49",
-          "fill_quantity": 164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765209600000,
-          "direction": "sell",
-          "fill_price": "624.06",
-          "fill_quantity": -164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765295100000,
-          "direction": "buy",
-          "fill_price": "624.54",
-          "fill_quantity": 164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765299600000,
-          "direction": "sell",
-          "fill_price": "625.225",
-          "fill_quantity": -164,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1765395000000,
           "direction": "buy",
           "fill_price": "624.34",
-          "fill_quantity": 164,
+          "fill_quantity": 162,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1765399500000,
           "direction": "sell",
           "fill_price": "628.49",
-          "fill_quantity": -164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765476900000,
-          "direction": "buy",
-          "fill_price": "623.63",
-          "fill_quantity": 166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765481400000,
-          "direction": "sell",
-          "fill_price": "625.175",
-          "fill_quantity": -166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765915200000,
-          "direction": "buy",
-          "fill_price": "610.47",
-          "fill_quantity": 170,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1765982700000,
-          "direction": "sell",
-          "fill_price": "610.59",
-          "fill_quantity": -170,
+          "fill_quantity": -162,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766069100000,
           "direction": "buy",
           "fill_price": "607.78",
-          "fill_quantity": 170,
+          "fill_quantity": 168,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766073600000,
           "direction": "sell",
           "fill_price": "611.81",
-          "fill_quantity": -170,
+          "fill_quantity": -168,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766155500000,
           "direction": "buy",
           "fill_price": "616.365",
-          "fill_quantity": 169,
+          "fill_quantity": 166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1766160000000,
           "direction": "sell",
           "fill_price": "614.815",
-          "fill_quantity": -169,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1766506500000,
-          "direction": "buy",
-          "fill_price": "620.29",
-          "fill_quantity": 168,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1766511000000,
-          "direction": "sell",
-          "fill_price": "621.07",
-          "fill_quantity": -168,
+          "fill_quantity": -166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767038400000,
           "direction": "buy",
           "fill_price": "621.49",
-          "fill_quantity": 168,
+          "fill_quantity": 165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767105900000,
           "direction": "sell",
           "fill_price": "619.77",
-          "fill_quantity": -168,
+          "fill_quantity": -165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767112200000,
           "direction": "buy",
           "fill_price": "621.71",
-          "fill_quantity": 167,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767116700000,
           "direction": "sell",
           "fill_price": "620.54",
-          "fill_quantity": -167,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767366000000,
           "direction": "buy",
           "fill_price": "621.19",
-          "fill_quantity": 167,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767370500000,
           "direction": "sell",
           "fill_price": "612.78",
-          "fill_quantity": -167,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767383100000,
           "direction": "buy",
           "fill_price": "614.165",
-          "fill_quantity": 166,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767623460000,
           "direction": "sell",
           "fill_price": "619.32",
-          "fill_quantity": -166,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767710700000,
           "direction": "buy",
           "fill_price": "619.91",
-          "fill_quantity": 166,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1767715200000,
           "direction": "sell",
           "fill_price": "620.43",
-          "fill_quantity": -166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767969900000,
-          "direction": "buy",
-          "fill_price": "622.345",
-          "fill_quantity": 166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1767974400000,
-          "direction": "sell",
-          "fill_price": "623.76",
-          "fill_quantity": -166,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768238100000,
-          "direction": "buy",
-          "fill_price": "627.61",
-          "fill_quantity": 165,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768242600000,
-          "direction": "sell",
-          "fill_price": "628.13",
-          "fill_quantity": -165,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1768323600000,
           "direction": "buy",
           "fill_price": "628.62",
-          "fill_quantity": 165,
+          "fill_quantity": 161,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1768328100000,
           "direction": "sell",
           "fill_price": "626.12",
-          "fill_quantity": -165,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768423500000,
-          "direction": "buy",
-          "fill_price": "618.43",
-          "fill_quantity": 167,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1768491000000,
-          "direction": "sell",
-          "fill_price": "625.14",
-          "fill_quantity": -167,
+          "fill_quantity": -161,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769007600000,
           "direction": "buy",
           "fill_price": "612.6",
-          "fill_quantity": 170,
+          "fill_quantity": 165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769012100000,
           "direction": "sell",
           "fill_price": "615.72",
-          "fill_quantity": -170,
+          "fill_quantity": -165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769023800000,
           "direction": "buy",
           "fill_price": "615.08",
-          "fill_quantity": 170,
+          "fill_quantity": 165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769028300000,
           "direction": "sell",
           "fill_price": "616.43",
-          "fill_quantity": -170,
+          "fill_quantity": -165,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769182200000,
           "direction": "buy",
           "fill_price": "623.05",
-          "fill_quantity": 168,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769186700000,
           "direction": "sell",
           "fill_price": "624.605",
-          "fill_quantity": -168,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769438700000,
           "direction": "buy",
           "fill_price": "624.815",
-          "fill_quantity": 168,
+          "fill_quantity": 163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1769443200000,
           "direction": "sell",
           "fill_price": "626.335",
-          "fill_quantity": -168,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1769533200000,
-          "direction": "buy",
-          "fill_price": "631.18",
-          "fill_quantity": 167,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1769537700000,
-          "direction": "sell",
-          "fill_price": "630.94",
-          "fill_quantity": -167,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1769715000000,
-          "direction": "buy",
-          "fill_price": "626.58",
-          "fill_quantity": 168,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1769719500000,
-          "direction": "sell",
-          "fill_price": "627.6",
-          "fill_quantity": -168,
+          "fill_quantity": -163,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770044400000,
           "direction": "buy",
           "fill_price": "623.72",
-          "fill_quantity": 169,
+          "fill_quantity": 164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770048900000,
           "direction": "sell",
           "fill_price": "626.22",
-          "fill_quantity": -169,
+          "fill_quantity": -164,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770235200000,
           "direction": "buy",
           "fill_price": "608.315",
-          "fill_quantity": 174,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770302700000,
           "direction": "sell",
           "fill_price": "603.69",
-          "fill_quantity": -174,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770389100000,
           "direction": "buy",
           "fill_price": "604.23",
-          "fill_quantity": 174,
+          "fill_quantity": 168,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770393600000,
           "direction": "sell",
           "fill_price": "603.465",
-          "fill_quantity": -174,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1770738300000,
-          "direction": "buy",
-          "fill_price": "616.185",
-          "fill_quantity": 170,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1770742800000,
-          "direction": "sell",
-          "fill_price": "614.14",
-          "fill_quantity": -170,
+          "fill_quantity": -168,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770831900000,
           "direction": "buy",
           "fill_price": "613.62",
-          "fill_quantity": 171,
+          "fill_quantity": 166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1770836400000,
           "direction": "sell",
           "fill_price": "613.575",
-          "fill_quantity": -171,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771001100000,
-          "direction": "buy",
-          "fill_price": "603.91",
-          "fill_quantity": 173,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771005600000,
-          "direction": "sell",
-          "fill_price": "605.09",
-          "fill_quantity": -173,
+          "fill_quantity": -166,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771347600000,
           "direction": "buy",
           "fill_price": "600.83",
-          "fill_quantity": 175,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771352100000,
           "direction": "sell",
           "fill_price": "598.7234",
-          "fill_quantity": -175,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771353000000,
           "direction": "buy",
           "fill_price": "601.035",
-          "fill_quantity": 174,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771357500000,
           "direction": "sell",
           "fill_price": "603.58",
-          "fill_quantity": -174,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771425900000,
           "direction": "buy",
           "fill_price": "603.11",
-          "fill_quantity": 174,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771430400000,
           "direction": "sell",
           "fill_price": "608.775",
-          "fill_quantity": -174,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771598700000,
-          "direction": "buy",
-          "fill_price": "605.08",
-          "fill_quantity": 175,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1771603200000,
-          "direction": "sell",
-          "fill_price": "609.86",
-          "fill_quantity": -175,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771613100000,
           "direction": "buy",
           "fill_price": "608.67",
-          "fill_quantity": 175,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771617600000,
           "direction": "sell",
           "fill_price": "607.5",
-          "fill_quantity": -175,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771944300000,
           "direction": "buy",
           "fill_price": "604.94",
-          "fill_quantity": 176,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1771948800000,
           "direction": "sell",
           "fill_price": "606.525",
-          "fill_quantity": -176,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772138700000,
-          "direction": "buy",
-          "fill_price": "608.85",
-          "fill_quantity": 176,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772206200000,
-          "direction": "sell",
-          "fill_price": "606.78",
-          "fill_quantity": -176,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772224200000,
           "direction": "buy",
           "fill_price": "606.925",
-          "fill_quantity": 175,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772464500000,
           "direction": "sell",
           "fill_price": "605.8671",
-          "fill_quantity": -175,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772468100000,
           "direction": "buy",
           "fill_price": "606.86",
-          "fill_quantity": 175,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772472600000,
           "direction": "sell",
           "fill_price": "608.605",
-          "fill_quantity": -175,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772562600000,
-          "direction": "buy",
-          "fill_price": "601.44",
-          "fill_quantity": 177,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1772567100000,
-          "direction": "sell",
-          "fill_price": "603.205",
-          "fill_quantity": -177,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772742600000,
           "direction": "buy",
           "fill_price": "606.64",
-          "fill_quantity": 176,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1772810100000,
           "direction": "sell",
           "fill_price": "602.88",
-          "fill_quantity": -176,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1773072900000,
-          "direction": "buy",
-          "fill_price": "599.79",
-          "fill_quantity": 177,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1773077400000,
-          "direction": "sell",
-          "fill_price": "598.53",
-          "fill_quantity": -177,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1773084600000,
-          "direction": "buy",
-          "fill_price": "606.78",
-          "fill_quantity": 175,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1773152100000,
-          "direction": "sell",
-          "fill_price": "606.35",
-          "fill_quantity": -175,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773409500000,
           "direction": "buy",
           "fill_price": "602.7594",
-          "fill_quantity": 176,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773414000000,
           "direction": "sell",
           "fill_price": "595.98",
-          "fill_quantity": -176,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773668700000,
           "direction": "buy",
           "fill_price": "600.36",
-          "fill_quantity": 174,
+          "fill_quantity": 168,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773673200000,
           "direction": "sell",
           "fill_price": "600.94",
-          "fill_quantity": -174,
+          "fill_quantity": -168,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773755100000,
           "direction": "buy",
           "fill_price": "604.665",
-          "fill_quantity": 173,
+          "fill_quantity": 167,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773759600000,
           "direction": "sell",
           "fill_price": "604.95",
-          "fill_quantity": -173,
+          "fill_quantity": -167,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1773947700000,
           "direction": "buy",
           "fill_price": "595.0401",
-          "fill_quantity": 176,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774015200000,
           "direction": "sell",
           "fill_price": "586.3",
-          "fill_quantity": -176,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774273500000,
           "direction": "buy",
           "fill_price": "590.5699",
-          "fill_quantity": 175,
+          "fill_quantity": 169,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774278000000,
           "direction": "sell",
           "fill_price": "593.21",
-          "fill_quantity": -175,
+          "fill_quantity": -169,
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1774291500000,
+          "ms_utc": 1774446300000,
           "direction": "buy",
-          "fill_price": "590.756",
-          "fill_quantity": 176,
+          "fill_price": "589.5999",
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1774359060000,
+          "ms_utc": 1774450800000,
           "direction": "sell",
-          "fill_price": "584.81",
-          "fill_quantity": -176,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1774379700000,
-          "direction": "buy",
-          "fill_price": "586.265",
-          "fill_quantity": 175,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1774447200000,
-          "direction": "sell",
-          "fill_price": "587.62",
-          "fill_quantity": -175,
+          "fill_price": "590.36",
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774457100000,
           "direction": "buy",
           "fill_price": "589.24",
-          "fill_quantity": 175,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774461600000,
           "direction": "sell",
           "fill_price": "588.99",
-          "fill_quantity": -175,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774964700000,
           "direction": "buy",
           "fill_price": "565.1",
-          "fill_quantity": 182,
+          "fill_quantity": 177,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1774969200000,
           "direction": "sell",
           "fill_price": "564.97",
-          "fill_quantity": -182,
+          "fill_quantity": -177,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775142900000,
           "direction": "buy",
           "fill_price": "583.944",
-          "fill_quantity": 176,
+          "fill_quantity": 172,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775147400000,
           "direction": "sell",
           "fill_price": "581.6999",
-          "fill_quantity": -176,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775482260000,
-          "direction": "buy",
-          "fill_price": "586.23",
-          "fill_quantity": 175,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1775486700000,
-          "direction": "sell",
-          "fill_price": "587.34",
-          "fill_quantity": -175,
+          "fill_quantity": -172,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775501100000,
           "direction": "buy",
           "fill_price": "587.8399",
-          "fill_quantity": 175,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775568660000,
           "direction": "sell",
           "fill_price": "585.64",
-          "fill_quantity": -175,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775580300000,
           "direction": "buy",
           "fill_price": "584.75",
-          "fill_quantity": 175,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775584800000,
           "direction": "sell",
           "fill_price": "585.23",
-          "fill_quantity": -175,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775591100000,
           "direction": "buy",
           "fill_price": "585.6078",
-          "fill_quantity": 175,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775658600000,
           "direction": "sell",
           "fill_price": "605.15",
-          "fill_quantity": -175,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775742300000,
           "direction": "buy",
           "fill_price": "606.44",
-          "fill_quantity": 175,
+          "fill_quantity": 170,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1775746800000,
           "direction": "sell",
           "fill_price": "604.975",
-          "fill_quantity": -175,
+          "fill_quantity": -170,
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1775749500000,
+          "ms_utc": 1776865500000,
           "direction": "buy",
-          "fill_price": "607.03",
-          "fill_quantity": 174,
+          "fill_price": "649.48",
+          "fill_quantity": 158,
           "order_fee": "1.0"
         },
         {
-          "ms_utc": 1775754000000,
+          "ms_utc": 1776870000000,
           "direction": "sell",
-          "fill_price": "608.7101",
-          "fill_quantity": -174,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776091500000,
-          "direction": "buy",
-          "fill_price": "611.87",
-          "fill_quantity": 173,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776096000000,
-          "direction": "sell",
-          "fill_price": "611.69",
-          "fill_quantity": -173,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776447000000,
-          "direction": "buy",
-          "fill_price": "647.3799",
-          "fill_quantity": 163,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776451500000,
-          "direction": "sell",
-          "fill_price": "648.18",
-          "fill_quantity": -163,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776709800000,
-          "direction": "buy",
-          "fill_price": "646.49",
-          "fill_quantity": 164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776714300000,
-          "direction": "sell",
-          "fill_price": "646.17",
-          "fill_quantity": -164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776799800000,
-          "direction": "buy",
-          "fill_price": "647.63",
-          "fill_quantity": 164,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1776867300000,
-          "direction": "sell",
-          "fill_price": "651.14",
-          "fill_quantity": -164,
+          "fill_price": "652.35",
+          "fill_quantity": -158,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1776956400000,
           "direction": "buy",
           "fill_price": "655.41",
-          "fill_quantity": 162,
+          "fill_quantity": 157,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1776960900000,
           "direction": "sell",
           "fill_price": "655.1596",
-          "fill_quantity": -162,
+          "fill_quantity": -157,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777038300000,
           "direction": "buy",
           "fill_price": "658.5999",
-          "fill_quantity": 162,
+          "fill_quantity": 156,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777042800000,
           "direction": "sell",
           "fill_price": "660.385",
-          "fill_quantity": -162,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777311000000,
-          "direction": "buy",
-          "fill_price": "663.47",
-          "fill_quantity": 161,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777315500000,
-          "direction": "sell",
-          "fill_price": "663.44",
-          "fill_quantity": -161,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777401000000,
-          "direction": "buy",
-          "fill_price": "657.81",
-          "fill_quantity": 162,
-          "order_fee": "1.0"
-        },
-        {
-          "ms_utc": 1777405500000,
-          "direction": "sell",
-          "fill_price": "657.87",
-          "fill_quantity": -162,
+          "fill_quantity": -156,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777490100000,
           "direction": "buy",
           "fill_price": "661.245",
-          "fill_quantity": 161,
+          "fill_quantity": 156,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777557600000,
           "direction": "sell",
           "fill_price": "659.58",
-          "fill_quantity": -161,
+          "fill_quantity": -156,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777561200000,
           "direction": "buy",
           "fill_price": "662.29",
-          "fill_quantity": 161,
+          "fill_quantity": 156,
           "order_fee": "1.0"
         },
         {
           "ms_utc": 1777565700000,
           "direction": "sell",
           "fill_price": "664.02",
-          "fill_quantity": -161,
+          "fill_quantity": -156,
           "order_fee": "1.0"
         }
       ],
       "dividends": [],
-      "final_equity": "107314.3896",
-      "lean_reported_end_equity": "107314.39"
+      "final_equity": "103864.7244",
+      "lean_reported_end_equity": "103864.72"
     }
   }
 }

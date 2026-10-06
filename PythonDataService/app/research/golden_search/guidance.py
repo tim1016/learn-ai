@@ -316,8 +316,12 @@ def _ema_sentence(values: Mapping[str, Decimal]) -> str:
     )
 
 
+def _ema_previous_sentence(values: Mapping[str, Decimal]) -> str:
+    return f"{_ema_sentence(values)} · cross age ≤ {_number(values['cross_max_age_bars'])}"
+
+
 _EMA_STRATEGY_KEYS = ("ema_crossover_signal", "ema_previous_crossover")
-_SENTENCES = dict.fromkeys(_EMA_STRATEGY_KEYS, _ema_sentence)
+_SENTENCES = {"ema_crossover_signal": _ema_sentence, "ema_previous_crossover": _ema_previous_sentence}
 # Short names for fixed knobs, where the declaration's label reads awkwardly in a sentence.
 _FIXED_NAMES: dict[tuple[str, str], tuple[str, str]] = {
     (key, "gap_bps"): ("Normalized gap", "bps") for key in _EMA_STRATEGY_KEYS

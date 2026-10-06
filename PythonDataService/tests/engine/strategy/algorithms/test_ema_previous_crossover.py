@@ -1,8 +1,9 @@
 """The EMA Previous Crossover entry rule, one branch per test (#2902).
 
-A cross up opens a cross that stays open while fast stays above slow. Its
-first bar where the gap floors and the RSI band pass is its entry bar, and
-that bar spends the cross whether or not the entry is taken. A position is
+A cross up is remembered by its bar's close time while fast stays above slow.
+While flat, a bar enters when it closes at most ``cross_max_age_bars``
+15-minute bars of clock time after the cross bar and the gap floors and the
+RSI band pass on that same bar. Nothing else is remembered. A position is
 held for exactly ``hold_bars`` decision bars.
 
 Each test scripts the three indicator readings bar by bar and reads what the
@@ -93,7 +94,7 @@ class _Run:
 
     def cross_states(self) -> list[object]:
         return [
-            next(check.observed for check in d.explanation.checks if check.check_id == "open_cross")
+            next(check.observed for check in d.explanation.checks if check.check_id == "recent_cross")
             for d in self.decisions
             if d.explanation is not None and d.ready
         ]
@@ -130,37 +131,48 @@ def _drive(
     return run
 
 
-def test_cross_bar_that_already_clears_the_gates_is_the_entry_bar() -> None:
+def test_cross_bar_that_already_clears_the_gates_enters() -> None:
     assert _drive([below(), GOOD]).staged == [None, ENTER]
 
 
-def test_entry_waits_for_the_gap_to_widen_after_the_cross() -> None:
-    run = _drive([below(), above("0.05"), above("0.15"), above("0.25")])
+def test_bar_after_the_cross_enters_once_the_gap_has_widened() -> None:
+    run = _drive([below(), above("0.05"), above("0.25")])
 
-    assert run.staged == [None, None, None, ENTER]
+    assert run.staged == [None, None, ENTER]
+    assert run.cross_states() == ["not_above", "crossed_up", "recent"]
 
 
-def test_entry_waits_for_rsi_to_come_back_inside_the_band() -> None:
-    run = _drive([below(), above("0.25", "75"), above("0.25", "72"), above("0.25", "65")])
+def test_bar_after_the_cross_enters_once_rsi_is_back_inside_the_band() -> None:
+    run = _drive([below(), above("0.25", "75"), above("0.25", "65")])
 
-    assert run.staged == [None, None, None, ENTER]
+    assert run.staged == [None, None, ENTER]
+
+
+def test_cross_older_than_the_limit_does_not_enter() -> None:
+    """The owner's rule: the cross bar closed at most 15 minutes before the evaluated bar."""
+    run = _drive([below(), above("0.05"), above("0.15"), GOOD, GOOD])
+
+    assert run.staged == [None, None, None, None, None]
+    assert run.cross_states() == ["not_above", "crossed_up", "recent", "stale", "stale"]
 
 
 def test_gap_and_rsi_must_pass_on_the_same_bar() -> None:
-    """The owner's worked example: the gap passes on bar 3 and RSI on bar 4, but only bar 5 has both."""
-    run = _drive(
-        [
-            below(),
-            above("0.05", "48"),
-            above("0.15", "55"),
-            above("0.25", "72"),
-            above("0.18", "65"),
-            above("0.22", "60"),
-        ]
-    )
+    """The gap passes on the cross bar and RSI on the next, but no bar has both."""
+    run = _drive([below(), above("0.25", "72"), above("0.18", "65")])
 
-    assert run.staged == [None, None, None, None, None, ENTER]
-    assert run.cross_states() == ["not_above", "crossed_up", "waiting", "waiting", "waiting", "waiting"]
+    assert run.staged == [None, None, None]
+
+
+@pytest.mark.parametrize("limit", [2, 3], ids=["at-the-limit", "inside-the-limit"])
+def test_cross_age_limit_is_inclusive_and_configurable(limit: int) -> None:
+    run = _drive([below(), above("0.05"), above("0.15"), GOOD, GOOD], cross_max_age_bars=limit)
+
+    assert run.staged == [None, None, None, ENTER, None]
+
+
+def test_cross_age_limit_of_zero_allows_the_cross_bar_only() -> None:
+    assert _drive([below(), GOOD], cross_max_age_bars=0).staged == [None, ENTER]
+    assert _drive([below(), above("0.05"), GOOD], cross_max_age_bars=0).staged == [None, None, None]
 
 
 @pytest.mark.parametrize(
@@ -183,11 +195,18 @@ def test_normalized_gap_floor_applies_on_the_entry_bar() -> None:
     assert run.staged == [None, None, ENTER]
 
 
-def test_position_is_held_for_exactly_hold_bars_and_the_cross_gives_no_second_entry() -> None:
+def test_position_is_held_for_exactly_hold_bars_and_a_stale_cross_gives_no_second_entry() -> None:
     run = _drive([below(), GOOD, GOOD, GOOD, GOOD, GOOD], hold_bars=2)
 
     assert run.staged == [None, ENTER, None, EXIT, None, None]
-    assert run.cross_states()[-2:] == ["spent", "spent"]
+    assert run.cross_states()[-2:] == ["stale", "stale"]
+
+
+def test_cross_still_recent_after_the_exit_enters_again() -> None:
+    """Only a limit longer than the hold leaves a cross recent once its trade is over."""
+    run = _drive([below(), GOOD, GOOD, GOOD], hold_bars=1, cross_max_age_bars=2)
+
+    assert run.staged == [None, ENTER, EXIT, ENTER]
 
 
 def test_reversed_cross_during_the_hold_does_not_end_the_trade() -> None:
@@ -196,35 +215,44 @@ def test_reversed_cross_during_the_hold_does_not_end_the_trade() -> None:
     assert run.staged == [None, ENTER, None, None, EXIT]
 
 
-def test_fast_touching_slow_closes_the_cross_and_the_next_cross_enters() -> None:
+def test_fast_touching_slow_ends_the_cross_and_the_next_cross_enters() -> None:
     touching: Reading = (_SLOW, _SLOW, Decimal("60"))
     run = _drive([below(), GOOD, GOOD, GOOD, touching, GOOD], hold_bars=1)
 
     assert run.staged == [None, ENTER, EXIT, None, None, ENTER]
 
 
-def test_cross_whose_first_good_bar_falls_inside_a_hold_is_spent() -> None:
+def test_fast_touching_slow_ends_a_cross_that_was_still_recent() -> None:
+    """With no gap floor, only the ended cross keeps the touching bar out."""
+    touching: Reading = (_SLOW, _SLOW, Decimal("60"))
+    run = _drive([below(), above("0.05", "75"), touching], gap=0.0)
+
+    assert run.staged == [None, None, None]
+
+
+def test_cross_during_a_hold_is_stale_by_the_time_the_trade_exits() -> None:
     run = _drive([below(), GOOD, below(), GOOD, GOOD, GOOD, GOOD], hold_bars=4)
 
     assert run.staged == [None, ENTER, None, None, None, EXIT, None]
 
 
-def test_cross_opened_during_a_hold_enters_when_its_first_good_bar_comes_after_the_exit() -> None:
-    run = _drive([below(), GOOD, below(), above("0.05"), GOOD], hold_bars=2)
+def test_cross_on_the_exit_bar_enters_on_the_next_bar() -> None:
+    """Nothing is remembered: the cross bar passed the gates while the trade was ending, and the bar after is judged on its own."""
+    run = _drive([below(), GOOD, below(), below(), GOOD, GOOD], hold_bars=3)
 
-    assert run.staged == [None, ENTER, None, EXIT, ENTER]
-
-
-def test_discarded_entry_is_not_proposed_again_on_the_same_cross() -> None:
-    run = _drive([below(), GOOD, GOOD, GOOD], discard=frozenset({1}))
-
-    assert run.staged == [None, ENTER, None, None]
+    assert run.staged == [None, ENTER, None, None, EXIT, ENTER]
 
 
-def test_observe_only_entry_bar_stays_missed() -> None:
+def test_discarded_entry_is_proposed_again_while_the_cross_is_recent() -> None:
+    run = _drive([below(), GOOD, GOOD, GOOD], discard=frozenset({1, 2}))
+
+    assert run.staged == [None, ENTER, ENTER, None]
+
+
+def test_observe_only_entry_bar_leaves_the_next_bar_free_to_enter() -> None:
     run = _drive([below(), GOOD, GOOD], observe_only=frozenset({1}))
 
-    assert run.staged == [None, ENTER, None]
+    assert run.staged == [None, ENTER, ENTER]
 
 
 def test_discarded_exit_is_proposed_again_on_the_next_bar() -> None:
@@ -240,6 +268,12 @@ def test_cross_seen_while_rsi_warms_up_enters_once_rsi_is_ready() -> None:
     assert run.staged == [None, None, ENTER]
 
 
+def test_cross_seen_while_rsi_warms_up_is_stale_if_rsi_takes_too_long() -> None:
+    run = _drive([below(None), above("0.25", None), above("0.25", None), GOOD])
+
+    assert run.staged == [None, None, None, None]
+
+
 def test_fast_already_above_slow_when_first_known_is_never_an_entry() -> None:
     run = _drive([GOOD, GOOD, GOOD])
 
@@ -247,18 +281,37 @@ def test_fast_already_above_slow_when_first_known_is_never_an_entry() -> None:
     assert run.cross_states() == ["unseen", "unseen", "unseen"]
 
 
-def test_force_flat_drops_the_position_and_keeps_the_cross_spent() -> None:
-    """Bar 2 stays out because the cross is spent; bar 4 enters because the position is gone."""
-    run = _drive([below(), GOOD, GOOD, below(), GOOD], force_flat_before=frozenset({2}))
+def test_force_flat_drops_the_position_and_a_still_recent_cross_enters() -> None:
+    """A bot starts flat: the bar after the cross is judged on its own, whatever the replay did on the cross bar."""
+    run = _drive([below(), GOOD, GOOD, GOOD], force_flat_before=frozenset({2}))
 
-    assert run.staged == [None, ENTER, None, None, ENTER]
+    assert run.staged == [None, ENTER, ENTER, None]
+
+
+@pytest.mark.parametrize("limit", [1, 8], ids=["default", "longest"])
+def test_cross_on_a_session_s_last_bar_is_stale_on_the_next_session_s_first_bar(limit: int) -> None:
+    """The age is clock time: the next bar received closes hours after the cross, not 15 minutes."""
+    first, second = _two_consecutive_sessions()
+    bars = [*_session_bars(first)[-2:], _session_bars(second)[0]]
+
+    run = _drive([below(), above("0.05"), GOOD], bars=bars, cross_max_age_bars=limit)
+
+    assert run.staged == [None, None, None]
+    assert run.cross_states() == ["not_above", "crossed_up", "stale"]
+
+
+@pytest.mark.parametrize(("limit", "last"), [(1, None), (2, ENTER)], ids=["past-the-limit", "within-the-limit"])
+def test_bar_missing_after_the_cross_ages_it_by_the_clock(limit: int, last: SignalIntentKind | None) -> None:
+    """The bar after a missing one closes 30 minutes after the cross."""
+    bars = [indexed_bucket("SPY", index, _WIDTH_MS, "100") for index in (0, 1, 3)]
+
+    run = _drive([below(), above("0.05"), GOOD], bars=bars, cross_max_age_bars=limit)
+
+    assert run.staged == [None, None, last]
 
 
 def test_hold_counts_decision_bars_across_the_session_close() -> None:
-    first, second = [
-        window.session_date
-        for window in trading_calendar.session_windows_ms_utc(date(2024, 1, 2), date(2024, 1, 12))
-    ][:2]
+    first, second = _two_consecutive_sessions()
     last_two = _session_bars(first)[-2:]
     next_day = _session_bars(second)[:5]
 
@@ -268,6 +321,14 @@ def test_hold_counts_decision_bars_across_the_session_close() -> None:
     exit_intent = run.decisions[-1].intent
     assert exit_intent is not None
     assert exit_intent.bar_close_ms == next_day[4].end_ms
+
+
+def _two_consecutive_sessions() -> tuple[date, date]:
+    first, second = [
+        window.session_date
+        for window in trading_calendar.session_windows_ms_utc(date(2024, 1, 2), date(2024, 1, 12))
+    ][:2]
+    return first, second
 
 
 def _session_bars(day: date) -> list[TradeBar]:
@@ -283,6 +344,13 @@ def test_two_holds_are_two_evaluation_identities() -> None:
 
     assert evaluation_id(hold_bars=5) != evaluation_id(hold_bars=6)
     assert evaluation_id(fast_period=5, slow_period=10) != evaluation_id(fast_period=4, slow_period=10)
+    assert evaluation_id(cross_max_age_bars=1) != evaluation_id(cross_max_age_bars=2)
+
+
+@pytest.mark.parametrize("value", [-1, 9, True, 1.5], ids=["negative", "past-two-hours", "boolean", "fractional"])
+def test_cross_age_limit_must_be_a_whole_number_of_bars_up_to_two_hours(value: object) -> None:
+    with pytest.raises(ValueError):
+        EmaPreviousCrossoverParams(cross_max_age_bars=value)
 
 
 # ── Tie-back to EMA Crossover Signal ─────────────────────────────────────────
@@ -298,7 +366,7 @@ def _entry_gates_pass(decision: SignalDecision) -> bool:
 
 
 @pytest.mark.parametrize(("gap", "rsi_min"), [(0.20, 50.0), (0.0, 30.0)], ids=["lean-parity-point", "no-gap-floor"])
-def test_every_ema_crossover_signal_entry_bar_is_an_entry_bar_of_the_same_cross(gap: float, rsi_min: float) -> None:
+def test_every_ema_crossover_signal_entry_bar_is_a_cross_bar_entry_here(gap: float, rsi_min: float) -> None:
     """On shared bars, the bars where EMA Crossover Signal's entry rule passes are
     exactly this program's entry bars that fall on the cross bar itself.
 
@@ -320,7 +388,7 @@ def test_every_ema_crossover_signal_entry_bar_is_an_entry_bar_of_the_same_cross(
         bar.end_ms
         for bar, decision in candidate
         if _entry_gates_pass(decision)
-        and any(c.check_id == "open_cross" and c.observed == "crossed_up" for c in decision.explanation.checks)
+        and any(c.check_id == "recent_cross" and c.observed == "crossed_up" for c in decision.explanation.checks)
     }
 
     assert reference_entry_bars, "the cell exercises the reference rule"

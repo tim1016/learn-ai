@@ -12,7 +12,13 @@ raw minute bars (`lean/observations.csv`) are reused as priced-data input.
   own run of the trusted template on the SPY and QQQ six-month cells.
 - Parameters: each cell's signal symbol (`AAPL`, `QQQ`, `SPY`, or `TSLA`) at
   the registered validated point: `gap=0.2`, `gap_bps=0.0`, `rsi_min=50.0`,
-  `rsi_max=70.0`, `fast_period=5`, `slow_period=10`, `hold_bars=5`.
+  `rsi_max=70.0`, `fast_period=5`, `slow_period=10`, `hold_bars=5`,
+  `cross_max_age_bars=1`.
+- Regenerated: 2026-10-05, after the owner replaced the entry rule the same
+  day it was first built (program version `ema-previous-crossover/v2`: a
+  cross at most `cross_max_age_bars` 15-minute bars old by the clock, with
+  nothing else remembered between bars). No bot or accepted validation ran
+  on the first rule.
 - Generated: 2026-10-05, by
   `python -m scripts.generate_signal_program_trace_corpus --program ema_previous_crossover --output tests/fixtures/golden/ema-previous-crossover-signal/v1/trace-corpus.json`
 - Root generation: `trace_corpus_root(entries)` in
@@ -23,6 +29,6 @@ raw minute bars (`lean/observations.csv`) are reused as priced-data input.
   every other program's corpus replays, and the generator does not override
   it. All programs therefore replay the same bars of the same ten cells.
 - Decision identity: the replay commits every staged decision
-  (`BacktestEngine.for_decision_identity`). The cross state is part of each
-  trace (`relation_facts.cross_open`), so the root pins which bars had an
-  open cross, not only which bars entered.
+  (`BacktestEngine.for_decision_identity`). Whether the cross is recent is
+  part of each trace (`relation_facts.cross_recent`), so the root pins which
+  bars had a recent cross, not only which bars entered.

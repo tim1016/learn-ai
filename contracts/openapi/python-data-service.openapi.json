@@ -14041,8 +14041,15 @@
       },
       "EmaPreviousCrossoverStrategyParametersModel": {
         "additionalProperties": false,
-        "description": "All seven resolved settings accepted by the EMA previous-crossover twin.",
+        "description": "All eight resolved settings accepted by the EMA previous-crossover twin.",
         "properties": {
+          "cross_max_age_bars": {
+            "default": 1,
+            "maximum": 8.0,
+            "minimum": 0.0,
+            "title": "Cross Max Age Bars",
+            "type": "integer"
+          },
           "fast_period": {
             "default": 5,
             "maximum": 30.0,

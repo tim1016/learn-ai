@@ -51,6 +51,7 @@ STRATEGY_PARAMETERS = {
     "fast_period": "5",
     "slow_period": "10",
     "hold_bars": "5",
+    "cross_max_age_bars": "1",
 }
 # LEAN reports end equity to the cent.
 _END_EQUITY_ATOL = Decimal("0.005")

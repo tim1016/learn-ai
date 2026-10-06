@@ -811,7 +811,7 @@ class TestTemplateSelection:
         assert model.strategy_parameters.gap_bps == 0.0
         assert model.strategy_parameters.rsi_min == expected_rsi_min
 
-    async def test_previous_crossover_template_accepts_all_seven_settings(self) -> None:
+    async def test_previous_crossover_template_accepts_all_eight_settings(self) -> None:
         from app.routers.lean_sidecar import TrustedRunRequestModel
 
         payload = _good_payload()
@@ -824,6 +824,7 @@ class TestTemplateSelection:
             "fast_period": 7,
             "slow_period": 20,
             "hold_bars": 6,
+            "cross_max_age_bars": 2,
         }
 
         model = TrustedRunRequestModel.model_validate(payload)
@@ -838,11 +839,23 @@ class TestTemplateSelection:
             {"slow_period": 41},
             {"hold_bars": 27},
             {"hold_bars": True},
+            {"cross_max_age_bars": -1},
+            {"cross_max_age_bars": 9},
             {"fast_period": 10, "slow_period": 10},
             {"rsi_min": 70, "rsi_max": 70},
             {"gap": -0.01},
         ],
-        ids=["fast-too-short", "slow-too-long", "hold-too-long", "boolean-hold", "fast-not-below-slow", "empty-rsi-band", "negative-gap"],
+        ids=[
+            "fast-too-short",
+            "slow-too-long",
+            "hold-too-long",
+            "boolean-hold",
+            "negative-cross-age",
+            "cross-age-too-long",
+            "fast-not-below-slow",
+            "empty-rsi-band",
+            "negative-gap",
+        ],
     )
     async def test_previous_crossover_template_rejects_settings_its_strategy_refuses(
         self,
