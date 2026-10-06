@@ -553,7 +553,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       flags: [],
       params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
-      exam_eligible: true,
       edge_hits: [],
     },
     recent: {
@@ -574,7 +573,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
       params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
-      exam_eligible: true,
       edge_hits: [],
     },
     incumbent: {
@@ -596,7 +594,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       flags: [],
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
-      exam_eligible: false,
       edge_hits: [],
     },
   };

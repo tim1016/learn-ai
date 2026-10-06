@@ -365,9 +365,7 @@ def evidence_view(
     for finding in stored.get("findings", []):
         if finding.get("candidate") is not None:
             findings.setdefault(finding["candidate"], []).append(finding["code"])
-    # The fits the final test runs, and every candidate key that names one of them.
     fits = fits_to_test(candidates)
-    tested_keys = {key for fit in fits for key in (fit["key"], *fit["same_as"])}
     views = []
     for item in candidates:
         metrics = None if item["development_metrics"] is None else Metrics.from_dict(item["development_metrics"])
@@ -406,7 +404,6 @@ def evidence_view(
                 ),
                 "params_sentence": params_sentence(declaration, item["point"]),
                 "fixed_sentence": fixed_sentence(declaration, protocol.knobs),
-                "exam_eligible": item["key"] in tested_keys,
             }
         )
     window = stored["window"]

@@ -62,6 +62,8 @@ export function researchRow(exam: ExamView, fit: ExamFit): EvidenceRow {
 /** The four separate evidence rows of the decision panel for one fit, by study state (closed copy). */
 export function evidenceRows(state: StudyState, exam: ExamView, fit: ExamFit): EvidenceRow[] {
   const approved = state === 'approved';
+  // Kept or closed: no approval ran and none can follow.
+  const ended = state === 'retained' || state === 'closed';
   const repeatability: EvidenceRow =
     state === 'approved'
       ? { title: 'Repeatability and coverage', chip: 'Verified', tone: 'good', detail: 'The immutable replay and required coverage match this exact version.' }
@@ -69,7 +71,9 @@ export function evidenceRows(state: StudyState, exam: ExamView, fit: ExamFit): E
         ? { title: 'Repeatability and coverage', chip: 'Proof failed', tone: 'bad', detail: 'The required replay did not complete or did not match. No new qualification was published.' }
         : state === 'qualification_pending'
           ? { title: 'Repeatability and coverage', chip: 'Building the proof', tone: 'warn', detail: 'The immutable replay and required coverage must match this exact version.' }
-          : { title: 'Repeatability and coverage', chip: 'Built during approval', tone: 'neutral', detail: 'The immutable replay and required coverage must match this exact version.' };
+          : ended
+            ? { title: 'Repeatability and coverage', chip: 'Not built', tone: 'neutral', detail: 'The study ended without an approval, so no proof was built.' }
+            : { title: 'Repeatability and coverage', chip: 'Built during approval', tone: 'neutral', detail: 'The immutable replay and required coverage must match this exact version.' };
   return [
     researchRow(exam, fit),
     repeatability,
@@ -77,11 +81,13 @@ export function evidenceRows(state: StudyState, exam: ExamView, fit: ExamFit): E
       title: 'Independent engine agreement',
       chip: 'Missing · Python-only',
       tone: 'warn',
-      detail: approved ? 'Missing parity remains recorded after Manual override.' : 'A separate acknowledgement is required for Manual override.',
+      detail: approved ? 'Missing parity remains recorded after Manual override.' : ended ? 'No override was recorded: the study ended without an approval.' : 'A separate acknowledgement is required for Manual override.',
     },
     approved
       ? { title: 'Golden acceptance', chip: 'Accepted · Manual override', tone: 'good', detail: 'Selectable for Paper and Live; operating checks remain.' }
-      : { title: 'Golden acceptance', chip: 'Awaiting your approval', tone: 'warn', detail: 'Approval publishes the qualified version and the active default together.' },
+      : ended
+        ? { title: 'Golden acceptance', chip: 'Not approved', tone: 'neutral', detail: 'The study ended without publishing a version; the current default stands.' }
+        : { title: 'Golden acceptance', chip: 'Awaiting your approval', tone: 'warn', detail: 'Approval publishes the qualified version and the active default together.' },
   ];
 }
 

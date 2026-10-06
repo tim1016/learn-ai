@@ -14311,8 +14311,6 @@ export interface components {
             edge_hits: string[];
             /** Eligible */
             eligible: boolean;
-            /** Exam Eligible */
-            exam_eligible: boolean;
             /** Fixed Sentence */
             fixed_sentence: string;
             /** Flags */

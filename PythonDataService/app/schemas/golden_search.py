@@ -998,7 +998,6 @@ class GoldenSearchEvidenceCandidate(_Wire):
     flags: list[GoldenSearchFinding]
     params_sentence: str
     fixed_sentence: str
-    exam_eligible: bool
 
 
 class GoldenSearchRecommendation(_Wire):
