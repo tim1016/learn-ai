@@ -29,7 +29,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.data_lake.polygon_fetcher import PolygonBar, PolygonFetchError, fetch_aggregate_bars
+from app.data_lake.polygon_fetcher import (
+    PolygonBar,
+    PolygonFetchError,
+    fetch_aggregate_bars,
+    polygon_history_floor,
+)
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_start_for_bar_count
 from app.schemas.broker_v2_panel import ChartBar, ChartHistoryTimeframe
 from app.schemas.fleet_history_batch import HistoryBatchResponse
@@ -42,8 +47,9 @@ from app.services.polygon_notice_classifier import (
     classify_polygon_exception,
     missing_polygon_api_key_notice,
 )
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc
 
-_POLYGON_HISTORY_YEARS = 2
 _ET = ZoneInfo("America/New_York")
 
 # A history bar source fetches aggregate bars for a symbol/date-range at a given
@@ -116,18 +122,6 @@ def _plan_history_walk(
     )
 
 
-def _subtract_years(value: date, years: int) -> date:
-    try:
-        return value.replace(year=value.year - years)
-    except ValueError:
-        return value.replace(year=value.year - years, day=28)
-
-
-def _polygon_history_floor(now_ms: int) -> date:
-    today = datetime.fromtimestamp(now_ms / 1000, tz=UTC).date()
-    return _subtract_years(today, _POLYGON_HISTORY_YEARS)
-
-
 def _history_bar_end_ms(bar: PolygonBar, plan: _HistoryWalkPlan) -> int:
     if plan.timespan != "day":
         return bar.t_ms + plan.span_ms
@@ -161,10 +155,10 @@ async def _fetch_history_bars(
     symbol: str,
     plan: _HistoryWalkPlan,
     bar_source: HistoryBarSource,
+    floor: date,
 ) -> list[PolygonBar]:
-    """Fetch backward until the bar budget or Polygon entitlement is exhausted."""
+    """Fetch backward until the bar budget is met or ``floor``, the provider's first day, is reached."""
 
-    floor = _polygon_history_floor(plan.to_ms)
     range_start = max(plan.fetch_start, floor)
     entitlement_end = datetime.fromtimestamp(plan.to_ms / 1000, tz=UTC).date() + timedelta(days=1)
     range_end = entitlement_end
@@ -197,6 +191,7 @@ async def fetch_complete_history_batch(
     required_bar_count: int,
     as_of_ms: int,
     bar_source: HistoryBarSource,
+    today: date,
 ) -> HistoryBatchResponse:
     """Run the full backward Polygon widening walk to completion (issue #2204).
 
@@ -205,9 +200,14 @@ async def fetch_complete_history_batch(
     ``combined``-posture local shortcut
     (``app.services.broker_v2_panel.history_batch_client``). It is the exact walk
     ``build_history_chart`` used to run inline before #2204 -- widen backward
-    until ``required_bar_count`` bars are collected or the two-year
-    entitlement floor is reached -- unchanged in behavior, just relocated off
-    the module the Clerk imports (gate F5).
+    until ``required_bar_count`` bars are collected or the provider's history
+    floor is reached -- relocated off the module the Clerk imports (gate F5).
+
+    ``today`` is the ET date the provider's history is counted from
+    (:func:`polygon_history_floor`). It is the real today, not the date of
+    ``as_of_ms``: a finished run's tape ends in the past, and a walk that
+    reached five years behind that end would ask for days the provider
+    refuses, which leaves the whole batch with no bars.
 
     A Polygon fetch failure degrades into a ``polygon_*`` notice with no bars
     (issue #2203) rather than raising -- this function's caller always gets a
@@ -222,6 +222,7 @@ async def fetch_complete_history_batch(
             symbol=symbol,
             plan=plan,
             bar_source=bar_source,
+            floor=polygon_history_floor(today),
         )
     except PolygonFetchError as exc:
         polygon_bars = []
@@ -278,6 +279,7 @@ async def build_coordinator_history_batch(
         required_bar_count=required_bar_count,
         as_of_ms=as_of_ms,
         bar_source=_bar_source,
+        today=et_date_at_ms(now_ms_utc()),
     )
 
 

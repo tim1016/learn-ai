@@ -52,6 +52,7 @@ from app.services.live_chart_window import (
     ChartFeedStatus,
     ChartWindowResult,
 )
+from app.utils.session_anchors import et_date_at_ms
 from tests.broker.v2panel.fixtures import SID
 
 _NOW = 1_700_000_000_000
@@ -85,6 +86,7 @@ def _batch_provider_from_source(bar_source):
             required_bar_count=query.required_bar_count,
             as_of_ms=query.as_of_ms,
             bar_source=bar_source,
+            today=et_date_at_ms(query.as_of_ms),
         )
 
     return _provider
@@ -354,7 +356,7 @@ async def test_history_extends_backward_when_sparse_aggregates_underfill_budget(
     assert result.indicator_bar_budget_satisfied is True
 
 
-async def test_history_never_fetches_before_polygon_two_year_entitlement() -> None:
+async def test_history_never_fetches_before_the_provider_history_floor() -> None:
     starts: list[date] = []
 
     async def _source(symbol, start, end, source_multiplier, source_timespan):
@@ -370,8 +372,34 @@ async def test_history_never_fetches_before_polygon_two_year_entitlement() -> No
         now_ms=_NOW,
     )
 
-    assert starts == [date(2021, 11, 14)]
+    # Five years before 2023-11-14, kept two days inside: the provider's first day.
+    assert starts[-1] == date(2018, 11, 16)
+    assert min(starts) == date(2018, 11, 16)
     assert result.indicator_bar_budget_satisfied is False
+
+
+async def test_the_provider_history_is_counted_from_today_not_from_the_end_of_a_past_window() -> None:
+    """A finished run's tape ends in the past, and what the provider serves is counted from today.
+
+    A walk that reached five years behind the tape's end would ask for days
+    the provider refuses, and one refused day leaves the chart with no bars.
+    """
+    starts: list[date] = []
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        starts.append(start)
+        return []
+
+    await history_batch_walk.fetch_complete_history_batch(
+        symbol="SPY",
+        timeframe="1d",
+        required_bar_count=300,
+        as_of_ms=_NOW - 30 * 86_400_000,
+        bar_source=_source,
+        today=date(2023, 11, 14),
+    )
+
+    assert starts[-1] == date(2018, 11, 16)
 
 
 async def test_daily_bar_completes_at_session_close_not_midnight_plus_one_day(
@@ -606,6 +634,7 @@ async def test_fetch_complete_history_batch_polygon_auth_error_returns_notice_wi
         required_bar_count=300,
         as_of_ms=_NOW,
         bar_source=_source,
+        today=et_date_at_ms(_NOW),
     )
 
     assert batch.bars == []
