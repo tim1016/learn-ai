@@ -30,11 +30,11 @@ NEXT_SESSION_NOON = et_minute_of_day_ms(date(2026, 9, 9), 12 * 60)
 OVERNIGHT = et_minute_of_day_ms(date(2026, 9, 9), 2 * 60)
 
 
-def _retain(ledger: SourceBarLedger, *, end_ms: int, close: str) -> None:
+def _retain(ledger: SourceBarLedger, *, end_ms: int, close: str, volume: int = 1) -> None:
     price = Decimal(close)
     ledger.append(MarketDataBar(
         symbol="SPY", start_ms=end_ms - 60_000, end_ms=end_ms, open=price, high=price, low=price, close=price,
-        volume=1, fetched_at_ms=end_ms, feed_id="ibkr", session_phase="RTH",
+        volume=volume, fetched_at_ms=end_ms, feed_id="ibkr", session_phase="RTH",
     ), run_id="run-a")
 
 
@@ -125,6 +125,42 @@ async def test_a_run_end_close_fills_at_the_last_bar_its_run_saw_stamped_when_it
     assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 600.0, OVERNIGHT)
     evidence = ledger.latest_for_symbol("SPY", provider=RUN_END_CLOSE_PROVIDER)
     assert evidence is not None and (evidence.close, evidence.end_ms, evidence.run_id) == (Decimal("600.00"), OVERNIGHT, None)
+    # The price is stamped now, and its record keeps when it last traded, so its age is not lost (#2912).
+    priced = broker.synthesized_fill_anchors()["bot:ema:close"]
+    assert (priced.provider, priced.decision_bar_end_ms, priced.restated_bar_end_ms) == (
+        RUN_END_CLOSE_PROVIDER, OVERNIGHT, NOON,
+    )
+
+
+async def test_a_run_end_close_after_quiet_minutes_is_as_old_as_the_last_trade(tmp_path: Path) -> None:
+    """The feed delivers a bar for a minute nothing traded in, repeating the last trade's price.
+
+    A thin asset that last traded at noon and was quiet for five hours is
+    closed overnight at a price fourteen hours old, not nine.
+    """
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
+    _retain(ledger, end_ms=NOON, close="600.00")
+    _retain(ledger, end_ms=NOON + 5 * 60 * 60_000, close="600.00", volume=0)
+    broker = _broker(ledger, now_ms=OVERNIGHT, quote=None)
+
+    assert broker.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is True
+    order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:close")
+
+    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 600.0, OVERNIGHT)
+    assert broker.synthesized_fill_anchors()["bot:ema:close"].restated_bar_end_ms == NOON
+
+
+async def test_a_run_end_close_still_sells_when_this_clock_runs_behind_the_feed(tmp_path: Path) -> None:
+    """The last bar's time is the feed's and "now" is this process's: a lagging clock must not leave the close unsent."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
+    _retain(ledger, end_ms=NOON, close="600.00")
+    behind = NOON - 5_000
+    broker = _broker(ledger, now_ms=behind, quote=None)
+
+    assert broker.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is True
+    order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:close")
+
+    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 600.0, behind)
 
 
 async def test_a_run_end_close_with_no_bar_its_run_saw_is_left_unsent(tmp_path: Path) -> None:

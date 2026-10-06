@@ -685,6 +685,16 @@ _UNRECORDED_SIMULATED_FILL = SimulatedFillView(
 )
 
 
+def _price_age(fill: FillRecord, price_made_at_ms: int) -> tuple[int, str]:
+    """How long before the fill its price was made, as a figure and in words; never negative.
+
+    The two times can come from different clocks (the feed's and this
+    process's), so a price "made" after its fill is one of no age.
+    """
+    age_ms = max(0, fill.filled_at_ms - price_made_at_ms)
+    return age_ms, duration_label(age_ms)
+
+
 def simulated_fill_view(anchor: SynthesizedAnchor, fill: FillRecord) -> SimulatedFillView:
     """How one simulated fill was priced, in the owner's words (#2912).
 
@@ -701,15 +711,24 @@ def simulated_fill_view(anchor: SynthesizedAnchor, fill: FillRecord) -> Simulate
             caution=False,
         )
     if anchor.provider == RUN_END_CLOSE_PROVIDER:
+        if anchor.restated_bar_end_ms is None:
+            # A close recorded before its price's own time was kept: its age is not guessed.
+            return SimulatedFillView(
+                kind="run_end_close",
+                label="Simulated · last price seen",
+                sentence="Simulated: closed at the last price this run saw, which may be older than this fill.",
+                caution=True,
+            )
+        age_ms, age = _price_age(fill, anchor.restated_bar_end_ms)
         return SimulatedFillView(
             kind="run_end_close",
-            label="Simulated · last price seen",
-            sentence="Simulated: closed at the last price this run saw, which may be older than this fill.",
+            label=f"Simulated · last price seen, {age} old",
+            sentence=f"Simulated: closed at the last price this run saw, which last traded {age} earlier.",
+            price_age_ms=age_ms,
             caution=True,
         )
     if anchor.fill_model == "older_bar_close":
-        age_ms = max(0, fill.filled_at_ms - anchor.decision_bar_end_ms)
-        age = duration_label(age_ms)
+        age_ms, age = _price_age(fill, anchor.decision_bar_end_ms)
         return SimulatedFillView(
             kind="older_bar_close",
             label=f"Simulated · price {age} old",
