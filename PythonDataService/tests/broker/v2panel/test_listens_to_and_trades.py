@@ -18,7 +18,12 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import (
+    submit_retire_strategy_instance,
+    submit_start_run,
+    submit_stop_run,
+)
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -27,12 +32,14 @@ from app.broker.contract.registry import get_broker_registry, reset_broker_regis
 from app.engine.live.desired_state import DesiredState
 from app.routers.broker_v2_panel import router
 from app.schemas.action_plan import TradedInstrumentView, order_symbol
-from app.schemas.bot_history import BotHistoryOrders, FleetBotHistoryRow
+from app.schemas.bot_history import AccountBotHistory, BotHistoryBot, BotHistoryOrders, FleetBotHistoryRow
+from app.schemas.broker_v2_panel import BotPanelView
 from app.schemas.traded_asset_acknowledgement import (
     UntestedTradedAssetAcknowledgement,
     UntestedTradedAssetWarning,
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_carryover import immutable_configuration_payload
 from app.services.bot_registry_projection import project_bot_status
 from app.services.bot_runner import set_bot_task_registry
 from app.services.broker_v2_panel import (
@@ -47,7 +54,7 @@ from app.services.broker_v2_panel.catalog_projection_service import SqliteCatalo
 from app.services.broker_v2_panel.panel_projection_service import _recent_decision_views
 from app.services.broker_v2_panel.sqlite_panel_adapter import _working_order_view
 from app.services.broker_v2_panel.sqlite_panel_source import _uncleanly_ended, home_roster
-from app.services.fleet_bot_history import BotHistoryFilters, _symbols_of
+from app.services.fleet_bot_history import BotHistoryFilters, merge_bot_history
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.v2panel.fixtures import ACCT
@@ -59,14 +66,26 @@ from tests.broker.v2panel.test_panel_router import _clock_seq, _FakeBrokerPort, 
 _QQQ = TradedInstrumentView(kind="stock", symbol="QQQ")
 
 
+def _binding(*, trades: str = "QQQ", **more: object) -> BrokerBotBinding:
+    return BrokerBotBinding(
+        strategy_instance_id="bot", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
+        mode="trade", quantity=1, action_plan=alpaca_v1_action_plan(trades), run_id="run-1", created_at_ms=0,
+        **more,
+    )
+
+
 def _config(*, listens_to: str | None = "SPY", trades: str | None = "QQQ", **more: object) -> str:
-    """A bot's immutable configuration as the runner seals it: the Signal stream's symbol and the plan."""
-    config: dict[str, object] = {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID", **more}
-    if listens_to is not None:
-        config["symbol"] = listens_to
-    if trades is not None:
-        config["action_plan"] = alpaca_v1_action_plan(trades).model_dump(mode="json")
-    return json.dumps(config)
+    """A bot's immutable configuration, exactly as the Clerk's registration writes it from the binding.
+
+    ``listens_to=None`` and ``trades=None`` drop those facts, as a
+    configuration written before a registration carried them has none.
+    """
+    config = immutable_configuration_payload(_binding(trades=trades or "SPY"))
+    if listens_to is None:
+        del config["symbol"]
+    if trades is None:
+        del config["action_plan"]
+    return canonicalize({**config, **more})
 
 
 @pytest.fixture
@@ -118,15 +137,21 @@ def test_a_plan_that_cannot_be_read_is_refused_rather_than_guessed(repo: ClerkSq
         _roster_row(repo, registered_under="QQQ", config_json=_config(trades=None, action_plan={"on_enter": []}))
 
 
-def test_a_runner_backed_row_reads_the_same_two_facts_from_its_binding() -> None:
-    binding = BrokerBotBinding(
-        strategy_instance_id="bot", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
-        mode="dry_run", quantity=1, action_plan=alpaca_v1_action_plan("QQQ"), run_id="run-1", created_at_ms=0,
+def test_a_runner_backed_row_reads_the_same_facts_from_its_binding() -> None:
+    row = project_bot_status(
+        _binding(traded_asset_acknowledgement=_ACCEPTANCE), None, DesiredState.RUNNING, running=True
     )
 
-    row = project_bot_status(binding, None, DesiredState.RUNNING, running=True)
+    assert (row.symbol, row.traded, row.traded_asset_acknowledgement) == ("SPY", _QQQ, _ACCEPTANCE)
 
-    assert (row.symbol, row.traded) == ("SPY", _QQQ)
+
+def test_a_retired_row_still_says_what_the_bot_listened_to_and_traded(repo: ClerkSqliteRepository) -> None:
+    _roster_row(repo, registered_under="QQQ", config_json=_config())
+    submit_retire_strategy_instance(repo, account_id=repo.account_id, strategy_instance_id="bot", retired_at_ms=5)
+
+    row = sqlite_roster_status.build_terminal_roster_status("alpaca", repo.strategy_instance("bot"), repo)
+
+    assert (row.phase, row.symbol, row.traded) == ("RETIRED", "SPY", _QQQ)
 
 
 # ── what the owner accepted ─────────────────────────────────────────────
@@ -144,6 +169,15 @@ def test_a_row_carries_the_acceptance_its_bot_was_deployed_with(repo: ClerkSqlit
     )
 
     assert row.traded_asset_acknowledgement == _ACCEPTANCE
+
+
+def test_an_acceptance_that_cannot_be_read_is_refused_rather_than_dropped(repo: ClerkSqliteRepository) -> None:
+    """Showing the bot with no acceptance would say the owner never gave one."""
+    with pytest.raises(SqliteCatalogProjectionUnavailable, match="unreadable untested-asset acceptance"):
+        _roster_row(
+            repo, registered_under="QQQ",
+            config_json=_config(traded_asset_acknowledgement={"acknowledgement": "something else"}),
+        )
 
 
 def test_the_bot_page_shows_deploys_warning_and_what_the_owner_accepted() -> None:
@@ -188,9 +222,9 @@ def test_an_unclean_end_is_reported_under_the_asset_the_bot_may_still_hold(
     assert unreadable == []
 
 
-def _panel(**overrides: object) -> SimpleNamespace:
-    """The two facts of a bot page these readers take from it."""
-    return SimpleNamespace(symbol="SPY", traded=_QQQ, mode="trade", status="running", **overrides)
+def _bot_page() -> BotPanelView:
+    """The page of a running Paper bot that listens to SPY and trades QQQ."""
+    return _panel_view(_status(mode="trade").model_copy(update={"traded": _QQQ}), _clerk_status(), [])
 
 
 def test_a_working_order_with_no_recorded_symbol_is_in_the_asset_the_bot_trades() -> None:
@@ -199,18 +233,18 @@ def test_a_working_order_with_no_recorded_symbol_is_in_the_asset_the_bot_trades(
         submitted_at_ms=1, updated_at_ms=2,
     )
 
-    assert _working_order_view(_panel(), order, strict=False).symbol == "QQQ"  # type: ignore[arg-type]
+    assert _working_order_view(_bot_page(), order, strict=False).symbol == "QQQ"
 
 
 def test_a_manual_order_from_the_bots_page_is_offered_in_the_asset_it_trades() -> None:
     """The ticket is there to fix the bot's position, which is in QQQ."""
-    entry = _manual_order_entry(_panel())  # type: ignore[arg-type]
+    entry = _manual_order_entry(_bot_page())
 
-    assert entry.reason == "Place an order for QQQ on this account."
+    assert "QQQ" in entry.reason and "SPY" not in entry.reason
 
 
-async def test_a_flatten_cohort_is_the_bots_that_hold_the_same_asset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two bots hold QQQ, one listening to SPY and one to QQQ itself. A third listens to SPY and holds SPY."""
+async def test_a_flatten_cohort_is_the_bots_that_listen_to_the_same_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 0051: a stop wave strands the bots that move in lockstep on one signal, whatever each trades."""
     def row(sid: str, *, symbol: str, traded: TradedInstrumentView | None = None) -> SimpleNamespace:
         return SimpleNamespace(
             strategy_instance_id=sid, strategy_key="ema_crossover_signal", strategy_label="EMA Crossover Signal",
@@ -233,7 +267,7 @@ async def test_a_flatten_cohort_is_the_bots_that_hold_the_same_asset(monkeypatch
     view = await cohort_flatten.get_cohort_flatten_view("alpaca", "PA-1")
 
     assert [(cohort.symbol, [leg.strategy_instance_id for leg in cohort.legs]) for cohort in view.cohorts] == [
-        ("QQQ", ["qqq", "spy-qqq"]),
+        ("SPY", ["spy", "spy-qqq"]),
     ]
 
 
@@ -251,14 +285,42 @@ def _history_row(sid: str, *, symbol: str, traded: TradedInstrumentView | None =
     )
 
 
-def test_history_finds_a_bot_under_either_symbol() -> None:
-    listens_spy_trades_qqq = _history_row("a", symbol="SPY", traded=_QQQ)
-    trades_iwm = _history_row("b", symbol="IWM")
+def _one_lanes_answer(*rows: FleetBotHistoryRow) -> dict:
+    """The coordinator's read of one lane, as that lane's route serialises its bots."""
+    lane = AccountBotHistory(
+        account_id="PA-1", observed_at_ms=1,
+        bots=tuple(BotHistoryBot(**row.model_dump(exclude={"broker", "clerk_id"})) for row in rows), gaps=(),
+    )
+    return {
+        "observed_at_ms": 1,
+        "lanes": [{"ok": True, "broker": "alpaca", "clerk_id": "clerk-1", "value": lane.model_dump(mode="json")}],
+    }
 
-    assert _symbols_of(listens_spy_trades_qqq) == ("SPY", "QQQ")
-    assert BotHistoryFilters(symbol="QQQ").admits(listens_spy_trades_qqq)
-    assert BotHistoryFilters(symbol="SPY").admits(listens_spy_trades_qqq)
-    assert not BotHistoryFilters(symbol="QQQ").admits(trades_iwm)
+
+def _history_page(answer: dict, *, symbol: str | None = None):
+    return merge_bot_history(
+        answer, accounts={"clerk-1": "PA-1"}, extra_gaps=(), filters=BotHistoryFilters(symbol=symbol),
+        page=1, page_size=25,
+    )
+
+
+def test_history_finds_a_bot_under_either_symbol() -> None:
+    answer = _one_lanes_answer(_history_row("spy-qqq", symbol="SPY", traded=_QQQ), _history_row("iwm", symbol="IWM"))
+
+    assert _history_page(answer).symbols == ("IWM", "QQQ", "SPY")
+    for symbol in ("SPY", "QQQ"):
+        assert [row.strategy_instance_id for row in _history_page(answer, symbol=symbol).rows] == ["spy-qqq"]
+    assert [row.traded for row in _history_page(answer, symbol="QQQ").rows] == [_QQQ]
+
+
+def test_an_ordinary_bots_history_row_is_sent_as_it_was_before_the_field_existed() -> None:
+    """The coordinator reads a lane's answer strictly, so a ``null`` here would blank History on one still
+    running the build before this field: an absent traded instrument is left off the wire."""
+    answer = _one_lanes_answer(_history_row("spy", symbol="SPY"))
+
+    [sent] = answer["lanes"][0]["value"]["bots"]
+    assert "traded" not in sent
+    assert [(row.symbol, row.traded) for row in _history_page(answer).rows] == [("SPY", None)]
 
 
 # ── a refused decision says why ─────────────────────────────────────────
@@ -367,6 +429,16 @@ async def test_the_bot_page_of_a_bot_that_trades_another_asset(
     assert page["traded_market_pulse"] is not None
     assert page["market_pulse"] is not None
     assert clerk_card_symbols == ["QQQ"], "the Clerk's submission gate reads the feed of the asset its orders are in"
+
+
+async def test_homes_rows_name_what_each_bot_listens_to_and_trades(bot_pages: FastAPI) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=bot_pages), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/catalog")
+
+    assert response.status_code == 200, response.text
+    rows = {row["strategy_instance_id"]: row for row in response.json()}
+    assert (rows["spy-qqq"]["symbol"], rows["spy-qqq"]["traded"]) == ("SPY", {"kind": "stock", "symbol": "QQQ"})
+    assert (rows["spy"]["symbol"], rows["spy"]["traded"]) == ("SPY", None)
 
 
 async def test_the_bot_page_of_a_bot_that_trades_what_it_listens_to_is_unchanged(

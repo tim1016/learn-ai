@@ -53,7 +53,6 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.account_authority import AuthorityKind
-from app.schemas.action_plan import order_symbol
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView
 from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
 from app.schemas.broker_bots import BotStatusView
@@ -1404,8 +1403,8 @@ def _uncleanly_ended(
             continue
         outcome = status.duty_outcome
         if outcome is not None and ended_uncleanly(kind=outcome.kind, running=status.running):
-            # The notices say what the bot may still hold, so they name what it trades.
-            ended.append(_EndedBot(sid=sid, symbol=order_symbol(status.symbol, status.traded), kind=outcome.kind))
+            # The notices say what the bot may still hold: the asset the Clerk registered it under.
+            ended.append(_EndedBot(sid=sid, symbol=str(registration["symbol"]), kind=outcome.kind))
     return ended, unreadable
 
 

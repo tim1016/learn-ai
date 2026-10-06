@@ -45,7 +45,11 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 
 @dataclass(frozen=True)
 class DeclaredConfiguration:
-    """The submission-capability facts a roster row must state truthfully."""
+    """What a roster row states from the bot's own immutable configuration.
+
+    What it may submit (mode, quantity, carryover), what it listens to and
+    trades, and the owner's acknowledgement of an untested traded asset.
+    """
 
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int | None
@@ -65,11 +69,13 @@ class DeclaredConfiguration:
 
 
 def declared_configuration(strategy_instance_id: str, config_json: str) -> DeclaredConfiguration:
-    """Read mode, quantity, and carryover policy out of SQLite's own config.
+    """Read a bot's declared facts out of SQLite's own config.
 
     Refuses rather than substitutes a default: guessing `trade` for a row
     whose real mode is unreadable would overstate what the bot may do, and
-    guessing `log_only` would understate it. Neither is safe to render.
+    guessing `log_only` would understate it. Neither is safe to render. An
+    Action Plan or an acknowledgement that cannot be read is refused the
+    same way.
     """
     try:
         declared = json.loads(config_json)

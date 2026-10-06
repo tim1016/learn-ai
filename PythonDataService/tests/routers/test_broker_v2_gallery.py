@@ -23,6 +23,7 @@ from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.config import settings
 from app.main import app
 from app.routers import broker_v2_gallery
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.broker_v2_gallery import (
     GalleryBotView,
     GalleryFeedView,
@@ -64,9 +65,11 @@ class _Cat2:
         strategy_label: str = "",
         needs_attention: bool = False,
         phase: str = "ON_DUTY",
+        traded: TradedInstrumentView | None = None,
     ) -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
+        self.traded = traded
         self.running = running
         self.strategy_label = strategy_label
         self.realized_pnl_today = realized_pnl_today
@@ -160,6 +163,35 @@ async def test_gallery_snapshot_returns_running_bots(gallery_app) -> None:
     assert {b["sid"] for b in body["bots"]} == {"Aug11-02"}
     assert {s["symbol"] for s in body["symbols"]} == {"SPY"}
     assert body["bots"][0]["last_bar_at_ms"] == 1_700_000_060_000  # SPY's latest bar end_ms
+
+
+async def test_a_wall_tile_charts_what_the_bot_listens_to_and_names_what_it_trades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2912: the tile's candles and feed are SPY's, the symbol the bot decides on; it trades QQQ."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+    qqq = TradedInstrumentView(kind="stock", symbol="QQQ")
+    rows = [
+        _Cat2("spy-qqq", "SPY", True, 1.0, 0.0, 1, traded=qqq),
+        _Cat2("spy", "SPY", True, 1.0, 0.0, 1),
+    ]
+    hub = GalleryHub(
+        broker=_BROKER, account_id=_ACCOUNT_ID, catalog_source=_FakeCatalogSource(rows), aggregator=_FakeAggregator(),
+    )
+    app.dependency_overrides[broker_v2_gallery.get_gallery_hub] = lambda: hub
+    try:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"{_URL_PREFIX}/snapshot")
+    finally:
+        app.dependency_overrides.pop(broker_v2_gallery.get_gallery_hub, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    tiles = {tile["sid"]: tile for tile in body["bots"]}
+    assert (tiles["spy-qqq"]["symbol"], tiles["spy-qqq"]["traded"]) == ("SPY", {"kind": "stock", "symbol": "QQQ"})
+    assert tiles["spy"]["traded"] is None
+    assert {charted["symbol"] for charted in body["symbols"]} == {"SPY"}, "QQQ is traded, not charted"
 
 
 async def test_gallery_snapshot_includes_stopped_bot_and_excludes_retired(
