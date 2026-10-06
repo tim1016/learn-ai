@@ -1,7 +1,7 @@
-"""EMA Previous Crossover — enter on the first good bar after a cross, not only on the cross bar.
+"""EMA Previous Crossover — enter on a bar that clears the gates while the cross is still recent.
 
-Formula: Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an RSI(14) filter; fast/slow default to 5/10. A cross up (EMA(fast) > EMA(slow) on a bar whose previous bar had EMA(fast) <= EMA(slow)) opens a cross, which stays open while EMA(fast) > EMA(slow). Entry bar: the first bar of an open cross where (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50–70). That bar spends the cross whether or not the entry is taken. Exit: hold_bars consolidated decision bars after entry (default 5, i.e. 75 minutes inside one session).
-Reference: The rule is the owner's (#2902, 2026-10-05) and has no outside source. The port reference is LEAN's execution of the twin `app/lean_sidecar/trusted_samples/ema_previous_crossover.py`, which supplies the consolidation, the EMAs, the RSI and the fills.
+Formula: Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an RSI(14) filter; fast/slow default to 5/10. A cross up is a bar with EMA(fast) > EMA(slow) whose previous bar had EMA(fast) <= EMA(slow). Its age is the number of bars since it, 0 on the cross bar, and it ends when EMA(fast) <= EMA(slow). Entry, while flat: age <= cross_max_age_bars (default 1) AND (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50–70), all read on the bar being evaluated. Exit: hold_bars consolidated decision bars after entry (default 5, i.e. 75 minutes inside one session).
+Reference: The rule is the owner's (#2902, revised 2026-10-05) and has no outside source. The port reference is LEAN's execution of the twin `app/lean_sidecar/trusted_samples/ema_previous_crossover.py`, which supplies the consolidation, the EMAs, the RSI and the fills.
 Canonical implementation: this file.
 Validated against: `tests/engine/strategy/algorithms/test_ema_previous_crossover.py`; `tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py`.
 
@@ -9,14 +9,15 @@ Strategy rules:
   * 15-minute signal bars consolidated from minute data.
   * Indicators: EMA(fast), EMA(slow) and Wilders RSI(14), each updated with
     the consolidated bar's close at its end time.
-  * A cross up opens a cross. It stays open while fast stays strictly above
-    slow; a bar with fast at or below slow closes it. There is no limit on
-    how long it may stay open.
-  * The first bar of an open cross on which both gap floors and the RSI band
-    pass is that cross's entry bar. The strategy emits ENTER there when it is
-    flat. Each cross has exactly one entry bar: it is spent on that bar even
-    when the strategy is holding an earlier trade, or the candidate is later
-    discarded, so the entry bar of every cross depends only on the bars.
+  * A cross up starts a count of bars. The count is 0 on the cross bar and
+    grows by one on each bar fast stays strictly above slow; a bar with fast
+    at or below slow ends it.
+  * A bar is an entry bar when the count is at most ``cross_max_age_bars``
+    and both gap floors and the RSI band pass on that same bar. The strategy
+    emits ENTER there when it is flat. Nothing else is remembered: a bar is
+    judged on its own readings and the count, so an entry bar that was not
+    taken (the strategy was holding, or the candidate was discarded) leaves
+    the next bar free to enter while the cross is still recent.
   * Position lifecycle: EXIT after exactly ``hold_bars`` consolidated
     decision bars. The countdown advances only on decision bars, so a hold
     that outlasts the session resumes on the next session's bars. Nothing
@@ -26,9 +27,10 @@ Strategy rules:
 Warmup: an EMA is ready from bar index ``period - 1`` (0-indexed), seeded
 with the SMA of its first ``period`` closes; RSI(14) is ready from bar index
 14. A cross counts only against a relation the previous bar established, so
-fast found above slow on the first bar both EMAs are ready is not a cross.
-A cross seen while RSI is still warming up is open and can enter once RSI is
-ready. No intent is emitted before all three indicators are ready.
+fast found above slow on the first bar both EMAs are ready is not a cross and
+has no age. A cross seen while RSI is still warming up keeps counting and can
+enter once RSI is ready, if it is still recent. No intent is emitted before
+all three indicators are ready.
 
 Divergence from the LEAN twin: none in the decisions, which read prices
 alone. The parity test states how any difference in the two engines' cash
@@ -45,7 +47,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from enum import StrEnum
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -62,15 +63,8 @@ from app.utils.timestamps import display_time
 DEFAULT_FAST_PERIOD = 5
 DEFAULT_SLOW_PERIOD = 10
 DEFAULT_HOLD_BARS = 5
+DEFAULT_CROSS_MAX_AGE_BARS = 1
 RSI_PERIOD = 14
-
-
-class _Cross(StrEnum):
-    """Where the current fast-above-slow stretch stands."""
-
-    NONE = "none"
-    OPEN = "open"
-    SPENT = "spent"
 
 
 @dataclass
@@ -106,12 +100,12 @@ def _finite(name: str, value: Decimal | float) -> Decimal:
     return coerced
 
 
-def _decision_bar_count(name: str, value: int) -> int:
-    """Refuse a length or hold that is not a positive integer (``True`` is not one)."""
+def _decision_bar_count(name: str, value: int, *, minimum: int = 1) -> int:
+    """Refuse a count of decision bars that is not an integer of at least ``minimum`` (``True`` is not one)."""
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer, got {value!r}")
-    if value < 1:
-        raise ValueError(f"{name} must be at least 1, got {value}")
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}")
     return value
 
 
@@ -128,6 +122,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         fast_period: int = DEFAULT_FAST_PERIOD,
         slow_period: int = DEFAULT_SLOW_PERIOD,
         hold_bars: int = DEFAULT_HOLD_BARS,
+        cross_max_age_bars: int = DEFAULT_CROSS_MAX_AGE_BARS,
     ) -> None:
         super().__init__()
         # The signal stream, not an execution target: the Action Plan selects
@@ -144,6 +139,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         if self._fast_period >= self._slow_period:
             raise ValueError(f"fast_period must be less than slow_period, got {fast_period} and {slow_period}")
         self._hold_bars = _decision_bar_count("hold_bars", hold_bars)
+        self._cross_max_age_bars = _decision_bar_count("cross_max_age_bars", cross_max_age_bars, minimum=0)
 
         self._symbol: str = ""
         self._ema_fast: ExponentialMovingAverage | None = None
@@ -153,7 +149,10 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         # Decision math, advanced on every evaluated bar and rebuilt by
         # replaying bars. Never part of position custody.
         self._fast_was_above_slow: bool = False
-        self._cross: _Cross = _Cross.NONE
+        # Bars since the cross up that began the current fast-above-slow
+        # stretch; None when fast is not above slow, or the stretch began
+        # before the relation was known.
+        self._bars_since_cross: int | None = None
 
         # Position lifecycle. The position opens and closes only when a
         # decision is committed; the countdown also steps on each held bar.
@@ -181,7 +180,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         self._rsi = RelativeStrengthIndex(f"RSI{RSI_PERIOD}", RSI_PERIOD)
 
         self._fast_was_above_slow = False
-        self._cross = _Cross.NONE
+        self._bars_since_cross = None
         self._in_position = False
 
         self.ctx.register_consolidator(
@@ -201,6 +200,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
             "fast_period": str(self._fast_period),
             "slow_period": str(self._slow_period),
             "hold_bars": str(self._hold_bars),
+            "cross_max_age_bars": str(self._cross_max_age_bars),
         }
 
     def _gap_checks(self, ema_fast: Decimal, ema_slow: Decimal) -> tuple[ExplainedCheck, ...]:
@@ -246,7 +246,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
             ready=False,
             relation_facts={
                 "ema_fast_above_slow": False,
-                "cross_open": False,
+                "cross_recent": False,
                 "was_in_position": self._in_position,
             },
             signal_facts={"decision": "HOLD", "timeframe": "15m"},
@@ -268,12 +268,11 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         )
 
     def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision:
-        """Advance the indicators and the cross, and describe one possible action.
+        """Advance the indicators and the cross age, and describe one possible action.
 
         Never emits an intent, and never opens or closes the position. The
-        cross is advanced here, on every bar and whatever the position, so
-        it is a function of the bars alone: a discarded or observe-only
-        entry bar still spends its cross.
+        cross age is advanced here, on every bar and whatever the position,
+        so it is a function of the bars alone.
         """
         assert self._ema_fast is not None
         assert self._ema_slow is not None
@@ -289,7 +288,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
 
         if not (self._ema_fast.is_ready and self._ema_slow.is_ready):
             self._fast_was_above_slow = False
-            self._cross = _Cross.NONE
+            self._bars_since_cross = None
             return self._unready_decision()
 
         assert self._ema_fast.current_value is not None
@@ -300,9 +299,11 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         fast_above_slow = ema_fast > ema_slow
         crossed_up = fast_above_slow and relation_was_known and not self._fast_was_above_slow
         if not fast_above_slow:
-            self._cross = _Cross.NONE
+            self._bars_since_cross = None
         elif crossed_up:
-            self._cross = _Cross.OPEN
+            self._bars_since_cross = 0
+        elif self._bars_since_cross is not None:
+            self._bars_since_cross += 1
         self._fast_was_above_slow = fast_above_slow
 
         if not self._rsi.is_ready:
@@ -312,22 +313,25 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         rsi = self._rsi.current_value
         prior_in_position = self._in_position
         prior_countdown = self._bars_until_exit
-        cross_open = self._cross is _Cross.OPEN
+        cross_age = self._bars_since_cross
+        cross_recent = cross_age is not None and cross_age <= self._cross_max_age_bars
 
         if not fast_above_slow:
             cross_state = "not_above"
-        elif cross_open:
-            cross_state = "crossed_up" if crossed_up else "waiting"
-        elif self._cross is _Cross.SPENT:
-            cross_state = "spent"
-        else:
+        elif cross_age is None:
             cross_state = "unseen"
+        elif cross_age == 0:
+            cross_state = "crossed_up"
+        elif cross_recent:
+            cross_state = "recent"
+        else:
+            cross_state = "stale"
         entry_checks = (
             ExplainedCheck(
-                check_id="open_cross",
+                check_id="recent_cross",
                 role=CheckRole.ENTRY,
                 comparison=Comparison.STATE,
-                passed=cross_open,
+                passed=cross_recent,
                 observed=cross_state,
             ),
             *self._gap_checks(ema_fast, ema_slow),
@@ -341,8 +345,6 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
             ),
         )
         is_entry_bar = all(check.passed for check in entry_checks)
-        if is_entry_bar:
-            self._cross = _Cross.SPENT
 
         bar_signal = "HOLD"
         intent: SignalIntent | None = None
@@ -382,7 +384,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
             ready=True,
             relation_facts={
                 "ema_fast_above_slow": fast_above_slow,
-                "cross_open": cross_open,
+                "cross_recent": cross_recent,
                 "was_in_position": prior_in_position,
             },
             signal_facts={"decision": bar_signal, "timeframe": "15m"},
@@ -446,7 +448,7 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
         )
 
     def rollback_blocked_entry(self) -> None:
-        """What an entry commits: the position, its countdown and its snapshot. The cross is not custody."""
+        """What an entry commits: the position, its countdown and its snapshot. The cross age is not custody."""
         self._in_position = False
         self._bars_until_exit = 0
         self._pending_entry = None
@@ -459,9 +461,8 @@ class EmaPreviousCrossoverAlgorithm(Strategy):
     def on_force_flat(self) -> None:
         """Start flat after a warmup replay.
 
-        Indicators and the cross carry forward: a cross spent during the
-        replay stays spent, so a bot started mid-move does not take an entry
-        its backtest never shows.
+        Indicators and the cross age carry forward, so a bot that starts
+        while a cross is still recent can enter on its first good bar.
         """
         self._in_position = False
         self._bars_until_exit = 0

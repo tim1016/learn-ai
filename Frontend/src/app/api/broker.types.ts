@@ -11789,9 +11789,14 @@ export interface components {
         };
         /**
          * EmaPreviousCrossoverStrategyParametersModel
-         * @description All seven resolved settings accepted by the EMA previous-crossover twin.
+         * @description All eight resolved settings accepted by the EMA previous-crossover twin.
          */
         EmaPreviousCrossoverStrategyParametersModel: {
+            /**
+             * Cross Max Age Bars
+             * @default 1
+             */
+            cross_max_age_bars?: number;
             /**
              * Fast Period
              * @default 5

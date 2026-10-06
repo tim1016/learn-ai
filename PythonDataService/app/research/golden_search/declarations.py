@@ -252,9 +252,36 @@ _EMA_DECLARATION = SearchDeclaration(
     default_pair_audits=(("fast_period", "slow_period"), ("rsi_min", "rsi_max")),
 )
 
-# EMA Previous Crossover has the same seven settings and bounds, so it is
-# searched in the same order with the same ranges (#2902).
-_EMA_PREVIOUS_DECLARATION = replace(_EMA_DECLARATION, strategy_key="ema_previous_crossover")
+# EMA Previous Crossover searches the same seven settings in the same order
+# with the same ranges, and adds its cross age limit, held fixed by default:
+# the owner's rule is a cross on the evaluated bar or the one before (#2902).
+_EMA_PREVIOUS_DECLARATION = replace(
+    _EMA_DECLARATION,
+    strategy_key="ema_previous_crossover",
+    knobs=(
+        *_EMA_DECLARATION.knobs,
+        SearchKnob(
+            name="cross_max_age_bars",
+            label="Cross age limit",
+            unit="decision bars",
+            kind="integer",
+            domain_low=_d("0"),
+            domain_high=_d("26"),
+            quantum=_d("1"),
+            default_low=_d("0"),
+            default_high=_d("3"),
+            neighbor_step=_d("1"),
+            default_step=_d("1"),
+            searchable_by_default=False,
+            warmup_dependent=False,
+            default_value=_d("1"),
+            note=(
+                "Most bars that may have passed since the cross on the entry bar. "
+                "It stays fixed at 1 by default: the cross is on the evaluated bar or the one before."
+            ),
+        ),
+    ),
+)
 
 _DECLARATIONS: dict[str, SearchDeclaration] = {
     declaration.strategy_key: declaration for declaration in (_EMA_DECLARATION, _EMA_PREVIOUS_DECLARATION)

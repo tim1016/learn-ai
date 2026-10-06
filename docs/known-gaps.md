@@ -583,8 +583,8 @@ re-arms the server-authored timeframe auto-correct, and numeric
   that holds a dividend payer overnight into its ex-date therefore ends with
   less cash than its LEAN companion, and its later orders can be one share
   smaller. Decisions, fill bars and fill prices are unaffected. Found on the
-  SPY six-month cell while building EMA Previous Crossover: 157 shares held
-  over 2026-03-20, $282.60. The ENG-010 parity test
+  SPY six-month cell while building EMA Previous Crossover: 155 shares held
+  over 2026-03-20, $279.00. The ENG-010 parity test
   (`PythonDataService/tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py`)
   credits the recorded dividend itself; cash changes only in
   `PythonDataService/app/engine/execution/portfolio.py::apply_fill`. The

@@ -792,14 +792,14 @@ _EMA_PREVIOUS_CROSSOVER_VIEW = StrategyView(
     values=_EMA_VIEW_VALUES,
     checks=(
         ViewCheck(
-            check_id="open_cross",
-            label="Unused cross",
+            check_id="recent_cross",
+            label="Recent cross",
             chip="cross",
-            needs="a cross up not yet used",
+            needs="a recent cross up",
             states={
                 "crossed_up": "yes, crossed this bar",
-                "waiting": "yes, crossed earlier",
-                "spent": "no, already used",
+                "recent": "yes, crossed recently",
+                "stale": "no, cross too old",
                 "unseen": "no, cross not seen",
                 "not_above": "no, below",
             },
@@ -1243,15 +1243,15 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=EMA_PREVIOUS_CROSSOVER_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaPreviousCrossoverParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="bfcba46e8b3e479fc6d80e271e12b277121ac82ef36f02b70eae4c70cb4578ec",
+            golden_trace_root="e1ee049b0df0638f6ba1c27889bfbd4ebfa8e18eb229fc2a35eacec851e9a746",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
             # Same indicators as ema_crossover_signal, so the same buffer over
             # the RSI(14) warmup at the default lengths; a deploy at longer
             # ones seals the days they need (`resolved_warmup_lookback_days`).
-            # The lookback also bounds how old a cross a bot can have seen: a
-            # cross that began before it is not open (#2902).
+            # The lookback also holds far more bars than the longest cross age
+            # limit, so a bot always knows whether a cross is recent.
             warmup_lookback_days=5,
             # EmaPreviousCrossoverAlgorithm.initialize() constructs exactly
             # these three named series, each fed bar.close at bar.end_ms.
@@ -1267,7 +1267,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # commit_signal_decision arms the countdown to hold_bars at entry;
             # this static value is the default five, and
             # `exit_eligibility_for` resolves a seal's own hold. The cross
-            # state is decision math rebuilt by replaying bars, not persisted
+            # age is decision math rebuilt by replaying bars, not persisted
             # state, so countdown_state_persistable stays False as for every
             # other program.
             exit_eligibility=ExitEligibilityContract(
@@ -1279,15 +1279,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             numerical_provenance=NumericalProvenanceContract(
                 formula=(
                     "Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an "
-                    "RSI(14) filter; fast/slow default to 5/10. A cross up opens a cross that "
-                    "stays open while EMA(fast) > EMA(slow). Entry bar: the first bar of an open "
-                    "cross where (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized "
-                    "gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50-70); "
-                    "that bar spends the cross whether or not the entry is taken. Exit: hold_bars "
-                    "consolidated decision bars after entry (default 5, 75 minutes)."
+                    "RSI(14) filter; fast/slow default to 5/10. A cross up is a bar with "
+                    "EMA(fast) > EMA(slow) whose previous bar had EMA(fast) <= EMA(slow); its age "
+                    "is the bars since it, 0 on the cross bar, and it ends when EMA(fast) <= "
+                    "EMA(slow). Entry, while flat: age <= cross_max_age_bars (default 1) AND "
+                    "(EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized gap >= "
+                    "gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50-70), all on the "
+                    "bar being evaluated. Exit: hold_bars consolidated decision bars after entry "
+                    "(default 5, 75 minutes)."
                 ),
                 reference=(
-                    "The rule is the owner's (#2902, 2026-10-05) and has no outside source. The "
+                    "The rule is the owner's (#2902, revised 2026-10-05) and has no outside source. The "
                     "port reference is LEAN's execution of the trusted template "
                     "ema_previous_crossover, which supplies the consolidation, the EMAs, the RSI "
                     "and the fills."
@@ -1321,6 +1323,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "fast_period": "decision_bars",
                 "slow_period": "decision_bars",
                 "hold_bars": "decision_bars",
+                "cross_max_age_bars": "decision_bars",
             },
             # The default configuration: the point the trace corpus and the
             # ENG-010 LEAN fixture were both produced at.
@@ -1332,30 +1335,31 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 "fast_period": 5,
                 "slow_period": 10,
                 "hold_bars": 5,
+                "cross_max_age_bars": 1,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
             artifact_paths=EMA_PREVIOUS_CROSSOVER_ARTIFACT_PATHS,
             wiring_artifact_paths=EMA_PREVIOUS_CROSSOVER_WIRING_PATHS,
         ),
         description=(
-            "Long-only intraday EMA signal generator that waits for a cross to "
-            "prove itself. Where EMA Crossover Signal needs the cross, the gap "
-            "and the RSI band on one bar, this strategy lets the cross happen "
-            "first and enters on a later bar.\n"
+            "Long-only intraday EMA signal generator that buys a recent cross "
+            "once it has proved itself. The cross may be on the bar being "
+            "evaluated or a few bars back; the gap and the RSI band are read on "
+            "the bar being evaluated.\n"
             "\n"
             "The strategy reads minute signal bars, consolidates them into "
             "15-minute bars, and tracks a fast and a slow EMA (5 and 10 by "
-            "default) and Wilders RSI(14). A fast-over-slow cross opens a "
-            "cross, which stays open for as long as fast stays above slow. The "
-            "first bar of an open cross with a wide enough gap (0.20 by "
-            "default) and an RSI inside its band (50–70 by default) is that "
-            "cross's entry bar. Each cross has exactly one entry bar: if the "
-            "strategy cannot take it, the cross is spent and the strategy "
-            "waits for the next one. A position is held for a fixed number of "
-            "15-minute bars (five, 75 min, by default); the hold counts session "
-            "bars only. There is no stop, no target, no scaling, and at most "
-            "one position lifecycle open at a time. In live runs, the Action "
-            "Plan selects the stock to trade; the strategy does not."
+            "default) and Wilders RSI(14). On each bar, while it holds nothing, "
+            "it buys when three things are true on that bar: the fast EMA "
+            "crossed above the slow EMA on this bar or within the cross age "
+            "limit (one bar back by default) and has stayed above since, the "
+            "gap is wide enough (0.20 by default), and RSI is inside its band "
+            "(50–70 by default). Nothing is remembered from earlier bars. A "
+            "position is held for a fixed number of 15-minute bars (five, "
+            "75 min, by default); the hold counts session bars only. There is "
+            "no stop, no target, no scaling, and at most one position lifecycle "
+            "open at a time. In live runs, the Action Plan selects the stock to "
+            "trade; the strategy does not."
         ),
         algorithm_pseudocode=(
             "Universe\n"
@@ -1367,18 +1371,19 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    EMA_slow = ExponentialMovingAverage(slow_period)   # default 10\n"
             "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
             "\n"
-            "Cross state (updated on every bar, whatever the position)\n"
+            "Cross age (updated on every bar, whatever the position)\n"
             "    cross_up = EMA_fast > EMA_slow AND EMA_fast[-1] <= EMA_slow[-1]\n"
-            "    cross_up                 ⇒ cross = OPEN\n"
-            "    EMA_fast <= EMA_slow     ⇒ cross = NONE\n"
+            "    cross_up                 ⇒ cross_age = 0\n"
+            "    still EMA_fast > EMA_slow ⇒ cross_age += 1\n"
+            "    EMA_fast <= EMA_slow     ⇒ cross_age = none\n"
             "    fast above slow on the first bar both EMAs are ready is not a\n"
-            "    cross: it stays NONE until a cross is seen\n"
+            "    cross: cross_age stays none until a cross is seen\n"
             "\n"
             "Alpha — entry bar (needs all three indicators ready)\n"
+            "    recent    = cross_age <= cross_max_age_bars     # default 1\n"
             "    gap_ok    = (EMA_fast - EMA_slow) >= gap         # default 0.20\n"
             "    rsi_ok    = rsi_min <= RSI <= rsi_max           # default 50..70\n"
-            "    entry_bar = cross is OPEN AND gap_ok AND rsi_ok\n"
-            "    ⇒ on an entry bar: cross = SPENT\n"
+            "    entry_bar = recent AND gap_ok AND rsi_ok\n"
             "    ⇒ on an entry bar while flat: emit Insight(UP); emit ENTER\n"
             "\n"
             "Alpha — bar exit conditions (evaluated while in trade)\n"
@@ -1397,17 +1402,19 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    if still in position at the last bar: emit EXIT"
         ),
         gotchas=[
-            "Each cross has exactly one entry bar: the first bar where the "
-            "gap floors and the RSI band both pass. It is spent there even "
-            "when the strategy is holding an earlier trade, the bot is paused, "
-            "or the order is refused, so the entry bar depends only on prices.",
-            "A bot replays about five days of bars before it starts. A cross "
-            "spent during that replay stays spent, and a cross that began "
-            "before the replay window is not open, so a long backtest can "
-            "take an entry a freshly started bot does not. This is more "
-            "likely at long EMA lengths, where fast can stay above slow for "
-            "days.",
-            "Fast touching slow (equal values) closes the cross. The next bar "
+            "The cross age limit counts 15-minute bars since the cross. At the "
+            "default of 1 the cross must be on the bar being evaluated or the "
+            "one before it; at 0 it must be on the bar being evaluated.",
+            "Nothing is remembered between bars. If an entry is not taken "
+            "(the order is refused, the bot is paused, or an earlier trade is "
+            "still held), the next bar can still enter while the cross is "
+            "recent and the gates pass.",
+            "A bot starts with no position. If it starts while a cross is "
+            "still recent, it can enter on a bar where a backtest that began "
+            "earlier is already holding the trade it took on the bar before.",
+            "With a cross age limit longer than the hold, one cross can give "
+            "a second trade after the first one exits.",
+            "Fast touching slow (equal values) ends the cross. The next bar "
             "with fast above slow is a new cross.",
             "The gap and the RSI must pass on the same bar. A gap that passed "
             "on an earlier bar is not remembered.",
@@ -1415,8 +1422,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "LEAN's convention, not the Pine/most-libraries default of "
             "seeding from the first sample alone.",
             "RSI uses Wilders smoothing with period+1 warmup. A cross seen "
-            "while RSI is still warming up is open and can enter once RSI is "
-            "ready.",
+            "while RSI is still warming up keeps its age and can enter once "
+            "RSI is ready, if it is still recent.",
             "The hold counts 15-minute decision bars across sessions, never "
             "wall-clock time.",
             "The Action Plan may trade a different stock from the signal "
@@ -1434,7 +1441,16 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         lean_twin="ema_previous_crossover",
         # The twin reads every setting, so the parity companion is available
         # at any configuration.
-        lean_parameter_names=("gap", "gap_bps", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars"),
+        lean_parameter_names=(
+            "gap",
+            "gap_bps",
+            "rsi_min",
+            "rsi_max",
+            "fast_period",
+            "slow_period",
+            "hold_bars",
+            "cross_max_age_bars",
+        ),
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",

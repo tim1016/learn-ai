@@ -108,12 +108,23 @@ def test_new_parity_group_id_is_run_id_safe():
         ("ema_crossover_signal", {"params": {"symbol": "SPY", "fast_period": 7}}, REASON_PARAMETERS_UNREPRESENTABLE),
         ("ema_crossover_signal", {"params": {"symbol": "SPY", "slow_period": 20}}, REASON_PARAMETERS_UNREPRESENTABLE),
         ("ema_crossover_signal", {"params": {"symbol": "SPY", "hold_bars": 6}}, REASON_PARAMETERS_UNREPRESENTABLE),
-        # EMA Previous Crossover's twin reads all seven settings (#2902), so
-        # changed lengths and a changed hold stay comparable too.
+        # EMA Previous Crossover's twin reads all eight settings (#2902), so
+        # changed lengths, a changed hold and a changed cross age limit stay
+        # comparable too.
         ("ema_previous_crossover", {}, None),
         (
             "ema_previous_crossover",
-            {"params": {"symbol": "SPY", "gap": 0.1, "rsi_min": 45.0, "fast_period": 7, "slow_period": 20, "hold_bars": 6}},
+            {
+                "params": {
+                    "symbol": "SPY",
+                    "gap": 0.1,
+                    "rsi_min": 45.0,
+                    "fast_period": 7,
+                    "slow_period": 20,
+                    "hold_bars": 6,
+                    "cross_max_age_bars": 3,
+                }
+            },
             None,
         ),
         # A changed cadence is representable for rsi_mean_reversion, whose
@@ -242,6 +253,7 @@ def test_every_ema_previous_crossover_setting_reaches_its_own_template(verdict_w
         "fast_period": 7,
         "slow_period": 20,
         "hold_bars": 6,
+        "cross_max_age_bars": 3,
     }
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY["ema_previous_crossover"],

@@ -1,18 +1,19 @@
 """LEAN validation twin for the EMA Previous Crossover strategy.
 
 Formula: Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars,
-gated by Wilders RSI(14). A cross up opens a cross that stays open while the
-fast EMA stays above the slow one. The first bar of an open cross where the
-gap floors and the RSI band pass is its entry bar, and that bar spends the
-cross whether or not the entry is taken. Exit after ``hold_bars`` bars.
-Reference: the rule is the owner's (#2902, 2026-10-05); no outside source
-states it. LEAN supplies the consolidation, the indicators and the fills.
+gated by Wilders RSI(14). A cross up starts a count of bars: 0 on the cross
+bar, one more on each bar the fast EMA stays above the slow one. While flat,
+a bar enters when the count is at most ``cross_max_age_bars`` and the gap
+floors and the RSI band pass on that same bar. Exit after ``hold_bars`` bars.
+Reference: the rule is the owner's (#2902, revised 2026-10-05); no outside
+source states it. LEAN supplies the consolidation, the indicators and the
+fills.
 Canonical Python implementation:
 ``app.engine.strategy.algorithms.ema_previous_crossover.EmaPreviousCrossoverAlgorithm``.
 Validated against:
 ``tests/integration/reconciliation/test_ema_previous_crossover_lean_golden.py``.
 
-All seven strategy settings are read from validated runtime parameters, so a
+All eight strategy settings are read from validated runtime parameters, so a
 companion run executes the same resolved configuration as Python at any
 point, not only the defaults.
 
@@ -55,12 +56,13 @@ def _to_ms_utc(dt):
 
 
 class MyAlgorithm(QCAlgorithm):
-    """EMA previous crossover: enter on the first good bar after a cross."""
+    """EMA previous crossover: enter on a good bar while the cross is still recent."""
 
     RSI_PERIOD = 14
     FAST_PERIOD_DEFAULT = 5
     SLOW_PERIOD_DEFAULT = 10
     HOLD_BARS_DEFAULT = 5
+    CROSS_MAX_AGE_BARS_DEFAULT = 1
     GAP_DEFAULT = 0.20
     GAP_BPS_DEFAULT = 0.0
     RSI_LO_DEFAULT = 50.0
@@ -87,6 +89,9 @@ class MyAlgorithm(QCAlgorithm):
         fast_period = self._whole_number("fast_period", self.FAST_PERIOD_DEFAULT, 2, 30)
         slow_period = self._whole_number("slow_period", self.SLOW_PERIOD_DEFAULT, 3, 40)
         self.hold_bars = self._whole_number("hold_bars", self.HOLD_BARS_DEFAULT, 1, 26)
+        self.cross_max_age_bars = self._whole_number(
+            "cross_max_age_bars", self.CROSS_MAX_AGE_BARS_DEFAULT, 0, 26
+        )
 
         bar_minutes = int(bar_minutes_str)
         if bar_minutes != 15:
@@ -137,9 +142,10 @@ class MyAlgorithm(QCAlgorithm):
         self.ema_slow = ExponentialMovingAverage(slow_period)
         self.rsi = RelativeStrengthIndex(self.RSI_PERIOD, MovingAverageType.Wilders)
 
-        # Cross state: advanced on every bar, whatever the position.
+        # Cross age: advanced on every bar, whatever the position. None when
+        # fast is not above slow, or no cross began the current stretch.
         self.fast_was_above_slow = False
-        self.cross_open = False
+        self.bars_since_cross = None
         self.bars_held = 0
         self.in_trade = False
 
@@ -180,7 +186,7 @@ class MyAlgorithm(QCAlgorithm):
 
         if not (self.ema_fast.IsReady and self.ema_slow.IsReady):
             self.fast_was_above_slow = False
-            self.cross_open = False
+            self.bars_since_cross = None
             return
 
         fast = float(self.ema_fast.Current.Value)
@@ -188,9 +194,11 @@ class MyAlgorithm(QCAlgorithm):
 
         fast_above_slow = fast > slow
         if not fast_above_slow:
-            self.cross_open = False
+            self.bars_since_cross = None
         elif relation_was_known and not self.fast_was_above_slow:
-            self.cross_open = True
+            self.bars_since_cross = 0
+        elif self.bars_since_cross is not None:
+            self.bars_since_cross += 1
         self.fast_was_above_slow = fast_above_slow
 
         if not self.rsi.IsReady:
@@ -202,10 +210,11 @@ class MyAlgorithm(QCAlgorithm):
         gap_bps = 10000.0 * (fast - slow) / slow
         normalized_gap_ok = gap_bps >= self.gap_bps_min
         rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi
-        entry_bar = self.cross_open and absolute_gap_ok and normalized_gap_ok and rsi_ok
-        if entry_bar:
-            # One entry bar per cross, taken or not.
-            self.cross_open = False
+        cross_recent = (
+            self.bars_since_cross is not None
+            and self.bars_since_cross <= self.cross_max_age_bars
+        )
+        entry_bar = cross_recent and absolute_gap_ok and normalized_gap_ok and rsi_ok
 
         signal = "HOLD"
         if self.in_trade:

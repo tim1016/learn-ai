@@ -76,6 +76,7 @@ export interface TrustedRunRequest {
     fast_period?: number;
     slow_period?: number;
     hold_bars?: number;
+    cross_max_age_bars?: number;
   };
   /**
    * PR B (2026-05-19) — canonical DataPolicy block. When provided, the
