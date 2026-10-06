@@ -351,7 +351,8 @@ def _bot(
     sid = facts.strategy_instance_id
     if facts.config is None:
         raise SqliteCatalogProjectionUnavailable(f"Bot '{sid}' has no immutable configuration.")
-    world = bot_world(authority_world, declared_configuration(sid, facts.config.config_json).mode)
+    declared = declared_configuration(sid, facts.config.config_json)
+    world = bot_world(authority_world, declared.mode)
     runs = _runs(sid, facts.runs, retired_at_ms=facts.retired_at_ms)
     running = bool(runs) and runs[0].running
     status = bot_status(
@@ -362,7 +363,10 @@ def _bot(
         strategy_instance_id=sid,
         strategy_key=facts.config.strategy_key,
         strategy_label=facts.config.display_name,
-        symbol=facts.symbol,
+        # The Clerk registered the bot under what it trades; its own
+        # configuration says what it listens to.
+        symbol=declared.listens_to(facts.symbol),
+        traded=declared.traded,
         account_id=account_id,
         world=_WORLDS[world],
         world_label=WORLD_LABELS[world],

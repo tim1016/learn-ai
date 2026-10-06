@@ -55,6 +55,7 @@ from app.schemas.run_admission import (
 )
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.schemas.strategy_view import DecisionExplanationView
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetWarning
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.channel_health import (
@@ -284,6 +285,7 @@ def _recent_decision_views(
                 if receipt.explanation is None or render_explanation is None
                 else render_explanation(receipt.explanation)
             ),
+            refusal_reason=receipt.refusal_reason,
         )
         for receipt in reversed(receipts[-limit:])
     ]
@@ -798,6 +800,13 @@ def build_panel(
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,
+        traded=status.traded,
+        traded_asset_warning=(
+            None if status.traded is None else UntestedTradedAssetWarning.for_symbols(
+                status.symbol, status.traded.symbol, acceptance_required=False,
+            )
+        ),
+        traded_asset_acknowledgement=status.traded_asset_acknowledgement,
         mode=status.mode,
         sealed_program=sealed_program,
         program_build=program_build,

@@ -4330,6 +4330,16 @@
             ],
             "title": "Trade Count"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "world_label": {
             "title": "World Label",
             "type": "string"
@@ -4956,6 +4966,16 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "transaction_count": {
             "minimum": 0.0,
             "title": "Transaction Count",
@@ -5552,6 +5572,36 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_warning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetWarning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at_ms": {
             "title": "Updated At Ms",
             "type": "integer"
@@ -5921,6 +5971,26 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -16920,6 +16990,16 @@
             "title": "Symbol",
             "type": "string"
           },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "transaction_count": {
             "minimum": 0.0,
             "title": "Transaction Count",
@@ -17388,6 +17468,16 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -37022,6 +37112,17 @@
             "title": "Recorded At Ms",
             "type": "integer"
           },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Reason"
+          },
           "seq": {
             "title": "Seq",
             "type": "integer"
@@ -45477,6 +45578,30 @@
           "observed_at_ms"
         ],
         "title": "TopOfBookQuote",
+        "type": "object"
+      },
+      "TradedInstrumentView": {
+        "additionalProperties": false,
+        "description": "What a bot trades, when that is not shares of the symbol it listens to (#2912).\n\nA bot's ``symbol`` is its Signal stream: what it listens to. This is on\nits row only when it trades something else, so its presence is the\nserver's one answer to \"does this bot trade something else\". The answer\ncomes from the instrument's type and identity, never from a screen\ncomparing tickers: options on the bot's own symbol are something else.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "stock",
+              "option"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "symbol"
+        ],
+        "title": "TradedInstrumentView",
         "type": "object"
       },
       "TradingCalendarWindow": {

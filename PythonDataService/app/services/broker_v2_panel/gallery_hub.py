@@ -358,6 +358,7 @@ class GalleryHub:
         return model(
             sid=row.strategy_instance_id,
             symbol=row.symbol,
+            traded=getattr(row, "traded", None),
             label=getattr(row, "strategy_label", ""),
             running=getattr(row, "running", False),
             phase=getattr(row, "phase", ""),

@@ -37,6 +37,7 @@ from app.schemas.account_authority import (
     AuthorityKind,
     account_authority_agrees,
 )
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.alpaca_clerk_sqlite import (
     ExposureNoticeView,
     RecoveryStatusResponse,
@@ -52,6 +53,10 @@ from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCo
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.schemas.strategy_view import DecisionExplanationView
+from app.schemas.traded_asset_acknowledgement import (
+    UntestedTradedAssetAcknowledgement,
+    UntestedTradedAssetWarning,
+)
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -184,7 +189,10 @@ class BotCatalogView(BaseModel):
     strategy_label: str
     broker: str
     account_id: str
+    # What the bot listens to; ``traded`` is what it trades when that is
+    # something else (#2912).
     symbol: str
+    traded: TradedInstrumentView | None = None
     mode: Literal["log_only", "dry_run", "trade"]
     phase: Phase
     desired_state: DesiredState
@@ -563,6 +571,10 @@ class RecentDecisionView(BaseModel):
     # their values ("values not recorded").
     decision_bar_close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     explanation: DecisionExplanationView | None = None
+    # Why a refused decision sent no order, as it was recorded (#2912): for
+    # one, that the traded asset had no price for the decision's minute.
+    # ``None`` when the row is no refusal or its refusal recorded no sentence.
+    refusal_reason: str | None = None
 
     @model_validator(mode="after")
     def simulated_row_names_its_synthesized_authority(self) -> RecentDecisionView:
@@ -657,7 +669,15 @@ class BotPanelView(BaseModel):
     experimental_notice: str | None = None
     broker: str
     account_id: str
+    # What the bot listens to; ``traded`` is what it trades when that is
+    # something else (#2912).
     symbol: str
+    traded: TradedInstrumentView | None = None
+    # For a bot that trades something else: the warning Deploy showed, in the
+    # same sentences, and what the owner accepted and why (``None`` for a Dry
+    # Run, which is warned and asked for nothing).
+    traded_asset_warning: UntestedTradedAssetWarning | None = None
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     mode: Literal["log_only", "dry_run", "trade"]
     # Immutable identity (ADR 0043 decision 1): the exact versioned seal bound
     # to this strategy instance, reused verbatim from its single canonical shape

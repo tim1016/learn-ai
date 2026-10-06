@@ -7,6 +7,7 @@ from typing import Literal
 
 from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleStateRecord
 from app.engine.live.desired_state import DesiredState
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.broker_bots import BotDutyOutcomeView, BotProcessFact, BotStatusView
 from app.services.bot_binding_repository import BotRunOutcomeRecord, BrokerBotBinding
 from app.services.bot_dry_run import MAX_DRY_RUN_TAIL, DryRunActivity, DryRunActivityJournal
@@ -106,6 +107,8 @@ def project_bot_status(
         strategy_key=binding.strategy_key,
         broker=binding.broker,
         symbol=binding.symbol,
+        traded=TradedInstrumentView.of(binding.action_plan, signal_symbol=binding.symbol),
+        traded_asset_acknowledgement=binding.traded_asset_acknowledgement,
         mode=binding.mode,
         quantity=binding.quantity,
         carryover_policy=binding.carryover_policy,

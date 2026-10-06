@@ -7869,6 +7869,7 @@ export interface components {
             symbol: string;
             /** Trade Count */
             trade_count?: number | null;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
             /** World Label */
             world_label: string;
         };
@@ -8109,6 +8110,7 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
             /** Transaction Count */
             transaction_count: number;
             /**
@@ -8302,6 +8304,9 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
+            traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
             /** Updated At Ms */
             updated_at_ms: number;
             warmup_join?: components["schemas"]["WarmupJoinView"] | null;
@@ -8423,6 +8428,8 @@ export interface components {
             strategy_label?: string | null;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
         };
         /**
          * BreachProbability
@@ -12896,6 +12903,7 @@ export interface components {
             strategy_label: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
             /** Transaction Count */
             transaction_count: number;
             /**
@@ -13054,6 +13062,7 @@ export interface components {
             sid: string;
             /** Symbol */
             symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
         };
         /**
          * GalleryFeedView
@@ -20854,6 +20863,8 @@ export interface components {
             reason_code: string;
             /** Recorded At Ms */
             recorded_at_ms: number;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
             /** Seq */
             seq: number;
             /**
@@ -24092,6 +24103,25 @@ export interface components {
             observed_at_ms: number;
             /** Source */
             source: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * TradedInstrumentView
+         * @description What a bot trades, when that is not shares of the symbol it listens to (#2912).
+         *
+         *     A bot's ``symbol`` is its Signal stream: what it listens to. This is on
+         *     its row only when it trades something else, so its presence is the
+         *     server's one answer to "does this bot trade something else". The answer
+         *     comes from the instrument's type and identity, never from a screen
+         *     comparing tickers: options on the bot's own symbol are something else.
+         */
+        TradedInstrumentView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stock" | "option";
             /** Symbol */
             symbol: string;
         };

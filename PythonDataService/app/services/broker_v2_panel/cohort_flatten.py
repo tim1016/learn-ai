@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+from app.schemas.action_plan import order_symbol
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
@@ -68,14 +69,18 @@ def _leg_from_panel(panel: BotPanelView, action: PanelAction | None) -> CohortFl
 
 
 async def get_cohort_flatten_view(broker: str, account_id: str) -> CohortFlattenView:
-    """Group the roster by (strategy_key, symbol); present per-leg facts."""
+    """Group the roster by (strategy_key, traded symbol); present per-leg facts.
+
+    A cohort is flattened together, so it is the bots that hold the same
+    asset, whatever each listens to (#2912).
+    """
     resolved = await validate_account(broker, account_id)
     rows = await panel_data_source.get_catalog(broker, resolved)
     groups: dict[tuple[str, str], list[BotCatalogView]] = {}
     for row in rows:
         if row.phase == "RETIRED":
             continue
-        groups.setdefault((row.strategy_key, row.symbol), []).append(row)
+        groups.setdefault((row.strategy_key, order_symbol(row.symbol, row.traded)), []).append(row)
 
     cohorts: list[CohortFlattenCohort] = []
     for (strategy_key, symbol), members in sorted(groups.items()):

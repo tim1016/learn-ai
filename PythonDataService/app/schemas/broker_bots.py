@@ -21,7 +21,7 @@ from pydantic import (
 from pydantic.json_schema import SkipJsonSchema
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
-from app.schemas.action_plan import ActionPlan
+from app.schemas.action_plan import ActionPlan, TradedInstrumentView
 from app.schemas.bot_end import BotEndInput, BotEndView, refuse_explicit_null_end
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.deployment_budget import DeploymentBudgetInput
@@ -507,7 +507,14 @@ class BotStatusView(BaseModel):
     # durable display-name record yet, so only they may leave it absent.
     strategy_label: str | None = None
     broker: str
+    # The Signal stream: what the bot listens to, whatever it trades.
     symbol: str
+    # What it trades, when that is something else (#2912).
+    traded: TradedInstrumentView | None = None
+    # The owner's written acceptance that the strategy is untested trading
+    # ``traded``, as it was given at Deploy. ``None`` for a Dry Run, which
+    # needs none, and for every bot that trades what it listens to.
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"

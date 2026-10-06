@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -84,7 +85,10 @@ class BotHistoryBot(BaseModel):
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str
+    #: What the bot listened to.
     symbol: str
+    #: What it traded, when that was something else (#2912).
+    traded: TradedInstrumentView | None = None
     account_id: str
     world: BotHistoryWorld
     #: The world worded once, e.g. "PAPER · practice money" (PRD #2560 D4).

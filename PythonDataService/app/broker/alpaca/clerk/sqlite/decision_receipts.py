@@ -99,6 +99,10 @@ class DecisionReceipt(BaseModel):
     # or -- with ``explanation_unreadable`` -- on one this build cannot read.
     explanation: DecisionExplanationRecord | None = None
     explanation_unreadable: bool = False
+    # Why a refused decision sent no order, in the sentence its refusal was
+    # recorded with (#2912): the runner's pricing refusals and the Clerk's
+    # own. ``None`` on every other row, and on a refusal recorded without one.
+    refusal_reason: str | None = None
     # Stored causal identity, written by
     # ``append_atomic_decision_receipt_row`` in this same module
     # (``decision_id`` == ``evaluation_id``). It belongs on the receipt row

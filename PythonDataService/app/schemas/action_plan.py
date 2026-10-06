@@ -230,3 +230,33 @@ def trades_the_signals_shares(action_plan: ActionPlan, signal_symbol: str) -> bo
     """
     instrument = traded_instrument(action_plan)
     return instrument.kind == "stock" and instrument.underlying.upper() == signal_symbol.upper()
+
+
+class TradedInstrumentView(BaseModel):
+    """What a bot trades, when that is not shares of the symbol it listens to (#2912).
+
+    A bot's ``symbol`` is its Signal stream: what it listens to. This is on
+    its row only when it trades something else, so its presence is the
+    server's one answer to "does this bot trade something else". The answer
+    comes from the instrument's type and identity, never from a screen
+    comparing tickers: options on the bot's own symbol are something else.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["stock", "option"]
+    # The stock or ETF traded; for options, the symbol the contracts are on.
+    symbol: str
+
+    @classmethod
+    def of(cls, action_plan: ActionPlan, *, signal_symbol: str) -> TradedInstrumentView | None:
+        """The plan's traded instrument, or ``None`` when the bot trades the shares it listens to."""
+        if trades_the_signals_shares(action_plan, signal_symbol):
+            return None
+        instrument = traded_instrument(action_plan)
+        return cls(kind=instrument.kind, symbol=instrument.underlying.upper())
+
+
+def order_symbol(symbol: str, traded: TradedInstrumentView | None) -> str:
+    """The symbol a bot's orders and positions are in: what it trades, which is ``symbol`` unless it says otherwise."""
+    return symbol if traded is None else traded.symbol

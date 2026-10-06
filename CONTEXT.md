@@ -823,7 +823,13 @@ against a broker, so this vocabulary survives a broker change.
   and of the validation-case symbol** — a free deploy-time choice. Distinct again
   from the **traded instrument**, which the Action plan controls: signal stream is
   *what the strategy watches*, the action-plan legs are *what it trades*. All three
-  (validation symbol, signal stream, traded legs) may differ.
+  (validation symbol, signal stream, traded legs) may differ. On every bot row a
+  screen reads, `symbol` is the Signal stream and `traded` names the traded
+  instrument, present only when the bot trades something other than shares of
+  that symbol; the Clerk's own registration is under the traded asset. The
+  owner-facing words are "Listens to" and "Trades". A reader that asks what a
+  bot holds or sends orders in uses the traded one. _Avoid_: signal symbol,
+  trade symbol, underlying (as a label for a stock bot)
 - **Signal intent** — an instrument-free ENTER or EXIT decision emitted by a
   signal-only strategy at a decision-bar close. The Action Plan consumes that
   decision to choose the traded leg; the strategy never chooses the asset.
