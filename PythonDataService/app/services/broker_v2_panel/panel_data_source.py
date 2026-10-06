@@ -668,7 +668,12 @@ def _simulated_fill_anchors(facade: SqliteAlpacaClerkFacade, sid: str) -> Mappin
     except (RuntimeError, OSError, ValueError) as error:
         logger.warning(
             "Bot page: the simulated order ledger cannot be read",
-            extra={"action": "bot_page_simulated_fills_unreadable", "strategy_instance_id": sid, "error": str(error)},
+            extra={
+                "action": "bot_page_simulated_fills_unreadable",
+                "strategy_instance_id": sid,
+                "error_type": type(error).__name__,
+                "error": str(error),
+            },
         )
         return {}
 

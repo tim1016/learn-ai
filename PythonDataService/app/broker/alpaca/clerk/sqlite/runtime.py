@@ -491,7 +491,8 @@ class SqliteAlpacaClerkFacade:
         """How this authority priced the fills no venue made, by order ref (#2912).
 
         Read-model seam for the bot page. A Paper or Live authority's fills
-        come from Alpaca, so it has none.
+        come from Alpaca, so it has none: an empty answer says "nothing on
+        record" only where ``binds_decision_bar`` is true.
         """
         return self._trade.synthesized_fill_anchors()
 
