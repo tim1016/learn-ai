@@ -149,7 +149,7 @@ def test_bar_after_the_cross_enters_once_rsi_is_back_inside_the_band() -> None:
 
 
 def test_cross_older_than_the_limit_does_not_enter() -> None:
-    """The owner's rule: the cross is on the evaluated bar or the one before, no further back."""
+    """The owner's rule: the cross bar closed at most 15 minutes before the evaluated bar."""
     run = _drive([below(), above("0.05"), above("0.15"), GOOD, GOOD])
 
     assert run.staged == [None, None, None, None, None]
@@ -222,6 +222,14 @@ def test_fast_touching_slow_ends_the_cross_and_the_next_cross_enters() -> None:
     assert run.staged == [None, ENTER, EXIT, None, None, ENTER]
 
 
+def test_fast_touching_slow_ends_a_cross_that_was_still_recent() -> None:
+    """With no gap floor, only the ended cross keeps the touching bar out."""
+    touching: Reading = (_SLOW, _SLOW, Decimal("60"))
+    run = _drive([below(), above("0.05", "75"), touching], gap=0.0)
+
+    assert run.staged == [None, None, None]
+
+
 def test_cross_during_a_hold_is_stale_by_the_time_the_trade_exits() -> None:
     run = _drive([below(), GOOD, below(), GOOD, GOOD, GOOD, GOOD], hold_bars=4)
 
@@ -280,12 +288,13 @@ def test_force_flat_drops_the_position_and_a_still_recent_cross_enters() -> None
     assert run.staged == [None, ENTER, ENTER, None]
 
 
-def test_cross_on_a_session_s_last_bar_is_stale_on_the_next_session_s_first_bar() -> None:
+@pytest.mark.parametrize("limit", [1, 8], ids=["default", "longest"])
+def test_cross_on_a_session_s_last_bar_is_stale_on_the_next_session_s_first_bar(limit: int) -> None:
     """The age is clock time: the next bar received closes hours after the cross, not 15 minutes."""
     first, second = _two_consecutive_sessions()
     bars = [*_session_bars(first)[-2:], _session_bars(second)[0]]
 
-    run = _drive([below(), above("0.05"), GOOD], bars=bars)
+    run = _drive([below(), above("0.05"), GOOD], bars=bars, cross_max_age_bars=limit)
 
     assert run.staged == [None, None, None]
     assert run.cross_states() == ["not_above", "crossed_up", "stale"]

@@ -254,7 +254,8 @@ _EMA_DECLARATION = SearchDeclaration(
 
 # EMA Previous Crossover searches the same seven settings in the same order
 # with the same ranges, and adds its cross age limit, held fixed by default:
-# the owner's rule is a cross on the evaluated bar or the one before (#2902).
+# the owner's rule is a cross at most 15 minutes before the evaluated bar's
+# close (#2902).
 _EMA_PREVIOUS_DECLARATION = replace(
     _EMA_DECLARATION,
     strategy_key="ema_previous_crossover",

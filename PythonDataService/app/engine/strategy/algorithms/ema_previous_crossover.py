@@ -35,8 +35,8 @@ has no age. A cross seen while RSI is still warming up keeps its age and can
 enter once RSI is ready, if it is still recent. No intent is emitted before
 all three indicators are ready.
 
-Divergence from the LEAN twin: none in the decisions, which read prices
-alone. The parity test states how any difference in the two engines' cash
+Divergence from the LEAN twin: none in the decisions, which read prices and
+bar close times alone. The parity test states how any difference in the two engines' cash
 accounting is handled before it compares order sizes and equity.
 
 Trade logging: trades are logged in ``on_order_event`` from actual fill
