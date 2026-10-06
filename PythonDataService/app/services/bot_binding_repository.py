@@ -175,7 +175,7 @@ class StrategyInstanceRecord(BaseModel):
     created_at_ms: int
 
     @model_serializer(mode="wrap")
-    def _omit_an_absent_acceptance(self, handler: SerializerFunctionWrapHandler):
+    def _omit_an_absent_acceptance(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """A bot with no acceptance is written exactly as it was before the field existed.
 
         This record refuses unknown fields, so the build that wrote a

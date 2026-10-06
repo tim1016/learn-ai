@@ -48,6 +48,7 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import (
     BotRunnerError,
+    TradedAssetAcknowledgementRefusedError,
 )
 from tests._helpers.bot_runner.custody import (
     _SID,
@@ -477,31 +478,40 @@ async def test_a_bot_is_bound_to_the_asset_its_deploy_names_as_traded(tmp_path: 
     await registry.stop("alpaca", _SID)
 
 
+_ACKNOWLEDGED = UntestedTradedAssetAcknowledgement(
+    acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+    reason="QQQ has followed SPY closely enough to try this.",
+)
+
+
 @pytest.mark.asyncio
-async def test_the_owners_acceptance_of_an_untested_asset_is_sealed_with_the_bot(tmp_path: Path) -> None:
-    """#2912: a bot that listens to SPY and trades QQQ keeps what the owner accepted, in its record and under its seal."""
-    acceptance = UntestedTradedAssetAcknowledgement(
-        acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
-        reason="QQQ has followed SPY closely enough to try this.",
-    )
+@pytest.mark.parametrize(
+    ("deploy", "refused_as"),
+    [
+        pytest.param({"mode": "trade", "traded_symbol": "QQQ"}, "TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED", id="trades-another-asset-unacknowledged"),
+        pytest.param(
+            {"mode": "trade", "traded_asset_acknowledgement": _ACKNOWLEDGED},
+            "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE", id="trades-what-it-listens-to",
+        ),
+        pytest.param(
+            {"mode": "dry_run", "traded_symbol": "QQQ", "traded_asset_acknowledgement": _ACKNOWLEDGED},
+            "TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE", id="dry-run",
+        ),
+    ],
+)
+async def test_the_runner_starts_no_bot_the_acknowledgement_rule_refuses(
+    tmp_path: Path, deploy: dict, refused_as: str
+) -> None:
+    """#2912: the rule is held where every bot starts, whatever route asked. Nothing is written for a refused one."""
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
-    await registry.deploy_with_admission(
-        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-        strategy_instance_id=_SID,
-        symbol="SPY",
-        traded_symbol="QQQ",
-        traded_asset_acknowledgement=acceptance,
-    )
+    with pytest.raises(TradedAssetAcknowledgementRefusedError) as refused:
+        await registry.deploy_with_admission(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", **deploy,
+        )
 
-    binding = registry.binding_for_control("alpaca", _SID)
-    assert binding.traded_asset_acknowledgement == acceptance
-    assert binding.sealed_program is not None
-    assert binding.sealed_program.traded_asset_acknowledgement == acceptance
-    assert _strategy_instance_json(tmp_path)["traded_asset_acknowledgement"] == acceptance.model_dump()
-    stored_seal = json.loads((tmp_path / "live_state" / _SID / "sealed_program_v2.json").read_text())
-    assert stored_seal["traded_asset_acknowledgement"] == acceptance.model_dump()
-    await registry.stop("alpaca", _SID)
+    assert (refused.value.reason_code, refused.value.http_status) == (refused_as, 409)
+    assert not (tmp_path / "live_state" / _SID).exists()
 
 
 @pytest.mark.asyncio

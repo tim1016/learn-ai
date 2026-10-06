@@ -17,7 +17,21 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-UNTESTED_TRADED_ASSET_ACKNOWLEDGEMENT = "I_ACCEPT_UNTESTED_TRADED_ASSET_RISK"
+from app.schemas.action_plan import ActionPlan, trades_the_signals_shares
+
+
+def substantive_reason(value: str, *, what: str) -> str:
+    """An owner's own reason for a recorded acceptance: 10 to 500 characters once trimmed.
+
+    The one rule for every acceptance that is kept with a bot. ``what``
+    names the reason in the refusal.
+    """
+    reason = value.strip()
+    if len(reason) < 10:
+        raise ValueError(f"{what} must contain at least 10 characters")
+    if len(reason) > 500:
+        raise ValueError(f"{what} must contain at most 500 characters")
+    return reason
 
 
 class UntestedTradedAssetAcknowledgement(BaseModel):
@@ -31,12 +45,35 @@ class UntestedTradedAssetAcknowledgement(BaseModel):
     @field_validator("reason")
     @classmethod
     def _require_substantive_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if len(reason) < 10:
-            raise ValueError("the reason for accepting an untested traded asset must contain at least 10 characters")
-        if len(reason) > 500:
-            raise ValueError("the reason for accepting an untested traded asset must contain at most 500 characters")
-        return reason
+        return substantive_reason(value, what="the reason for accepting an untested traded asset")
+
+
+AcknowledgementFault = Literal["required", "not_applicable"]
+
+
+def traded_asset_acknowledgement_fault(
+    *,
+    mode: Literal["log_only", "dry_run", "trade"],
+    action_plan: ActionPlan,
+    signal_symbol: str,
+    acknowledgement: UntestedTradedAssetAcknowledgement | None,
+) -> AcknowledgementFault | None:
+    """What is wrong with starting this bot with this acknowledgement, or ``None`` (#2912).
+
+    The one rule, asked wherever a bot can be started. A bot needs the
+    acknowledgement when it trades its account's money (``trade``: Paper,
+    Live Shadow and Live alike) in something other than the shares it
+    listens to. No other bot may carry one: the record is kept for good, and
+    it would say the owner accepted what nobody asked them to.
+
+    Whether a bot trades something else is read from its plan, by the
+    instrument's type and identity, never by comparing two tickers: options
+    on the bot's own symbol are something else.
+    """
+    needs_one = mode == "trade" and not trades_the_signals_shares(action_plan, signal_symbol)
+    if needs_one:
+        return "required" if acknowledgement is None else None
+    return None if acknowledgement is None else "not_applicable"
 
 
 class UntestedTradedAssetWarning(BaseModel):

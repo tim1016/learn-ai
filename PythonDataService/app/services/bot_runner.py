@@ -174,6 +174,7 @@ from app.services.bot_runner_errors import (
     UnknownBotError,
     raise_run_refusal,
     require_start_configuration,
+    require_traded_asset_acknowledgement,
 )
 from app.services.bot_runtime import (
     ManagedBot,
@@ -686,6 +687,11 @@ class BotTaskRegistry:
         require_start_configuration(
             carryover_policy,
         )
+        action_plan = alpaca_v1_action_plan(traded_symbol or symbol)
+        # Execution only: a preview comes before the owner accepts.
+        require_traded_asset_acknowledgement(
+            mode=mode, action_plan=action_plan, signal_symbol=symbol, acknowledgement=traded_asset_acknowledgement,
+        )
         self._confined_instance_dir(strategy_instance_id)
         request = make_start_request(
             broker=broker,
@@ -697,7 +703,7 @@ class BotTaskRegistry:
             quantity=quantity,
             carryover_policy=carryover_policy,
             evidence_override=evidence_override,
-            action_plan=alpaca_v1_action_plan(traded_symbol or symbol),
+            action_plan=action_plan,
             strategy_params=strategy_params,
             exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,

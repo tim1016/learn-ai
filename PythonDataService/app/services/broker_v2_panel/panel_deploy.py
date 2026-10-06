@@ -53,10 +53,18 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
-from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetWarning
-from app.services.bot_binding_repository import BrokerBotBinding
+from app.schemas.traded_asset_acknowledgement import (
+    AcknowledgementFault,
+    UntestedTradedAssetWarning,
+    traded_asset_acknowledgement_fault,
+)
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_runner import BotRunnerError, BotTaskRegistry, get_bot_task_registry
 from app.services.bot_runner import UnknownBotError as RunnerUnknownBotError
+from app.services.bot_runner_errors import (
+    TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE,
+    TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED,
+)
 from app.services.broker_v2_panel import budget_deploy
 from app.services.broker_v2_panel.bot_end_panel import resolve_deploy_end
 from app.services.broker_v2_panel.deploy_submissions import (
@@ -770,7 +778,7 @@ def _require_alpaca_deploy_request(
         _require_dry_run_deploy_request(view, strategy)
     else:
         _require_broker_deploy_request(view, strategy, request)
-    _refuse_acceptance_of_the_signals_own_asset(request)
+    _refuse_an_acknowledgement_no_one_asked_for(request)
     try:
         resolved = resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
     except ValueError as exc:
@@ -811,39 +819,55 @@ def _untested_traded_asset_warning(request: AlpacaPaperDeployRequest) -> Unteste
     )
 
 
-def _refuse_acceptance_of_the_signals_own_asset(request: AlpacaPaperDeployRequest) -> None:
-    """An acceptance with no untested asset behind it is refused, in every mode (#2912).
+def _acknowledgement_fault(request: AlpacaPaperDeployRequest) -> AcknowledgementFault | None:
+    """The one acknowledgement rule, asked of a Deploy request (#2912)."""
+    return traded_asset_acknowledgement_fault(
+        mode="dry_run" if request.execution_mode == "dry_run" else "trade",
+        action_plan=alpaca_v1_action_plan(request.order_symbol),
+        signal_symbol=request.symbol,
+        acknowledgement=request.traded_asset_acknowledgement,
+    )
 
-    The strategy's evidence is about trading the symbol it listens to, so a
-    bot that trades that symbol has nothing to accept, and a record saying
-    otherwise would be kept with the bot for good.
+
+def _refuse_an_acknowledgement_no_one_asked_for(request: AlpacaPaperDeployRequest) -> None:
+    """An acknowledgement the bot has no use for is refused, at every review and at Deploy (#2912).
+
+    Only a Paper, Live Shadow or Live bot that trades something other than
+    the shares it listens to is asked for one. The record is kept with the
+    bot for good, so a bot that trades its own symbol, or a Dry Run, may not
+    carry one that says the owner accepted what nobody asked them to.
     """
-    if request.traded_asset_acknowledgement is None or request.traded_symbol is not None:
+    if _acknowledgement_fault(request) != "not_applicable":
         return
     raise PanelRunnerError(
-        f"This bot trades {request.symbol}, the symbol it listens to, so it has no untested asset to accept.",
-        detail="The acceptance applies only to a bot that trades another asset than the one it listens to.",
-        next_action="Remove the acceptance and deploy again.",
+        "This bot has no untested traded asset to accept.",
+        detail=(
+            "The acknowledgement is for a Paper, Live Shadow or Live bot that trades something other "
+            "than the shares it listens to. It is kept with the bot for good."
+        ),
+        next_action="Remove the acknowledgement and deploy again.",
         http_status=409,
+        reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_NOT_APPLICABLE,
     )
 
 
 def _require_untested_asset_acceptance(request: AlpacaPaperDeployRequest) -> None:
-    """A Paper, Live Shadow or Live bot that trades another asset needs the owner's written acceptance (#2912).
+    """A Paper, Live Shadow or Live bot that trades something else needs the owner's written acknowledgement (#2912).
 
     Asked at Deploy only. The owner accepts last, above the Deploy button,
     so the money review and the admission preview that come before it ask
-    for nothing. A Dry Run contacts no broker and needs none; one it is given
-    is kept.
+    for nothing. The runner holds the same rule for every start; it is asked
+    here first so the refusal comes before the bot has a name.
     """
-    warning = _untested_traded_asset_warning(request)
-    if warning is None or request.execution_mode == "dry_run" or request.traded_asset_acknowledgement is not None:
+    if _acknowledgement_fault(request) != "required":
         return
+    warning = _untested_traded_asset_warning(request)
     raise PanelRunnerError(
-        f"Accept that this strategy is untested trading {request.traded_symbol} before deploying.",
-        detail=f"{warning.headline} {warning.detail}",
-        next_action="Tick the acceptance and give your reason, or deploy it as a Dry Run.",
+        f"Accept that this strategy is untested trading {request.order_symbol} before deploying.",
+        detail="" if warning is None else f"{warning.headline} {warning.detail}",
+        next_action="Tick the acknowledgement and give your reason, or deploy it as a Dry Run.",
         http_status=409,
+        reason_code=TRADED_ASSET_ACKNOWLEDGEMENT_REQUIRED,
     )
 
 
