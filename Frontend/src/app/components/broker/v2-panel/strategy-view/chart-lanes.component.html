@@ -1,8 +1,18 @@
 @if (lanes().length > 0) {
   <div class="chart-lanes" role="group" aria-label="The run’s events on the chart’s clock">
     @for (lane of lanes(); track lane.key) {
-      <div class="chart-lanes__row" role="list" [attr.aria-label]="lane.title" [attr.data-lane]="lane.key">
-        <span class="chart-lanes__title" aria-hidden="true">{{ lane.title }}</span>
+      <div
+        class="chart-lanes__row"
+        role="list"
+        [attr.aria-label]="lane.symbol ? lane.title + ' ' + lane.symbol : lane.title"
+        [attr.data-lane]="lane.key"
+      >
+        <span class="chart-lanes__title" aria-hidden="true">
+          {{ lane.title }}
+          @if (lane.symbol; as symbol) {
+            <app-asset-identity [symbol]="symbol" size="xs" [logo]="false" [showTitle]="false" />
+          }
+        </span>
         @for (mark of lane.marks; track mark.key) {
           <span
             role="listitem"

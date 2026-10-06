@@ -79,10 +79,10 @@
 
     <div class="tape-readout" aria-live="polite">
       <span>{{ activeBars().length }} candle{{ activeBars().length === 1 ? '' : 's' }}</span>
-      @if (visibleFillCount() === activeMarkers().length) {
-        <span>{{ activeMarkers().length }} fill{{ activeMarkers().length === 1 ? '' : 's' }}</span>
+      @if (visibleFillCount() === fillCount()) {
+        <span>{{ fillCount() }} fill{{ fillCount() === 1 ? '' : 's' }}</span>
       } @else {
-        <span>{{ visibleFillCount() }} plotted / {{ activeMarkers().length }} fills</span>
+        <span>{{ visibleFillCount() }} plotted / {{ fillCount() }} fills</span>
       }
       @if (activePane() === 'live' && liveSource()) {
         <span>{{ liveSource() ?? '' | receiptLabel }}</span>
@@ -168,6 +168,24 @@
             </div>
           }
         }
+        @if (positionFeedNotice(); as feed) {
+          <section
+            class="feed-notice"
+            [class.feed-notice--down]="feed.attention_required"
+            [attr.role]="feed.attention_required ? 'alert' : 'status'"
+            aria-labelledby="position-feed-notice-title"
+            data-testid="position-feed-notice"
+          >
+            <strong id="position-feed-notice-title">{{ feed.headline }}</strong>
+            <span>{{ feed.explanation }}</span>
+            @if (feed.next_step; as nextStep) {
+              <span>{{ nextStep }}</span>
+            }
+            @if (feed.last_error; as lastError) {
+              <code class="feed-notice__meta">{{ lastError }}</code>
+            }
+          </section>
+        }
         @for (notice of liveNotices(); track notice.code) {
           <div class="overlay-notice" role="status" aria-live="polite">
             {{ notice.message }}
@@ -193,6 +211,15 @@
               </li>
             }
           </ul>
+        }
+        @if (activePosition(); as position) {
+          <p class="chart-position-caption">
+            <app-asset-identity [symbol]="position.symbol" size="xs" [logo]="false" />
+            <strong>{{ position.heading }}</strong>
+            @for (notice of position.overlay_notices; track notice.code) {
+              <span>{{ notice.message }}</span>
+            }
+          </p>
         }
         @if (activePane() === 'polygon' && historyUnavailable()) {
           <div class="chart-state" role="status">

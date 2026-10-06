@@ -356,6 +356,25 @@
 
 .chart-indicator-legend__title { color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
 
+/* Over the lowest pane, which is the position pane's. */
+.chart-position-caption {
+  position: absolute;
+  z-index: 1;
+  bottom: 2.4rem;
+  left: var(--space-2);
+  display: flex;
+  max-width: calc(100% - var(--space-4));
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  color: var(--text-secondary);
+  font: 600 var(--fs-xxs)/1.2 var(--font-mono);
+  pointer-events: none;
+
+  strong { color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
+}
+
 .chart-state {
   position: absolute;
   z-index: 2;

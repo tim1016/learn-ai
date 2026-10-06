@@ -502,7 +502,7 @@ async def test_live_snapshot_serves_the_same_headline_as_the_panel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The snapshot no longer rewrites the headline, so it and ``/panel`` agree."""
-    panel = SimpleNamespace(symbol="SPY", market_pulse=object())
+    panel = SimpleNamespace(symbol="SPY", traded=None, market_pulse=object())
 
     async def panel_with_fills(*_args: object, **_kwargs: object):
         return panel, [], ()

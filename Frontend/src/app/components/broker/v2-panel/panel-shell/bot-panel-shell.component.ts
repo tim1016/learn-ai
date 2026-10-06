@@ -628,6 +628,7 @@ export class BotPanelShellComponent {
       fills: panel.run_fills ?? [],
       workingOrders: panel.working_orders,
       feedEvents: this.feedContinuity().events,
+      tradedFeed: panel.traded_feed_lane ?? null,
     };
   });
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from decimal import Decimal
-from typing import Literal
+from typing import Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
@@ -31,6 +31,7 @@ from app.broker.v2panel.vocabulary import (
 )
 from app.engine.strategy.registry import strategy_experimental_notice
 from app.schemas.account_authority import SIMULATED_AUTHORITY_KINDS, AuthorityKind
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.broker_bots import BotStatusView
@@ -45,6 +46,8 @@ from app.schemas.broker_v2_panel import (
     PanelAction,
     RecentDecisionView,
     RecentFillView,
+    TradedFeedLaneEvent,
+    TradedFeedLaneView,
     TransactionRail,
     WorkingOrderView,
 )
@@ -77,6 +80,12 @@ from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
     derive_stations,
     transaction_refs_for_bot,
+)
+from app.services.pricing_bar_stream import (
+    PRICING_BAR_CONFLICT,
+    PRICING_BAR_LATE,
+    PRICING_BAR_NO_TRADE,
+    PRICING_FEED_UNHEALTHY,
 )
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
@@ -255,6 +264,41 @@ def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingO
         for entry in latest_by_ref.values()
         if entry.order is not None
     ]
+
+
+_TRADED_FEED_LANE_STATES: Final[dict[str, Literal["no_trade", "late", "unhealthy", "conflict"]]] = {
+    PRICING_BAR_NO_TRADE: "no_trade",
+    PRICING_BAR_LATE: "late",
+    PRICING_FEED_UNHEALTHY: "unhealthy",
+    PRICING_BAR_CONFLICT: "conflict",
+}
+
+
+def traded_feed_lane(
+    traded: TradedInstrumentView | None, decisions: Sequence[RecentDecisionView]
+) -> TradedFeedLaneView | None:
+    """The lane for what a bot trades, when that is not what it listens to (#2915).
+
+    One event per entry the traded asset's price feed refused, at the close
+    of the bar it was decided on. It is built from the decisions the panel
+    already lists, so it reaches as far back as they do.
+    """
+    if traded is None:
+        return None
+    return TradedFeedLaneView(
+        title="Market data",
+        symbol=traded.symbol,
+        events=[
+            TradedFeedLaneEvent(
+                at_ms=decision.decision_bar_close_ms or decision.recorded_at_ms,
+                state=_TRADED_FEED_LANE_STATES[decision.reason_code],
+                reason_code=decision.reason_code,
+                sentence=decision.refusal_reason,
+            )
+            for decision in decisions
+            if decision.reason_code in _TRADED_FEED_LANE_STATES
+        ],
+    )
 
 
 def _recent_decision_views(
@@ -815,6 +859,7 @@ def build_panel(
         revision=revision,
         market_pulse=market_pulse,
         traded_market_pulse=traded_market_pulse,
+        traded_feed_lane=traded_feed_lane(status.traded, decision_views),
         feed_continuity=build_feed_continuity(
             feed_continuity_events,
             run_id=(

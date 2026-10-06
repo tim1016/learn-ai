@@ -38,9 +38,11 @@ import type {
   ChartHistoryTimeframe,
   ChartLiveResolution,
   ChartOverlayNoticeView,
+  ChartPositionPane,
   ChartSource,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
@@ -59,6 +61,7 @@ import { ChartLanesComponent } from '../strategy-view/chart-lanes.component';
 import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-overlay';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import { chartIndicatorCatalog } from './chart-indicator-catalog';
+import { positionRuns, type PositionRun } from './dual-pane-chart-position';
 import {
   type SelectedChartIndicator,
   resultBelongsToIndicator,
@@ -220,6 +223,7 @@ export const POLYGON_TIMEFRAMES: readonly PolygonTimeframeOption[] = [
   { value: '1d', label: '1D' },
 ];
 export const LIVE_RESOLUTIONS: readonly ChartLiveResolution[] = ['5s', '1m'];
+const POSITION_LINE_COLOR = '#c4b5fd';
 export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>(
   'DUAL_PANE_CHART_FACTORY',
   { providedIn: 'root', factory: () => createAppChart },
@@ -261,6 +265,7 @@ function barCoordinateScale(timeScale: ITimeScaleApi<Time>, bars: readonly Chart
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AssetIdentityComponent,
     ChartIndicatorRailComponent,
     ChartLanesComponent,
     PanelInstrumentQuoteComponent,
@@ -299,6 +304,10 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
   readonly histIndicatorBarBudget = input(0);
   readonly histIndicatorBarBudgetSatisfied = input(true);
+  /** What the bot trades, on each tape's own bars, when that is not what it
+   * listens to (#2915): a pane under the indicators, sharing the time axis. */
+  readonly livePosition = input<ChartPositionPane | null>(null);
+  readonly histPosition = input<ChartPositionPane | null>(null);
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
@@ -346,6 +355,12 @@ export class DualPaneChartComponent implements AfterViewInit {
     return feed?.show_notice ? feed : null;
   });
   protected readonly liveFeedDown = computed(() => this.liveFeed()?.attention_required === true);
+  /** The traded asset's own bar line (#2915): it can stop while the chart's line draws. */
+  protected readonly positionFeedNotice = computed<ChartFeedView | null>(() => {
+    if (this.activePane() !== 'live') return null;
+    const feed = this.livePosition()?.feed;
+    return feed?.show_notice ? feed : null;
+  });
 
   protected readonly liveSource = computed<ChartSource | null>(() => {
     const bars = this.liveBars();
@@ -370,12 +385,25 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (this.activePane() === 'live') return this.liveFillMarkers();
     return this.historyMatchesSelection() ? this.histFillMarkers() : [];
   });
+  protected readonly activePosition = computed(() => {
+    if (this.activePane() === 'live') return this.livePosition();
+    return this.historyMatchesSelection() ? this.histPosition() : null;
+  });
   protected readonly activeLoading = computed(() =>
     this.activePane() === 'live' ? this.liveLoading() : this.historyLoading(),
   );
-  protected readonly visibleFillCount = computed(() =>
-    countPlottedFills(this.activeMarkers(), this.activeBars()),
+  /** Fills on the candles and on the position pane, which draws the traded asset's (#2915). */
+  protected readonly fillCount = computed(
+    () => this.activeMarkers().length + (this.activePosition()?.fill_markers.length ?? 0),
   );
+  protected readonly visibleFillCount = computed(() => {
+    const bars = this.activeBars();
+    const position = this.activePosition();
+    const onPosition = position === null
+      ? 0
+      : positionRuns(position, bars).reduce((sum, run) => sum + countPlottedFills(position.fill_markers, run.bars), 0);
+    return countPlottedFills(this.activeMarkers(), bars) + onPosition;
+  });
   protected readonly activeIndicatorKeys = computed(() =>
     this.selectedIndicators().map((indicator) => indicator.name),
   );
@@ -478,6 +506,7 @@ export class DualPaneChartComponent implements AfterViewInit {
       this.activeBars(),
       this.selectedIndicators(),
       this.indicatorColorOverrides(),
+      this.activePosition(),
     ));
     effect(() => {
       this.timeZone();
@@ -512,6 +541,7 @@ export class DualPaneChartComponent implements AfterViewInit {
       this.activeBars(),
       this.selectedIndicators(),
       this.indicatorColorOverrides(),
+      this.activePosition(),
     );
     this.destroyRef.onDestroy(() => this.cleanup());
   }
@@ -670,11 +700,13 @@ export class DualPaneChartComponent implements AfterViewInit {
     });
   }
 
+  /** The panes under the candles: each indicator's, then the position pane, which stays lowest. */
   private renderIndicators(
     results: readonly ChartIndicatorResult[],
     bars: readonly ChartBar[],
     selected: readonly SelectedChartIndicator[],
     colorOverrides: Readonly<Record<string, string>>,
+    position: ChartPositionPane | null,
   ): void {
     if (!this.chart) return;
     for (const rendered of this.indicatorSeries) this.chart.removeSeries(rendered);
@@ -716,5 +748,30 @@ export class DualPaneChartComponent implements AfterViewInit {
       }
       this.indicatorSeries.push(rendered);
     }
+    if (position !== null) this.renderPosition(position, bars, paneIndices.size + 1);
+  }
+
+  /**
+   * One line per unbroken stretch of the traded asset's price, so a bar with
+   * no price stays a gap. With no price at all one empty line still holds the
+   * pane, so its caption never sits over another pane.
+   */
+  private renderPosition(position: ChartPositionPane, bars: readonly ChartBar[], paneIndex: number): void {
+    const chart = this.chart;
+    if (!chart) return;
+    const runs = positionRuns(position, bars);
+    const stretches: readonly PositionRun[] = runs.length > 0 ? runs : [{ points: [], bars: [] }];
+    stretches.forEach((run, index) => {
+      const line = chart.addSeries(LineSeries, {
+        color: POSITION_LINE_COLOR,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: index === stretches.length - 1,
+        crosshairMarkerVisible: false,
+      }, paneIndex);
+      line.setData([...run.points]);
+      createSeriesMarkers(line, toSeriesMarkers(position.fill_markers, run.bars));
+      this.indicatorSeries.push(line);
+    });
   }
 }

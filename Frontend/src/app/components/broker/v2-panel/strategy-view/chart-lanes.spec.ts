@@ -25,7 +25,7 @@ function minuteOf(ms: number): string {
 }
 
 function context(overrides: Partial<StrategyRunContext> = {}): StrategyRunContext {
-  return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], ...overrides };
+  return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], tradedFeed: null, ...overrides };
 }
 
 function lane(lanes: readonly ChartLane[], key: LaneKey): ChartLane {
@@ -38,6 +38,27 @@ describe('chartLanes (#2794)', () => {
   it('draws four lanes in order: decisions, orders, market data, the bot', () => {
     expect(chartLanes(fakeStrategyView(), context()).map(({ title }) => title))
       .toEqual(['Decisions', 'Orders', 'Market data', 'Bot']);
+  });
+
+  it('adds a lane for the asset a bot trades, where each kind of refusal looks different (#2915)', () => {
+    const lanes = chartLanes(fakeStrategyView(), context({
+      tradedFeed: {
+        title: 'Market data',
+        symbol: 'QQQ',
+        events: [
+          { at_ms: barCloseMs(2), state: 'no_trade', reason_code: 'PRICING_BAR_NO_TRADE', sentence: 'QQQ had no trade in this minute.' },
+          { at_ms: barCloseMs(3), state: 'late', reason_code: 'PRICING_BAR_LATE', sentence: null },
+          { at_ms: barCloseMs(3) + STRATEGY_BAR_MS, state: 'unhealthy', reason_code: 'PRICING_FEED_UNHEALTHY', sentence: null },
+        ],
+      },
+    }));
+
+    expect(lanes.map(({ key }) => key)).toEqual(['decisions', 'orders', 'market', 'traded', 'bot']);
+    const traded = lane(lanes, 'traded');
+    expect(traded.symbol).toBe('QQQ');
+    expect(traded.marks.map(({ atMs }) => atMs)).toEqual([barCloseMs(2), barCloseMs(3), barCloseMs(3) + STRATEGY_BAR_MS]);
+    expect(new Set(traded.marks.map(({ glyph, tone }) => `${glyph}/${tone}`)).size).toBe(3);
+    expect(traded.marks[0].label).toContain('QQQ had no trade in this minute.');
   });
 
   it('marks every decision bar at its close, the before-start ones hollow in the backend’s words', () => {

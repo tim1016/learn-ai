@@ -5602,6 +5602,16 @@
               }
             ]
           },
+          "traded_feed_lane": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedFeedLaneView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "traded_market_pulse": {
             "anyOf": [
               {
@@ -8285,6 +8295,16 @@
             "title": "Overlay Notices",
             "type": "array"
           },
+          "position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartPositionPane"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
             "type": "string"
@@ -8649,6 +8669,16 @@
             "title": "Overlay Notices",
             "type": "array"
           },
+          "position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartPositionPane"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "resolution": {
             "enum": [
               "5s",
@@ -8711,6 +8741,91 @@
           "source"
         ],
         "title": "ChartOverlayNoticeView",
+        "type": "object"
+      },
+      "ChartPositionPane": {
+        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\n``points`` has one entry per bar of the chart it comes with, in the same\norder, so the pane shares the chart's time axis exactly. ``kind`` says\nwhat a value is: ``price`` is the traded stock's or ETF's own bar close.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
+        "properties": {
+          "feed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartFeedView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fill_markers": {
+            "items": {
+              "$ref": "#/components/schemas/ChartFillMarker"
+            },
+            "title": "Fill Markers",
+            "type": "array"
+          },
+          "heading": {
+            "title": "Heading",
+            "type": "string"
+          },
+          "kind": {
+            "const": "price",
+            "title": "Kind"
+          },
+          "overlay_notices": {
+            "items": {
+              "$ref": "#/components/schemas/ChartOverlayNoticeView"
+            },
+            "title": "Overlay Notices",
+            "type": "array"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ChartPositionPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "symbol",
+          "heading",
+          "points",
+          "fill_markers"
+        ],
+        "title": "ChartPositionPane",
+        "type": "object"
+      },
+      "ChartPositionPoint": {
+        "description": "What the position pane draws on one of the chart's own bars.",
+        "properties": {
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "start_ms",
+          "value"
+        ],
+        "title": "ChartPositionPoint",
         "type": "object"
       },
       "ChartQualityReport": {
@@ -45639,6 +45754,77 @@
           "observed_at_ms"
         ],
         "title": "TopOfBookQuote",
+        "type": "object"
+      },
+      "TradedFeedLaneEvent": {
+        "description": "One entry refused because the traded asset had no usable price for its minute.",
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentence"
+          },
+          "state": {
+            "enum": [
+              "no_trade",
+              "late",
+              "unhealthy",
+              "conflict"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at_ms",
+          "state",
+          "reason_code",
+          "sentence"
+        ],
+        "title": "TradedFeedLaneEvent",
+        "type": "object"
+      },
+      "TradedFeedLaneView": {
+        "description": "The traded asset's lane under a bot's chart (#2915).",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TradedFeedLaneEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "symbol",
+          "events"
+        ],
+        "title": "TradedFeedLaneView",
         "type": "object"
       },
       "TradedInstrumentView": {

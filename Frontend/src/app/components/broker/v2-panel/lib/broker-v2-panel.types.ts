@@ -151,6 +151,10 @@ export type ChartLiveResponse = components['schemas']['ChartLiveResponse'];
 /** The LIVE chart's own IBKR bar line, separate from the bot's feed (#2355). */
 export type ChartFeedView = components['schemas']['ChartFeedView'];
 export type ChartHistoryResponse = components['schemas']['ChartHistoryResponse'];
+/** The pane under a bot's chart for what it trades, when that is not what it listens to (#2915). */
+export type ChartPositionPane = components['schemas']['ChartPositionPane'];
+/** The traded asset's lane under a bot's chart: the entries its price feed refused (#2915). */
+export type TradedFeedLaneView = components['schemas']['TradedFeedLaneView'];
 
 // ── Strategy view (#2639) ────────────────────────────────────────────────────
 // The bot's own decision bars, values, checks and Dark Bright Gate results in

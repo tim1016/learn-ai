@@ -21,6 +21,9 @@
   font-size: var(--fs-xxs);
   line-height: 0.75rem;
   white-space: nowrap;
+
+  // A lane about another asset names it in the title's own type.
+  app-asset-identity { --asset-identity-symbol-color: currentColor; }
 }
 
 .chart-lanes__mark {
