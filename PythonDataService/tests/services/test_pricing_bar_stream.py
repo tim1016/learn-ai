@@ -283,6 +283,25 @@ async def test_a_simulated_sell_with_no_price_of_its_minute_takes_the_newest_ear
     assert priced is not None and (priced.end_ms, priced.close) == (_T0, Decimal("40.10"))
 
 
+async def test_a_simulated_sell_passes_over_an_earlier_minute_delivered_with_two_prices(
+    ledger: SourceBarLedger,
+) -> None:
+    """Neither price of that minute may price an order, so the sale takes the trade before it."""
+    feed = _Subscriptions([
+        _qqq(_T0, close="40.10"),
+        _qqq(_T0 + _MINUTE_MS, close="40.50"),
+        _qqq(_T0 + _MINUTE_MS, close="41.00", minutes=2),
+        _qqq(_T0 + 2 * _MINUTE_MS, close="40.70", volume=0),
+    ])
+    async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=2_000) as stream:
+        refused = await stream.bar_for_entry(_T0 + _MINUTE_MS, time_left_ms=20_000)
+        await stream.bar_for_entry(_T0 + 2 * _MINUTE_MS, time_left_ms=20_000)
+        priced = await stream.bar_for_simulated_exit(_T0 + 3 * _MINUTE_MS)
+
+    assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_BAR_CONFLICT"
+    assert priced is not None and (priced.end_ms, priced.close) == (_T0, Decimal("40.10"))
+
+
 async def test_a_simulated_sell_has_no_price_only_when_the_asset_never_traded(ledger: SourceBarLedger) -> None:
     async with PricingBarStream(_Subscriptions([]), ledger, symbol="QQQ", run_id="run-1", wait_ms=0) as stream:
         assert await stream.bar_for_simulated_exit(_T0) is None

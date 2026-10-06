@@ -1252,6 +1252,7 @@ class SqliteAlpacaClerkFacade:
                 entry.instrument.underlying,
                 purpose=purpose,
                 synthesized=self.binds_decision_bar,
+                exit_sells=entry.position == "long",
                 decision_bar=retained_source_bar,
                 pricing_bar=pricing_bar,
             )
@@ -2104,6 +2105,7 @@ def _order_pricing_bar(
     *,
     purpose: EffectPurpose,
     synthesized: bool,
+    exit_sells: bool,
     decision_bar: RetainedSourceBar | None,
     pricing_bar: RetainedSourceBar | None,
 ) -> RetainedSourceBar | LegRefusal | None:
@@ -2131,11 +2133,13 @@ def _order_pricing_bar(
     synthesized fill of either purpose is a bar's close, so those are refused
     when no bar of the order's own can price them.
 
-    A synthesized EXIT alone may be priced from an earlier minute. When the
-    traded instrument has no bar for the decision's minute its runner offers
-    the newest earlier one, and the fill carries that bar's own time beside
-    the decision's. That price fills a market sale only: the caller refuses
-    the sale once a market order can no longer be sent.
+    A synthesized EXIT that sells is the one order an earlier minute may
+    price. When the traded instrument has no bar for the decision's minute its
+    runner offers the newest earlier one, and the fill carries that bar's own
+    time beside the decision's. That price fills a market sale only: the
+    caller refuses the sale once a market order can no longer be sent. An
+    older price never buys, so the EXIT of a short position (``exit_sells``
+    false), which buys to cover, is held to its own minute like an ENTER.
     """
     if decision_bar is None:
         return None
@@ -2146,7 +2150,7 @@ def _order_pricing_bar(
     elif not _same_symbol(pricing_bar.symbol, traded_symbol):
         unpriced = PRICING_BAR_MISMATCH
     elif pricing_bar.end_ms == decision_bar.end_ms or (
-        purpose is EffectPurpose.EXIT and synthesized and pricing_bar.end_ms < decision_bar.end_ms
+        purpose is EffectPurpose.EXIT and exit_sells and synthesized and pricing_bar.end_ms < decision_bar.end_ms
     ):
         return pricing_bar
     else:

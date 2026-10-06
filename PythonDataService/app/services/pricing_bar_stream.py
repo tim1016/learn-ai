@@ -153,15 +153,22 @@ class PricingBarStream:
 
         Its own minute's bar when that arrives within this stream's wait and
         has a trade in it. Otherwise the newest earlier bar that has one,
-        whose own close time says how old the price is. ``None`` only when the
-        traded instrument has never traded on this stream.
+        whose own close time says how old the price is. A minute delivered
+        with two different prices is no price for a sale either, so it is
+        passed over for the one before it. ``None`` only when the traded
+        instrument has no such bar on this stream.
         """
         own = await self._arrival(close_ms, wait_ms=self._wait_ms)
         if isinstance(own, RetainedSourceBar) and own.volume > 0:
             return own
-        return self._ledger.latest_for_symbol(
-            self._symbol, provider=self._feed.feed_id, at_or_before_ms=close_ms - 1, traded_only=True
-        )
+        before_ms = close_ms
+        while True:
+            older = self._ledger.latest_for_symbol(
+                self._symbol, provider=self._feed.feed_id, at_or_before_ms=before_ms - 1, traded_only=True
+            )
+            if older is None or older.end_ms not in self._conflicted:
+                return older
+            before_ms = older.end_ms
 
     async def bar_for_entry(self, close_ms: int, *, time_left_ms: int) -> RetainedSourceBar | PricingRefusal:
         """The pricing bar for an ENTER decided on the bar closing at ``close_ms``, or why there is none.

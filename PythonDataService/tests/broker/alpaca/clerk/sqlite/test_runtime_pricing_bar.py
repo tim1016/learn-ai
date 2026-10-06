@@ -24,12 +24,12 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, LIVE_ENVELOPE_UNOBSERVED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.program_leg import PRICING_BAR_MISMATCH, ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.marketdata.feed import MarketDataBar
 from app.schemas.deployment_budget import DeployBudgetConsent
@@ -419,6 +419,23 @@ async def test_an_older_price_never_buys_on_an_account_that_fills_its_own_orders
     finally:
         repo.close()
         evidence.close()
+
+
+@pytest.mark.parametrize(
+    ("exit_sells", "priced"), [(True, True), (False, False)], ids=["closes-a-long", "covers-a-short"],
+)
+def test_an_older_price_fills_only_an_exit_that_sells(exit_sells: bool, priced: bool) -> None:
+    """A short position's EXIT buys to cover, and an older price never buys."""
+    decision = _retained(SIGNAL, close="100", end_ms=NOON, account_id="shadow-evidence:any")
+    older = _retained(TRADED, close="40", end_ms=NOON - 3 * MINUTE_MS, account_id="shadow-evidence:any")
+
+    resolved = _order_pricing_bar(
+        TRADED, purpose=EffectPurpose.EXIT, synthesized=True, exit_sells=exit_sells,
+        decision_bar=decision, pricing_bar=older,
+    )
+
+    assert (resolved is older) is priced
+    assert priced or resolved is PRICING_BAR_MISMATCH
 
 
 async def test_a_sale_that_reaches_the_clerk_after_the_close_is_not_filled_at_an_older_price(tmp_path: Path) -> None:
