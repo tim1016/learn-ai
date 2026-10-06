@@ -26,7 +26,6 @@ import asyncpg
 
 from app.research.golden_search.models import (
     CommandRecord,
-    EvaluationPage,
     EvaluationRecord,
     NewStudy,
     StudyRow,
@@ -44,12 +43,16 @@ _STUDY_COLUMNS = """
     exam_locked, decision_json::text AS decision_json, budget_cap, consumed_evaluations, cache_hits,
     invalid_points, incomplete, failure_reason, hidden, run_to_compare
 """
-_EVALUATION_COLUMNS = """
+# Every evaluation column but the detail payload and the curve arrays.
+_RUN_FIELDS = """
     study_id, evaluation_key, point_hash, point_json::text AS point_json, window_start_ms, window_end_ms,
     scenario, detail, stage, fold_index, status, attempt, retries, total_trades, net_profit, total_return_pct,
-    sharpe_ratio, max_drawdown_pct, win_rate, error, detail_json::text AS detail_json, created_at_ms,
-    completed_at_ms, equity_close_ms IS NOT NULL AS has_curve
+    sharpe_ratio, max_drawdown_pct, win_rate, error, created_at_ms, completed_at_ms,
+    equity_close_ms IS NOT NULL AS has_curve
 """
+_EVALUATION_COLUMNS = f"{_RUN_FIELDS}, detail_json::text AS detail_json"
+# A run as the runs list reads it: a list of thousands never opens a detail payload.
+_RUN_COLUMNS = f"{_RUN_FIELDS}, NULL::text AS detail_json"
 # Plain columns a transition may set; JSON columns are handled by name below.
 _UPDATABLE_COLUMNS = frozenset(
     {
@@ -947,10 +950,6 @@ async def find_detail_evaluation(
     return _evaluation(row) if row is not None else None
 
 
-# A run as the runs list reads it: every column but the detail payload, which a list of thousands never opens.
-_RUN_COLUMNS = _EVALUATION_COLUMNS.replace("detail_json::text AS detail_json", "NULL::text AS detail_json")
-
-
 async def list_runs(conn: asyncpg.Connection, study_id: str) -> list[EvaluationRecord]:
     """Every evaluation of a study, in the order they were first asked for, without its detail payload."""
     rows = await conn.fetch(
@@ -1046,32 +1045,3 @@ async def consumed_outside_evaluator(conn: asyncpg.Connection, study_id: str, st
         step,
     )
     return int(value or 0)
-
-
-async def list_evaluations(
-    conn: asyncpg.Connection,
-    study_id: str,
-    *,
-    stage: str | None = None,
-    fold_index: int | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> EvaluationPage:
-    if page < 1 or not 1 <= page_size <= 500:
-        raise ValueError("page must be positive and page_size between 1 and 500")
-    where = "study_id = $1 AND ($2::text IS NULL OR stage = $2) AND ($3::int IS NULL OR fold_index = $3)"
-    total = await conn.fetchval(f"SELECT COUNT(*) FROM research_golden_search_evaluations WHERE {where}", study_id, stage, fold_index)
-    rows = await conn.fetch(
-        f"""
-        SELECT {_EVALUATION_COLUMNS} FROM research_golden_search_evaluations
-         WHERE {where}
-         ORDER BY created_at_ms, evaluation_key
-         LIMIT $4 OFFSET $5
-        """,
-        study_id,
-        stage,
-        fold_index,
-        page_size,
-        (page - 1) * page_size,
-    )
-    return EvaluationPage(total=int(total or 0), page=page, page_size=page_size, rows=tuple(_evaluation(row) for row in rows))

@@ -167,8 +167,7 @@ export type EvidenceScope = Schemas['GoldenSearchEvidenceScope'];
 
 /**
  * One candidate on the development scope. `guidance` comes from a closed copy
- * map keyed by its situation; `params_sentence` is Python-authored; the
- * incumbent is not `exam_eligible` (keeping it needs no final test).
+ * map keyed by its situation; `params_sentence` is Python-authored.
  */
 export type EvidenceCandidate = Omit<Schemas['GoldenSearchEvidenceCandidate'], 'point'> & { point: Point };
 /** `incomplete` when the budget stopped the stage before every candidate's evidence ran. */
@@ -209,8 +208,8 @@ export type StudyScope = Schemas['GoldenSearchScope'];
 
 /**
  * One study as the workbench reads it. `protocol` is the frozen plan echo;
- * `exposure_preview` is what opening the final test would record, while a
- * candidate is chosen (null otherwise).
+ * `exposure_preview` is what opening the final test would record, while the
+ * candidates are compared (null otherwise).
  */
 export type StudyDetail = Omit<Schemas['GoldenSearchStudyDetail'], 'protocol' | 'results' | 'action_refusals'> & {
   protocol: ProtocolRequest;
@@ -266,15 +265,6 @@ export interface StudyListFilters {
   limit?: number;
 }
 
-export interface EvaluationQuery {
-  stage?: string;
-  fold_index?: number;
-  page: number;
-  page_size: number;
-}
-
-export type EvaluationRow = Omit<Schemas['GoldenSearchEvaluationRow'], 'point'> & { point: Point };
-export type EvaluationPage = Omit<Schemas['GoldenSearchEvaluationPage'], 'rows'> & { rows: EvaluationRow[] };
 
 export type DailyEquityPoint = Schemas['GoldenSearchEquityPoint'];
 export type DrawdownPoint = Schemas['GoldenSearchDrawdownPoint'];
@@ -328,26 +318,28 @@ export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
 export type RunGroupKey = Schemas['GoldenSearchRunGroup']['key'];
 export type RunGroup = Schemas['GoldenSearchRunGroup'];
 /** One engine run of a study (#2930), under the step that first asked for it. */
-export type StudyRun = Omit<Schemas['GoldenSearchRun'], 'point'> & { point: Point };
-export type RunsPage = Omit<Schemas['GoldenSearchRunsPage'], 'rows'> & { rows: StudyRun[] };
-export const RUN_SORTS = ['recorded', 'total_return_pct', 'sharpe_ratio', 'max_drawdown_pct', 'total_trades', 'net_profit'] as const;
-export type RunSort = (typeof RUN_SORTS)[number];
+export type StudyRun = Schemas['GoldenSearchRun'];
+export type RunsPage = Schemas['GoldenSearchRunsPage'];
+/** The order of a page of runs: as recorded, or by a measure. */
+export type RunSort = RunsPage['sort'];
 export interface RunsQuery {
   group: RunGroupKey | null;
+  /** One fold of the fold groups; null for every fold. */
+  fold_index: number | null;
   sort: RunSort;
   descending: boolean;
   page: number;
   page_size: number;
 }
-/** One run's daily curve as parallel lists over its session closes; `drawdown` is null when its peak never rose above 0. */
+/** One run's daily curve as parallel lists over its session closes; `drawdown` and `deepest_drawdown` are null when its peak never rose above 0. */
 export type RunCurve = Schemas['GoldenSearchRunCurve'];
 /** The runs one step draws together: a search's scored points, the folds' tests, or one candidate with its stresses and neighbors. */
 export type CurveSetKey = 'search' | 'recent' | 'fold_tests' | 'candidate';
 /** How a step draws a line: the set's chosen settings, the incumbent, a candidate's own run, a stress or neighbor of it, or one of a search's other points. */
 export type LineRole = Schemas['GoldenSearchCurveLine']['role'];
-export type CurveLine = Omit<Schemas['GoldenSearchCurveLine'], 'run'> & { run: StudyRun };
-/** `left_out` runs had a curve the read's cap did not return; `not_recorded` runs kept none. */
-export type CurveSet = Omit<Schemas['GoldenSearchCurveSet'], 'lines'> & { lines: CurveLine[] };
+export type CurveLine = Schemas['GoldenSearchCurveLine'];
+/** `left_out` scored points had a curve the read's cap did not return; `not_recorded` completed runs kept none; `notes` say what the set could not show. */
+export type CurveSet = Schemas['GoldenSearchCurveSet'];
 /** The named runs' curves, and the runs among them that kept none. */
 export type RunCurves = Schemas['GoldenSearchRunCurves'];
 

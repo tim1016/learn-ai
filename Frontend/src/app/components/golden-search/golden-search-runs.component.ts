@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { ButtonModule } from 'primeng/button';
 
@@ -18,7 +18,7 @@ const PAGE_SIZE = 100;
 const MAX_DRAWN = 100;
 
 interface SortColumn {
-  readonly key: Exclude<RunSort, 'recorded' | 'net_profit'>;
+  readonly key: Exclude<RunSort, 'recorded'>;
   readonly label: string;
   /** Which way the first click sorts: the better end first. */
   readonly bestFirstDescending: boolean;
@@ -47,9 +47,11 @@ interface RunRow {
  * candidate, neighbor and stress runs, the final test's — with its settings,
  * window and numbers. The owner filters by what asked for the runs, sorts by
  * a measure, and ticks runs to draw their cumulative return and fall from
- * peak together. A run recorded before runs kept their curve is listed with
- * its numbers and says its curve was not recorded. Ticks survive a change of
- * filter, sort or page; the list is read again when the study records more.
+ * peak together; a fold group can be listed one fold at a time. A run with
+ * no curve is listed with its numbers and says its curve was not recorded.
+ * Ticks survive a change of filter, sort or page; the list is read again
+ * when the study records more. The study page builds this anew for each
+ * study, so nothing here outlives the study it was opened on.
  */
 @Component({
   selector: 'app-golden-search-runs',
@@ -66,6 +68,8 @@ export class GoldenSearchRunsComponent {
   protected readonly columns = COLUMNS;
   protected readonly maxDrawn = MAX_DRAWN;
   protected readonly group = signal<RunGroupKey | null>(null);
+  /** One fold of a fold group; null for every fold. */
+  protected readonly fold = signal<number | null>(null);
   protected readonly sort = signal<RunSort>('recorded');
   protected readonly descending = signal(false);
   protected readonly page = signal(1);
@@ -73,7 +77,14 @@ export class GoldenSearchRunsComponent {
   protected readonly ticked = signal<readonly StudyRun[]>([]);
 
   private readonly studyId = computed(() => this.study().id);
-  private readonly query = computed<RunsQuery>(() => ({ group: this.group(), sort: this.sort(), descending: this.descending(), page: this.page(), page_size: PAGE_SIZE }));
+  private readonly query = computed<RunsQuery>(() => ({
+    group: this.group(),
+    fold_index: this.fold(),
+    sort: this.sort(),
+    descending: this.descending(),
+    page: this.page(),
+    page_size: PAGE_SIZE,
+  }));
   private readonly listing = resource({
     params: () => ({ studyId: this.studyId(), query: this.query() }),
     loader: ({ params }) => this.service.runs(params.studyId, params.query),
@@ -87,18 +98,16 @@ export class GoldenSearchRunsComponent {
   });
 
   /** Each read curve by run; null for a run that kept none. Curves never change once recorded. */
-  private readonly cache = new Map<string, RunCurve | null>();
+  private readonly cache = signal<ReadonlyMap<string, RunCurve | null>>(new Map());
   private readonly curves = resource({
     // Nothing ticked reads nothing.
     params: () => (this.ticked().length === 0 ? undefined : { studyId: this.studyId(), keys: this.ticked().map((run) => run.evaluation_key) }),
     loader: async ({ params }) => {
-      const missing = params.keys.filter((key) => !this.cache.has(key));
-      if (missing.length > 0) {
-        const read = await this.service.runCurves(params.studyId, missing);
-        for (const curve of read.curves) this.cache.set(curve.evaluation_key, curve);
-        for (const key of read.not_recorded) this.cache.set(key, null);
-      }
-      return params.keys.length;
+      const held = this.cache();
+      const missing = params.keys.filter((key) => !held.has(key));
+      if (missing.length === 0) return;
+      const read = await this.service.runCurves(params.studyId, missing);
+      this.cache.update((cache) => new Map([...cache, ...read.curves.map((curve) => [curve.evaluation_key, curve] as const), ...read.not_recorded.map((key) => [key, null] as const)]));
     },
   });
   protected readonly curvesError = computed(() => {
@@ -107,17 +116,18 @@ export class GoldenSearchRunsComponent {
   });
   /** The ticked runs whose curves are read, in the order ticked. */
   private readonly lines = computed<RunLine[]>(() => {
-    // Read again once a load fills the cache.
-    this.curves.value();
+    const cache = this.cache();
     return this.ticked().flatMap((run) => {
-      const curve = this.cache.get(run.evaluation_key);
-      return curve === undefined || curve === null ? [] : [{ key: run.evaluation_key, label: run.label, curve }];
+      const curve = cache.get(run.evaluation_key);
+      return curve === undefined || curve === null ? [] : [{ key: run.evaluation_key, label: run.label, settings: run.params_sentence, curve }];
     });
   });
+  /** Read on its own, so a study poll that changes nothing else does not rebuild the chart. */
+  private readonly ceiling = computed(() => this.study().protocol.policy.max_drawdown_ceiling);
   protected readonly chart = computed(
     () => {
       const lines = this.lines();
-      return lines.length === 0 ? null : runCurvesSpec(lines, this.study().protocol.policy.max_drawdown_ceiling);
+      return lines.length === 0 ? null : runCurvesSpec(lines, this.ceiling());
     },
     { equal: sameChart },
   );
@@ -136,8 +146,14 @@ export class GoldenSearchRunsComponent {
     })),
   );
   protected readonly totalRuns = computed(() => (this.runs()?.groups ?? []).reduce((sum, group) => sum + group.runs, 0));
-  /** Completed runs with no curve: the ones recorded before runs kept it. A failed run never had one to keep. */
+  /** Completed runs with no curve to draw. A failed run never had one to keep. */
   protected readonly withoutCurve = computed(() => (this.runs()?.groups ?? []).reduce((sum, group) => sum + group.completed - group.with_curve, 0));
+  /** The folds to choose between, when the group shown is one of the fold groups. */
+  protected readonly folds = computed(() => {
+    const group = this.group();
+    const count = group === 'fold_training' || group === 'fold_test' ? (this.runs()?.folds ?? 0) : 0;
+    return Array.from({ length: count }, (_, index) => index);
+  });
   protected readonly pages = computed(() => Math.max(1, Math.ceil((this.runs()?.total ?? 0) / PAGE_SIZE)));
   protected readonly firstShown = computed(() => (this.runs()?.total ? (this.page() - 1) * PAGE_SIZE + 1 : 0));
   protected readonly lastShown = computed(() => Math.min(this.page() * PAGE_SIZE, this.runs()?.total ?? 0));
@@ -145,19 +161,6 @@ export class GoldenSearchRunsComponent {
   protected readonly drawable = computed(() => this.rows().filter((row) => row.run.has_curve && !row.ticked).length);
 
   constructor() {
-    // Another study starts from the top: its own groups, no ticks, no curves of the last one.
-    effect(() => {
-      this.studyId();
-      untracked(() => {
-        this.cache.clear();
-        this.shown.set(null);
-        this.ticked.set([]);
-        this.group.set(null);
-        this.sort.set('recorded');
-        this.descending.set(false);
-        this.page.set(1);
-      });
-    });
     effect(() => {
       if (this.listing.hasValue()) this.shown.set(this.listing.value());
     });
@@ -166,6 +169,12 @@ export class GoldenSearchRunsComponent {
 
   protected chooseGroup(group: RunGroupKey | null): void {
     this.group.set(group);
+    this.fold.set(null);
+    this.page.set(1);
+  }
+
+  protected chooseFold(fold: number | null): void {
+    this.fold.set(fold);
     this.page.set(1);
   }
 

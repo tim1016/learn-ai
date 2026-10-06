@@ -5264,23 +5264,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/golden-search/studies/{study_id}/evaluations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Evaluations */
-        get: operations["list_evaluations_api_research_golden_search_studies__study_id__evaluations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/golden-search/studies/{study_id}/runs": {
         parameters: {
             query?: never;
@@ -14059,11 +14042,15 @@ export interface components {
             /** Label */
             label: string;
             /**
+             * Params Sentence
+             * @description The run's settings in words.
+             */
+            params_sentence: string;
+            /**
              * Role
              * @enum {string}
              */
             role: "winner" | "incumbent" | "candidate" | "stress" | "neighbor" | "other";
-            run: components["schemas"]["GoldenSearchRun"];
         };
         /** GoldenSearchCurvePoint */
         GoldenSearchCurvePoint: {
@@ -14090,20 +14077,23 @@ export interface components {
         };
         /** GoldenSearchCurveSet */
         GoldenSearchCurveSet: {
-            /** Capital */
-            capital: number;
             /**
              * Left Out
-             * @description Runs of the set with a curve that this read did not return, past its cap; named lines are never left out.
+             * @description Other scored points with a curve that this read did not return, past its cap; named lines are never left out.
              */
             left_out: number;
             /** Lines */
             lines: components["schemas"]["GoldenSearchCurveLine"][];
             /**
              * Not Recorded
-             * @description Runs of the set that kept no daily equity.
+             * @description Completed runs of the set that kept no daily equity.
              */
             not_recorded: number;
+            /**
+             * Notes
+             * @description What the set could not show, in words, e.g. that the current settings were not run on this window.
+             */
+            notes: string[];
         };
         /** GoldenSearchDecision */
         GoldenSearchDecision: {
@@ -14340,70 +14330,6 @@ export interface components {
             /** Total Max */
             total_max: number;
         };
-        /** GoldenSearchEvaluationPage */
-        GoldenSearchEvaluationPage: {
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-            /** Rows */
-            rows: components["schemas"]["GoldenSearchEvaluationRow"][];
-            /** Total */
-            total: number;
-        };
-        /** GoldenSearchEvaluationRow */
-        GoldenSearchEvaluationRow: {
-            /** Attempt */
-            attempt: number;
-            /** Completed At Ms */
-            completed_at_ms: number | null;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Detail */
-            detail: boolean;
-            /** Error */
-            error: string | null;
-            /** Evaluation Key */
-            evaluation_key: string;
-            /** Fold Index */
-            fold_index: number | null;
-            /**
-             * Has Curve
-             * @description Whether the run kept its daily equity; a run recorded before runs kept it has none.
-             */
-            has_curve: boolean;
-            /** Max Drawdown Pct */
-            max_drawdown_pct: number | null;
-            /** Net Profit */
-            net_profit: number | null;
-            /** Point */
-            point: Record<string, never>;
-            /** Point Hash */
-            point_hash: string;
-            /** Retries */
-            retries: number;
-            /** Scenario */
-            scenario: string;
-            /** Sharpe Ratio */
-            sharpe_ratio: number | null;
-            /** Stage */
-            stage: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "completed" | "failed";
-            /** Total Return Pct */
-            total_return_pct: number | null;
-            /** Total Trades */
-            total_trades: number | null;
-            /** Win Rate */
-            win_rate: number | null;
-            /** Window End Ms */
-            window_end_ms: number;
-            /** Window Start Ms */
-            window_start_ms: number;
-        };
         /** GoldenSearchEvidenceCandidate */
         GoldenSearchEvidenceCandidate: {
             /** Concentration */
@@ -14413,8 +14339,6 @@ export interface components {
             edge_hits: string[];
             /** Eligible */
             eligible: boolean;
-            /** Exam Eligible */
-            exam_eligible: boolean;
             /** Fixed Sentence */
             fixed_sentence: string;
             /** Flags */
@@ -15686,8 +15610,6 @@ export interface components {
              * @enum {string}
              */
             group: "search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final";
-            /** Group Label */
-            group_label: string;
             /** Has Curve */
             has_curve: boolean;
             /**
@@ -15698,16 +15620,10 @@ export interface components {
             /** Max Drawdown Pct */
             max_drawdown_pct: number | null;
             /**
-             * Names
-             * @description Current settings, a fit, or the fold's winner, when the run's settings are one of them.
+             * Params Sentence
+             * @description The run's settings in words; with the label it tells any two runs of a study apart.
              */
-            names: string[];
-            /** Net Profit */
-            net_profit: number | null;
-            /** Params Sentence */
             params_sentence: string;
-            /** Point */
-            point: Record<string, never>;
             /** Scenario */
             scenario: string;
             /** Sharpe Ratio */
@@ -15739,6 +15655,11 @@ export interface components {
              */
             cumulative_return: number[];
             /**
+             * Deepest Drawdown
+             * @description The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.
+             */
+            deepest_drawdown: number | null;
+            /**
              * Drawdown
              * @description Equity over its running peak, less 1; null when the peak never rose above 0.
              */
@@ -15748,8 +15669,6 @@ export interface components {
         };
         /** GoldenSearchRunCurves */
         GoldenSearchRunCurves: {
-            /** Capital */
-            capital: number;
             /** Curves */
             curves: components["schemas"]["GoldenSearchRunCurve"][];
             /**
@@ -15801,7 +15720,7 @@ export interface components {
             runs: number;
             /**
              * With Curve
-             * @description How many kept their daily equity; a completed run without it was recorded before runs kept it.
+             * @description How many kept their daily equity.
              */
             with_curve: number;
         };
@@ -15817,6 +15736,11 @@ export interface components {
         /** GoldenSearchRunsPage */
         GoldenSearchRunsPage: {
             /**
+             * Folds
+             * @description How many walk-forward folds the plan froze; fold runs can be listed one fold at a time.
+             */
+            folds: number;
+            /**
              * Groups
              * @description Every group the study has runs in, whatever the filter.
              */
@@ -15827,6 +15751,12 @@ export interface components {
             page_size: number;
             /** Rows */
             rows: components["schemas"]["GoldenSearchRun"][];
+            /**
+             * Sort
+             * @description The order of the rows: as recorded, or by a measure.
+             * @enum {string}
+             */
+            sort: "recorded" | "total_return_pct" | "sharpe_ratio" | "max_drawdown_pct" | "total_trades";
             /**
              * Total
              * @description Runs matching the group and fold asked for.
@@ -35350,8 +35280,8 @@ export interface operations {
     get_curve_set_api_research_golden_search_studies__study_id__charts_run_curves_get: {
         parameters: {
             query: {
-                /** @description search, recent, fold_tests or candidate. */
-                set: string;
+                /** @description Which step's runs to draw. */
+                set: "search" | "recent" | "fold_tests" | "candidate";
                 /** @description The candidate whose run, stresses and neighbors to draw; for the candidate set only. */
                 candidate?: ("incumbent" | "all_period" | "recent") | null;
             };
@@ -35632,89 +35562,14 @@ export interface operations {
             };
         };
     };
-    list_evaluations_api_research_golden_search_studies__study_id__evaluations_get: {
-        parameters: {
-            query?: {
-                /** @description The step that asked for the evaluation, e.g. search or validation. */
-                stage?: string | null;
-                fold_index?: number | null;
-                page?: number;
-                page_size?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                study_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenSearchEvaluationPage"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
-                };
-            };
-        };
-    };
     list_runs_api_research_golden_search_studies__study_id__runs_get: {
         parameters: {
             query?: {
-                /** @description What asked for the runs, e.g. search, fold_test or final. */
-                group?: string | null;
+                /** @description What asked for the runs. */
+                group?: ("search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final") | null;
                 fold_index?: number | null;
-                /** @description recorded, or the measure to order by. */
-                sort?: string;
+                /** @description The order: as recorded, or by a measure. */
+                sort?: "recorded" | "total_return_pct" | "sharpe_ratio" | "max_drawdown_pct" | "total_trades";
                 descending?: boolean;
                 page?: number;
                 page_size?: number;

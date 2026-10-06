@@ -5,9 +5,11 @@ study's starting capital ``C``:
   * cumulative return ``r_t = E_t / C − 1``;
   * fall from peak ``d_t = E_t / max_{s ≤ t} E_s − 1``
     (``evidence.drawdown_series``); undefined, and read as none, while the
-    peak is not above 0.
-These are the two series a candidate's detail read draws
-(``views.run_detail``). A run recorded before runs kept their curve has
+    peak is not above 0;
+  * deepest fall ``min_t d_t``, at a session close: the engine's
+    ``max_drawdown_pct`` reads every bar and can be deeper.
+The two series are the ones a candidate's detail read draws
+(``views.run_detail``), from the same functions. A run recorded before runs kept their curve has
 none: it reads as not recorded, never as a flat line.
 
 A run belongs to the group of the step that first asked for it; a point a
@@ -19,17 +21,22 @@ later step asks for again is answered from that first run:
                                a base-cost neighbor, or a cost scenario
   final                        a final-test run
 
-A step draws one set of those runs, each line with a role that says how to
-draw it:
-  search, recent   every point the procedure scored: its winner, the
-                   incumbent, and the others
-  fold_tests       each fold's test run of its winner and of the incumbent
+A step draws one set of runs, each line with a role that says how to draw it:
+  search, recent   every point the procedure scored (its group), the winner
+                   among them, and the incumbent on the procedure's window —
+                   from the procedure if it scored it, else from whichever
+                   step did; a note says so when no step did
+  fold_tests       for each fold, its winner's and the incumbent's run on
+                   the fold's test window
   candidate        one candidate's development run, its cost-stress runs,
-                   and its neighbors — the settings one neighbor step either
-                   side on each searched knob (``grid_procedure.
-                   neighbor_probes``), wherever they were first scored
-A set returns at most ``MAX_SET_CURVES`` lines: every named line, then the
-others in recorded order; the rest are counted, never dropped silently.
+                   and, when its neighbors were audited, the settings one
+                   neighbor step either side on each searched knob
+                   (``grid_procedure.neighbor_probes``)
+A named run is found by what it is — settings, window, base costs — never
+by which step asked first, because an earlier step may have scored it. A
+set returns every named line and at most ``MAX_OTHER_LINES`` of a search's
+other points, spread evenly over the order they were scored; the rest are
+counted, never dropped silently.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2930 "Every run
   keeps a daily equity curve".
 Canonical implementation: evidence.py for the two series; this file groups,
@@ -45,7 +52,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 from app.research.golden_search.declarations import SearchDeclaration, point_hash
-from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series
+from app.research.golden_search.evidence import CANDIDATE_LABELS, cumulative_return_series, drawdown_series
 from app.research.golden_search.grid_procedure import neighbor_probes
 from app.research.golden_search.guidance import params_sentence
 from app.research.golden_search.models import EvaluationRecord, StudyRow
@@ -53,16 +60,13 @@ from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.protocol import BASE_SCENARIO
 
 RunGroup = Literal["search", "pair_audit", "recent", "fold_training", "fold_test", "candidate", "neighbor", "stress", "final"]
-RunSort = Literal["recorded", "total_return_pct", "sharpe_ratio", "max_drawdown_pct", "total_trades", "net_profit"]
-
+RunSort = Literal["recorded", "total_return_pct", "sharpe_ratio", "max_drawdown_pct", "total_trades"]
 CurveSet = Literal["search", "recent", "fold_tests", "candidate"]
 #: How a step draws a line: the set's chosen settings, the frozen incumbent, a candidate's own run, a cost
 #: scenario or a neighbor of it, or one of the many other points a search scored.
 LineRole = Literal["winner", "incumbent", "candidate", "stress", "neighbor", "other"]
 
 RUN_GROUPS: tuple[RunGroup, ...] = get_args(RunGroup)
-CURVE_SETS: tuple[CurveSet, ...] = get_args(CurveSet)
-RUN_SORTS: tuple[RunSort, ...] = get_args(RunSort)
 GROUP_LABELS: dict[RunGroup, str] = {
     "search": "All-period search",
     "pair_audit": "Pair audit",
@@ -77,8 +81,8 @@ GROUP_LABELS: dict[RunGroup, str] = {
 _GROUP_OF_STEP: dict[str, RunGroup] = {"search": "search", "pair_audit": "pair_audit", "recent": "recent", "exam": "final"}
 #: The most curves one read returns: an overlay past this is unreadable, and the page asks again for more.
 MAX_CURVES = 200
-#: The most lines one step's set returns; a search can score more points than a chart can show.
-MAX_SET_CURVES = 300
+#: The most of a search's other points one step's set returns; a search can score more than a chart can show.
+MAX_OTHER_LINES = 300
 
 
 def group_of(record: EvaluationRecord, folds: Mapping[int, FoldWindow]) -> RunGroup:
@@ -141,7 +145,11 @@ def run_view(
     scenario_labels: Mapping[str, str],
     declaration: SearchDeclaration,
 ) -> dict[str, Any]:
-    """One run as the All runs page lists it: what asked for it, its settings, its window and its numbers."""
+    """One run as the All runs page lists it: what asked for it, its settings, its window and its numbers.
+
+    ``label`` with ``params_sentence`` tells any two runs of a study apart: a
+    step scores a set of settings once per window, fold and cost scenario.
+    """
     parts = [GROUP_LABELS[group] if record.fold_index is None else f"Fold {record.fold_index + 1} {'test' if group == 'fold_test' else 'training'}"]
     if record.scenario != BASE_SCENARIO:
         parts.append(scenario_labels.get(record.scenario, record.scenario))
@@ -149,18 +157,14 @@ def run_view(
     return {
         "evaluation_key": record.evaluation_key,
         "group": group,
-        "group_label": GROUP_LABELS[group],
         "fold_index": record.fold_index,
         "label": " · ".join(parts),
-        "names": list(names),
-        "point": dict(record.point),
         "params_sentence": params_sentence(declaration, record.point),
         "window_start_ms": record.window_start_ms,
         "window_end_ms": record.window_end_ms,
         "scenario": record.scenario,
         "status": record.status,
         "total_trades": record.total_trades,
-        "net_profit": _metric(record, "net_profit"),
         "total_return_pct": _metric(record, "total_return_pct"),
         "sharpe_ratio": _metric(record, "sharpe_ratio"),
         "max_drawdown_pct": _metric(record, "max_drawdown_pct"),
@@ -193,7 +197,7 @@ def runs_page(
     names = named_points(row)
     scenario_labels = {item["key"]: item["label"] for item in row.protocol.get("stress", [])}
     grouped = [(group_of(record, by_fold), record) for record in records]
-    # Per group: every run, the completed ones, and those that kept a curve. A completed run without one predates curves.
+    # Per group: every run, the completed ones, and those that kept a curve.
     counts = {key: [0, 0, 0] for key in RUN_GROUPS}
     for key, record in grouped:
         counts[key][0] += 1
@@ -212,6 +216,8 @@ def runs_page(
         "total": len(chosen),
         "page": page,
         "page_size": page_size,
+        "sort": sort,
+        "folds": len(folds),
         "groups": [
             {"key": key, "label": GROUP_LABELS[key], "runs": counts[key][0], "completed": counts[key][1], "with_curve": counts[key][2]}
             for key in RUN_GROUPS
@@ -234,21 +240,23 @@ def curve_view(evaluation_key: str, daily: Sequence[tuple[int, float]], capital:
     return {
         "evaluation_key": evaluation_key,
         "close_ms": [ms for ms, _ in daily],
-        "cumulative_return": [equity / capital - 1.0 for _, equity in daily],
+        "cumulative_return": [value for _, value in cumulative_return_series(daily, capital)],
         "drawdown": falls,
+        "deepest_drawdown": min(falls) if falls else None,
     }
 
 
 def curves_view(evaluation_keys: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> dict[str, Any]:
     """The curves of the named runs, in the order asked, and the runs among them that kept none."""
     return {
-        "capital": capital,
         "curves": [curve_view(key, stored[key], capital) for key in evaluation_keys if key in stored],
         "not_recorded": [key for key in evaluation_keys if key not in stored],
     }
 
 
 # ── A step's set of lines ────────────────────────────────────────────────
+
+Window = tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -260,66 +268,129 @@ class SetLine:
     label: str
 
 
-def _procedure_lines(row: StudyRow, records: Sequence[EvaluationRecord], group: RunGroup, step: str, folds: Mapping[int, FoldWindow]) -> list[SetLine]:
-    """Every point one search procedure scored: its winner, the incumbent, and the rest."""
-    incumbent = point_hash(row.strategy_key, dict(row.protocol["incumbent"]["params"]))
+@dataclass(frozen=True)
+class ChosenLines:
+    """A step's set as chosen: the lines to draw, what the cap left out, and what the set could not show."""
+
+    lines: tuple[SetLine, ...]
+    left_out: int
+    not_recorded: int
+    notes: tuple[str, ...]
+
+
+class _BaseRuns:
+    """A study's base-cost runs by what they are: settings and window, whichever step asked first."""
+
+    def __init__(self, records: Sequence[EvaluationRecord]) -> None:
+        self._runs: dict[tuple[str, Window], EvaluationRecord] = {}
+        for record in records:
+            if record.scenario != BASE_SCENARIO:
+                continue
+            key = (record.point_hash, (record.window_start_ms, record.window_end_ms))
+            held = self._runs.get(key)
+            # A summary run and a detail run of one point hold the same curve; keep the first that kept one.
+            if held is None or (record.has_curve and not held.has_curve):
+                self._runs[key] = record
+
+    def of(self, point_digest: str, window: Window) -> EvaluationRecord | None:
+        return self._runs.get((point_digest, window))
+
+
+def _incumbent_hash(row: StudyRow) -> str:
+    return point_hash(row.strategy_key, dict(row.protocol["incumbent"]["params"]))
+
+
+def _procedure_lines(row: StudyRow, records: Sequence[EvaluationRecord], step: Literal["search", "recent"], folds: Mapping[int, FoldWindow]) -> tuple[list[SetLine], list[str]]:
+    """Every point one search procedure scored, its winner among them, and the incumbent on its window."""
     stored = row.results.get(step)
-    winner = None if stored is None else point_hash(row.strategy_key, dict(stored["procedure"]["winner"]))
-    lines = []
+    if stored is None:
+        return [], []
+    incumbent, winner = _incumbent_hash(row), point_hash(row.strategy_key, dict(stored["procedure"]["winner"]))
+    lines: list[SetLine] = []
     for record in records:
-        if group_of(record, folds) != group:
+        if group_of(record, folds) != step:
             continue
         if record.point_hash == winner:
-            lines.append(SetLine(record, "winner", "Winner"))
+            lines.append(SetLine(record, "winner", "Winner · current settings" if winner == incumbent else "Winner"))
         elif record.point_hash == incumbent:
             lines.append(SetLine(record, "incumbent", CANDIDATE_LABELS["incumbent"]))
         else:
             lines.append(SetLine(record, "other", "Scored point"))
-    return lines
+    notes: list[str] = []
+    if incumbent != winner and not any(line.role == "incumbent" for line in lines):
+        # The procedure started elsewhere (a qualified incumbent is never the seed): take the incumbent's run wherever it was scored.
+        window = (int(stored["window"]["start_ms"]), int(stored["window"]["end_ms"]))
+        elsewhere = _BaseRuns(records).of(incumbent, window)
+        if elsewhere is not None:
+            lines.append(SetLine(elsewhere, "incumbent", CANDIDATE_LABELS["incumbent"]))
+        else:
+            notes.append("The current settings were not run on this window, so they have no line here.")
+    return lines, notes
 
 
 def _fold_test_lines(row: StudyRow, records: Sequence[EvaluationRecord], folds: Mapping[int, FoldWindow]) -> list[SetLine]:
-    names = named_points(row)
-    incumbent = point_hash(row.strategy_key, dict(row.protocol["incumbent"]["params"]))
-    lines = []
-    for record in records:
-        if group_of(record, folds) != "fold_test" or record.fold_index is None:
+    """Each fold's winner and the incumbent on that fold's test window, fold by fold."""
+    runs, incumbent = _BaseRuns(records), _incumbent_hash(row)
+    lines: list[SetLine] = []
+    for stored in row.results.get("validation", {}).get("folds", []):
+        fold = folds.get(int(stored["fold_index"]))
+        if fold is None:
             continue
-        fold = f"Fold {record.fold_index + 1}"
-        if names.fold_winner.get(record.fold_index) == record.point_hash:
-            lines.append(SetLine(record, "winner", f"{fold} winner"))
-        elif record.point_hash == incumbent:
-            lines.append(SetLine(record, "incumbent", f"{fold} current settings"))
-    return sorted(lines, key=lambda line: (line.record.fold_index or 0, line.role != "winner"))
+        window, name = (fold.test_start_ms, fold.test_end_ms), f"Fold {fold.fold_index + 1}"
+        winner = None if stored.get("winner") is None else point_hash(row.strategy_key, dict(stored["winner"]))
+        tested = None if winner is None else runs.of(winner, window)
+        if tested is not None:
+            lines.append(SetLine(tested, "winner", f"{name} winner · current settings" if winner == incumbent else f"{name} winner"))
+        benchmark = runs.of(incumbent, window)
+        if benchmark is not None and winner != incumbent:
+            lines.append(SetLine(benchmark, "incumbent", f"{name} current settings"))
+    return lines
 
 
-def _candidate_lines(
-    row: StudyRow, records: Sequence[EvaluationRecord], candidate_key: str, declaration: SearchDeclaration, folds: Mapping[int, FoldWindow]
-) -> list[SetLine]:
-    """One candidate's development run, its cost-stress runs, and its one-step neighbors on each searched knob."""
+def _candidate_lines(row: StudyRow, records: Sequence[EvaluationRecord], candidate_key: str, declaration: SearchDeclaration) -> list[SetLine]:
+    """One candidate's development run, its cost-stress runs and, when they were audited, its one-step neighbors."""
     stored = next((item for item in (row.results.get("evidence") or {}).get("candidates", []) if item["key"] == candidate_key), None)
     if stored is None:
         return []
     development = (int(row.protocol["development_start_ms"]), int(row.protocol["development_end_ms"]))
     scenario_labels = {item["key"]: item["label"] for item in row.protocol.get("stress", [])}
-    own = [record for record in records if record.point_hash == stored["point_hash"] and (record.window_start_ms, record.window_end_ms) == development]
-    lines = [SetLine(record, "candidate", CANDIDATE_LABELS[stored["key"]]) for record in own if group_of(record, folds) == "candidate"][:1]
-    lines += [SetLine(record, "stress", scenario_labels.get(record.scenario, record.scenario)) for record in own if record.scenario != BASE_SCENARIO]
-    # A neighbor is drawn from the base-cost summary run that first scored it, whichever step asked.
-    scored = {
-        record.point_hash: record
-        for record in reversed(records)
-        if (record.window_start_ms, record.window_end_ms) == development and record.scenario == BASE_SCENARIO and not record.detail
-    }
+    runs = _BaseRuns(records)
+    lines: list[SetLine] = []
+    own = runs.of(stored["point_hash"], development)
+    if own is not None:
+        lines.append(SetLine(own, "candidate", CANDIDATE_LABELS[stored["key"]]))
+    for record in records:
+        stressed = record.scenario != BASE_SCENARIO and record.point_hash == stored["point_hash"]
+        if stressed and (record.window_start_ms, record.window_end_ms) == development:
+            lines.append(SetLine(record, "stress", scenario_labels.get(record.scenario, record.scenario)))
+    if not stored.get("neighbors_audited"):
+        return lines
     for plan in row.protocol["knobs"]:
         if plan["mode"] != "search":
             continue
         knob = declaration.knob(plan["name"])
         for side, probe in zip(("below", "above"), neighbor_probes(declaration, stored["point"], knob.name), strict=True):
-            record = None if probe.point_hash is None else scored.get(probe.point_hash)
-            if record is not None:
-                lines.append(SetLine(record, "neighbor", f"{knob.label} one step {side} ({probe.values[knob.name]:g})"))
+            neighbor = None if probe.point_hash is None else runs.of(probe.point_hash, development)
+            if neighbor is not None:
+                lines.append(SetLine(neighbor, "neighbor", f"{knob.label} one step {side} ({probe.values[knob.name]:g})"))
     return lines
+
+
+def _within_cap(lines: Sequence[SetLine], notes: Sequence[str]) -> ChosenLines:
+    """Keep every named line; of a search's other points, at most the cap, spread evenly over the order they were scored."""
+    completed = [line for line in lines if line.record.status == "completed"]
+    drawable = [line for line in completed if line.record.has_curve]
+    others = [index for index, line in enumerate(drawable) if line.role == "other"]
+    if len(others) > MAX_OTHER_LINES:
+        kept = {others[(position * len(others)) // MAX_OTHER_LINES] for position in range(MAX_OTHER_LINES)}
+        dropped = set(others) - kept
+        drawable = [line for index, line in enumerate(drawable) if index not in dropped]
+    return ChosenLines(
+        lines=tuple(drawable),
+        left_out=max(0, len(others) - MAX_OTHER_LINES),
+        not_recorded=len(completed) - sum(line.record.has_curve for line in completed),
+        notes=tuple(notes),
+    )
 
 
 def curve_set_lines(
@@ -330,62 +401,37 @@ def curve_set_lines(
     declaration: SearchDeclaration,
     curve_set: CurveSet,
     candidate_key: str | None = None,
-) -> list[SetLine]:
-    """The runs one step draws, in drawing order. ``records`` arrive in recorded order."""
+) -> ChosenLines:
+    """The runs one step draws, in drawing order. ``records`` arrive in recorded order.
+
+    A run still pending, or one that failed, has no curve and is not counted
+    as one that kept none: ``not_recorded`` is completed runs only.
+    """
     by_fold = {fold.fold_index: fold for fold in folds}
-    if curve_set == "search":
-        return _procedure_lines(row, records, "search", "search", by_fold)
-    if curve_set == "recent":
-        return _procedure_lines(row, records, "recent", "recent", by_fold)
+    if curve_set == "search" or curve_set == "recent":
+        return _within_cap(*_procedure_lines(row, records, curve_set, by_fold))
     if curve_set == "fold_tests":
-        return _fold_test_lines(row, records, by_fold)
+        return _within_cap(_fold_test_lines(row, records, by_fold), ())
     if candidate_key is None:
         raise ValueError("a candidate's set needs the candidate")
-    return _candidate_lines(row, records, candidate_key, declaration, by_fold)
+    return _within_cap(_candidate_lines(row, records, candidate_key, declaration), ())
 
 
-def within_cap(lines: Sequence[SetLine]) -> tuple[list[SetLine], int, int]:
-    """The lines a set returns, how many drawable ones its cap left out, and how many kept no curve.
-
-    Every named line is kept before any of the others, so a search of a
-    thousand points still shows its winner and the incumbent.
-    """
-    drawable = [line for line in lines if line.record.has_curve]
-    named = [line for line in drawable if line.role != "other"]
-    others = [line for line in drawable if line.role == "other"]
-    room = max(0, MAX_SET_CURVES - len(named))
-    kept = {id(line) for line in [*named[:MAX_SET_CURVES], *others[:room]]}
-    returned = [line for line in drawable if id(line) in kept]
-    return returned, len(drawable) - len(returned), len(lines) - len(drawable)
-
-
-def curve_set_view(
-    row: StudyRow,
-    lines: Sequence[SetLine],
-    left_out: int,
-    not_recorded: int,
-    stored: Mapping[str, Sequence[tuple[int, float]]],
-    *,
-    folds: Sequence[FoldWindow],
-    declaration: SearchDeclaration,
-) -> dict[str, Any]:
-    """A step's set as the chart reads it: each line's run, role, label and curve."""
-    by_fold = {fold.fold_index: fold for fold in folds}
-    names = named_points(row)
-    scenario_labels = {item["key"]: item["label"] for item in row.protocol.get("stress", [])}
+def curve_set_view(row: StudyRow, chosen: ChosenLines, stored: Mapping[str, Sequence[tuple[int, float]]], *, declaration: SearchDeclaration) -> dict[str, Any]:
+    """A step's set as the chart reads it: each line's role, label, settings and curve."""
     capital = float(row.protocol["execution"]["initial_cash"])
     return {
-        "capital": capital,
         "lines": [
             {
-                "run": run_view(line.record, group=group_of(line.record, by_fold), names=names.of(line.record), scenario_labels=scenario_labels, declaration=declaration),
                 "role": line.role,
                 "label": line.label,
+                "params_sentence": params_sentence(declaration, line.record.point),
                 "curve": curve_view(line.record.evaluation_key, stored[line.record.evaluation_key], capital),
             }
-            for line in lines
+            for line in chosen.lines
             if line.record.evaluation_key in stored
         ],
-        "left_out": left_out,
-        "not_recorded": not_recorded,
+        "left_out": chosen.left_out,
+        "not_recorded": chosen.not_recorded,
+        "notes": list(chosen.notes),
     }

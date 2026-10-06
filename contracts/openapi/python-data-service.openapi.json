@@ -19766,6 +19766,11 @@
             "title": "Label",
             "type": "string"
           },
+          "params_sentence": {
+            "description": "The run's settings in words.",
+            "title": "Params Sentence",
+            "type": "string"
+          },
           "role": {
             "enum": [
               "winner",
@@ -19777,15 +19782,12 @@
             ],
             "title": "Role",
             "type": "string"
-          },
-          "run": {
-            "$ref": "#/components/schemas/GoldenSearchRun"
           }
         },
         "required": [
-          "run",
           "role",
           "label",
+          "params_sentence",
           "curve"
         ],
         "title": "GoldenSearchCurveLine",
@@ -19827,12 +19829,8 @@
       "GoldenSearchCurveSet": {
         "additionalProperties": false,
         "properties": {
-          "capital": {
-            "title": "Capital",
-            "type": "number"
-          },
           "left_out": {
-            "description": "Runs of the set with a curve that this read did not return, past its cap; named lines are never left out.",
+            "description": "Other scored points with a curve that this read did not return, past its cap; named lines are never left out.",
             "title": "Left Out",
             "type": "integer"
           },
@@ -19844,16 +19842,24 @@
             "type": "array"
           },
           "not_recorded": {
-            "description": "Runs of the set that kept no daily equity.",
+            "description": "Completed runs of the set that kept no daily equity.",
             "title": "Not Recorded",
             "type": "integer"
+          },
+          "notes": {
+            "description": "What the set could not show, in words, e.g. that the current settings were not run on this window.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
           }
         },
         "required": [
-          "capital",
           "lines",
           "left_out",
-          "not_recorded"
+          "not_recorded",
+          "notes"
         ],
         "title": "GoldenSearchCurveSet",
         "type": "object"
@@ -20411,234 +20417,6 @@
         "title": "GoldenSearchEstimate",
         "type": "object"
       },
-      "GoldenSearchEvaluationPage": {
-        "additionalProperties": false,
-        "properties": {
-          "page": {
-            "title": "Page",
-            "type": "integer"
-          },
-          "page_size": {
-            "title": "Page Size",
-            "type": "integer"
-          },
-          "rows": {
-            "items": {
-              "$ref": "#/components/schemas/GoldenSearchEvaluationRow"
-            },
-            "title": "Rows",
-            "type": "array"
-          },
-          "total": {
-            "title": "Total",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "total",
-          "page",
-          "page_size",
-          "rows"
-        ],
-        "title": "GoldenSearchEvaluationPage",
-        "type": "object"
-      },
-      "GoldenSearchEvaluationRow": {
-        "additionalProperties": false,
-        "properties": {
-          "attempt": {
-            "title": "Attempt",
-            "type": "integer"
-          },
-          "completed_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completed At Ms"
-          },
-          "created_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Created At Ms",
-            "type": "integer"
-          },
-          "detail": {
-            "title": "Detail",
-            "type": "boolean"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "evaluation_key": {
-            "title": "Evaluation Key",
-            "type": "string"
-          },
-          "fold_index": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fold Index"
-          },
-          "has_curve": {
-            "description": "Whether the run kept its daily equity; a run recorded before runs kept it has none.",
-            "title": "Has Curve",
-            "type": "boolean"
-          },
-          "max_drawdown_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Drawdown Pct"
-          },
-          "net_profit": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Net Profit"
-          },
-          "point": {
-            "title": "Point",
-            "type": "object"
-          },
-          "point_hash": {
-            "title": "Point Hash",
-            "type": "string"
-          },
-          "retries": {
-            "title": "Retries",
-            "type": "integer"
-          },
-          "scenario": {
-            "title": "Scenario",
-            "type": "string"
-          },
-          "sharpe_ratio": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sharpe Ratio"
-          },
-          "stage": {
-            "title": "Stage",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "pending",
-              "completed",
-              "failed"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "total_return_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Return Pct"
-          },
-          "total_trades": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Trades"
-          },
-          "win_rate": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Win Rate"
-          },
-          "window_end_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Window End Ms",
-            "type": "integer"
-          },
-          "window_start_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Window Start Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "evaluation_key",
-          "point_hash",
-          "point",
-          "window_start_ms",
-          "window_end_ms",
-          "scenario",
-          "detail",
-          "stage",
-          "fold_index",
-          "status",
-          "attempt",
-          "retries",
-          "total_trades",
-          "net_profit",
-          "total_return_pct",
-          "sharpe_ratio",
-          "max_drawdown_pct",
-          "win_rate",
-          "error",
-          "created_at_ms",
-          "completed_at_ms",
-          "has_curve"
-        ],
-        "title": "GoldenSearchEvaluationRow",
-        "type": "object"
-      },
       "GoldenSearchEvidenceCandidate": {
         "additionalProperties": false,
         "properties": {
@@ -20680,10 +20458,6 @@
           },
           "eligible": {
             "title": "Eligible",
-            "type": "boolean"
-          },
-          "exam_eligible": {
-            "title": "Exam Eligible",
             "type": "boolean"
           },
           "fixed_sentence": {
@@ -20796,8 +20570,7 @@
           "guidance",
           "flags",
           "params_sentence",
-          "fixed_sentence",
-          "exam_eligible"
+          "fixed_sentence"
         ],
         "title": "GoldenSearchEvidenceCandidate",
         "type": "object"
@@ -24257,10 +24030,6 @@
             "title": "Group",
             "type": "string"
           },
-          "group_label": {
-            "title": "Group Label",
-            "type": "string"
-          },
           "has_curve": {
             "title": "Has Curve",
             "type": "boolean"
@@ -24281,32 +24050,10 @@
             ],
             "title": "Max Drawdown Pct"
           },
-          "names": {
-            "description": "Current settings, a fit, or the fold's winner, when the run's settings are one of them.",
-            "items": {
-              "type": "string"
-            },
-            "title": "Names",
-            "type": "array"
-          },
-          "net_profit": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Net Profit"
-          },
           "params_sentence": {
+            "description": "The run's settings in words; with the label it tells any two runs of a study apart.",
             "title": "Params Sentence",
             "type": "string"
-          },
-          "point": {
-            "title": "Point",
-            "type": "object"
           },
           "scenario": {
             "title": "Scenario",
@@ -24370,18 +24117,14 @@
         "required": [
           "evaluation_key",
           "group",
-          "group_label",
           "fold_index",
           "label",
-          "names",
-          "point",
           "params_sentence",
           "window_start_ms",
           "window_end_ms",
           "scenario",
           "status",
           "total_trades",
-          "net_profit",
           "total_return_pct",
           "sharpe_ratio",
           "max_drawdown_pct",
@@ -24412,6 +24155,18 @@
             "title": "Cumulative Return",
             "type": "array"
           },
+          "deepest_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.",
+            "title": "Deepest Drawdown"
+          },
           "drawdown": {
             "anyOf": [
               {
@@ -24436,7 +24191,8 @@
           "evaluation_key",
           "close_ms",
           "cumulative_return",
-          "drawdown"
+          "drawdown",
+          "deepest_drawdown"
         ],
         "title": "GoldenSearchRunCurve",
         "type": "object"
@@ -24444,10 +24200,6 @@
       "GoldenSearchRunCurves": {
         "additionalProperties": false,
         "properties": {
-          "capital": {
-            "title": "Capital",
-            "type": "number"
-          },
           "curves": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchRunCurve"
@@ -24465,7 +24217,6 @@
           }
         },
         "required": [
-          "capital",
           "curves",
           "not_recorded"
         ],
@@ -24608,7 +24359,7 @@
             "type": "integer"
           },
           "with_curve": {
-            "description": "How many kept their daily equity; a completed run without it was recorded before runs kept it.",
+            "description": "How many kept their daily equity.",
             "title": "With Curve",
             "type": "integer"
           }
@@ -24652,6 +24403,11 @@
       "GoldenSearchRunsPage": {
         "additionalProperties": false,
         "properties": {
+          "folds": {
+            "description": "How many walk-forward folds the plan froze; fold runs can be listed one fold at a time.",
+            "title": "Folds",
+            "type": "integer"
+          },
           "groups": {
             "description": "Every group the study has runs in, whatever the filter.",
             "items": {
@@ -24675,6 +24431,18 @@
             "title": "Rows",
             "type": "array"
           },
+          "sort": {
+            "description": "The order of the rows: as recorded, or by a measure.",
+            "enum": [
+              "recorded",
+              "total_return_pct",
+              "sharpe_ratio",
+              "max_drawdown_pct",
+              "total_trades"
+            ],
+            "title": "Sort",
+            "type": "string"
+          },
           "total": {
             "description": "Runs matching the group and fold asked for.",
             "title": "Total",
@@ -24685,6 +24453,8 @@
           "total",
           "page",
           "page_size",
+          "sort",
+          "folds",
           "groups",
           "rows"
         ],
@@ -68782,13 +68552,18 @@
             }
           },
           {
-            "description": "search, recent, fold_tests or candidate.",
+            "description": "Which step's runs to draw.",
             "in": "query",
             "name": "set",
             "required": true,
             "schema": {
-              "description": "search, recent, fold_tests or candidate.",
-              "maxLength": 32,
+              "description": "Which step's runs to draw.",
+              "enum": [
+                "search",
+                "recent",
+                "fold_tests",
+                "candidate"
+              ],
               "title": "Set",
               "type": "string"
             }
@@ -69214,165 +68989,6 @@
         ]
       }
     },
-    "/api/research/golden-search/studies/{study_id}/evaluations": {
-      "get": {
-        "operationId": "list_evaluations_api_research_golden_search_studies__study_id__evaluations_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "study_id",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "title": "Study Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The step that asked for the evaluation, e.g. search or validation.",
-            "in": "query",
-            "name": "stage",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 32,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The step that asked for the evaluation, e.g. search or validation.",
-              "title": "Stage"
-            }
-          },
-          {
-            "in": "query",
-            "name": "fold_index",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Fold Index"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page",
-            "required": false,
-            "schema": {
-              "default": 1,
-              "minimum": 1,
-              "title": "Page",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_size",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Page Size",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenSearchEvaluationPage"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
-                }
-              }
-            },
-            "description": "Bad Request"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
-                }
-              }
-            },
-            "description": "Service Unavailable"
-          }
-        },
-        "summary": "List Evaluations",
-        "tags": [
-          "research-golden-search"
-        ]
-      }
-    },
     "/api/research/golden-search/studies/{study_id}/runs": {
       "get": {
         "description": "Every run of the study, grouped by what asked for it (#2930).",
@@ -69390,21 +69006,31 @@
             }
           },
           {
-            "description": "What asked for the runs, e.g. search, fold_test or final.",
+            "description": "What asked for the runs.",
             "in": "query",
             "name": "group",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 32,
+                  "enum": [
+                    "search",
+                    "pair_audit",
+                    "recent",
+                    "fold_training",
+                    "fold_test",
+                    "candidate",
+                    "neighbor",
+                    "stress",
+                    "final"
+                  ],
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "What asked for the runs, e.g. search, fold_test or final.",
+              "description": "What asked for the runs.",
               "title": "Group"
             }
           },
@@ -69426,14 +69052,20 @@
             }
           },
           {
-            "description": "recorded, or the measure to order by.",
+            "description": "The order: as recorded, or by a measure.",
             "in": "query",
             "name": "sort",
             "required": false,
             "schema": {
               "default": "recorded",
-              "description": "recorded, or the measure to order by.",
-              "maxLength": 32,
+              "description": "The order: as recorded, or by a measure.",
+              "enum": [
+                "recorded",
+                "total_return_pct",
+                "sharpe_ratio",
+                "max_drawdown_pct",
+                "total_trades"
+              ],
               "title": "Sort",
               "type": "string"
             }

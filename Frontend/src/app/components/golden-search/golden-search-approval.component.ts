@@ -5,7 +5,7 @@ import { ButtonModule } from 'primeng/button';
 import { GOLDEN_DEPLOY_HANDOFF_ROUTE, GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../fleet/account-workspace';
 import { expectedDefault, factualNote } from './golden-search-decision';
 import { GoldenSearchRetainComponent, RETAIN_KINDS, type RetainDecision } from './golden-search-retain.component';
-import { isLive, type ExamFit, type ExamView, type RetainKind, type StudyCommand, type StudyDetail } from './golden-search.types';
+import { isLive, type ExamFit, type RetainKind, type StudyCommand, type StudyDetail } from './golden-search.types';
 
 /**
  * The decision panel (#2696, #2930) for the fit the page is about: a written
@@ -27,7 +27,6 @@ import { isLive, type ExamFit, type ExamView, type RetainKind, type StudyCommand
 })
 export class GoldenSearchApprovalComponent {
   readonly study = input.required<StudyDetail>();
-  readonly exam = input.required<ExamView>();
   /** The fit this approval names. */
   readonly fit = input.required<ExamFit>();
   readonly busy = input(false);

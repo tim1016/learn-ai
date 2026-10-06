@@ -143,6 +143,8 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
 
     # The lock box says what opening the test would record, before it is opened.
     assert detail["exposure_preview"]["state"] == "not_opened"
+    # Both fits chose one set of settings, so the lock names one run for the two of them.
+    assert evidence["fits_to_test"] == [{"key": "all_period", "same_as": ["recent"], "label": "All-period and recent fit"}]
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
     detail = await driver.detail(row)
     assert detail["state"] == "awaiting_review" and row.candidate_key is None
@@ -840,15 +842,13 @@ async def test_both_fits_sit_the_final_test_and_the_owner_names_one_afterwards(c
     detail = await driver.detail(row)
     exam = detail["results"]["exam"]
     assert [(fit["key"], fit["same_as"], fit["label"]) for fit in exam["fits"]] == [("all_period", [], "All-period fit"), ("recent", [], "Recent fit")]
-    # The lock promised exactly these fits, and marked exactly their candidates as testable.
-    evidence = detail["results"]["evidence"]
-    assert [(fit["key"], fit["label"]) for fit in evidence["fits_to_test"]] == [(fit["key"], fit["label"]) for fit in exam["fits"]]
-    assert {item["key"]: item["exam_eligible"] for item in evidence["candidates"]} == {"incumbent": False, "all_period": True, "recent": True}
+    # The lock promised exactly these fits.
+    assert [(fit["key"], fit["label"]) for fit in detail["results"]["evidence"]["fits_to_test"]] == [(fit["key"], fit["label"]) for fit in exam["fits"]]
     assert exam["fits"][0]["point"] != exam["fits"][1]["point"]
     # Each fit is judged on its own run; the incumbent ran once beside them.
     assert [fit["outcome"] for fit in exam["fits"]] == ["meets_rules", "meets_rules"]
     assert exam["fits"][0]["metrics"]["sharpe_ratio"] != exam["fits"][1]["metrics"]["sharpe_ratio"]
-    assert (await service.evaluations(row.id, stage="exam", page=1, page_size=10))["total"] == 3
+    assert (await service.runs(row.id, group="final"))["total"] == 3
     assert (exam["pick"], exam["chosen_key"]) == ("after_test", None)
     assert exam["selection_note"].startswith("2 fits ran on the final test.")
     # The interval is used once, with a reservation and a result for each fit.
@@ -900,6 +900,15 @@ async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and
     assert row.state == "approved" and driver.approval.requests[-1].research["weakness"] == []
 
 
+async def test_a_study_kept_after_two_fits_ran_says_how_many_ran_and_promises_no_approval(driver: Driver, symbol: str) -> None:
+    row = await _two_fits_to_review(driver, symbol)
+    assert (await driver.detail(row))["results"]["exam"]["selection_note"].endswith("chosen after the final test, from 2 fits.")
+
+    row = await driver.advance(row, "retain", {"kind": "keep_current", "note": "Neither is worth the change."})
+
+    assert (await driver.detail(row))["results"]["exam"]["selection_note"] == "2 fits ran on the final test."
+
+
 async def test_a_retried_approval_must_name_the_fit_it_started_with(driver: Driver, symbol: str) -> None:
     row = await _two_fits_to_review(driver, symbol)
     driver.approval = FakeApproval(fail_with=("PROOF_MISMATCH", "The restored replay differs from the lake replay."))
@@ -947,7 +956,8 @@ async def test_every_run_keeps_its_daily_curve_and_the_runs_read_groups_them(con
     assert curve["close_ms"] == [point["ms"] for point in detail["cumulative_return"]]
     assert curve["cumulative_return"] == pytest.approx([point["value"] for point in detail["cumulative_return"]], abs=1e-12, rel=0)
     assert curve["drawdown"] == pytest.approx([point["drawdown"] for point in detail["drawdown"]], abs=1e-12, rel=0)
-    assert (curves["capital"], curves["not_recorded"]) == (row.protocol["execution"]["initial_cash"], [])
+    assert curves["not_recorded"] == []
+    assert curve["deepest_drawdown"] == min(point["drawdown"] for point in detail["drawdown"])
 
 
 async def test_each_step_draws_its_own_runs_with_the_line_each_one_is(driver: Driver, symbol: str) -> None:
@@ -957,33 +967,56 @@ async def test_each_step_draws_its_own_runs_with_the_line_each_one_is(driver: Dr
     roles = [line["role"] for line in search["lines"]]
     assert roles.count("winner") == 1 and roles.count("incumbent") == 1 and roles.count("other") == len(roles) - 2
     winner = next(line for line in search["lines"] if line["role"] == "winner")
-    assert winner["run"]["point"] == row.results["search"]["procedure"]["winner"]
-    assert len(winner["curve"]["close_ms"]) == len(winner["curve"]["cumulative_return"]) > 0
-    assert (search["left_out"], search["not_recorded"]) == (0, 0)
-    assert {line["run"]["group"] for line in (await service.curve_set(row.id, curve_set="recent"))["lines"]} == {"recent"}
+    assert winner["params_sentence"].startswith("Gap $0.30") and len(winner["curve"]["close_ms"]) == len(winner["curve"]["cumulative_return"]) > 0
+    # Two lines never read the same: a scored point is told apart by its settings.
+    assert len({(line["label"], line["params_sentence"]) for line in search["lines"]}) == len(search["lines"])
+    assert (search["left_out"], search["not_recorded"], search["notes"]) == (0, 0, [])
+    recent = await service.curve_set(row.id, curve_set="recent")
+    assert [line["role"] for line in recent["lines"]].count("winner") == 1
 
     folds = await service.curve_set(row.id, curve_set="fold_tests")
     assert [line["label"] for line in folds["lines"]] == ["Fold 1 winner", "Fold 1 current settings", "Fold 2 winner", "Fold 2 current settings"]
-    # Each fold's line covers its own test window and no other.
+    # Each fold's line covers its own test window and no other; none reaches the final interval.
     assert folds["lines"][0]["curve"]["close_ms"][-1] < folds["lines"][2]["curve"]["close_ms"][0]
+    assert all(line["curve"]["close_ms"][-1] < row.protocol["final_start_ms"] for line in folds["lines"])
 
     candidate = await service.curve_set(row.id, curve_set="candidate", candidate_key="all_period")
     by_role: dict[str, list[str]] = {}
     for line in candidate["lines"]:
         by_role.setdefault(line["role"], []).append(line["label"])
+        assert line["curve"]["close_ms"][-1] < row.protocol["final_start_ms"]  # development only, though the fit also sat the final test
     assert by_role["candidate"] == ["All-period fit"]
     assert sorted(by_role["stress"]) == ["Extra $1 per order", "Extra 1¢/share slippage"]
-    # Gap and hold are searched: one step either side of each, wherever the point was first scored.
+    # Gap and hold are searched: one step either side of each.
     assert sorted(by_role["neighbor"]) == sorted(
         f"{knob} one step {side} ({value:g})"
         for knob, values in (("Crossover gap", (0.25, 0.35)), ("Hold time", (6, 8)))
         for side, value in zip(("below", "above"), values, strict=True)
     )
+    # The incumbent is a candidate too: its own run and its stresses, and no neighbors, because none were audited.
+    incumbent = await service.curve_set(row.id, curve_set="candidate", candidate_key="incumbent")
+    assert sorted({line["role"] for line in incumbent["lines"]}) == ["candidate", "stress"]
 
-    for query in ({"curve_set": "everything"}, {"curve_set": "candidate"}, {"curve_set": "search", "candidate_key": "recent"}):
+    for query in ({"curve_set": "candidate"}, {"curve_set": "search", "candidate_key": "recent"}):
         with pytest.raises(GoldenSearchRefusal) as refused:
             await service.curve_set(row.id, **query)
         assert refused.value.code == "RUNS_QUERY_INVALID"
+
+
+async def test_a_step_drawn_while_its_runs_are_still_coming_counts_no_missing_curve(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.lock(symbol), "continue")
+    one = (await service.runs(row.id, group="search"))["rows"][-1]
+    await conn.execute(
+        "UPDATE research_golden_search_evaluations SET status = 'pending', equity_close_ms = NULL, equity_values = NULL WHERE study_id = $1 AND evaluation_key = $2",
+        row.id,
+        one["evaluation_key"],
+    )
+
+    search = await service.curve_set(row.id, curve_set="search")
+
+    # The run in flight has no line yet, and is not reported as one that kept no curve.
+    assert search["not_recorded"] == 0
+    assert len(search["lines"]) == (await service.runs(row.id, group="search"))["total"] - 1
 
 
 async def test_a_run_recorded_before_runs_kept_their_curve_reads_not_recorded(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
@@ -1001,10 +1034,6 @@ async def test_a_run_recorded_before_runs_kept_their_curve_reads_not_recorded(co
     assert [curve["evaluation_key"] for curve in curves["curves"]] == [second["evaluation_key"]]
     listed = {run["evaluation_key"]: run["has_curve"] for run in (await service.runs(row.id, group="search"))["rows"]}
     assert (listed[first["evaluation_key"]], listed[second["evaluation_key"]]) == (False, True)
-    for query, field in (({"group": "everything"}, "group"), ({"sort": "luck"}, "sort")):
-        with pytest.raises(GoldenSearchRefusal) as refused:
-            await service.runs(row.id, **query)
-        assert (refused.value.code, refused.value.field) == ("RUNS_QUERY_INVALID", field)
     with pytest.raises(GoldenSearchRefusal) as none_named:
         await service.run_curves(row.id, [])
     assert none_named.value.code == "RUNS_QUERY_INVALID"
@@ -1017,7 +1046,6 @@ async def test_fits_that_return_the_current_settings_leave_nothing_to_test(drive
     driver.engine.score = current_settings_win
     row = await driver.to_candidate(symbol)
     detail = await driver.detail(row)
-    assert [item["exam_eligible"] for item in detail["results"]["evidence"]["candidates"]] == [False, False, False]
     assert detail["results"]["evidence"]["fits_to_test"] == []
     assert "open_exam" not in detail["permitted_actions"] and "retain" in detail["permitted_actions"]
     with pytest.raises(GoldenSearchRefusal) as refused:
@@ -1282,8 +1310,5 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark
 
     # One fit (both chose the same settings) and the incumbent.
-    page = await service.evaluations(row.id, stage="exam", page=1, page_size=10)
-    assert page["total"] == 2 and {item["detail"] for item in page["rows"]} == {True}
-    with pytest.raises(GoldenSearchRefusal) as refused:
-        await service.evaluations(row.id, page=0)
-    assert refused.value.code == "PAGE_INVALID"
+    final = await service.runs(row.id, group="final")
+    assert final["total"] == 2 and all(run["has_curve"] for run in final["rows"])

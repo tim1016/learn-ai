@@ -6,17 +6,27 @@ import type { GoldenSearchChartId } from './charts/golden-search-chart-guides';
 import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { reloadOnProgress } from './charts/golden-search-reload';
-import { runCurvesSpec } from './golden-search-run-curves-chart';
+import { stepCurvesSpec } from './golden-search-step-curves-chart';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateKey, CurveSetKey, StudyDetail } from './golden-search.types';
+
+/** What each set's runs move with, so a panel reads again only when its own step records more. */
+function setProgress(study: StudyDetail, curves: CurveSetKey): string {
+  const results = study.results;
+  if (curves === 'search') return `${results.search?.evaluations ?? 0}|${results.search?.winner_hash ?? ''}`;
+  if (curves === 'recent') return `${results.recent?.evaluations ?? 0}|${results.recent?.winner_hash ?? ''}`;
+  if (curves === 'fold_tests') return (results.validation?.folds ?? []).map((fold) => fold.status).join();
+  return results.evidence === null ? 'no evidence' : 'evidence';
+}
 
 /**
  * One step's runs drawn together (#2930): every point a search scored behind
  * its winner and the current settings, each fold's test run beside the
  * current settings', or a candidate with its cost-stress and neighbor runs.
  * The server names the set's lines and their roles; this panel reads the set
- * once per study (and again when the study records more), draws it, and says
- * how many runs the read left out or kept no curve for.
+ * once per study (and again when its own step records more), draws it, and
+ * says what the set could not show: points past its cap, completed runs
+ * that kept no curve, and the server's own notes.
  */
 @Component({
   selector: 'app-golden-search-curve-set',
@@ -32,15 +42,16 @@ import type { CandidateKey, CurveSetKey, StudyDetail } from './golden-search.typ
       } @else if (spec(); as drawn) {
         <app-golden-search-chart [spec]="drawn" [height]="340" />
       } @else if (set(); as read) {
-        <p class="muted">{{ read.not_recorded > 0 ? 'These runs were recorded before runs kept their curve.' : empty() }}</p>
+        <p class="muted">{{ read.not_recorded > 0 ? 'These runs have no curve recorded.' : empty() }}</p>
       } @else {
         <p class="muted" role="status">Loading the curves…</p>
       }
       <p caption class="caption">
         {{ caption() }}
         @if (set(); as read) {
-          @if (read.left_out > 0) { {{ read.left_out }} more scored points are not drawn here; All runs lists every one. }
-          @if (read.not_recorded > 0 && read.lines.length > 0) { {{ read.not_recorded }} of these runs kept no curve. }
+          @for (note of read.notes; track note) { {{ note }} }
+          @if (read.left_out > 0) { An even spread of the scored points is drawn; {{ read.left_out }} more are not. All runs lists every one. }
+          @if (read.not_recorded > 0 && read.lines.length > 0) { {{ read.not_recorded }} completed runs of this set have no curve recorded. }
         }
       </p>
     </app-golden-search-panel>
@@ -80,17 +91,19 @@ export class GoldenSearchCurveSetComponent {
     const error = this.lines.error();
     return error === undefined ? null : extractServerMessage(error, 'These runs’ curves could not be loaded.');
   });
+  /** Read on its own, so a study poll that changes nothing else does not rebuild the chart. */
+  private readonly ceiling = computed(() => this.study().protocol.policy.max_drawdown_ceiling);
+  /** Whose colour the bold line takes: the candidate's own, the recent fit's for its search, else the all-period fit's. */
+  private readonly accent = computed<CandidateKey>(() => this.candidate() ?? (this.curves() === 'recent' ? 'recent' : 'all_period'));
   protected readonly spec = computed(
     () => {
       const set = this.set();
-      if (set === null || set.lines.length === 0) return null;
-      const drawn = set.lines.map((line) => ({ key: line.run.evaluation_key, label: line.label, curve: line.curve, role: line.role }));
-      return runCurvesSpec(drawn, this.study().protocol.policy.max_drawdown_ceiling);
+      return set === null || set.lines.length === 0 ? null : stepCurvesSpec(set.lines, this.ceiling(), this.accent());
     },
     { equal: sameChart },
   );
 
   constructor() {
-    reloadOnProgress(() => `${this.study().revision}|${this.study().consumed_evaluations}`, this.lines);
+    reloadOnProgress(() => setProgress(this.study(), this.curves()), this.lines);
   }
 }

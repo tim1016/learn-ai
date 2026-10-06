@@ -391,7 +391,7 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     folds = await client.get(f"{BASE}/studies/{study['id']}/charts/test-over-time")
     assert folds.status_code == 200, folds.text
     assert {fold["status"] for fold in folds.json()["folds"]} == {"completed"} and not folds.json()["planned"]
-    page = await client.get(f"{BASE}/studies/{study['id']}/evaluations", params={"stage": "search", "page": 1, "page_size": 5})
+    page = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "search", "page": 1, "page_size": 5})
     assert page.status_code == 200 and page.json()["total"] > 5 and len(page.json()["rows"]) == 5
 
     study = await _advance(client, harness, study, "open_exam", {"acknowledge_final_test": True})
@@ -411,8 +411,9 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     assert {line["role"] for line in drawn.json()["lines"]} == {"winner", "incumbent"}
     unnamed = await client.get(f"{BASE}/studies/{study['id']}/charts/run-curves", params={"set": "candidate"})
     assert (unnamed.status_code, unnamed.json()["detail"]["code"]) == (400, "RUNS_QUERY_INVALID")
+    assert (await client.get(f"{BASE}/studies/{study['id']}/charts/run-curves", params={"set": "everything"})).status_code == 422
     refused = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "everything"})
-    assert (refused.status_code, refused.json()["detail"]["code"]) == (400, "RUNS_QUERY_INVALID")
+    assert refused.status_code == 422  # the route admits only the groups that exist
 
     study = await _advance(client, harness, study, "approve", APPROVE)
     assert study["state"] == "approved" and study["guidance"]["headline"] == "Golden configuration ready in Deploy"
@@ -607,7 +608,8 @@ async def test_reads_of_a_missing_study_or_candidate_are_404_with_a_code(client:
 
     responses = [
         await client.get(f"{BASE}/studies/{missing}"),
-        await client.get(f"{BASE}/studies/{missing}/evaluations"),
+        await client.get(f"{BASE}/studies/{missing}/runs"),
+        await client.get(f"{BASE}/studies/{missing}/runs/curves", params={"key": "k"}),
         await client.get(f"{BASE}/studies/{missing}/candidates/incumbent"),
         await client.get(f"{BASE}/studies/{missing}/charts/test-over-time"),
         await client.get(f"{BASE}/studies/{missing}/charts/search"),
@@ -618,7 +620,7 @@ async def test_reads_of_a_missing_study_or_candidate_are_404_with_a_code(client:
     before_evidence = await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")
     unknown_key = await client.get(f"{BASE}/studies/{study['id']}/candidates/best_guess")
 
-    assert [(r.status_code, r.json()["detail"]["code"]) for r in responses] == [(404, "NOT_FOUND")] * 8
+    assert [(r.status_code, r.json()["detail"]["code"]) for r in responses] == [(404, "NOT_FOUND")] * 9
     assert before_evidence.status_code == 404 and before_evidence.json()["detail"]["code"] == "CANDIDATE_UNAVAILABLE"
     assert unknown_key.status_code == 422
 

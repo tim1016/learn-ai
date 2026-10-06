@@ -13,15 +13,13 @@ from app.research.golden_search.evidence import drawdown_series
 from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.run_curves import (
-    MAX_SET_CURVES,
-    SetLine,
+    MAX_OTHER_LINES,
     curve_set_lines,
     curve_view,
     curves_view,
     group_of,
     named_points,
     runs_page,
-    within_cap,
 )
 
 EMA = declaration_for("ema_crossover_signal")
@@ -108,7 +106,7 @@ def test_the_page_lists_one_group_sorted_with_unmeasured_runs_last_beside_every_
     assert [row["evaluation_key"] for row in best_first["rows"]] == ["s2", "s4", "s1", "s3"]
     # A run without the measure stays last when the sort turns round: it is not the worst, it is unmeasured.
     assert [row["evaluation_key"] for row in _page(records, group="search", sort="total_return_pct")["rows"]] == ["s1", "s4", "s2", "s3"]
-    assert best_first["total"] == 4
+    assert (best_first["total"], best_first["sort"], best_first["folds"]) == (4, "total_return_pct", 2)
     assert best_first["groups"] == [
         # The failed run never had a curve to keep; it is not one recorded before curves.
         {"key": "search", "label": "All-period search", "runs": 4, "completed": 3, "with_curve": 3},
@@ -126,6 +124,21 @@ def test_the_page_lists_one_group_sorted_with_unmeasured_runs_last_beside_every_
         _page(records, page=0)
 
 
+def test_one_fold_of_a_group_can_be_listed_alone_and_two_runs_never_read_the_same() -> None:
+    records = [
+        _run("a0", "validation", fold_index=0, window_start_ms=0, window_end_ms=100),
+        _run("b0", "validation", INCUMBENT, fold_index=0, window_start_ms=0, window_end_ms=100),
+        _run("a1", "validation", fold_index=1, window_start_ms=100, window_end_ms=200),
+    ]
+
+    first_fold = _page(records, group="fold_training", fold_index=0)
+
+    assert [row["evaluation_key"] for row in first_fold["rows"]] == ["a0", "b0"]
+    # The same settings trained in two folds differ by label; two points of one fold differ by their settings.
+    described = [(row["label"], row["params_sentence"]) for row in _page(records, group="fold_training")["rows"]]
+    assert len(set(described)) == len(described) == 3
+
+
 def test_a_curve_is_the_return_on_starting_capital_and_the_fall_from_its_own_peak() -> None:
     days = [session_close_ms_utc(day) for day in (date(2025, 1, 6), date(2025, 1, 7), date(2025, 1, 8))]
     daily = [(days[0], 101_000.0), (days[1], 99_990.0), (days[2], 102_010.0)]
@@ -136,11 +149,13 @@ def test_a_curve_is_the_return_on_starting_capital_and_the_fall_from_its_own_pea
     assert view["cumulative_return"] == pytest.approx([0.01, -0.0001, 0.0201], abs=1e-12, rel=0)
     assert view["drawdown"] == pytest.approx([0.0, 99_990.0 / 101_000.0 - 1.0, 0.0], abs=1e-12, rel=0)
     assert view["drawdown"] == [value for _, value in drawdown_series(daily)]
+    # The deepest fall is the series' own lowest point, worked out here and not in the browser.
+    assert view["deepest_drawdown"] == pytest.approx(99_990.0 / 101_000.0 - 1.0, abs=1e-12, rel=0)
 
 
 def test_a_run_whose_equity_never_rose_above_zero_has_a_return_and_no_fall_from_peak() -> None:
     view = curve_view("k", [(1, 0.0), (2, 0.0)], 100_000.0)
-    assert view["cumulative_return"] == [-1.0, -1.0] and view["drawdown"] is None
+    assert view["cumulative_return"] == [-1.0, -1.0] and view["drawdown"] is None and view["deepest_drawdown"] is None
 
 
 def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_not_drawn() -> None:
@@ -149,12 +164,34 @@ def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_n
     view = curves_view(["a", "old", "b"], stored, 100.0)
 
     assert [curve["evaluation_key"] for curve in view["curves"]] == ["a", "b"]
-    assert view["not_recorded"] == ["old"] and view["capital"] == 100.0
+    assert view["not_recorded"] == ["old"]
 
 
-def _lines(records: list[EvaluationRecord], curve_set: str, **study: Any) -> list[tuple[str, str, str]]:
-    lines = curve_set_lines(_study(**study), records, folds=FOLDS, declaration=EMA, curve_set=curve_set)  # type: ignore[arg-type]
-    return [(line.record.evaluation_key, line.role, line.label) for line in lines]
+# ── A step's set of lines ────────────────────────────────────────────────
+
+DEVELOPMENT = (0, 300)
+RECENT = (200, 300)
+SEARCHED = {"procedure": {"winner": WINNER}, "window": {"start_ms": 0, "end_ms": 300}}
+
+
+def _set_study(**results: Any) -> StudyRow:
+    study = _study(**results)
+    protocol = {
+        **study.protocol,
+        "development_start_ms": DEVELOPMENT[0],
+        "development_end_ms": DEVELOPMENT[1],
+        "knobs": [{"name": "gap", "mode": "search"}, {"name": "rsi_min", "mode": "fixed"}],
+        "stress": [{"key": "slippage_1c", "label": "Extra 1¢/share slippage"}],
+    }
+    return StudyRow(**{**{field: getattr(study, field) for field in study.__dataclass_fields__}, "protocol": protocol})
+
+
+def _chosen(records: list[EvaluationRecord], curve_set: str, candidate: str | None = None, **results: Any) -> Any:
+    return curve_set_lines(_set_study(**results), records, folds=FOLDS, declaration=EMA, curve_set=curve_set, candidate_key=candidate)  # type: ignore[arg-type]
+
+
+def _drawn(records: list[EvaluationRecord], curve_set: str, candidate: str | None = None, **results: Any) -> list[tuple[str, str, str]]:
+    return [(line.record.evaluation_key, line.role, line.label) for line in _chosen(records, curve_set, candidate, **results).lines]
 
 
 def test_a_search_set_is_every_point_the_procedure_scored_with_its_winner_and_the_incumbent_named() -> None:
@@ -163,44 +200,106 @@ def test_a_search_set_is_every_point_the_procedure_scored_with_its_winner_and_th
         _run("s2", "search", {**INCUMBENT, "gap": 0.25}),
         _run("s3", "search", WINNER),
         # Another procedure's point, and a neighbor the evidence asked for, are not this search's.
-        _run("r1", "recent", WINNER),
+        _run("r1", "recent", WINNER, window_start_ms=200),
         _run("n1", "evidence", {**INCUMBENT, "gap": 0.35}),
     ]
 
-    assert _lines(records, "search", search={"procedure": {"winner": WINNER}}) == [
-        ("s1", "incumbent", "Current settings"),
-        ("s2", "other", "Scored point"),
-        ("s3", "winner", "Winner"),
-    ]
-    assert _lines(records, "recent", recent={"procedure": {"winner": WINNER}}) == [("r1", "winner", "Winner")]
+    assert _drawn(records, "search", search=SEARCHED) == [("s1", "incumbent", "Current settings"), ("s2", "other", "Scored point"), ("s3", "winner", "Winner")]
+    assert _drawn(records, "recent", recent={"procedure": {"winner": WINNER}, "window": {"start_ms": 200, "end_ms": 300}})[0] == ("r1", "winner", "Winner")
 
 
-def test_a_fold_test_set_pairs_each_folds_winner_with_the_incumbent_on_its_test_window() -> None:
+def test_a_search_that_did_not_score_the_incumbent_draws_it_from_the_step_that_did_and_says_so_when_none_did() -> None:
+    # The search started from another seed, as it must when the incumbent is a qualified version.
+    searched = [_run("s3", "search", WINNER), _run("c1", "evidence", INCUMBENT, detail=True)]
+
+    assert _drawn(searched, "search", search=SEARCHED) == [("s3", "winner", "Winner"), ("c1", "incumbent", "Current settings")]
+    # Nothing ran the incumbent on the recent window: the set says so and draws no line for it.
+    recent = _chosen([_run("r1", "recent", WINNER, window_start_ms=200)], "recent", recent={"procedure": {"winner": WINNER}, "window": {"start_ms": 200, "end_ms": 300}})
+    assert [line.role for line in recent.lines] == ["winner"]
+    assert recent.notes == ("The current settings were not run on this window, so they have no line here.",)
+
+
+def test_a_search_that_returned_the_incumbent_names_one_line_for_both() -> None:
+    kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
+    chosen = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
+
+    assert [(line.role, line.label) for line in chosen.lines] == [("winner", "Winner · current settings"), ("other", "Scored point")]
+    assert chosen.notes == ()
+
+
+def test_a_fold_test_set_finds_each_run_by_what_it_is_even_when_another_step_scored_it_first() -> None:
+    validation = {"folds": [{"fold_index": 0, "winner": FOLD_WINNER}, {"fold_index": 1, "winner": WINNER}]}
     records = [
-        _run("t1", "validation", INCUMBENT, fold_index=1, window_start_ms=200, window_end_ms=300),
+        # Fold 1's test window is the recent window here: the recent search scored both runs first.
+        _run("r-win", "recent", WINNER, window_start_ms=200, window_end_ms=300),
+        _run("r-inc", "recent", INCUMBENT, window_start_ms=200, window_end_ms=300),
         _run("t0", "validation", INCUMBENT, fold_index=0, window_start_ms=100, window_end_ms=200),
         _run("w0", "validation", FOLD_WINNER, fold_index=0, window_start_ms=100, window_end_ms=200),
         # A training run of the winner is not a test.
         _run("x0", "validation", FOLD_WINNER, fold_index=0, window_start_ms=0, window_end_ms=100),
     ]
 
-    assert _lines(records, "fold_tests", validation={"folds": [{"fold_index": 0, "winner": FOLD_WINNER}, {"fold_index": 1, "winner": None}]}) == [
+    assert _drawn(records, "fold_tests", validation=validation) == [
         ("w0", "winner", "Fold 1 winner"),
         ("t0", "incumbent", "Fold 1 current settings"),
-        ("t1", "incumbent", "Fold 2 current settings"),
+        ("r-win", "winner", "Fold 2 winner"),
+        ("r-inc", "incumbent", "Fold 2 current settings"),
+    ]
+    # A fold with no winner still shows the incumbent; a fold that chose the incumbent is one line.
+    assert _drawn(records, "fold_tests", validation={"folds": [{"fold_index": 0, "winner": None}, {"fold_index": 1, "winner": INCUMBENT}]}) == [
+        ("t0", "incumbent", "Fold 1 current settings"),
+        ("r-inc", "winner", "Fold 2 winner · current settings"),
     ]
 
 
-def test_a_set_keeps_every_named_line_before_the_others_and_counts_what_it_leaves_out() -> None:
-    def other(index: int, **overrides: Any) -> SetLine:
-        return SetLine(_run(f"o{index}", "search", {**INCUMBENT, "gap": index / 1000}, **overrides), "other", "Scored point")
+def _evidence(key: str, point: dict[str, Any], *, audited: bool) -> dict[str, Any]:
+    return {"key": key, "point": point, "point_hash": point_hash(STRATEGY, point), "neighbors_audited": audited}
 
-    crowd = [other(index) for index in range(MAX_SET_CURVES + 5)]
-    winner = SetLine(_run("w", "search", WINNER), "winner", "Winner")
-    old = other(9999, has_curve=False)
 
-    returned, left_out, not_recorded = within_cap([*crowd, old, winner])
+def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_wherever_they_were_scored() -> None:
+    below, above = {**INCUMBENT, "gap": 0.25}, {**INCUMBENT, "gap": 0.35}
+    records = [
+        # The search scored the candidate and one neighbor before the evidence asked; the other is the evidence's own.
+        _run("s-win", "search", WINNER),
+        _run("s-below", "search", below),
+        _run("d-win", "evidence", WINNER, detail=True),
+        _run("n-above", "evidence", above),
+        _run("x-win", "evidence", WINNER, scenario="slippage_1c"),
+        # The same settings on the final test, and another point's stress, are not this candidate's development evidence.
+        _run("f-win", "exam", WINNER, detail=True, window_start_ms=300, window_end_ms=400),
+        _run("x-inc", "evidence", INCUMBENT, scenario="slippage_1c"),
+    ]
+    evidence = {"candidates": [_evidence("all_period", WINNER, audited=True), _evidence("incumbent", INCUMBENT, audited=False)]}
 
-    # The winner arrived last and is still drawn; six of the others give way to it and to the cap.
-    assert len(returned) == MAX_SET_CURVES and returned[-1].role == "winner"
-    assert (left_out, not_recorded) == (6, 1)
+    assert _drawn(records, "candidate", "all_period", evidence=evidence) == [
+        ("s-win", "candidate", "All-period fit"),
+        ("x-win", "stress", "Extra 1¢/share slippage"),
+        ("s-below", "neighbor", "Crossover gap one step below (0.25)"),
+        ("n-above", "neighbor", "Crossover gap one step above (0.35)"),
+    ]
+    # The incumbent's neighbors were not audited: the search's nearby points are not passed off as an audit.
+    incumbent = _drawn([*records, _run("s-inc", "search", INCUMBENT)], "candidate", "incumbent", evidence=evidence)
+    assert [role for _, role, _ in incumbent] == ["candidate", "stress"]
+    assert _drawn(records, "candidate", "recent", evidence=evidence) == []
+
+
+def test_a_set_keeps_every_named_line_spreads_the_others_over_the_search_and_counts_only_completed_runs_without_a_curve() -> None:
+    crowd = [_run(f"o{index:04d}", "search", {**INCUMBENT, "gap": 1 + index / 1000}) for index in range(MAX_OTHER_LINES * 2)]
+    records = [
+        *crowd,
+        _run("old", "search", {**INCUMBENT, "gap": 9.0}, has_curve=False),
+        _run("failed", "search", {**INCUMBENT, "gap": 9.1}, status="failed", has_curve=False),
+        _run("pending", "search", {**INCUMBENT, "gap": 9.2}, status="pending", has_curve=False),
+        _run("inc", "search", INCUMBENT),
+        _run("win", "search", WINNER),
+    ]
+
+    chosen = _chosen(records, "search", search=SEARCHED)
+
+    drawn = [line.record.evaluation_key for line in chosen.lines]
+    others = [key for key in drawn if key.startswith("o")]
+    # Both named lines arrived last and are still drawn; the others are every second point, first to last.
+    assert drawn[-2:] == ["inc", "win"] and len(others) == MAX_OTHER_LINES
+    assert others == [f"o{index:04d}" for index in range(0, MAX_OTHER_LINES * 2, 2)]
+    # A run still pending or one that failed never had a curve to keep.
+    assert (chosen.left_out, chosen.not_recorded) == (MAX_OTHER_LINES, 1)

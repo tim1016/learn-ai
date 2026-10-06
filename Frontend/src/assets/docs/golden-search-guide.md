@@ -407,7 +407,9 @@ Does the winner travel with the crowd, or stand alone?
 
 #### What you're looking at
 
-One line for every point the search scored, all on the same window: the cumulative return on top and the fall from peak beneath. The winner is bold, the current settings dashed, and every other point faint. The recent-window search has its own copy, on the recent window only. A search that scored more points than the chart can hold says how many it left out; All runs lists every one.
+One line for every point the search scored, all on the same window: the cumulative return on top and the fall from peak beneath. The winner is bold, the current settings dashed, and every other point faint. The recent-window search has its own copy, on the recent window only.
+
+When the search did not score the current settings itself, their line comes from the run another step made on the same window; if no step ran them there, the panel says so. A search that scored more points than the chart can hold draws an even spread of them and says how many it left out; All runs lists every one. Hover a session for the named lines and the best of the rest, each with its settings.
 
 #### How to read it
 
@@ -625,7 +627,7 @@ How did each fold’s winner travel through its test window?
 
 #### What you're looking at
 
-For each fold, the fold's winner on its own test window as a bold line, and the current settings on the same window as a dashed line. Every fold starts flat with fresh capital, so the lines sit side by side along the date axis and do not join. Beneath, each run's fall from its own peak inside its window.
+For each fold, the fold's winner on its own test window as a bold line, and the current settings on the same window as a dashed line. Every fold starts flat with fresh capital, so the lines sit side by side along the date axis and do not join. A fold whose winner is the current settings shows one line for both. Beneath, each run's fall from its own peak inside its window.
 
 #### How to read it
 
@@ -835,7 +837,7 @@ Does the candidate’s path survive higher costs and a one-step change?
 
 #### What you're looking at
 
-The selected candidate's development run as a bold line. Beside it, in teal, the same settings rerun under each cost stress the plan declared. In light blue, its neighbors: the settings with one searched knob moved one neighbor step down or up and everything else unchanged. Beneath, each run's fall from its own peak.
+The selected candidate's development run as a bold line. Beside it, in teal, the same settings rerun under each cost stress the plan declared. In light blue, its neighbors: the settings with one searched knob moved one neighbor step down or up and everything else unchanged. Neighbors are drawn only when the study audited them for this candidate. The bold line takes the candidate's own colour, and the current settings are dashed. Beneath, each run's fall from its own peak.
 
 #### How to read it
 

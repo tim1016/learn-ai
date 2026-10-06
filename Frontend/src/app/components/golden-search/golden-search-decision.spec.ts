@@ -43,6 +43,9 @@ describe('golden-search-decision', () => {
     expect(chips('awaiting_review')).toEqual(['Meets the stated rules', 'Built during approval', 'Missing · Python-only', 'Awaiting your approval']);
     expect(chips('qualification_failed')[1]).toBe('Proof failed');
     expect(chips('approved')).toEqual(['Meets the stated rules', 'Verified', 'Missing · Python-only', 'Accepted · Manual override']);
+    // A kept or closed study awaits nothing.
+    expect(chips('retained')).toEqual(['Meets the stated rules', 'Not built', 'Missing · Python-only', 'Not approved']);
+    expect(chips('closed')[3]).toBe('Not approved');
   });
 
   it('the final test has a result only once every fit is scored, and a fit answers to each name that chose its settings', () => {

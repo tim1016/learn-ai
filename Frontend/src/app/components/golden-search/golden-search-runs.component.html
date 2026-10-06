@@ -40,9 +40,17 @@
           <button type="button" class="chip" [attr.aria-pressed]="group() === item.key" (click)="chooseGroup(item.key)">{{ item.label }} <span class="count">{{ item.runs | number }}</span></button>
         }
       </div>
+      @if (folds().length > 0) {
+        <div class="filters" role="group" aria-label="Which fold">
+          <button type="button" class="chip" [attr.aria-pressed]="fold() === null" (click)="chooseFold(null)">Every fold</button>
+          @for (index of folds(); track index) {
+            <button type="button" class="chip" [attr.aria-pressed]="fold() === index" (click)="chooseFold(index)">Fold {{ index + 1 }}</button>
+          }
+        </div>
+      }
       @if (withoutCurve() > 0) {
         <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i>
-          <span>Recorded before runs kept their curve: {{ withoutCurve() | number }}. They are listed with their numbers and cannot be drawn.</span></p>
+          <span>Completed runs with no curve recorded: {{ withoutCurve() | number }}. They are listed with their numbers and cannot be drawn.</span></p>
       }
 
       <div class="table-wrap">
@@ -66,7 +74,7 @@
           <tbody>
             @for (row of rows(); track row.run.evaluation_key) {
               <tr [class.ticked]="row.ticked">
-                <td><input type="checkbox" [checked]="row.ticked" [disabled]="!row.run.has_curve || (full() && !row.ticked)" [attr.aria-label]="'Draw ' + row.run.label" (change)="toggle(row.run)" /></td>
+                <td><input type="checkbox" [checked]="row.ticked" [disabled]="!row.run.has_curve || (full() && !row.ticked)" [attr.aria-label]="'Draw ' + row.run.label + ', ' + row.run.params_sentence" (change)="toggle(row.run)" /></td>
                 <th scope="row">{{ row.run.label }}@if (row.note; as note) { <small [class.bad]="row.run.status === 'failed'">{{ note }}</small> }</th>
                 <td class="settings">{{ row.run.params_sentence }}</td>
                 <td class="window"><app-timestamp-display [value]="row.run.window_start_ms" mode="date-et" /> – <app-timestamp-display [value]="row.run.window_end_ms - 1" mode="date-et" /></td>
