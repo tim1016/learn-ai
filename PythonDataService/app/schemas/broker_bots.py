@@ -10,7 +10,14 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
@@ -143,6 +150,11 @@ class AlpacaPaperDeployRequest(BaseModel):
     exit_terms: ExitTermsInput
     budget: DeploymentBudgetInput | None = None
     symbol: str = Field(min_length=1, max_length=12)
+    # What the bot trades when that is not the symbol it listens to (#2912):
+    # one stock or ETF. Omitted, the bot trades ``symbol``. Naming ``symbol``
+    # here is the same choice and is normalised to omitted, so one bot never
+    # has two identities.
+    traded_symbol: str | None = Field(default=None, min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run", "shadow", "live"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
@@ -183,11 +195,27 @@ class AlpacaPaperDeployRequest(BaseModel):
     def _normalize_symbol(cls, value: str) -> str:
         return normalized_symbol(value)
 
+    @field_validator("traded_symbol")
+    @classmethod
+    def _normalize_traded_symbol(cls, value: str | None) -> str | None:
+        return None if value is None else normalized_symbol(value)
+
+    @model_validator(mode="after")
+    def _trading_the_signal_is_trading_nothing_else(self) -> AlpacaPaperDeployRequest:
+        if self.traded_symbol == self.symbol:
+            self.traded_symbol = None
+        return self
+
     @model_validator(mode="after")
     def _dry_run_cannot_carry_broker_exposure(self) -> AlpacaPaperDeployRequest:
         if self.execution_mode == "dry_run" and self.carryover_policy == "ALLOW":
             raise ValueError("dry_run requires carryover_policy=FORBID")
         return self
+
+    @property
+    def order_symbol(self) -> str:
+        """The symbol this bot's orders are in: what it trades, which is what it listens to unless it says otherwise."""
+        return self.traded_symbol or self.symbol
 
     def fingerprint(self, **bound_to: str) -> str:
         """The one hash of these settings, bound to what the caller names.
@@ -202,6 +230,10 @@ class AlpacaPaperDeployRequest(BaseModel):
         else the hash commits to (the account; for consent, also the world).
         """
         payload = self.model_dump(mode="json", include=set(AlpacaPaperDeployRequest.model_fields) - {"end"})
+        if payload["traded_symbol"] is None:
+            # Omitted when absent, so a Deploy that trades the symbol it
+            # listens to keeps the fingerprint it had before the field existed.
+            del payload["traded_symbol"]
         if payload["budget"] is not None:
             payload["budget"].pop("review_token", None)
             payload["budget"].pop("live_confirmation", None)
@@ -235,6 +267,8 @@ class BotDeployPrefill(BaseModel):
     source_strategy_instance_id: str
     strategy_key: str
     symbol: str
+    # What the earlier bot traded, when that was not ``symbol`` (#2912).
+    traded_symbol: str | None = None
     sizing: AlpacaPaperSizingSelection
     parameters: dict[str, JsonValue]
     # ``None`` when the source bot's terms were never recorded in full: the

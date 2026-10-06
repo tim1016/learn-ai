@@ -27,12 +27,16 @@ from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.contract.errors import BrokerError
+from app.broker.contract.models import is_active_tradable_us_equity
+from app.broker.contract.registry import get_broker_registry
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_search import qualification_service
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
 from app.schemas.account_authority import world_admits_account_mode
+from app.schemas.action_plan import traded_instrument, trades_the_signals_shares
 from app.schemas.broker_bots import (
     AlpacaDeploySubmission,
     AlpacaPaperDeployReceipt,
@@ -284,8 +288,7 @@ async def preview_alpaca_deployment_budget(
     The warning is read here, not in ``preview_budget``: consent re-runs that
     preview at Deploy, and a warning is no part of what consent binds.
     """
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-    resolved = _require_alpaca_deploy_request(view, request)
+    _view, resolved = await _deploy_preflight(broker, account_id, request)
     try:
         preview = budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective)
         same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
@@ -460,8 +463,7 @@ async def deploy_alpaca_paper_bot(
         # committed. A budget-less Deploy has no commit to read, so its
         # earlier bot may have started.
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
-            view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-            resolved_params = _require_alpaca_deploy_request(view, request)
+            view, resolved_params = await _deploy_preflight(broker, account_id, request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(account_id, request, resolved_parameters=resolved_params.effective)
@@ -479,6 +481,7 @@ async def deploy_alpaca_paper_bot(
                 strategy_instance_id=sid,
                 strategy_key=request.strategy_key,
                 symbol=request.symbol,
+                traded_symbol=request.traded_symbol,
                 use_rth=True,
                 mode="dry_run" if request.execution_mode == "dry_run" else "trade",
                 quantity=request.sizing.quantity,
@@ -597,8 +600,7 @@ async def preview_alpaca_paper_start_admission(
     The bot has no name yet, so the checks run against the name a Deploy
     claimed now would get: they describe the bot the Deploy would create.
     """
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
-    resolved_params = _require_alpaca_deploy_request(view, request)
+    _view, resolved_params = await _deploy_preflight(broker, account_id, request)
     # The end the Deploy would refuse is refused here too (#2607).
     resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run")
     registry = _runner()
@@ -615,6 +617,7 @@ async def preview_alpaca_paper_start_admission(
             strategy_instance_id=sid,
             strategy_key=request.strategy_key,
             symbol=request.symbol,
+            traded_symbol=request.traded_symbol,
             use_rth=True,
             mode="dry_run" if request.execution_mode == "dry_run" else "trade",
             quantity=request.sizing.quantity,
@@ -659,6 +662,11 @@ async def deploy_prefill(broker: str, account_id: str, sid: str) -> BotDeployPre
         source_strategy_instance_id=sid,
         strategy_key=binding.strategy_key,
         symbol=binding.symbol,
+        traded_symbol=(
+            None
+            if trades_the_signals_shares(binding.action_plan, binding.symbol)
+            else traded_instrument(binding.action_plan).underlying
+        ),
         sizing=AlpacaPaperSizingSelection(
             preset="safe_canary" if binding.quantity == 1 else "custom", quantity=binding.quantity,
         ),
@@ -686,6 +694,21 @@ def _owner_parameters(binding: BrokerBotBinding) -> dict[str, object]:
     if origins is None:
         return public
     return {name: value for name, value in public.items() if origins.get(name) == "deploy_override"}
+
+
+async def _deploy_preflight(
+    broker: str, account_id: str, request: AlpacaPaperDeployRequest,
+) -> tuple[AlpacaPaperDeployView, ResolvedDeployParams]:
+    """The checks the money review, the admission preview and Deploy all make, in one place.
+
+    One function so the three cannot drift: what a review accepts, Deploy
+    accepts, and a traded asset Alpaca cannot trade is refused at the first
+    review rather than at the final click.
+    """
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
+    resolved = _require_alpaca_deploy_request(view, request)
+    await _require_tradable_traded_asset(broker, request)
+    return view, resolved
 
 
 def _require_alpaca_deploy_request(
@@ -731,6 +754,7 @@ def _require_alpaca_deploy_request(
         _require_dry_run_deploy_request(view, strategy)
     else:
         _require_broker_deploy_request(view, strategy, request)
+        _require_the_signals_own_asset(request)
     try:
         resolved = resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
     except ValueError as exc:
@@ -754,6 +778,65 @@ def _require_alpaca_deploy_request(
             http_status=409,
         )
     return resolved
+
+
+def _require_the_signals_own_asset(request: AlpacaPaperDeployRequest) -> None:
+    """A bot that trades a different asset than it listens to runs as a Dry Run only, for now (#2912).
+
+    The strategy's evidence is about trading the symbol it listens to. Paper,
+    Live Shadow and Live open to a different asset once the owner can accept
+    that in writing with the Deploy; until that record exists, nothing that
+    contacts a broker takes one.
+    """
+    if request.traded_symbol is None:
+        return
+    raise PanelRunnerError(
+        f"A bot that listens to {request.symbol} and trades {request.traded_symbol} can run as a Dry Run only.",
+        detail=(
+            f"This strategy was tested trading {request.symbol}. It is untested trading "
+            f"{request.traded_symbol}, and a Paper, Live Shadow or Live bot needs that accepted in writing, "
+            "which Deploy cannot record yet."
+        ),
+        next_action=f"Deploy it as a Dry Run, or trade {request.symbol}.",
+        http_status=409,
+    )
+
+
+async def _require_tradable_traded_asset(broker: str, request: AlpacaPaperDeployRequest) -> None:
+    """Refuse a traded asset Alpaca cannot trade, before the bot exists (#2912).
+
+    Asked only for an asset other than the Signal stream's symbol: a Deploy
+    that trades the symbol it listens to is judged exactly as before. A Dry
+    Run asks too, so that what it rehearses is something a real bot could
+    trade.
+    """
+    symbol = request.traded_symbol
+    if symbol is None:
+        return
+    try:
+        asset = await get_broker_registry().resolve(broker).get_asset(symbol)
+    except BrokerError as exc:
+        # The broker contract's own status: only an unreachable or throttled
+        # Alpaca (503) is worth trying again. Rejected credentials or a
+        # request Alpaca would not read are not connection problems.
+        unreachable = exc.http_status == 503
+        raise PanelRunnerError(
+            f"Alpaca could not be asked whether it trades {symbol}.",
+            detail=exc.detail or str(exc),
+            next_action=(
+                "Try again once Alpaca can be reached."
+                if unreachable
+                else "Alpaca answered with an error, so sending this again will not help until that is fixed."
+            ),
+            http_status=exc.http_status,
+        ) from exc
+    if not is_active_tradable_us_equity(asset):
+        raise PanelRunnerError(
+            f"Alpaca cannot trade {symbol}. Choose another asset.",
+            detail=f"{symbol} is not an active, tradable US stock or ETF at Alpaca.",
+            next_action="Choose another asset to trade, or trade the symbol the bot listens to.",
+            http_status=409,
+        )
 
 
 def _require_dry_run_deploy_request(

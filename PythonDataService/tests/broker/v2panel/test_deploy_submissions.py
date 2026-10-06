@@ -793,6 +793,20 @@ def prefill_app(deploy_app, monkeypatch: pytest.MonkeyPatch):
     return SimpleNamespace(app=fast_app, registry=registry, sources=sources)
 
 
+async def test_deploy_again_prefill_restores_the_asset_the_earlier_bot_traded(prefill_app) -> None:
+    """#2912: the earlier bot listened to SPY and traded QQQ; Deploy again starts from both."""
+    source = _sealed_source("ema_crossover_signal", LEGACY_IDS[1], {}).model_copy(
+        update={"action_plan": alpaca_v1_action_plan("QQQ")}
+    )
+    prefill_app.sources[source.strategy_instance_id] = source
+
+    async with _client(prefill_app.app) as client:
+        found = await client.get(f"{_BOTS}/{source.strategy_instance_id}/deploy-prefill")
+
+    assert found.status_code == 200
+    assert (found.json()["symbol"], found.json()["traded_symbol"]) == ("SPY", "QQQ")
+
+
 async def test_deploy_again_prefill_returns_the_sealed_settings_and_never_money(prefill_app) -> None:
     source = _sealed_source("ema_crossover_signal", LEGACY_IDS[1], {"gap": 0.3, "rsi_min": 55.0})
     prefill_app.sources[source.strategy_instance_id] = source
@@ -807,6 +821,8 @@ async def test_deploy_again_prefill_returns_the_sealed_settings_and_never_money(
         "source_strategy_instance_id": LEGACY_IDS[1],
         "strategy_key": "ema_crossover_signal",
         "symbol": "SPY",
+        # The earlier bot traded the symbol it listened to.
+        "traded_symbol": None,
         "sizing": {"preset": "custom", "quantity": 3},
         # Only what the owner set: the registered defaults are not re-sent as overrides.
         "parameters": {"gap": 0.3, "rsi_min": 55.0},

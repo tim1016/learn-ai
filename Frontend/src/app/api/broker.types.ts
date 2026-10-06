@@ -6620,6 +6620,8 @@ export interface components {
             submission_key: string;
             /** Symbol */
             symbol: string;
+            /** Traded Symbol */
+            traded_symbol?: string | null;
         };
         /** AlpacaDeskStateResponse */
         AlpacaDeskStateResponse: {
@@ -6836,6 +6838,8 @@ export interface components {
             strategy_key: string;
             /** Symbol */
             symbol: string;
+            /** Traded Symbol */
+            traded_symbol?: string | null;
         };
         /**
          * AlpacaPaperDeployStrategy
@@ -7912,6 +7916,8 @@ export interface components {
             strategy_key: string;
             /** Symbol */
             symbol: string;
+            /** Traded Symbol */
+            traded_symbol?: string | null;
         };
         /**
          * BotDutyOutcomeView

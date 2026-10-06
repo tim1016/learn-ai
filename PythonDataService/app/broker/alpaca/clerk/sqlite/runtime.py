@@ -827,7 +827,9 @@ class SqliteAlpacaClerkFacade:
                 world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
                 if consent.world != world or self._live_envelope is None:
                     raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
-                quote = self._quote_source(binding.symbol, self._repo.clock())
+                # One estimated position is priced from the asset the bot
+                # buys, as the Deploy review priced it (#2912).
+                quote = self._quote_source(traded_symbol, self._repo.clock())
                 if quote is None:
                     raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
                 required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())

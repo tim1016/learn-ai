@@ -31,6 +31,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeedError,
 )
+from app.schemas.action_plan import traded_instrument
 from app.schemas.broker_bots import BotProcessFact
 from app.schemas.exit_terms import ExitTermsInput
 from app.services import bot_runner as bot_runner_module
@@ -454,6 +455,42 @@ async def test_start_timestamps_activation_after_custody_reconciliation(
     run_id = _current_run_json(tmp_path)["run_id"]
     assert _run_json(tmp_path, run_id)["started_at_ms"] == started.admission.evaluated_at_ms
     await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_a_bot_is_bound_to_the_asset_its_deploy_names_as_traded(tmp_path: Path) -> None:
+    """#2912: the runner is the one place the bot's plan is written. It listens to SPY and trades QQQ."""
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    await registry.deploy_with_admission(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        traded_symbol="QQQ",
+    )
+
+    binding = registry.binding_for_control("alpaca", _SID)
+    assert binding.symbol == "SPY"
+    assert traded_instrument(binding.action_plan).underlying == "QQQ"
+    assert _strategy_instance_json(tmp_path)["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "QQQ"
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_the_admission_preview_judges_the_bot_the_deploy_would_bind(tmp_path: Path) -> None:
+    """#2912: a preview of SPY-trades-QQQ is no preview of SPY-trades-SPY; naming SPY itself is naming nothing."""
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    async def previewed(**traded: str) -> str:
+        decision = await registry.preview_start_admission(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", **traded,
+        )
+        return decision.configuration_hash
+
+    trades_its_own = await previewed()
+
+    assert await previewed(traded_symbol="QQQ") != trades_its_own
+    assert await previewed(traded_symbol="SPY") == trades_its_own
 
 
 @pytest.mark.asyncio

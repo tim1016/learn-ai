@@ -37,7 +37,10 @@ from app.marketdata.feed import (
 )
 from app.schemas.action_plan import ActionPlan
 from app.schemas.deployment_budget import DeployBudgetConsent
-from app.schemas.market_liveness import MarketClockLivenessEvidence, SymbolTradingStatusEvidence
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    SymbolTradingStatusEvidence,
+)
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -49,8 +52,8 @@ from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeClerk
 from tests._helpers.bot_runner.market import patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
-from tests.broker.v2panel.test_dry_run_recovery import _publish_quote
 
 from ._support import _SESSION_OPEN_MS, _green_bar, _red_bar
 
@@ -527,7 +530,7 @@ async def test_a_dry_run_records_the_asset_it_traded_and_that_assets_price(tmp_p
         ),
     )
     market_liveness.reset_market_liveness_store_for_testing()
-    _publish_quote(NOON, bid=100.0, ask=100.0)
+    publish_quotes(NOON, SPY=100.0, QQQ=40.0)
     authority = SyntheticBindingAuthority(
         binding=binding, artifacts_root=tmp_path,
         lifecycle_repo_for=lambda _sid: pytest.fail("a Dry Run's entry never reads the runner's lifecycle state"),

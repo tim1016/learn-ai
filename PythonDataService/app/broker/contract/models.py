@@ -331,6 +331,21 @@ class BrokerAsset(_ContractModel):
     marginable: bool | None
 
 
+def is_active_tradable_us_equity(asset: BrokerAsset | None) -> bool:
+    """Whether the broker lists ``asset`` as a US stock or ETF it takes orders in now.
+
+    ``None`` is the broker not knowing the symbol. The one rule for every
+    place that asks before an order can exist: a manual order's preview, and
+    a Deploy that names the asset its bot trades.
+    """
+    return (
+        asset is not None
+        and asset.asset_class.lower() == "us_equity"
+        and asset.status.lower() == "active"
+        and asset.tradable
+    )
+
+
 class BrokerClockEvidence(_ContractModel):
     """Market-wide broker-clock evidence — not scheduled-session authority.
 
