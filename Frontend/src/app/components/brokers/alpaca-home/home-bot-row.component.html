@@ -8,7 +8,7 @@
     <a class="home-row__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
   </span>
   <span class="home-row__meta">
-    {{ bot.strategy_label }} · <app-asset-identity class="home-row__symbol" [symbol]="bot.symbol" size="xs" />
+    {{ bot.strategy_label }} · <app-bot-instrument class="home-row__symbol" [symbol]="bot.symbol" [traded]="bot.traded" />
   </span>
 </div>
 

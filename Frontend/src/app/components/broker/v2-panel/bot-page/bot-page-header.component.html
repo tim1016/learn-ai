@@ -6,7 +6,7 @@
       <span aria-hidden="true">·</span>
       <span class="bot-header__strategy">{{ panel().strategy_label }}</span>
       <span aria-hidden="true">·</span>
-      <app-asset-identity [symbol]="panel().symbol" size="sm" />
+      <app-bot-instrument [symbol]="panel().symbol" [traded]="panel().traded" form="words" size="sm" />
     </p>
     <div class="bot-header__title">
       <h2 class="bot-header__name">{{ panel().strategy_instance_id }}</h2>

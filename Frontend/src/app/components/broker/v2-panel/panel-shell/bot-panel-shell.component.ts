@@ -48,6 +48,7 @@ import type {
 import { FEED_CONTINUITY_NOT_RECORDED, feedContinuityFor } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService, type BotEndInput } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
+import { orderSymbol } from '../../../../shared/bot-instrument/bot-instrument.component';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
@@ -330,7 +331,8 @@ export class BotPanelShellComponent {
       clerkId: this.clerkId(),
       routeAccountId: this.accountId(),
       accountId: panel.account_id,
-      symbol: panel.symbol,
+      // The ticket is there to act on the bot's position, which is in what it trades.
+      symbol: orderSymbol(panel.symbol, panel.traded),
     });
   });
 

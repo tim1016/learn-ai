@@ -5,7 +5,7 @@ import {
   accountWorkspaceBotRoute,
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
-import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
+import { BotInstrumentComponent } from '../../../shared/bot-instrument/bot-instrument.component';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
@@ -25,7 +25,7 @@ import { homeBotHue, homeBotStrip, type HomeBot } from './home-bots';
 @Component({
   selector: 'app-home-bot-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetIdentityComponent, AuthoredUsdPipe, HomeBotActionComponent, MoneyBarComponent, RouterLink],
+  imports: [AuthoredUsdPipe, BotInstrumentComponent, HomeBotActionComponent, MoneyBarComponent, RouterLink],
   templateUrl: './home-bot-row.component.html',
   styleUrl: './home-bot-row.component.scss',
   host: {

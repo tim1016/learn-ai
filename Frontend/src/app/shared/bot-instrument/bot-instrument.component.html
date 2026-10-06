@@ -1,0 +1,15 @@
+@if (traded(); as other) {
+  @if (form() === 'words') {
+    <span class="bot-instrument__word">Listens to</span>
+    <app-asset-identity [symbol]="symbol()" [size]="size()" />
+    <span class="bot-instrument__separator" aria-hidden="true">·</span>
+    <span class="bot-instrument__word">Trades</span>
+    <app-asset-identity [symbol]="other.symbol" [size]="size()" />
+  } @else {
+    <app-asset-identity [symbol]="symbol()" [size]="size()" />
+    <span class="bot-instrument__arrow" aria-hidden="true">→</span>
+    <app-asset-identity [symbol]="other.symbol" [size]="size()" />
+  }
+} @else {
+  <app-asset-identity [symbol]="symbol()" [size]="size()" />
+}

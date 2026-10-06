@@ -349,6 +349,20 @@ describe('AlpacaHomeComponent', () => {
     );
   });
 
+  it('names what a bot listens to and trades on its row when that is something else (#2912)', async () => {
+    await renderHome({
+      getCatalog: () => Promise.resolve([
+        fakeCatalogBot({ strategy_instance_id: 'spy-qqq', traded: { kind: 'stock', symbol: 'QQQ' } }),
+        fakeCatalogBot({ strategy_instance_id: 'spy-only' }),
+      ]),
+    });
+
+    const other = (await screen.findByRole('link', { name: 'spy-qqq' })).closest('app-home-bot-row') as HTMLElement;
+    expect(within(other).getByRole('group', { name: 'Listens to SPY, trades QQQ' })).toBeTruthy();
+    const ordinary = screen.getByRole('link', { name: 'spy-only' }).closest('app-home-bot-row') as HTMLElement;
+    expect(within(ordinary).queryByRole('group', { name: /Listens to/ })).toBeNull();
+  });
+
   it('never puts a Dry Run in the bar: it has its own group, in simulated cash', async () => {
     await renderHome();
 

@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { LANE_MODE_WORDING } from '../../../../services/alpaca-live-verdict.service';
 import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
+import { BotInstrumentComponent } from '../../../../shared/bot-instrument/bot-instrument.component';
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { BotPanelView } from '../lib/broker-v2-panel.types';
@@ -31,7 +32,10 @@ let nextSummaryId = 0;
 @Component({
   selector: 'app-bot-page-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaLaneModeChipComponent, AssetIdentityComponent, AuthoredUsdPipe, RouterLink, TimestampDisplayComponent],
+  imports: [
+    AlpacaLaneModeChipComponent, AssetIdentityComponent, AuthoredUsdPipe, BotInstrumentComponent, RouterLink,
+    TimestampDisplayComponent,
+  ],
   templateUrl: './bot-page-header.component.html',
   styleUrl: './bot-page-header.component.scss',
   host: {

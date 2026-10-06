@@ -135,6 +135,22 @@ describe('AlpacaHistoryPageComponent', () => {
     expect(line.textContent).toContain('3 sent · 2 filled · 1 cancelled');
   });
 
+  it('names what a bot listened to and what it traded when that was something else (#2912)', async () => {
+    await renderHistory(page({
+      rows: [
+        bot({ strategy_instance_id: 'spy-qqq', traded: { kind: 'stock', symbol: 'QQQ' } }),
+        bot({ strategy_instance_id: 'spy-only' }),
+      ],
+      total: 2,
+    }));
+
+    const other = screen.getByRole('link', { name: 'spy-qqq' }).closest('tr') as HTMLElement;
+    expect(within(other).getByRole('group', { name: 'Listens to SPY, trades QQQ' })).toBeTruthy();
+    const ordinary = screen.getByRole('link', { name: 'spy-only' }).closest('tr') as HTMLElement;
+    expect(within(ordinary).queryByRole('group', { name: /Listens to/ })).toBeNull();
+    expect(within(ordinary).getByText('SPY')).toBeTruthy();
+  });
+
   it("wears the world each bot's run was in, never its lane's mode today (#2615)", async () => {
     // Both rows sit on the Live lane: a Dry Run and an old Shadow rehearsal
     // never wear its red "real money" chip.
