@@ -1,9 +1,9 @@
 """The traded instrument's one-minute bars, for a bot that trades something else (#2912).
 
 A bot's Signal stream decides. This second stream only prices: it keeps the
-traded instrument's bars as they arrive, keyed by close time, so a decision
-can be handed the **pricing bar** -- the traded instrument's own bar that
-closes with the decision bar.
+traded instrument's bars as they arrive, so a decision can be handed the
+**pricing bar** -- the traded instrument's own bar that closes with the
+decision bar.
 
 The two streams deliver independently and in either order. An ENTER whose
 pricing bar has not arrived waits for it, for a short fixed time and never
@@ -12,13 +12,19 @@ never used for that decision. An EXIT never waits: it takes the bar if it is
 already there.
 
 Nothing that happens here ends the run, pauses the Signal Session or
-quarantines a decision bar. A feed error, a minute the feed cannot prove
-complete, or a stream that ends only leaves entries unpriceable until the
-stream is back, and the stream subscribes again on its own.
+quarantines a decision bar. A feed error of any kind, a minute the feed
+cannot prove complete, or a stream that ends only leaves entries unpriceable
+until the stream is back, and the stream subscribes again on its own: once
+the feed is connected, after a pause that grows while it keeps failing.
+
+A minute the feed cannot prove complete costs two entries, not one: the
+stream that replaces it joins the next minute partway, and the feed delivers
+no bar for a minute it joined partway.
 
 Each bar is retained in the instance's own source-bar ledger, as its own
-provider-and-symbol stream beside the signal's. That is where a Dry Run and a
-Live Shadow verify the bar a fill is priced from.
+provider-and-symbol stream beside the signal's, and read back from there by
+close time. That is where a Dry Run and a Live Shadow verify the bar a fill
+is priced from.
 """
 
 from __future__ import annotations
@@ -33,20 +39,17 @@ from app.services.source_bar_ledger import RetainedSourceBar, SourceBarConflictE
 
 logger = logging.getLogger(__name__)
 
-PRICING_BAR_WAIT_MS: Final = 5_000
-"""How long an ENTER waits for its pricing bar once its decision bar is in hand.
-
-A starting value (#2912): it should be set from how late the second stream's
-minute actually arrives. The caller also caps the wait at the decision's own
-time limit.
-"""
-
 RESUBSCRIBE_DELAY_S: Final = 2.0
-"""The pause before the stream subscribes again after it ended or failed."""
+"""The first pause before the stream subscribes again after it ended or failed."""
 
-# Minutes kept in memory. A decision is priced within seconds of its bar, so
-# this only bounds a long run's memory; the ledger keeps every bar.
-_KEPT_MINUTES: Final = 240
+RESUBSCRIBE_MAX_DELAY_S: Final = 60.0
+"""The longest pause between two attempts while the stream keeps failing.
+
+Each attempt asks the Gateway to qualify a contract and may spend one of the
+connection's paced bar requests, which every bot's Signal stream also draws
+on when it reconnects. A fixed short pause would spend that budget through
+an outage.
+"""
 
 PRICING_BAR_NO_TRADE: Final = "PRICING_BAR_NO_TRADE"
 PRICING_BAR_LATE: Final = "PRICING_BAR_LATE"
@@ -70,6 +73,10 @@ class PricingRefusal:
     why: str
 
 
+class _LedgerFailure(Exception):
+    """The bar ledger refused a bar for a reason that asking the feed again cannot cure."""
+
+
 class PricingBarStream:
     """Keep the traded instrument's minute bars and answer for one decision minute."""
 
@@ -80,8 +87,9 @@ class PricingBarStream:
         *,
         symbol: str,
         run_id: str,
-        wait_ms: int = PRICING_BAR_WAIT_MS,
+        wait_ms: int,
         resubscribe_delay_s: float = RESUBSCRIBE_DELAY_S,
+        resubscribe_max_delay_s: float = RESUBSCRIBE_MAX_DELAY_S,
     ) -> None:
         self._feed = feed
         self._ledger = ledger
@@ -89,11 +97,16 @@ class PricingBarStream:
         self._run_id = run_id
         self._wait_ms = wait_ms
         self._resubscribe_delay_s = resubscribe_delay_s
-        self._bars: dict[int, RetainedSourceBar] = {}
+        self._resubscribe_max_delay_s = resubscribe_max_delay_s
+        # Minutes delivered twice with different prices: neither prices an order.
         self._conflicted: set[int] = set()
         self._arrived = asyncio.Event()
-        # Why the stream is not delivering, or None while it is.
+        # Why the stream is not subscribed, from the failure that ended a
+        # subscription until the next one is asked for. None while subscribed.
         self._down: str | None = None
+        # A "stopped delivering" line was logged and no "delivering again" since:
+        # an outage is two log lines, however many attempts it takes.
+        self._outage_logged = False
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -113,10 +126,9 @@ class PricingBarStream:
         await asyncio.gather(task, return_exceptions=True)
 
     def bar_closing_at(self, close_ms: int) -> RetainedSourceBar | None:
-        """The bar already in hand that closes at ``close_ms``, if it can price an order."""
-        if close_ms in self._conflicted:
-            return None
-        return self._bars.get(close_ms)
+        """The bar already in hand that closes at ``close_ms``, if it is a price: one with a trade in it."""
+        bar = self._retained(close_ms)
+        return bar if isinstance(bar, RetainedSourceBar) and bar.volume > 0 else None
 
     async def bar_for_entry(self, close_ms: int, *, time_left_ms: int) -> RetainedSourceBar | PricingRefusal:
         """The pricing bar for an ENTER decided on the bar closing at ``close_ms``, or why there is none.
@@ -128,13 +140,9 @@ class PricingBarStream:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(0, min(self._wait_ms, time_left_ms)) / 1000
         while True:
-            if close_ms in self._conflicted:
-                return PricingRefusal(
-                    PRICING_BAR_CONFLICT,
-                    f"{self._symbol} was delivered with two different prices for this minute, "
-                    f"so neither is a price to buy at. {_NOT_RETRIED}",
-                )
-            bar = self._bars.get(close_ms)
+            bar = self._retained(close_ms)
+            if isinstance(bar, PricingRefusal):
+                return bar
             if bar is not None:
                 if bar.volume == 0:
                     return PricingRefusal(
@@ -151,10 +159,11 @@ class PricingBarStream:
                 await asyncio.wait_for(self._arrived.wait(), timeout=remaining)
             except TimeoutError:
                 break
-        if self._down is not None:
+        not_delivering = self._not_delivering()
+        if not_delivering is not None:
             return PricingRefusal(
                 PRICING_FEED_UNHEALTHY,
-                f"The {self._symbol} price feed is not delivering ({self._down}), so there was no price "
+                f"The {self._symbol} price feed is not delivering ({not_delivering}), so there was no price "
                 f"to buy at. {_NOT_RETRIED}",
             )
         return PricingRefusal(
@@ -162,37 +171,115 @@ class PricingBarStream:
             f"{self._symbol}'s price for this minute had not arrived in time. {_NOT_RETRIED}",
         )
 
+    def _retained(self, close_ms: int) -> RetainedSourceBar | PricingRefusal | None:
+        """The ledger's one bar closing at ``close_ms``; a refusal when the minute has two."""
+        two_prices = close_ms in self._conflicted
+        bar: RetainedSourceBar | None = None
+        if not two_prices:
+            try:
+                bar = self._ledger.find_by_closed_end(
+                    provider=self._feed.feed_id, symbol=self._symbol, end_ms=close_ms
+                )
+            except SourceBarConflictError:
+                # Two retained bars close at this instant (they open at
+                # different ones): the ledger will not choose between them.
+                two_prices = True
+        if two_prices:
+            return PricingRefusal(
+                PRICING_BAR_CONFLICT,
+                f"{self._symbol} was delivered with two different prices for this minute, "
+                f"so neither is a price to buy at. {_NOT_RETRIED}",
+            )
+        return bar
+
+    def _not_delivering(self) -> str | None:
+        """Why the feed is not delivering this symbol's bars right now, or None when it is.
+
+        Read when an ENTER's wait ends, so a bar that is merely late on a
+        healthy stream is not blamed on a failure the stream has already
+        recovered from, and a line that stalled without raising is not called
+        late.
+        """
+        if self._down is not None:
+            return self._down
+        try:
+            health = self._feed.health(self._symbol)
+        except Exception:
+            # A health probe that raises proves nothing about the feed.
+            logger.warning(
+                "the pricing stream's feed health could not be read",
+                exc_info=True,
+                extra={"action": "pricing_stream_health_unreadable", "symbol": self._symbol, "run_id": self._run_id},
+            )
+            return "its health could not be read"
+        if not health.connected:
+            return health.reason or "the feed is disconnected"
+        if health.stale:
+            return health.reason or "the feed has stalled"
+        return None
+
     async def _consume(self) -> None:
+        delay = self._resubscribe_delay_s
         while True:
             try:
                 async for bar in self._feed.stream_bars(self._symbol, use_rth=False):
                     self._retain(bar)
+                    delay = self._resubscribe_delay_s
                 why = "the stream ended"
+            except _LedgerFailure:
+                raise
             except MarketDataFeedError as exc:
                 why = exc.reason or str(exc)
+            except Exception as exc:
+                # Any feed failure is "down, subscribe again", never the run's.
+                # A socket that drops while a subscription is being set up
+                # raises the transport's own error, not the feed's. The Signal
+                # stream rides such a drop out; so must this one.
+                why = f"{type(exc).__name__}: {exc}"
+                if not self._outage_logged:
+                    logger.warning(
+                        "the pricing stream failed on an error the feed did not name",
+                        exc_info=True,
+                        extra={
+                            "action": "pricing_stream_unnamed_failure",
+                            "symbol": self._symbol,
+                            "run_id": self._run_id,
+                        },
+                    )
+            if not self._outage_logged:
+                self._outage_logged = True
+                logger.warning(
+                    "the pricing stream stopped delivering; entries are unpriceable until it is back",
+                    extra={"action": "pricing_stream_down", "symbol": self._symbol, "run_id": self._run_id, "why": why},
+                )
             self._down = why
             self._arrived.set()
-            logger.warning(
-                "the pricing stream stopped delivering; entries are unpriceable until it is back",
-                extra={
-                    "action": "pricing_stream_down",
-                    "symbol": self._symbol,
-                    "run_id": self._run_id,
-                    "why": why,
-                },
-            )
-            await asyncio.sleep(self._resubscribe_delay_s)
+            await asyncio.sleep(delay)
+            while not self._connected():
+                await asyncio.sleep(delay)
+            delay = min(delay * 2, self._resubscribe_max_delay_s)
+            # Asked for again. Until a bar arrives, the feed's own health says
+            # whether it is delivering.
+            self._down = None
+
+    def _connected(self) -> bool:
+        """Whether the feed's connection is up, so that subscribing again can succeed."""
+        try:
+            return self._feed.health().connected
+        except Exception:
+            # A health probe that raises proves nothing about the feed; the
+            # refusal an ENTER gets meanwhile logs the failure itself.
+            return False
 
     def _retain(self, bar: MarketDataBar) -> None:
         try:
-            retained = self._ledger.append(bar, run_id=self._run_id)
+            self._ledger.append(bar, run_id=self._run_id)
         except SourceBarConflictError as exc:
-            # The ledger refuses a second, different bar for a minute it holds,
-            # and a minute older than its newest. Neither is retained. Only the
-            # first leaves two prices for one minute, so only it marks the
-            # minute: the other is a minute with no bar at all.
-            if self._ledger.find_by_market_bar(bar) is not None:
-                self._bars.pop(bar.end_ms, None)
+            # The ledger refuses a second, different bar for a close time it
+            # holds, and a minute older than its newest. Neither is retained.
+            # Only the first leaves two prices for one minute, so only it marks
+            # the minute: the other is a minute with no bar at all.
+            if self._retained(bar.end_ms) is not None:
                 self._conflicted.add(bar.end_ms)
                 self._arrived.set()
             logger.warning(
@@ -206,24 +293,28 @@ class PricingBarStream:
                 },
             )
             return
+        except Exception as exc:
+            raise _LedgerFailure(str(exc)) from exc
         self._down = None
-        self._bars[retained.end_ms] = retained
-        for old in sorted(self._bars)[:-_KEPT_MINUTES]:
-            del self._bars[old]
-            self._conflicted.discard(old)
         self._arrived.set()
+        if self._outage_logged:
+            self._outage_logged = False
+            logger.info(
+                "the pricing stream is delivering again",
+                extra={"action": "pricing_stream_back", "symbol": self._symbol, "run_id": self._run_id},
+            )
 
     def _ended(self, task: asyncio.Task[None]) -> None:
-        """A consumer that died of an unexpected error leaves the stream down, loudly."""
+        """A consumer the ledger stopped leaves the stream down for the run, loudly."""
         if task.cancelled():
             return
         error = task.exception()
         if error is None:
             return
-        self._down = "the stream stopped on an unexpected error"
+        self._down = "its bars can no longer be retained"
         self._arrived.set()
         logger.error(
-            "the pricing stream stopped on an unexpected error; entries stay unpriceable for this run",
+            "the pricing stream stopped: its bars can no longer be retained; entries stay unpriceable for this run",
             extra={"action": "pricing_stream_failed", "symbol": self._symbol, "run_id": self._run_id},
             exc_info=(type(error), error, error.__traceback__),
         )
@@ -233,7 +324,6 @@ __all__ = [
     "PRICING_BAR_CONFLICT",
     "PRICING_BAR_LATE",
     "PRICING_BAR_NO_TRADE",
-    "PRICING_BAR_WAIT_MS",
     "PRICING_FEED_UNHEALTHY",
     "PRICING_REFUSAL_REASON_CODES",
     "PricingBarStream",

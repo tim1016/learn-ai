@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     SqliteDecisionReceipts,
 )
 from app.broker.contract.capabilities import ExtendedHoursWindow
+from app.config import settings
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -73,7 +74,7 @@ from app.services.market_liveness import (
     market_data_bars_live,
     market_liveness_fact,
 )
-from app.services.pricing_bar_stream import PRICING_BAR_WAIT_MS, PricingBarStream, PricingRefusal
+from app.services.pricing_bar_stream import PricingBarStream, PricingRefusal
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.services.startup_join import LiveStartBuffer, warm_through_seam
 from app.utils.timestamps import now_ms_utc
@@ -872,7 +873,7 @@ async def run_trade_bot(
     *,
     source_bars: SourceBarLedger | None = None,
     pricing_feed: MarketDataFeed | None = None,
-    pricing_bar_wait_ms: int = PRICING_BAR_WAIT_MS,
+    pricing_bar_wait_ms: int | None = None,
 ) -> None:
     """Execute one admitted strategy; the Clerk owns all execution truth.
 
@@ -888,7 +889,8 @@ async def run_trade_bot(
 
     ``pricing_feed`` is the feed a bot that trades a different asset reads
     that asset's bars from (``_pricing_stream_scope``). A bot that trades the
-    symbol it listens to never opens it.
+    symbol it listens to never opens it. ``pricing_bar_wait_ms`` overrides
+    the configured pricing-bar wait; production wiring leaves it unset.
     """
     clerk = get_alpaca_clerk()
     if clerk is None:
@@ -1325,15 +1327,23 @@ def _pricing_stream_scope(
     pricing_feed: MarketDataFeed | None,
     source_bars: SourceBarLedger | None,
     *,
-    wait_ms: int,
+    wait_ms: int | None,
 ) -> AbstractAsyncContextManager[PricingBarStream | None]:
     """The run's second bar stream, opened only for a bot that trades a different asset (#2912).
 
     The stream reads ``pricing_feed``, not the run's own feed: that one is
-    the Signal stream's, and it refuses a second symbol.
+    the Signal stream's, and it refuses a second symbol. It is a stream of
+    share bars, so it prices a stock or an ETF and nothing else: an option
+    plan is refused here rather than handed its underlying's share price.
     """
     if trades_the_signals_shares(binding.action_plan, binding.symbol):
         return nullcontext(None)
+    traded = traded_instrument(binding.action_plan)
+    if traded.kind != "stock":
+        raise RuntimeError(
+            f"A bot can be priced only in a stock or an ETF; its plan trades {traded.kind} on "
+            f"{traded.underlying}."
+        )
     if pricing_feed is None or source_bars is None:
         raise RuntimeError(
             "A bot that trades a different asset than it listens to needs that asset's price feed "
@@ -1342,9 +1352,9 @@ def _pricing_stream_scope(
     return PricingBarStream(
         pricing_feed,
         source_bars,
-        symbol=traded_instrument(binding.action_plan).underlying,
+        symbol=traded.underlying,
         run_id=binding.run_id,
-        wait_ms=wait_ms,
+        wait_ms=settings.PRICING_BAR_WAIT_MS if wait_ms is None else wait_ms,
     )
 
 
@@ -1489,7 +1499,7 @@ async def run_dry_run_bot(
     *,
     source_bars: SourceBarLedger | None,
     pricing_feed: MarketDataFeed | None = None,
-    pricing_bar_wait_ms: int = PRICING_BAR_WAIT_MS,
+    pricing_bar_wait_ms: int | None = None,
 ) -> None:
     """Run the signal session through its isolated synthetic Clerk authority."""
     from app.services.bot_dry_run import DryRunActivity
@@ -1618,6 +1628,13 @@ async def run_dry_run_bot(
                 raise RuntimeError(
                     "A synthetic effect was accepted without its exact retained decision-bar evidence."
                 )
+            # The bar the synthetic Clerk filled at: the traded instrument's
+            # own, never the signal's standing in for it (#2912).
+            filled_at = retained if pricing is None else priced.bar
+            if filled_at is None:
+                raise RuntimeError(
+                    "A synthetic effect was accepted without the traded instrument's bar it was priced from."
+                )
             order_ref = receipt.child_order_refs[0] if receipt.child_order_refs else (
                 f"simulated:{binding.run_id}:{evaluation.evaluation_id}"
             )
@@ -1638,7 +1655,7 @@ async def run_dry_run_bot(
                     # A Dry Run fills at the close of the decision's minute on
                     # purpose (#2599): it needs a price at the moment it
                     # decides. The price is the traded instrument's (#2912).
-                    fill_price=float((priced.bar or retained).close),
+                    fill_price=float(filled_at.close),
                 )
             )
             logger.info(

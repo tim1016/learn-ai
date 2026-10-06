@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from decimal import Decimal
@@ -25,16 +26,26 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import (
+    DELIVERY_ALLOWANCE_MS,
+    ContinuityPolicy,
+    FeedHealth,
+    MarketDataBar,
+    MarketDataFeedError,
+)
+from app.schemas.action_plan import ActionPlan
 from app.schemas.deployment_budget import DeployBudgetConsent
+from app.schemas.market_liveness import MarketClockLivenessEvidence, SymbolTradingStatusEvidence
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_dry_run import DryRunActivityJournal
+from app.services.market_liveness import compose_market_liveness
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.bot_runner.custody import _SID, _T0
 from tests._helpers.bot_runner.doubles import _FakeClerk
+from tests._helpers.bot_runner.market import patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.v2panel.test_dry_run_recovery import _publish_quote
@@ -133,6 +144,7 @@ class _Ran:
     calls: list[dict[str, Any]]
     receipts: list[tuple[str, dict[str, Any]]]
     ledger: SourceBarLedger
+    took_s: float
 
     def blocked(self) -> list[tuple[str, str]]:
         """Each refused decision's reason code and its plain words."""
@@ -154,14 +166,16 @@ async def run(tmp_path: Path) -> AsyncIterator[Any]:
 
     async def _run(script: list[_Step], *, wait_ms: int = 20, binding: BrokerBotBinding | None = None) -> _Ran:
         feed = _ScriptedFeed(script)
+        started = time.monotonic()
         await bot_trade_strategy.run_trade_bot(
             binding or _binding(), feed, source_bars=ledger, pricing_feed=feed, pricing_bar_wait_ms=wait_ms
         )
+        took_s = time.monotonic() - started
         receipts = [
             (receipt.outcome, json.loads(receipt.facts_json))
             for receipt in repo.decision_receipt_tail(strategy_instance_id=_SID, limit=50)
         ]
-        return _Ran(feed=feed, calls=clerk.calls, receipts=receipts, ledger=ledger)
+        return _Ran(feed=feed, calls=clerk.calls, receipts=receipts, ledger=ledger, took_s=took_s)
 
     try:
         yield _run
@@ -197,10 +211,12 @@ async def test_a_price_that_arrives_after_the_wait_is_kept_and_never_used(run: A
         [
             _Step(_green_bar(_FIRST_GREEN_MS)),
             _Step(_green_bar(_ENTER_MS)),
-            _Step(_qqq(_ENTER_MS), after_s=0.15),
+            _Step(_qqq(_ENTER_MS), after_s=0.05),
             _Step(_red_bar(_AFTER_ENTER_MS)),
         ],
-        wait_ms=20,
+        # No wait at all: the entry is refused before anything else can run,
+        # so the price is late however loaded the machine is.
+        wait_ms=0,
     )
 
     assert ran.calls == [], "the entry was dropped; the late price must not revive it"
@@ -239,6 +255,62 @@ async def test_each_reason_an_entry_has_no_price_is_recorded_as_itself(
     assert TRADED in why and "No order was sent" in why
 
 
+async def test_an_entry_never_waits_for_a_price_past_its_own_time_limit(
+    run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The decision is on its last on-time instant. A minute's wait is cut to nothing, and the entry is dropped.
+
+    Nothing else stops an entry going out after its time limit: once it has
+    its price the Clerk does not look at the clock again.
+    """
+    patch_wall_clock_to_the_fed_bar(monkeypatch, decision_delay_ms=DELIVERY_ALLOWANCE_MS)
+
+    ran = await run([_Step(_green_bar(_FIRST_GREEN_MS)), _Step(_green_bar(_ENTER_MS))], wait_ms=60_000)
+
+    assert ran.took_s < 2, "the entry waited past its own time limit"
+    assert ran.calls == []
+    [(reason_code, _why)] = ran.blocked()
+    assert reason_code == "PRICING_BAR_LATE"
+
+
+def _halted(halted_symbol: str) -> Any:
+    """Every symbol tradable but one, which is halted."""
+
+    def fact(symbol: str, observed_at_ms: int) -> Any:
+        return compose_market_liveness(
+            symbol,
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN", source="test.clock", observed_at_ms=observed_at_ms, vendor_timestamp_ms=observed_at_ms
+            ),
+            connected=True,
+            connection_changed_at_ms=observed_at_ms,
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol=symbol,
+                state="HALTED" if symbol.upper() == halted_symbol else "TRADABLE",
+                source="test.symbol-status",
+                observed_at_ms=observed_at_ms,
+                source_timestamp_ms=observed_at_ms,
+            ),
+        )
+
+    return fact
+
+
+async def test_an_entry_is_refused_while_the_traded_asset_is_halted_though_the_signal_is_live(
+    run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry needs both sides live: SPY to decide on, QQQ to send the order into."""
+    monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", _halted(TRADED))
+
+    ran = await run([_Step(_green_bar(_FIRST_GREEN_MS)), _Step(_qqq(_ENTER_MS)), _Step(_green_bar(_ENTER_MS))])
+
+    assert ran.calls == []
+    [facts] = [facts for outcome, facts in ran.receipts if outcome == "blocked"]
+    assert facts["market_liveness"]["symbol"] == TRADED
+    assert facts["market_liveness"]["state"] == "HALTED"
+
+
 async def test_trouble_on_the_price_stream_leaves_the_signal_running(run: Any) -> None:
     """The price feed fails; the signal's next bar is still decided, and the run ends on its own terms."""
     ran = await run(
@@ -272,6 +344,7 @@ async def test_a_sell_never_waits_for_a_price_and_is_never_held_back(run: Any, p
         wait_ms=60_000,
     )
 
+    assert ran.took_s < 5, "a sell waited for a price"
     enter, sell = ran.calls
     assert (enter["purpose"], sell["purpose"]) == ("ENTER", "EXIT")
     assert sell["retained_source_bar"].end_ms == _EXIT_MS
@@ -289,6 +362,39 @@ async def test_a_bot_that_trades_what_it_listens_to_opens_no_second_stream(run: 
     (call,) = ran.calls
     assert call["pricing_bar"] is None
     assert ran.feed.symbols_asked_for == [SIGNAL]
+
+
+async def test_a_plan_that_trades_options_is_not_handed_its_underlyings_share_price(tmp_path: Path) -> None:
+    """A second stream is a stream of share bars. It prices a stock or an ETF and nothing else."""
+    options_on_the_signal = ActionPlan.model_validate(
+        {
+            "on_enter": [
+                {
+                    "leg_id": "call",
+                    "instrument": {"kind": "option", "underlying": SIGNAL},
+                    "position": "long",
+                    "qty_ratio": 1,
+                    "right": "call",
+                    "strike": {"selector": "atm"},
+                    "expiry": {"selector": "nearest_weekly"},
+                }
+            ],
+            "on_exit": [{"kind": "close_leg", "entry_leg_id": "call"}],
+        }
+    )
+    binding = _binding().model_copy(update={"action_plan": options_on_the_signal})
+    ledger = SourceBarLedger(artifacts_root=tmp_path / "ledger", account_id="PA-TEST")
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    set_alpaca_clerk(_FakeClerk(repository=repo))
+    feed = _ScriptedFeed([])
+    try:
+        with pytest.raises(RuntimeError, match="only in a stock or an ETF"):
+            await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger, pricing_feed=feed)
+        assert feed.symbols_asked_for == []
+    finally:
+        set_alpaca_clerk(None)
+        ledger.close()
+        repo.close()
 
 
 async def test_a_bot_that_trades_another_asset_refuses_to_run_without_that_assets_feed(tmp_path: Path) -> None:

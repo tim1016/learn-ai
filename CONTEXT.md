@@ -583,8 +583,10 @@ so they survive a broker change.
   arrives after the wait is kept and never used for that decision. An ENTER
   left without a usable pricing bar is dropped under one of four reasons, kept
   apart: no trade in that minute (the bar came with zero volume), pricing bar
-  late, two different bars for one minute, or the price feed not delivering. An
-  EXIT never waits. _Avoid_: retry window, price timeout
+  late, two different bars for one minute, or the price feed not delivering
+  (it failed and is not yet asked for again, it is disconnected, or it has
+  stalled). An EXIT never waits. The wait is the `PRICING_BAR_WAIT_MS` setting.
+  _Avoid_: retry window, price timeout
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it
   (pre-market, regular, after-hours). The window is broker capability data;
