@@ -176,7 +176,7 @@ def mark_bar_arrival(context: StrategyContext, bar: TradeBar) -> None:
 
     Not cosmetic: a program whose ``commit_signal_decision`` reaches the
     portfolio directly rather than through ``ctx.emit_signal_intent``
-    (``instrument_surface="explicit"`` -- ``deployment_validation`` calls
+    (``deployment_validation`` calls
     ``ctx.set_holdings``/``ctx.liquidate``) asserts on ``current_time_ms``
     and raises without a reference price, so a COMMIT would crash instead
     of committing -- or, in a live-loop continuation, stamp every order
