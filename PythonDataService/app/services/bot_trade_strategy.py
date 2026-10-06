@@ -1401,7 +1401,13 @@ async def _price_decision(
         time_left_ms=decision_time_left_ms(continuity, evaluation.decision_bar_close_ms),
     )
     if not isinstance(priced, PricingRefusal):
-        return _PricedDecision(refused=False, bar=priced)
+        # The wait is cut to the decision's time limit, but it ends on the
+        # event loop's schedule, not on that instant. Judge lateness again:
+        # nothing after this looks at the clock before the order is sent.
+        late = _screen_late_decision(
+            decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
+        )
+        return _PricedDecision(refused=late.refused, bar=None if late.refused else priced)
     _discard_evaluation(evaluation)
     _append_decision_receipt(
         decision_receipts,

@@ -577,16 +577,10 @@ so they survive a broker change.
   recovery reduction, a flatten, a run-end close — read the live quote or the
   last bar instead. _Avoid_: reference bar, signal price, carried-over price
 - **Pricing-bar wait** — how long an ENTER waits for its pricing bar once its
-  decision bar is in hand: a fixed tunable, 5,000 ms to start, and never past
-  the instant the decision itself stops being on time. The two streams deliver
-  independently, so the pricing bar may arrive first or second. A bar that
-  arrives after the wait is kept and never used for that decision. An ENTER
-  left without a usable pricing bar is dropped under one of four reasons, kept
-  apart: no trade in that minute (the bar came with zero volume), pricing bar
-  late, two different bars for one minute, or the price feed not delivering
-  (it failed and no bar has arrived since, it is disconnected, it has stalled
-  or not yet closed a first bar, or its bars can no longer be retained). An
-  EXIT never waits. The wait is the `PRICING_BAR_WAIT_MS` setting.
+  decision bar is in hand: a short fixed time, and never past the instant the
+  decision itself stops being on time. The two streams deliver independently,
+  so the pricing bar may arrive first or second. A bar that arrives after the
+  wait is kept and never used for that decision.
   _Avoid_: retry window, price timeout
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 import app.services.bot_trade_strategy as bot_trade_strategy
+import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
@@ -78,6 +79,8 @@ class _Step:
     bar: MarketDataBar
     after_s: float = 0.0
     fails_with: MarketDataFeedError | None = None
+    # Run as the bar is handed over: what else is true by the time it arrives.
+    on_delivery: Callable[[], None] | None = None
 
 
 class _ScriptedFeed:
@@ -112,6 +115,8 @@ class _ScriptedFeed:
             self._turn += 1
             if step.fails_with is not None:
                 raise step.fails_with
+            if step.on_delivery is not None:
+                step.on_delivery()
             yield step.bar
         if symbol != SIGNAL:
             await asyncio.Event().wait()
@@ -286,6 +291,39 @@ async def test_the_wait_is_the_configured_one_when_a_run_is_given_none(
     assert ran.took_s < 4, "the entry waited though the configured wait is zero"
     [(reason_code, _why)] = ran.blocked()
     assert reason_code == "PRICING_BAR_LATE"
+
+
+async def test_an_entry_whose_price_arrives_as_its_time_runs_out_is_not_sent(
+    run: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The price came inside the wait, and the wait ended a moment past the decision's time limit.
+
+    Lateness is judged again once the price is in hand. Nothing after that
+    looks at the clock before the order goes out.
+    """
+    time_is_up = False
+
+    def now() -> int:
+        return _ENTER_MS + (DELIVERY_ALLOWANCE_MS + 1 if time_is_up else 0)
+
+    def run_out_the_clock() -> None:
+        nonlocal time_is_up
+        time_is_up = True
+
+    monkeypatch.setattr(feed_continuity_policy, "now_ms_utc", now)
+
+    ran = await run(
+        [
+            _Step(_green_bar(_FIRST_GREEN_MS)),
+            _Step(_green_bar(_ENTER_MS)),
+            _Step(_qqq(_ENTER_MS), after_s=0.02, on_delivery=run_out_the_clock),
+        ],
+        wait_ms=5_000,
+    )
+
+    assert ran.calls == []
+    [(reason_code, _why)] = ran.blocked()
+    assert reason_code == "DECISION_LATE"
 
 
 def _halted(halted_symbol: str) -> Any:
