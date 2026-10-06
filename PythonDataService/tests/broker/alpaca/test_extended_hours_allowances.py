@@ -212,6 +212,7 @@ def test_a_refused_binding_refuses_an_exit_as_a_typed_leg_refusal() -> None:
             purpose=EffectPurpose.EXIT,
             use_rth=False,
             decision_bar=_bar(8, 0),
+            pricing_bar=_bar(8, 0),
             policy=policy,
         )
 
@@ -229,6 +230,7 @@ def test_an_exit_leg_is_anchored_by_the_revision_not_a_historical_arming(tmp_pat
         purpose=EffectPurpose.EXIT,
         use_rth=False,
         decision_bar=_bar(8, 0),
+        pricing_bar=_bar(8, 0),
         policy=policy,
     ).shape
 
@@ -249,6 +251,7 @@ def test_an_entry_leg_is_anchored_by_the_revision_too(tmp_path: Path) -> None:
         purpose=EffectPurpose.ENTER,
         use_rth=False,
         decision_bar=_bar(8, 0),
+        pricing_bar=_bar(8, 0),
         policy=policy,
     ).shape
 
@@ -317,7 +320,7 @@ def test_admission_and_exit_preserve_the_composed_binding_refusal() -> None:
     assert decision.reason_code == refusal.reason
     with pytest.raises(ProgramLegRefused) as rejected:
         shape_program_leg(side=OrderSide.SELL, purpose=EffectPurpose.EXIT,
-                          use_rth=False, decision_bar=_bar(8, 0), policy=policy)
+                          use_rth=False, decision_bar=_bar(8, 0), pricing_bar=_bar(8, 0), policy=policy)
     assert rejected.value.reason_code == decision.reason_code
     assert rejected.value.explanation == decision.explanation
     assert rejected.value.next_step == decision.next_step

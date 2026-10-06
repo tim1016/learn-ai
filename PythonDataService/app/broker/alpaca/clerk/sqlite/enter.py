@@ -221,7 +221,7 @@ def accept_enter(
     writes the row in the same transaction. Every account authority supplies
     one; ``None`` means no envelope is configured (a scratch rehearsal store)
     and no envelope check runs.
-    ``reference_price`` is the decision-bar price a market leg is priced at; a
+    ``reference_price`` is the pricing bar's close a market leg is priced at; a
     limit leg is priced at its own limit and ignores it.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)

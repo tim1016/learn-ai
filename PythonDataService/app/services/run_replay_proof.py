@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.broker.alpaca.clerk.program_leg import PRICING_BAR_MISMATCH, PRICING_BAR_UNAVAILABLE
 from app.broker.alpaca.clerk.sqlite.decision_receipts import ENTER_OUTCOMES, EXIT_OUTCOMES
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty import TRANSIENT_ADMISSION_REASON_CODES
@@ -86,6 +87,10 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
         "MARKET_LIVENESS_BLOCKED",
         "SIMULATED_SOURCE_BAR_UNPROVEN",
         "EXIT_CUSTODY_UNPROVEN",
+        # The traded instrument had no bar of its own to price the order
+        # (#2912). A replay runs the signal alone and cannot see it.
+        PRICING_BAR_UNAVAILABLE.reason_code,
+        PRICING_BAR_MISMATCH.reason_code,
     }
     # The SQLite facade's ENTER rejected() path calls
     # _append_pre_custody_refusal to record a protected `blocked` receipt for

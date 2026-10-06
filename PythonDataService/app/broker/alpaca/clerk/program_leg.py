@@ -1,10 +1,12 @@
-"""Shape one program leg from the decision bar, the session, and the operator's allowances (ADR 0059 D5.3).
+"""Shape one program leg from its decision and pricing bars, the session, and the operator's allowances (ADR 0059 D5.3).
 
 Inside the regular session a program leg is a market DAY order, exactly as
 before this slice. Outside it — in the broker's declared PRE or POST window,
 after-hours ending at the calendar's scheduled close on an early-close day —
 the leg is a marketable DAY limit flagged for extended hours, anchored to the
-decision bar's close and widened by the policy's allowance. For an
+pricing bar's close and widened by the policy's allowance. The pricing bar is
+the traded instrument's own bar for the decision's minute: the decision bar
+itself for a bot that trades the symbol it listens to (#2912). For an
 extended-hours run anything else (closed, no anchor, no window, no allowance)
 is a typed refusal the Clerk turns into a rejected receipt; a program leg is
 never guessed.
@@ -395,7 +397,7 @@ EXTENDED_ANCHOR_UNAVAILABLE = LegRefusal(
 EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
     reason_code="EXTENDED_ANCHOR_UNPRICEABLE",
     explanation=(
-        "The decision bar's close and the configured allowance price this leg at or "
+        "The pricing bar's close and the configured allowance price this leg at or "
         "below zero, which is not a submittable limit."
     ),
     next_step=(
@@ -404,6 +406,27 @@ EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
         "deployment, so an edit alone changes nothing — or keep this instrument out of "
         "extended-hours trading."
     ),
+)
+
+# The two reasons an order has no price of its own (#2912). Every price an
+# order uses is read from the traded instrument's bar for the decision's
+# minute; a bar of another asset, the signal's included, never stands in.
+PRICING_BAR_UNAVAILABLE = LegRefusal(
+    reason_code="PRICING_BAR_UNAVAILABLE",
+    explanation=(
+        "No bar of the traded asset was retained for the decision's minute, so this "
+        "order has no price of its own."
+    ),
+    next_step="No order was sent. A price is never carried over from another minute or another asset.",
+)
+
+PRICING_BAR_MISMATCH = LegRefusal(
+    reason_code="PRICING_BAR_MISMATCH",
+    explanation=(
+        "The bar offered to price this order belongs to another asset or another minute "
+        "than the order's own."
+    ),
+    next_step="No order was sent. A price is never carried over from another minute or another asset.",
 )
 
 
@@ -433,6 +456,7 @@ def shape_program_leg(
     purpose: EffectPurpose,
     use_rth: bool,
     decision_bar: RetainedSourceBar | None,
+    pricing_bar: RetainedSourceBar | None,
     policy: ProgramLegPolicy,
 ) -> ProgramLeg:
     """The leg this decision submits (ADR 0059 D5.3), and until when it may be sent.
@@ -442,6 +466,12 @@ def shape_program_leg(
     (``RunDecisionSession.includes``), but the order it drives exists — and is
     therefore priced and placed — at the instant the bucket closed. The two
     instants are deliberately different.
+
+    The decision bar says *when*; the pricing bar says *at what price*. The
+    pricing bar is the traded instrument's own bar for that minute, and it is
+    the decision bar itself only when the bot trades the symbol it listens to
+    (#2912). An extended-session limit is anchored to the pricing bar's close,
+    never to the decision bar's.
 
     A regular-hours run never needs its bar: ENTER and EXIT alike are the
     market DAY leg. The only regular-hours bar that closes outside the session
@@ -456,7 +486,7 @@ def shape_program_leg(
         raise ProgramLegRefused(EXTENDED_HOURS_UNSUPPORTED)
     if session.kind == "extended":
         return _leg_at_decision_close(
-            side=side, purpose=purpose, decision_bar=decision_bar, policy=policy
+            side=side, purpose=purpose, decision_bar=decision_bar, pricing_bar=pricing_bar, policy=policy
         )
     return ProgramLeg(regular_session_shape(side))
 
@@ -466,6 +496,7 @@ def _leg_at_decision_close(
     side: OrderSide,
     purpose: EffectPurpose,
     decision_bar: RetainedSourceBar | None,
+    pricing_bar: RetainedSourceBar | None,
     policy: ProgramLegPolicy,
 ) -> ProgramLeg:
     """The leg for the session the decision bar closed in, or a typed refusal."""
@@ -485,8 +516,10 @@ def _leg_at_decision_close(
     allowance = policy.allowances.entry_bps if purpose is EffectPurpose.ENTER else policy.allowances.exit_bps
     if allowance is None:
         raise ProgramLegRefused(EXTENDED_HOURS_ALLOWANCE_UNSET)
+    if pricing_bar is None:
+        raise ProgramLegRefused(PRICING_BAR_UNAVAILABLE)
     try:
-        price = marketable_limit_price(side=side, anchor=decision_bar.close, allowance_bps=allowance)
+        price = marketable_limit_price(side=side, anchor=pricing_bar.close, allowance_bps=allowance)
     except ValueError as exc:
         # A non-positive quantised anchor. `BrokerOrderLeg` would reject it too,
         # but as a pydantic ValidationError raised from `apply()` — outside the
@@ -511,6 +544,8 @@ __all__ = [
     "EXTENDED_ANCHOR_UNPRICEABLE",
     "EXTENDED_HOURS_ALLOWANCE_UNSET",
     "EXTENDED_HOURS_UNSUPPORTED",
+    "PRICING_BAR_MISMATCH",
+    "PRICING_BAR_UNAVAILABLE",
     "AllowanceResolver",
     "LegRefusal",
     "LegShape",

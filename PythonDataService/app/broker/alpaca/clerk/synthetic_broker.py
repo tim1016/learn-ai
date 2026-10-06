@@ -213,7 +213,7 @@ class SyntheticBroker:
         return self._ledger is not None
 
     def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
-        """Bind one minted Clerk order identity to one exact retained decision bar."""
+        """Bind one minted Clerk order identity to the one exact retained bar that prices it."""
         if self._ledger is None:
             raise SynthesizedBarBindingError(
                 "Synthetic bar binding requires an authority-scoped retained-bar ledger."

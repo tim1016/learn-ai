@@ -3,7 +3,7 @@
 Formula:
     buy:  ceil_tick( anchor × (1 + allowance_bps / 10⁴) )
     sell: floor_tick( anchor × (1 − allowance_bps / 10⁴) )
-    where the anchor is the decision bar's close for a program leg, and IBKR's
+    where the anchor is the pricing bar's close for a program leg, and IBKR's
     live bid (sell) or ask (buy) for an operator's recovery reduction
     (``clerk/recovery_reduction.py``); the tick is 0.01 for a price ≥ 1 and
     0.0001 below 1 (Alpaca's limit-price precision rule, mirrored by
