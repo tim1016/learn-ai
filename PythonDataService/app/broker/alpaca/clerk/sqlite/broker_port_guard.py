@@ -191,19 +191,27 @@ class GuardedBrokerTradePort:
         self._assert_unfenced("get_order_by_broker_order_id")
         return await self._inner.get_order_by_broker_order_id(order_id)
 
-    def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
-        """Forward the synthetic-only exact-decision-bar capability.
+    def bind_evaluated_bar(
+        self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
+    ) -> None:
+        """Forward the synthetic-only capability to bind the exact bar that prices an order.
 
         This is deliberately not part of :class:`BrokerTradePort`: live
         broker adapters neither understand nor need retained source-bar
         evidence. The SQLite runtime calls it only for synthetic custody and
         fails closed if its selected port does not provide the capability.
+
+        ``fill_at_ms`` is passed only for a bar older than the decision it
+        prices (``SynthesizedOrderLedger.bind_evaluated_bar``).
         """
         self._assert_unfenced("bind_evaluated_bar")
         bind = getattr(self._inner, "bind_evaluated_bar", None)
         if not callable(bind):
             raise RuntimeError("Synthetic Clerk trade port cannot bind an evaluated source bar.")
-        bind(client_order_id, retained_bar)
+        if fill_at_ms is None:
+            bind(client_order_id, retained_bar)
+        else:
+            bind(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
     def recovery_price_available(self, symbol: str) -> bool:
         """Whether a no-submit port can price a recovery EXIT now; a vendor always can."""

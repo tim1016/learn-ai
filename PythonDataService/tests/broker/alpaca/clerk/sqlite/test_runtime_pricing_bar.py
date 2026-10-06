@@ -280,13 +280,10 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
         assert _fill_prices(repo, bought) == [40.10]
         assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
 
-        # Interim (#2912): a synthesized sell with no QQQ bar is refused, so no
-        # price is invented and nothing crashes. The PRD's rule is that it
-        # fills at the newest retained QQQ price, carrying that price's age;
-        # that lands in a later slice and replaces these four lines.
-        held = await decide(EffectPurpose.EXIT, "exit-0", retained_source_bar=spy_at_exit)
-        assert held.state is EffectOperationState.REJECTED
-        assert held.explanation.startswith("PRICING_BAR_UNAVAILABLE"), held.explanation
+        # With no QQQ bar offered at all there is still nothing to fill at.
+        unoffered = await decide(EffectPurpose.EXIT, "exit-0", retained_source_bar=spy_at_exit)
+        assert unoffered.state is EffectOperationState.REJECTED
+        assert unoffered.explanation.startswith("PRICING_BAR_UNAVAILABLE"), unoffered.explanation
         assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
 
         sold = await decide(EffectPurpose.EXIT, "exit-1", retained_source_bar=spy_at_exit, pricing_bar=qqq_at_exit)
@@ -297,6 +294,68 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
     finally:
         repo.close()
         evidence.close()
+
+
+async def test_a_live_shadow_sell_with_no_bar_of_its_minute_fills_at_the_newest_earlier_price(
+    tmp_path: Path,
+) -> None:
+    """A sell is never held back for want of a price (#2912).
+
+    QQQ has no bar for the minute SPY decided EXIT in. The sale fills at
+    QQQ's newest earlier close, stamped when it was decided, and its record
+    says so: an older bar's close, and that bar's own time.
+    """
+    ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id=f"shadow-evidence:{_SHADOW_SID}")
+    enter_ms = et_minute_of_day_ms(DAY, 601)
+    exit_ms = enter_ms + 3 * MINUTE_MS
+    spy_at_enter = evidence.append(_minute_bar(SIGNAL, close="100.25", end_ms=enter_ms), run_id="run-1")
+    qqq_at_enter = evidence.append(_minute_bar(TRADED, close="40.10", end_ms=enter_ms), run_id="run-1")
+    spy_at_exit = evidence.append(_minute_bar(SIGNAL, close="100.50", end_ms=exit_ms), run_id="run-1")
+    repo = ClerkSqliteRepository.initialize(
+        account_id=_SHADOW_ACCOUNT, artifacts_root=tmp_path, clock=_Clock(exit_ms + 1_000)
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+    )
+    await facade.register_strategy_run(binding)
+    try:
+        await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_at_enter, pricing_bar=qqq_at_enter,
+        )
+
+        sold = await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="exit-1", purpose=EffectPurpose.EXIT,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_at_exit, pricing_bar=qqq_at_enter,
+        )
+
+        assert sold.state is EffectOperationState.FLAT, sold.explanation
+        assert await ports.read.list_positions() == []
+        sale = next(order for order in await ports.read.list_orders() if order.side == "sell")
+        assert (sale.filled_avg_price, sale.filled_at_ms) == (40.10, exit_ms)
+        assert sale.client_order_id is not None
+        record = ports.book.record(sale.client_order_id)
+        assert record is not None and record.anchor is not None
+        assert (record.anchor.fill_model, record.anchor.decision_bar_end_ms) == ("older_bar_close", enter_ms)
+    finally:
+        repo.close()
+        evidence.close()
+
+
+async def test_an_older_price_never_buys(one_account: _OneAccount) -> None:  # noqa: F811 -- the imported fixture
+    """Only a simulated sell may be priced from an earlier minute. An entry never is, on any authority."""
+    earlier = _retained(TRADED, close="40", end_ms=NOON - MINUTE_MS)
+    receipt = await _b_decides_enter(one_account, quantity=1, pricing_bar=earlier)
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith("PRICING_BAR_MISMATCH"), receipt.explanation
 
 
 # ── the fill a Dry Run synthesizes ──────────────────────────────────────

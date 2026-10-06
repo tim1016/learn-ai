@@ -34,6 +34,9 @@ class DryRunActivity(BaseModel):
     side: Literal["buy", "sell"]
     quantity: float = Field(gt=0)
     fill_price: float = Field(gt=0)
+    # Set only when the fill was priced from a bar that closed before it was
+    # decided: that bar's close, so the price's age is on the row (#2912).
+    price_bar_end_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     simulated: Literal[True] = True
 
     @model_validator(mode="before")

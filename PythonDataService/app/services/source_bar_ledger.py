@@ -981,15 +981,19 @@ class SourceBarLedger:
 
     def latest_for_symbol(
         self, symbol: str, *, provider: str | None = None, at_or_before_ms: int | None = None,
-        market_only: bool = False,
+        market_only: bool = False, traded_only: bool = False,
     ) -> RetainedSourceBar | None:
         """Newest retained mark, optionally at a proven historical cutoff/provider.
 
         ``market_only`` leaves out the fill-evidence streams
         (:data:`FILL_EVIDENCE_PROVIDERS`): the answer is the last price the
-        market delivered, which a run saw.
+        market delivered, which a run saw. ``traded_only`` leaves out bars
+        with no volume: the feed delivers one for a minute nothing traded in,
+        and its prices are not from a trade in that minute.
         """
         predicates, values = ["b.symbol = ?"], [symbol]
+        if traded_only:
+            predicates.append("b.volume > 0")
         if provider is not None:
             predicates.append("b.provider = ?")
             values.append(provider)
@@ -999,7 +1003,7 @@ class SourceBarLedger:
         if market_only:
             predicates.append(f"b.provider NOT IN ({', '.join('?' for _ in FILL_EVIDENCE_PROVIDERS)})")
             values.extend(FILL_EVIDENCE_PROVIDERS)
-        unfiltered = provider is None and at_or_before_ms is None and not market_only
+        unfiltered = provider is None and at_or_before_ms is None and not market_only and not traded_only
         order = "b.seq DESC" if unfiltered else "b.end_ms DESC, b.seq DESC"
         with self._lock:
             row = self._conn.execute(

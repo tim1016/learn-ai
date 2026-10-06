@@ -49,7 +49,7 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 # The sim world's existing file name; the shadow world writes the same shape
 # in its own custody directory, so one reader serves both.
 SYNTHESIZED_ORDER_LEDGER_FILENAME = "simulated_orders.jsonl"
-FillModel = Literal["decision_bar_close", "limit_touch"]
+FillModel = Literal["decision_bar_close", "older_bar_close", "limit_touch"]
 _ORDER_LOCKS: dict[str, threading.Lock] = {}
 _ORDER_LOCKS_GUARD = threading.Lock()
 
@@ -69,6 +69,11 @@ class SynthesizedAnchor(BaseModel):
     would have cancelled the order. ``fill_bar_ref`` names the retained bar
     that produced the fill once one has; ``None`` while the order rests or
     after it cancelled unfilled.
+
+    ``decision_bar_start_ms`` and ``decision_bar_end_ms`` are the times of the
+    bar that priced the order. Under ``older_bar_close`` that bar closed
+    before the order was decided (#2912): the order's own fill instant minus
+    ``decision_bar_end_ms`` is the age of its price.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -83,6 +88,11 @@ class SynthesizedAnchor(BaseModel):
     cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     fill_bar_ref: str | None = None
     unfilled_reason: Literal["untouched", "no_evidence"] | None = None
+
+
+def immediate_fill_model(fill_at_ms: int | None) -> FillModel:
+    """The model an order filled at one bar's close records: its own minute's bar, or an older one."""
+    return "decision_bar_close" if fill_at_ms is None else "older_bar_close"
 
 
 class SynthesizedOrderRecord(BaseModel):
@@ -185,7 +195,7 @@ class SynthesizedOrderLedger:
     ) -> None:
         self.account_id = account_id
         self._verify_bar = verify_bar
-        self._bound_bars: dict[str, RetainedSourceBar] = {}
+        self._bound_bars: dict[str, tuple[RetainedSourceBar, int | None]] = {}
         self._binding_lock = threading.Lock()
         # Thread-local because the transaction lock is held by one thread at a
         # time: a sibling thread outside a transaction must not read another
@@ -223,22 +233,39 @@ class SynthesizedOrderLedger:
 
     # ── pricing-bar binding ─────────────────────────────────────────────
 
-    def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
+    def bind_evaluated_bar(
+        self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
+    ) -> None:
         """Bind one minted Clerk order identity to the one exact retained bar that prices it.
 
         The binding is consumed by that exact ``client_order_id`` on submit.
         Rebinding the same id deterministically replaces an unconsumed binding,
         while a later retained bar for the same symbol cannot replace it.
+
+        ``fill_at_ms`` is given for a bar that closed before the order was
+        decided: a sell with no bar of its own minute fills at the newest
+        earlier price, stamped when it was decided, not when that price
+        traded (#2912). Without it the fill is stamped at the bar's own close.
         """
         if not client_order_id:
             raise SynthesizedBarBindingError("Synthetic bar binding requires a client order id.")
         canonical = self.verified_retained_bar(retained_bar, symbol=None)
+        if fill_at_ms is not None and fill_at_ms < canonical.end_ms:
+            raise SynthesizedBarBindingError(
+                "A synthetic fill cannot be stamped before the close of the bar that prices it."
+            )
         with self._binding_lock:
-            self._bound_bars[client_order_id] = canonical
+            self._bound_bars[client_order_id] = (
+                canonical, None if fill_at_ms == canonical.end_ms else fill_at_ms
+            )
+
+    def consume_binding(self, client_order_id: str) -> tuple[RetainedSourceBar | None, int | None]:
+        """The bar bound to this order and, for an older bar, the instant its fill is stamped at."""
+        with self._binding_lock:
+            return self._bound_bars.pop(client_order_id, (None, None))
 
     def consume_bound_bar(self, client_order_id: str) -> RetainedSourceBar | None:
-        with self._binding_lock:
-            return self._bound_bars.pop(client_order_id, None)
+        return self.consume_binding(client_order_id)[0]
 
     def verified_retained_bar(
         self,
@@ -372,6 +399,7 @@ __all__ = [
     "SynthesizedLedgerTransactionError",
     "SynthesizedOrderLedger",
     "SynthesizedOrderRecord",
+    "immediate_fill_model",
     "observed_in_send_session",
     "project_positions",
     "recovery_bar_in_send_session",

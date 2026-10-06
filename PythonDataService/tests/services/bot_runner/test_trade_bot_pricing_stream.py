@@ -170,8 +170,14 @@ async def run(tmp_path: Path) -> AsyncIterator[Any]:
     set_alpaca_clerk(clerk)
 
     async def _run(
-        script: list[_Step], *, wait_ms: int | None = 20, binding: BrokerBotBinding | None = None
+        script: list[_Step],
+        *,
+        wait_ms: int | None = 20,
+        binding: BrokerBotBinding | None = None,
+        synthesized: bool = False,
     ) -> _Ran:
+        # A Live Shadow's Clerk fills its own orders, and says so.
+        clerk.binds_decision_bar = synthesized
         feed = _ScriptedFeed(script)
         started = time.monotonic()
         await bot_trade_strategy.run_trade_bot(
@@ -407,6 +413,42 @@ async def test_a_sell_never_waits_for_a_price_and_is_never_held_back(run: Any, p
         assert sell["pricing_bar"] is None
 
 
+def _round_trip(*sell_minute_prices: _Step) -> list[_Step]:
+    """ENTER at 10:00 with QQQ at 40.10, a QQQ trade at 10:01, EXIT decided on the 10:03 bar."""
+    return [
+        _Step(_green_bar(_FIRST_GREEN_MS)),
+        _Step(_qqq(_ENTER_MS, close="40.10")),
+        _Step(_green_bar(_ENTER_MS)),
+        _Step(_qqq(_ENTER_MS + 60_000, close="40.30")),
+        _Step(_red_bar(_ENTER_MS + 60_000)),
+        _Step(_red_bar(_ENTER_MS + 120_000)),
+        _Step(_red_bar(_EXIT_MS)),
+        *sell_minute_prices,
+    ]
+
+
+async def test_a_simulated_sell_waits_for_its_own_minutes_price(run: Any) -> None:
+    """A Live Shadow fills its own sale, so it needs a price: the one for its minute, a moment later."""
+    ran = await run(_round_trip(_Step(_qqq(_EXIT_MS, close="40.60"), after_s=0.02)), wait_ms=5_000, synthesized=True)
+
+    _enter, sell = ran.calls
+    assert (sell["purpose"], sell["pricing_bar"].end_ms, sell["pricing_bar"].close) == (
+        "EXIT", _EXIT_MS, Decimal("40.60"),
+    )
+
+
+async def test_a_simulated_sell_with_no_price_of_its_minute_is_handed_the_newest_earlier_trade(run: Any) -> None:
+    """Never held back, never priced from the signal: QQQ's 10:01 trade, with its own time on it."""
+    ran = await run(_round_trip(), wait_ms=20, synthesized=True)
+
+    _enter, sell = ran.calls
+    assert sell["purpose"] == "EXIT"
+    assert (sell["pricing_bar"].symbol, sell["pricing_bar"].end_ms, sell["pricing_bar"].close) == (
+        TRADED, _ENTER_MS + 60_000, Decimal("40.30"),
+    )
+    assert sell["retained_source_bar"].end_ms == _EXIT_MS
+
+
 async def test_a_bot_that_trades_what_it_listens_to_opens_no_second_stream(run: Any) -> None:
     ran = await run(
         [_Step(_green_bar(_FIRST_GREEN_MS)), _Step(_green_bar(_ENTER_MS))], binding=_binding(trades=SIGNAL)
@@ -467,7 +509,13 @@ _DRY_RUN_SID = "dry-spy-qqq"
 
 
 async def test_a_dry_run_records_the_asset_it_traded_and_that_assets_price(tmp_path: Path) -> None:
-    """The journal is what the bot page lists as fills: QQQ at QQQ's close, not SPY at SPY's."""
+    """The journal is what the bot page lists as fills: QQQ at QQQ's prices, never SPY's.
+
+    QQQ trades at noon and a minute later, then goes quiet. The buy fills at
+    noon's close. The sale is decided three minutes on, in a minute with no
+    QQQ bar: it fills at the newest earlier trade, and its row says how old
+    that price is.
+    """
     clock = _TestClock(NOON)
     binding = BrokerBotBinding(
         strategy_instance_id=_DRY_RUN_SID, strategy_key="deployment_validation", broker="alpaca", symbol=SIGNAL,
@@ -490,8 +538,17 @@ async def test_a_dry_run_records_the_asset_it_traded_and_that_assets_price(tmp_p
         assert runtime is not None and runtime.clerk is not None
         await runtime.clerk.register_strategy_run(binding)
         clock.value = NOON + 1_000
+        minute = 60_000
         feed = _ScriptedFeed(
-            [_Step(_green_bar(NOON - 60_000)), _Step(_qqq(NOON, close="40.10")), _Step(_green_bar(NOON))]
+            [
+                _Step(_green_bar(NOON - minute)),
+                _Step(_qqq(NOON, close="40.10")),
+                _Step(_green_bar(NOON)),
+                _Step(_qqq(NOON + minute, close="40.30")),
+                _Step(_red_bar(NOON + minute)),
+                _Step(_red_bar(NOON + 2 * minute)),
+                _Step(_red_bar(NOON + 3 * minute)),
+            ]
         )
         journal = DryRunActivityJournal(tmp_path / "instance")
         bars = authority.source_bars()
@@ -502,8 +559,14 @@ async def test_a_dry_run_records_the_asset_it_traded_and_that_assets_price(tmp_p
         finally:
             bars.close()
 
-        [bought] = journal.tail(5)
-        assert (bought.intent, bought.symbol, bought.fill_price) == ("ENTER", TRADED, 40.10)
+        bought, sold = journal.tail(5)
+        assert (bought.intent, bought.symbol, bought.fill_price, bought.price_bar_end_ms) == (
+            "ENTER", TRADED, 40.10, None,
+        )
+        assert (sold.intent, sold.symbol, sold.fill_price, sold.price_bar_end_ms) == (
+            "EXIT", TRADED, 40.30, NOON + minute,
+        )
+        assert sold.recorded_at_ms == NOON + 3 * minute
     finally:
         await close_synthetic_clerk_runtimes()
         market_liveness.reset_market_liveness_store_for_testing()

@@ -63,6 +63,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedBarBindingError,
     SynthesizedOrderLedger,
     SynthesizedOrderRecord,
+    immediate_fill_model,
     recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
@@ -230,9 +231,11 @@ class ShadowOrderBook:
         self._window = window
         self._clock = clock
 
-    def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
+    def bind_evaluated_bar(
+        self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
+    ) -> None:
         self._require_own_evidence(client_order_id, retained_bar)
-        self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
+        self._ledger.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
         """Bind a recovery EXIT to the latest bar its own instance retained.
@@ -261,7 +264,7 @@ class ShadowOrderBook:
             if existing is not None:
                 self._ledger.consume_bound_bar(client_order_id)
                 return existing
-            bound = self._ledger.consume_bound_bar(client_order_id)
+            bound, fill_at_ms = self._ledger.consume_binding(client_order_id)
             if bound is None:
                 raise ShadowFillBindingError(
                     "Shadow execution requires the exact retained decision bar bound to this order; "
@@ -271,10 +274,14 @@ class ShadowOrderBook:
             # Belt and braces over the bind-time check: the durable anchor can
             # never name another instance's evidence ledger.
             self._require_own_evidence(client_order_id, bar)
+            if leg.extended_hours and fill_at_ms is not None:
+                raise ShadowFillBindingError(
+                    "A resting shadow order is priced from its own decision bar, never an older one."
+                )
             order, anchor = (
                 self._resting_order(leg, client_order_id=client_order_id, bar=bar)
                 if leg.extended_hours
-                else self._immediate_order(leg, client_order_id=client_order_id, bar=bar)
+                else self._immediate_order(leg, client_order_id=client_order_id, bar=bar, fill_at_ms=fill_at_ms)
             )
             self._ledger.append_locked(records, order=order, leg=leg, anchor=anchor)
             return order
@@ -388,7 +395,7 @@ class ShadowOrderBook:
             )
 
     def _immediate_order(
-        self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar
+        self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar, fill_at_ms: int | None
     ) -> tuple[BrokerOrder, SynthesizedAnchor]:
         order = shape_immediate_order(
             leg,
@@ -397,9 +404,10 @@ class ShadowOrderBook:
             broker_id=SHADOW_BROKER_ID,
             id_prefix="shadow",
             observed_at_ms=self._clock(),
+            fill_at_ms=fill_at_ms,
         )
         return order, SynthesizedAnchor(
-            fill_model="decision_bar_close",
+            fill_model=immediate_fill_model(fill_at_ms),
             evidence_account_id=bar.account_id,
             provider=bar.provider,
             bar_identity=bar.bar_identity,
@@ -562,8 +570,10 @@ class NoSubmitAlpacaTradePort:
     def submission_response_is_authoritative_evidence(self) -> bool:
         return True
 
-    def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
-        self._book.bind_evaluated_bar(client_order_id, retained_bar)
+    def bind_evaluated_bar(
+        self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
+    ) -> None:
+        self._book.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str | None = None) -> bool:
         return self._book.bind_latest_recovery_bar(client_order_id, symbol=symbol, side=side)
