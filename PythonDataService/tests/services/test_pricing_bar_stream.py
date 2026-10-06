@@ -251,3 +251,57 @@ async def test_two_bars_closing_together_are_two_prices_whatever_minute_they_ope
         refused = await stream.bar_for_entry(_T0, time_left_ms=20_000)
 
     assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_BAR_CONFLICT"
+
+
+async def test_a_simulated_sell_fills_at_its_own_minutes_price_when_that_arrives_in_the_wait(
+    ledger: SourceBarLedger,
+) -> None:
+    feed = _Subscriptions([_qqq(_T0), _qqq(_T0 + _MINUTE_MS, close="40.60")])
+    async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=2_000) as stream:
+        priced = await stream.bar_for_simulated_exit(_T0 + _MINUTE_MS)
+
+    assert priced is not None and (priced.end_ms, priced.close) == (_T0 + _MINUTE_MS, Decimal("40.60"))
+
+
+@pytest.mark.parametrize(
+    "own_minute",
+    [
+        pytest.param([], id="no-bar"),
+        pytest.param([_qqq(_T0 + 2 * _MINUTE_MS, close="41.00", volume=0)], id="a-bar-with-no-trade"),
+    ],
+)
+async def test_a_simulated_sell_with_no_price_of_its_minute_takes_the_newest_earlier_trade(
+    ledger: SourceBarLedger, own_minute: list[MarketDataBar]
+) -> None:
+    """A minute nothing traded in is not a price, for the sell's own minute or for an earlier one."""
+    feed = _Subscriptions(
+        [_qqq(_T0, close="40.10"), _qqq(_T0 + _MINUTE_MS, close="40.90", volume=0), *own_minute]
+    )
+    async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=30) as stream:
+        priced = await stream.bar_for_simulated_exit(_T0 + 2 * _MINUTE_MS)
+
+    assert priced is not None and (priced.end_ms, priced.close) == (_T0, Decimal("40.10"))
+
+
+async def test_a_simulated_sell_passes_over_an_earlier_minute_delivered_with_two_prices(
+    ledger: SourceBarLedger,
+) -> None:
+    """Neither price of that minute may price an order, so the sale takes the trade before it."""
+    feed = _Subscriptions([
+        _qqq(_T0, close="40.10"),
+        _qqq(_T0 + _MINUTE_MS, close="40.50"),
+        _qqq(_T0 + _MINUTE_MS, close="41.00", minutes=2),
+        _qqq(_T0 + 2 * _MINUTE_MS, close="40.70", volume=0),
+    ])
+    async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=2_000) as stream:
+        refused = await stream.bar_for_entry(_T0 + _MINUTE_MS, time_left_ms=20_000)
+        await stream.bar_for_entry(_T0 + 2 * _MINUTE_MS, time_left_ms=20_000)
+        priced = await stream.bar_for_simulated_exit(_T0 + 3 * _MINUTE_MS)
+
+    assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_BAR_CONFLICT"
+    assert priced is not None and (priced.end_ms, priced.close) == (_T0, Decimal("40.10"))
+
+
+async def test_a_simulated_sell_has_no_price_only_when_the_asset_never_traded(ledger: SourceBarLedger) -> None:
+    async with PricingBarStream(_Subscriptions([]), ledger, symbol="QQQ", run_id="run-1", wait_ms=0) as stream:
+        assert await stream.bar_for_simulated_exit(_T0) is None

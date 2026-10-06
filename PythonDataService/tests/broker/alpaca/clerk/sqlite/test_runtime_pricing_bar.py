@@ -24,15 +24,16 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, LIVE_ENVELOPE_UNOBSERVED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.program_leg import PRICING_BAR_MISMATCH, ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.marketdata.feed import MarketDataBar
 from app.schemas.deployment_budget import DeployBudgetConsent
+from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -280,13 +281,10 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
         assert _fill_prices(repo, bought) == [40.10]
         assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
 
-        # Interim (#2912): a synthesized sell with no QQQ bar is refused, so no
-        # price is invented and nothing crashes. The PRD's rule is that it
-        # fills at the newest retained QQQ price, carrying that price's age;
-        # that lands in a later slice and replaces these four lines.
-        held = await decide(EffectPurpose.EXIT, "exit-0", retained_source_bar=spy_at_exit)
-        assert held.state is EffectOperationState.REJECTED
-        assert held.explanation.startswith("PRICING_BAR_UNAVAILABLE"), held.explanation
+        # With no QQQ bar offered at all there is still nothing to fill at.
+        unoffered = await decide(EffectPurpose.EXIT, "exit-0", retained_source_bar=spy_at_exit)
+        assert unoffered.state is EffectOperationState.REJECTED
+        assert unoffered.explanation.startswith("PRICING_BAR_UNAVAILABLE"), unoffered.explanation
         assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
 
         sold = await decide(EffectPurpose.EXIT, "exit-1", retained_source_bar=spy_at_exit, pricing_bar=qqq_at_exit)
@@ -297,6 +295,227 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
     finally:
         repo.close()
         evidence.close()
+
+
+async def test_a_live_shadow_sell_with_no_bar_of_its_minute_fills_at_the_newest_earlier_price(
+    tmp_path: Path,
+) -> None:
+    """A sell is never held back for want of a price (#2912).
+
+    QQQ has no bar for the minute SPY decided EXIT in. The sale fills at
+    QQQ's newest earlier close, stamped when it was decided, and its record
+    says so: an older bar's close, and that bar's own time.
+    """
+    ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id=f"shadow-evidence:{_SHADOW_SID}")
+    enter_ms = et_minute_of_day_ms(DAY, 601)
+    exit_ms = enter_ms + 3 * MINUTE_MS
+    spy_at_enter = evidence.append(_minute_bar(SIGNAL, close="100.25", end_ms=enter_ms), run_id="run-1")
+    qqq_at_enter = evidence.append(_minute_bar(TRADED, close="40.10", end_ms=enter_ms), run_id="run-1")
+    spy_at_exit = evidence.append(_minute_bar(SIGNAL, close="100.50", end_ms=exit_ms), run_id="run-1")
+    repo = ClerkSqliteRepository.initialize(
+        account_id=_SHADOW_ACCOUNT, artifacts_root=tmp_path, clock=_Clock(exit_ms + 1_000)
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+    )
+    await facade.register_strategy_run(binding)
+    try:
+        await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_at_enter, pricing_bar=qqq_at_enter,
+        )
+
+        sold = await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="exit-1", purpose=EffectPurpose.EXIT,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_at_exit, pricing_bar=qqq_at_enter,
+        )
+
+        assert sold.state is EffectOperationState.FLAT, sold.explanation
+        assert await ports.read.list_positions() == []
+        sale = next(order for order in await ports.read.list_orders() if order.side == "sell")
+        assert (sale.filled_avg_price, sale.filled_at_ms) == (40.10, exit_ms)
+        assert sale.client_order_id is not None
+        record = ports.book.record(sale.client_order_id)
+        assert record is not None and record.anchor is not None
+        assert (record.anchor.fill_model, record.anchor.decision_bar_end_ms) == ("older_bar_close", enter_ms)
+    finally:
+        repo.close()
+        evidence.close()
+
+
+def _publish_qqq_quote(at_ms: int) -> None:
+    """A fresh IBKR book for the traded asset, as the status source publishes it."""
+    market_liveness.get_market_liveness_store().apply_status_snapshot(MarketStatusSnapshot(
+        source=MarketStatusSource.IBKR, connected=True, observed_at_ms=at_ms, connection_changed_at_ms=at_ms,
+        symbol_statuses=(), quotes=(
+            TopOfBookQuote(symbol=TRADED, bid=40.0, ask=40.2, source="ibkr.market_data.status", observed_at_ms=at_ms),
+        ),
+    ), now_ms=at_ms)
+
+
+async def _shadow_holding_qqq(tmp_path: Path, *, exit_ms: int, clock: _Clock) -> tuple[Any, ...]:
+    """A Live Shadow that listens to SPY, bought QQQ at 10:01 for $40.10, and decides EXIT at ``exit_ms``."""
+    ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id=f"shadow-evidence:{_SHADOW_SID}")
+    enter_ms = et_minute_of_day_ms(DAY, 601)
+    spy_at_enter = evidence.append(_minute_bar(SIGNAL, close="100.25", end_ms=enter_ms), run_id="run-1")
+    qqq_at_enter = evidence.append(_minute_bar(TRADED, close="40.10", end_ms=enter_ms), run_id="run-1")
+    spy_at_exit = evidence.append(_minute_bar(SIGNAL, close="100.50", end_ms=exit_ms), run_id="run-1")
+    repo = ClerkSqliteRepository.initialize(
+        account_id=_SHADOW_ACCOUNT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=24 * 3_600_000
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+    )
+    await facade.register_strategy_run(binding)
+    bought = await facade.execute_for_instance(
+        strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="enter-1", purpose=EffectPurpose.ENTER,
+        action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+        retained_source_bar=spy_at_enter, pricing_bar=qqq_at_enter,
+    )
+    assert bought.state is not EffectOperationState.REJECTED, bought.explanation
+    return ports, evidence, repo, facade, binding, spy_at_exit, qqq_at_enter
+
+
+async def test_an_older_price_never_buys_on_an_account_that_fills_its_own_orders(tmp_path: Path) -> None:
+    """Only a sell may be priced from an earlier minute. A Live Shadow's entry offered one is refused."""
+    ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
+    evidence = SourceBarLedger(artifacts_root=tmp_path, account_id=f"shadow-evidence:{_SHADOW_SID}")
+    decided_ms = et_minute_of_day_ms(DAY, 604)
+    qqq_earlier = evidence.append(_minute_bar(TRADED, close="40.10", end_ms=decided_ms - 3 * MINUTE_MS), run_id="run-1")
+    spy_decides = evidence.append(_minute_bar(SIGNAL, close="100.25", end_ms=decided_ms), run_id="run-1")
+    repo = ClerkSqliteRepository.initialize(
+        account_id=_SHADOW_ACCOUNT, artifacts_root=tmp_path, clock=_Clock(decided_ms + 1_000)
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
+        program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+    )
+    binding = _binding(use_rth=True).model_copy(
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+    )
+    await facade.register_strategy_run(binding)
+    try:
+        refused = await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_decides, pricing_bar=qqq_earlier,
+        )
+
+        assert refused.state is EffectOperationState.REJECTED
+        assert refused.explanation.startswith("PRICING_BAR_MISMATCH"), refused.explanation
+        assert await ports.read.list_orders() == []
+    finally:
+        repo.close()
+        evidence.close()
+
+
+@pytest.mark.parametrize(
+    ("exit_sells", "priced"), [(True, True), (False, False)], ids=["closes-a-long", "covers-a-short"],
+)
+def test_an_older_price_fills_only_an_exit_that_sells(exit_sells: bool, priced: bool) -> None:
+    """A short position's EXIT buys to cover, and an older price never buys."""
+    decision = _retained(SIGNAL, close="100", end_ms=NOON, account_id="shadow-evidence:any")
+    older = _retained(TRADED, close="40", end_ms=NOON - 3 * MINUTE_MS, account_id="shadow-evidence:any")
+
+    resolved = _order_pricing_bar(
+        TRADED, purpose=EffectPurpose.EXIT, synthesized=True, exit_sells=exit_sells,
+        decision_bar=decision, pricing_bar=older,
+    )
+
+    assert (resolved is older) is priced
+    assert priced or resolved is PRICING_BAR_MISMATCH
+
+
+async def test_a_sale_that_reaches_the_clerk_after_the_close_is_not_filled_at_an_older_price(tmp_path: Path) -> None:
+    """An older price fills a market order only, and after the close none can go out.
+
+    The sale would be re-priced as a limit to rest until the next session, and
+    no limit is anchored to an older price. It is refused before anything is
+    accepted, where it used to raise after the EXIT was already on the books.
+    """
+    exit_ms = et_minute_of_day_ms(DAY, 958)
+    clock = _Clock(et_minute_of_day_ms(DAY, 601) + 1_000)
+    ports, evidence, repo, facade, binding, spy_at_exit, qqq_at_enter = await _shadow_holding_qqq(
+        tmp_path, exit_ms=exit_ms, clock=clock
+    )
+    try:
+        clock.now_ms = et_minute_of_day_ms(DAY, 960) + 30_000  # 16:00:30 ET
+        _publish_qqq_quote(clock.now_ms)  # a resting limit could be priced, so only the refusal stops it
+
+        late = await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="exit-1", purpose=EffectPurpose.EXIT,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_at_exit, pricing_bar=qqq_at_enter,
+        )
+
+        assert late.state is EffectOperationState.REJECTED
+        assert late.explanation.startswith("PRICING_BAR_UNAVAILABLE"), late.explanation
+        assert "can no longer take a market order" in late.explanation, "it says why, not only that no bar was found"
+        assert [order.side for order in await ports.read.list_orders()] == ["buy"], "no sale was synthesized"
+        assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
+        assert await facade.unresolved_effect_count(subject_id=f"bot:{_SHADOW_SID}") == 0
+    finally:
+        repo.close()
+        evidence.close()
+        market_liveness.reset_market_liveness_store_for_testing()
+
+
+async def test_a_sale_accepted_before_the_close_and_sent_after_it_is_refused_at_the_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The close can fall between accepting the sale and sending it.
+
+    The sale was accepted while a market order could still go out, and by the
+    send it is re-priced as a limit to rest. The send is refused the way a
+    broker would refuse it, so the EXIT fails cleanly: nothing is synthesized,
+    the shares stay, and nothing raises with the EXIT already on the books.
+    """
+    exit_ms = et_minute_of_day_ms(DAY, 958)
+    clock = _Clock(et_minute_of_day_ms(DAY, 601) + 1_000)
+    ports, evidence, repo, facade, binding, spy_at_exit, qqq_at_enter = await _shadow_holding_qqq(
+        tmp_path, exit_ms=exit_ms, clock=clock
+    )
+    try:
+        clock.now_ms = et_minute_of_day_ms(DAY, 960) + 30_000  # 16:00:30 ET
+        _publish_qqq_quote(clock.now_ms)
+        # The acceptance check alone still reads the session as open.
+        monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.runtime.market_leg_sendable", lambda _now_ms: True)
+
+        late = await facade.execute_for_instance(
+            strategy_instance_id=_SHADOW_SID, run_id="run-1", decision_id="exit-1", purpose=EffectPurpose.EXIT,
+            action_plan=_TRADES_QQQ, quantity=binding.quantity, use_rth=True,
+            retained_source_bar=spy_at_exit, pricing_bar=qqq_at_enter,
+        )
+
+        assert late.state is EffectOperationState.REJECTED, late.explanation
+        assert late.explanation == "The SQLite Account Clerk recorded EXIT as failed."
+        still_open = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=_SHADOW_SID
+        )
+        assert still_open is not None, "the failed sale is on the books as a position still open"
+        sale_ref = late.child_order_refs[-1]
+        assert any(
+            "priced this sale from an earlier minute" in transition["facts_json"]
+            for transition in repo.transitions_for_order(sale_ref)
+        ), "the order's evidence says why the simulation refused it"
+        assert [order.side for order in await ports.read.list_orders()] == ["buy"], "no sale was synthesized"
+        assert [position.symbol for position in await ports.read.list_positions()] == [TRADED]
+    finally:
+        repo.close()
+        evidence.close()
+        market_liveness.reset_market_liveness_store_for_testing()
 
 
 # ── the fill a Dry Run synthesizes ──────────────────────────────────────

@@ -87,6 +87,31 @@ def test_bar_from_another_authority_is_refused_by_the_verifier(tmp_path: Path) -
         ledger.bind_evaluated_bar("learn-ai/ema-1/v1:a", other)
 
 
+def test_a_bar_that_closed_before_the_order_was_decided_is_an_older_price(tmp_path: Path) -> None:
+    """The decision's instant is what tells an older bar from the decision minute's own (#2912)."""
+    ledger, bars = _ledger(tmp_path)
+    retained = bars.append(_bar(), run_id="run-1")
+
+    ledger.bind_evaluated_bar("learn-ai/ema-1/v1:own", retained, fill_at_ms=retained.end_ms)
+    own_minute = ledger.consume_binding("learn-ai/ema-1/v1:own")
+    ledger.bind_evaluated_bar("learn-ai/ema-1/v1:older", retained, fill_at_ms=retained.end_ms + 180_000)
+    older = ledger.consume_binding("learn-ai/ema-1/v1:older")
+
+    assert own_minute is not None and (own_minute.fill_model, own_minute.older_fill_at_ms) == ("decision_bar_close", None)
+    assert older is not None and (older.fill_model, older.older_fill_at_ms) == (
+        "older_bar_close", retained.end_ms + 180_000,
+    )
+    assert ledger.consume_binding("learn-ai/ema-1/v1:older") is None, "a binding is consumed once"
+
+
+def test_a_fill_is_never_stamped_before_the_bar_that_prices_it_closed(tmp_path: Path) -> None:
+    ledger, bars = _ledger(tmp_path)
+    retained = bars.append(_bar(), run_id="run-1")
+
+    with pytest.raises(SynthesizedBarBindingError, match="before the close of the bar"):
+        ledger.bind_evaluated_bar("learn-ai/ema-1/v1:a", retained, fill_at_ms=retained.end_ms - 1)
+
+
 def test_records_round_trip_with_leg_and_anchor(tmp_path: Path) -> None:
     ledger, bars = _ledger(tmp_path)
     retained = bars.append(_bar(), run_id="run-1")

@@ -408,16 +408,17 @@ EXTENDED_ANCHOR_UNPRICEABLE = LegRefusal(
     ),
 )
 
-# The two reasons an order has no price of its own (#2912). Every price an
-# order uses is read from the traded instrument's bar for the decision's
-# minute; a bar of another asset, the signal's included, never stands in.
+# The two reasons an order has no price of its own (#2912). A program order is
+# priced from the traded instrument's bar for the decision's minute. A bar of
+# another asset, the signal's included, never stands in; a bar of an earlier
+# minute only for a market sell a Dry Run or a Live Shadow fills itself.
 PRICING_BAR_UNAVAILABLE = LegRefusal(
     reason_code="PRICING_BAR_UNAVAILABLE",
     explanation=(
         "No bar of the traded asset was retained for the decision's minute, so this "
         "order has no price of its own."
     ),
-    next_step="No order was sent. A price is never carried over from another minute or another asset.",
+    next_step="No order was sent.",
 )
 
 PRICING_BAR_MISMATCH = LegRefusal(
@@ -426,7 +427,7 @@ PRICING_BAR_MISMATCH = LegRefusal(
         "The bar offered to price this order belongs to another asset or another minute "
         "than the order's own."
     ),
-    next_step="No order was sent. A price is never carried over from another minute or another asset.",
+    next_step="No order was sent.",
 )
 
 

@@ -1030,6 +1030,8 @@ async def run_trade_bot(
             priced = await _price_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
                 pricing=pricing, continuity=continuity,
+                # A Live Shadow runs this loop too, and fills its own orders.
+                synthesized=clerk.binds_decision_bar,
             )
             if priced.refused:
                 continue
@@ -1383,19 +1385,42 @@ async def _price_decision(
     intent: SignalIntent,
     pricing: PricingBarStream | None,
     continuity: ContinuityPolicy | None,
+    synthesized: bool,
 ) -> _PricedDecision:
     """Find the traded instrument's bar for this decision's minute (#2912).
 
     Shared by both runners. An ENTER waits for a bar not yet in hand, and one
     that ends without a usable bar is refused: DISCARD, plus a protected
     ``blocked`` receipt naming which of the stream's reasons it was. A price is
-    never carried over from another minute. An EXIT never waits and is never
-    refused here: it takes the bar if it has arrived.
+    never carried over from another minute for an entry.
+
+    An EXIT is never refused here. Sent to a broker it is a market order: it
+    does not wait, and takes the bar if it has arrived. ``synthesized`` says
+    the authority fills it itself (a Dry Run, a Live Shadow), which needs a
+    price: its own minute's bar, or the newest earlier one.
     """
     if pricing is None:
         return _PRICED_BY_ITS_DECISION_BAR
     if intent.kind is SignalIntentKind.EXIT:
-        return _PricedDecision(refused=False, bar=pricing.bar_closing_at(intent.bar_close_ms))
+        if not synthesized:
+            return _PricedDecision(refused=False, bar=pricing.bar_closing_at(intent.bar_close_ms))
+        bar = await pricing.bar_for_simulated_exit(intent.bar_close_ms)
+        if bar is not None and bar.end_ms < intent.bar_close_ms:
+            # Said every time: how much to trust this fill is how old its price is.
+            logger.info(
+                "A simulated sell had no price of its own minute and is priced from an earlier one",
+                extra={
+                    "action": "simulated_sell_older_price",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "traded_symbol": pricing.symbol,
+                    "decision_bar_close_ms": intent.bar_close_ms,
+                    "price_bar_end_ms": bar.end_ms,
+                    "price_age_ms": intent.bar_close_ms - bar.end_ms,
+                    "price": str(bar.close),
+                },
+            )
+        return _PricedDecision(refused=False, bar=bar)
     priced = await pricing.bar_for_entry(
         intent.bar_close_ms,
         time_left_ms=decision_time_left_ms(continuity, evaluation.decision_bar_close_ms),
@@ -1597,7 +1622,7 @@ async def run_dry_run_bot(
                 continue
             priced = await _price_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
-                pricing=pricing, continuity=continuity,
+                pricing=pricing, continuity=continuity, synthesized=clerk.binds_decision_bar,
             )
             if priced.refused:
                 continue
@@ -1662,6 +1687,7 @@ async def run_dry_run_bot(
                     # purpose (#2599): it needs a price at the moment it
                     # decides. The price is the traded instrument's (#2912).
                     fill_price=float(filled_at.close),
+                    price_bar_end_ms=filled_at.end_ms if filled_at.end_ms < intent.bar_close_ms else None,
                 )
             )
             logger.info(

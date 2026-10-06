@@ -179,7 +179,7 @@ from app.broker.alpaca.clerk.stream_health import (
     stream_health_refusal,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
@@ -271,11 +271,17 @@ def _entry_wait_ending(outcome: EntryReadingOutcome, *, run_active: bool) -> str
 
 
 class _PricingBarBoundTradePort:
-    """Bind each synthetic Clerk order to the one immutable retained bar that prices it."""
+    """Bind each synthetic Clerk order to the one immutable retained bar that prices it.
 
-    def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar) -> None:
+    ``decided_at_ms`` is the decision bar's close. A pricing bar that closed
+    before it is an older price: the fill is stamped at the decision's close,
+    at the older bar's price, and only a market order may fill that way.
+    """
+
+    def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar, *, decided_at_ms: int) -> None:
         self._inner = inner
         self._retained_bar = retained_bar
+        self._decided_at_ms = decided_at_ms
 
     @property
     def broker_id(self) -> str:
@@ -287,7 +293,16 @@ class _PricingBarBoundTradePort:
         return self._inner.submission_response_is_authoritative_evidence
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
-        self._inner.bind_evaluated_bar(client_order_id, self._retained_bar)
+        if leg.extended_hours and self._retained_bar.end_ms < self._decided_at_ms:
+            # The sale was accepted while a market order could still go out and
+            # is being sent after it no longer can, re-priced as a limit to
+            # rest. An older price anchors no limit, so the send is refused as
+            # a broker would refuse it, and the EXIT's own recovery takes over.
+            raise BrokerOrderRejected(
+                "The simulation priced this sale from an earlier minute and will not rest a limit at that price.",
+                broker=self._inner.broker_id,
+            )
+        self._inner.bind_evaluated_bar(client_order_id, self._retained_bar, fill_at_ms=self._decided_at_ms)
         return await self._inner.submit(leg, client_order_id=client_order_id)
 
     async def cancel(self, order_id: str) -> None:
@@ -1237,6 +1252,7 @@ class SqliteAlpacaClerkFacade:
                 entry.instrument.underlying,
                 purpose=purpose,
                 synthesized=self.binds_decision_bar,
+                exit_sells=entry.position == "long",
                 decision_bar=retained_source_bar,
                 pricing_bar=pricing_bar,
             )
@@ -1259,6 +1275,42 @@ class SqliteAlpacaClerkFacade:
                     reason_code=priced_by.reason_code,
                     explanation=priced_by.explanation,
                     next_step=priced_by.next_step,
+                )
+            # A synthesized sell with no bar of its own minute is priced from
+            # the newest earlier one the runner found (``_order_pricing_bar``).
+            older_price = (
+                priced_by is not None
+                and retained_source_bar is not None
+                and priced_by.end_ms < retained_source_bar.end_ms
+            )
+            if older_price and not market_leg_sendable(self._repo.clock()):
+                # An older price fills a market order only. Once the regular
+                # session cannot take one, the sale would be re-priced as a
+                # limit to rest, and no limit is anchored to an older price.
+                assert priced_by is not None and retained_source_bar is not None
+                logger.warning(
+                    "a simulated sale priced from an earlier minute arrived after a market order could be sent",
+                    extra={
+                        "action": "effect_pricing_bar_refused",
+                        "account_id": self._repo.account_id,
+                        "strategy_instance_id": strategy_instance_id,
+                        "decision_id": decision_id,
+                        "purpose": purpose.value,
+                        "reason_code": PRICING_BAR_UNAVAILABLE.reason_code,
+                        "cause": "older_price_after_market_close",
+                        "traded_symbol": entry.instrument.underlying,
+                        "pricing_bar_end_ms": priced_by.end_ms,
+                        "decision_bar_end_ms": retained_source_bar.end_ms,
+                    },
+                )
+                return rejected(
+                    reason_code=PRICING_BAR_UNAVAILABLE.reason_code,
+                    explanation=(
+                        f"{entry.instrument.underlying} has no bar for the decision's minute, and the regular "
+                        "session can no longer take a market order. An earlier minute's price fills a market "
+                        "sale only, so this sale was not simulated."
+                    ),
+                    next_step=PRICING_BAR_UNAVAILABLE.next_step,
                 )
             if pricing_bar is not None and priced_by is not pricing_bar:
                 # The order goes on without it (no decision bar to close with,
@@ -1315,7 +1367,9 @@ class SqliteAlpacaClerkFacade:
                     purpose=purpose,
                     use_rth=use_rth,
                     decision_bar=retained_source_bar,
-                    pricing_bar=priced_by,
+                    # An older price fills a synthesized sell; it never
+                    # anchors a limit an order rests at.
+                    pricing_bar=None if older_price else priced_by,
                     policy=(self.exit_policy_for_instance(strategy_instance_id)
                             if purpose is EffectPurpose.EXIT else self.program_leg_policy),
                 )
@@ -1506,8 +1560,10 @@ class SqliteAlpacaClerkFacade:
 
         trade: BrokerTradePort
         if self.binds_decision_bar:
-            assert priced_by is not None
-            trade = _PricingBarBoundTradePort(self._trade, priced_by)
+            assert priced_by is not None and retained_source_bar is not None
+            # The decision's close tells the port an older bar from the
+            # decision minute's own (``SynthesizedOrderLedger.bind_evaluated_bar``).
+            trade = _PricingBarBoundTradePort(self._trade, priced_by, decided_at_ms=retained_source_bar.end_ms)
         else:
             trade = self._trade
 
@@ -2049,6 +2105,7 @@ def _order_pricing_bar(
     *,
     purpose: EffectPurpose,
     synthesized: bool,
+    exit_sells: bool,
     decision_bar: RetainedSourceBar | None,
     pricing_bar: RetainedSourceBar | None,
 ) -> RetainedSourceBar | LegRefusal | None:
@@ -2073,8 +2130,16 @@ def _order_pricing_bar(
       needs no price. An extended-session leg does, and its shaper refuses it.
 
     An ENTER is never priced from another asset or another minute, and a
-    synthesized fill of either purpose is the pricing bar's close, so those
-    are refused when the bar is missing or is not the order's own.
+    synthesized fill of either purpose is a bar's close, so those are refused
+    when no bar of the order's own can price them.
+
+    A synthesized EXIT that sells is the one order an earlier minute may
+    price. When the traded instrument has no bar for the decision's minute its
+    runner offers the newest earlier one, and the fill carries that bar's own
+    time beside the decision's. That price fills a market sale only: the
+    caller refuses the sale once a market order can no longer be sent. An
+    older price never buys, so the EXIT of a short position (``exit_sells``
+    false), which buys to cover, is held to its own minute like an ENTER.
     """
     if decision_bar is None:
         return None
@@ -2082,7 +2147,11 @@ def _order_pricing_bar(
         if _same_symbol(decision_bar.symbol, traded_symbol):
             return decision_bar
         unpriced = PRICING_BAR_UNAVAILABLE
-    elif _same_symbol(pricing_bar.symbol, traded_symbol) and pricing_bar.end_ms == decision_bar.end_ms:
+    elif not _same_symbol(pricing_bar.symbol, traded_symbol):
+        unpriced = PRICING_BAR_MISMATCH
+    elif pricing_bar.end_ms == decision_bar.end_ms or (
+        purpose is EffectPurpose.EXIT and exit_sells and synthesized and pricing_bar.end_ms < decision_bar.end_ms
+    ):
         return pricing_bar
     else:
         unpriced = PRICING_BAR_MISMATCH

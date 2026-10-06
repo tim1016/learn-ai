@@ -422,3 +422,27 @@ async def test_dry_run_start_reports_its_own_unpriceable_authority_and_binding_f
     assert "could not be loaded" in decision.explanation
     assert refusal.next_step in decision.next_step
     assert "Fix the Alpaca connection" in decision.next_step
+
+
+def test_a_fill_priced_at_its_own_minute_writes_the_row_it_always_wrote(tmp_path: Path) -> None:
+    """The journal refuses a field it does not know, so an absent one is not written as null (#2912).
+
+    Code from before the field existed must still read every row of a bot
+    whose fills were priced at their own minute.
+    """
+    journal = DryRunActivityJournal(tmp_path)
+    row = {
+        "seq": 1, "strategy_instance_id": _SID, "run_id": "run-1",
+        "authority_account_id": f"sim:{_SID}", "authority_kind": "synthetic", "recorded_at_ms": _T0,
+        "bar_ref": "bar-1", "intent": "EXIT", "order_ref": "order-1", "symbol": "QQQ", "side": "sell",
+        "quantity": 1.0, "fill_price": 40.3,
+    }
+    journal.append(DryRunActivity(**row))
+    journal.append(DryRunActivity(**{**row, "seq": 2, "order_ref": "order-2", "price_bar_end_ms": _T0 - 120_000}))
+
+    own_minute, older = (
+        json.loads(line) for line in (tmp_path / "dry_run_activity.jsonl").read_text().splitlines()
+    )
+    assert "price_bar_end_ms" not in own_minute
+    assert older["price_bar_end_ms"] == _T0 - 120_000
+    assert [activity.price_bar_end_ms for activity in journal.tail(5)] == [None, _T0 - 120_000]

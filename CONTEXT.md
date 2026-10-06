@@ -573,14 +573,18 @@ so they survive a broker change.
   it: the cash check at an ENTER, the marketable limit anchor, and a fill a Dry
   Run or a Live Shadow synthesizes for that decision. For a bot that trades the
   symbol it listens to, it is the decision bar itself. A bar of any other asset
-  or any other minute never stands in for it. Orders that no decision prices — a
+  never stands in for it, and a bar of another minute only for a sell a Dry Run
+  or a Live Shadow fills itself (see **Pricing-bar wait**). Orders that no decision prices — a
   recovery reduction, a flatten, a run-end close — read the live quote or the
-  last bar instead. _Avoid_: reference bar, signal price, carried-over price
+  last bar instead. _Avoid_: reference bar, signal price
 - **Pricing-bar wait** — how long an ENTER waits for its pricing bar once its
   decision bar is in hand: a short fixed time, and never past the instant the
   decision itself stops being on time. The two streams deliver independently,
   so the pricing bar may arrive first or second. A bar that arrives after the
-  wait is kept and never used for that decision.
+  wait is kept and never used for that decision. A sell sent to a broker never
+  waits: it is a market order. A sell a Dry Run or a Live Shadow fills itself
+  waits the same time for its own minute's bar, then takes the newest earlier
+  bar with a trade in it, and its fill records that older bar's own time.
   _Avoid_: retry window, price timeout
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it
