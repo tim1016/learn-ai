@@ -1031,7 +1031,7 @@ async def run_trade_bot(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
                 pricing=pricing, continuity=continuity,
                 # A Live Shadow runs this loop too, and fills its own orders.
-                synthesized=bool(getattr(clerk, "binds_decision_bar", False)),
+                synthesized=clerk.binds_decision_bar,
             )
             if priced.refused:
                 continue
@@ -1402,11 +1402,24 @@ async def _price_decision(
     if pricing is None:
         return _PRICED_BY_ITS_DECISION_BAR
     if intent.kind is SignalIntentKind.EXIT:
-        bar = (
-            await pricing.bar_for_simulated_exit(intent.bar_close_ms)
-            if synthesized
-            else pricing.bar_closing_at(intent.bar_close_ms)
-        )
+        if not synthesized:
+            return _PricedDecision(refused=False, bar=pricing.bar_closing_at(intent.bar_close_ms))
+        bar = await pricing.bar_for_simulated_exit(intent.bar_close_ms)
+        if bar is not None and bar.end_ms < intent.bar_close_ms:
+            # Said every time: how much to trust this fill is how old its price is.
+            logger.info(
+                "A simulated sell had no price of its own minute and is priced from an earlier one",
+                extra={
+                    "action": "simulated_sell_older_price",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "traded_symbol": pricing.symbol,
+                    "decision_bar_close_ms": intent.bar_close_ms,
+                    "price_bar_end_ms": bar.end_ms,
+                    "price_age_ms": intent.bar_close_ms - bar.end_ms,
+                    "price": str(bar.close),
+                },
+            )
         return _PricedDecision(refused=False, bar=bar)
     priced = await pricing.bar_for_entry(
         intent.bar_close_ms,
@@ -1609,7 +1622,7 @@ async def run_dry_run_bot(
                 continue
             priced = await _price_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
-                pricing=pricing, continuity=continuity, synthesized=True,
+                pricing=pricing, continuity=continuity, synthesized=clerk.binds_decision_bar,
             )
             if priced.refused:
                 continue

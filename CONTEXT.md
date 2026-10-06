@@ -576,7 +576,7 @@ so they survive a broker change.
   never stands in for it, and a bar of another minute only for a sell a Dry Run
   or a Live Shadow fills itself (see **Pricing-bar wait**). Orders that no decision prices — a
   recovery reduction, a flatten, a run-end close — read the live quote or the
-  last bar instead. _Avoid_: reference bar, signal price, carried-over price
+  last bar instead. _Avoid_: reference bar, signal price
 - **Pricing-bar wait** — how long an ENTER waits for its pricing bar once its
   decision bar is in hand: a short fixed time, and never past the instant the
   decision itself stops being on time. The two streams deliver independently,

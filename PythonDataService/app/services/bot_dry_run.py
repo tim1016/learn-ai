@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.services.jsonl_wal import JsonlWal
@@ -38,6 +38,18 @@ class DryRunActivity(BaseModel):
     # decided: that bar's close, so the price's age is on the row (#2912).
     price_bar_end_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     simulated: Literal[True] = True
+
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_price_bar(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A fill priced at its own minute writes the row it always wrote.
+
+        The journal refuses a field it does not know, so a row carrying a
+        null one could not be read by the code before the field existed.
+        """
+        row = handler(self)
+        if row.get("price_bar_end_ms") is None:
+            row.pop("price_bar_end_ms", None)
+        return row
 
     @model_validator(mode="before")
     @classmethod

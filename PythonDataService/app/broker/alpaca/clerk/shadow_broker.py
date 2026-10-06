@@ -5,7 +5,10 @@ trade port that never submits. Three objects live here:
 
 * ``ShadowOrderBook`` — the synthesized orders and their settlement. A
   regular-session leg fills at its decision bar's close (``decision_bar_close``,
-  the same ``immediate_fill_price`` the sim world uses). An extended-session
+  the same ``immediate_fill_price`` the sim world uses). A regular-session
+  sale whose traded instrument had no bar for the decision's minute fills at
+  the close of the newest earlier one, stamped when it was decided
+  (``older_bar_close``, #2912). An extended-session
   limit leg rests and settles on read under ``limit_touch`` (D5.5) against
   the bars its own instance retained after the decision bar, and it
   cancels at the declared window's close for the decision's trading day — the
@@ -59,11 +62,11 @@ from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.sqlite.writes import account_paths, confined_account_file
 from app.broker.alpaca.clerk.synthesized_orders import (
     SYNTHESIZED_ORDER_LEDGER_FILENAME,
+    BoundBar,
     SynthesizedAnchor,
     SynthesizedBarBindingError,
     SynthesizedOrderLedger,
     SynthesizedOrderRecord,
-    immediate_fill_model,
     recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
@@ -264,24 +267,27 @@ class ShadowOrderBook:
             if existing is not None:
                 self._ledger.consume_bound_bar(client_order_id)
                 return existing
-            bound, fill_at_ms = self._ledger.consume_binding(client_order_id)
+            bound = self._ledger.consume_binding(client_order_id)
             if bound is None:
                 raise ShadowFillBindingError(
                     "Shadow execution requires the exact retained decision bar bound to this order; "
                     "nothing is ever priced from a later bar."
                 )
-            bar = self._ledger.verified_retained_bar(bound, symbol=leg.symbol)
+            bar = self._ledger.verified_retained_bar(bound.bar, symbol=leg.symbol)
             # Belt and braces over the bind-time check: the durable anchor can
             # never name another instance's evidence ledger.
             self._require_own_evidence(client_order_id, bar)
-            if leg.extended_hours and fill_at_ms is not None:
+            if leg.extended_hours and bound.older_fill_at_ms is not None:
+                # The Clerk refuses this before it reaches a port
+                # (``_PricingBarBoundTradePort``); a caller that got here is
+                # outside it.
                 raise ShadowFillBindingError(
                     "A resting shadow order is priced from its own decision bar, never an older one."
                 )
             order, anchor = (
                 self._resting_order(leg, client_order_id=client_order_id, bar=bar)
                 if leg.extended_hours
-                else self._immediate_order(leg, client_order_id=client_order_id, bar=bar, fill_at_ms=fill_at_ms)
+                else self._immediate_order(leg, client_order_id=client_order_id, priced_by=bound._replace(bar=bar))
             )
             self._ledger.append_locked(records, order=order, leg=leg, anchor=anchor)
             return order
@@ -395,8 +401,9 @@ class ShadowOrderBook:
             )
 
     def _immediate_order(
-        self, leg: BrokerOrderLeg, *, client_order_id: str, bar: RetainedSourceBar, fill_at_ms: int | None
+        self, leg: BrokerOrderLeg, *, client_order_id: str, priced_by: BoundBar
     ) -> tuple[BrokerOrder, SynthesizedAnchor]:
+        bar = priced_by.bar
         order = shape_immediate_order(
             leg,
             client_order_id=client_order_id,
@@ -404,10 +411,10 @@ class ShadowOrderBook:
             broker_id=SHADOW_BROKER_ID,
             id_prefix="shadow",
             observed_at_ms=self._clock(),
-            fill_at_ms=fill_at_ms,
+            fill_at_ms=priced_by.older_fill_at_ms,
         )
         return order, SynthesizedAnchor(
-            fill_model=immediate_fill_model(fill_at_ms),
+            fill_model=priced_by.fill_model,
             evidence_account_id=bar.account_id,
             provider=bar.provider,
             bar_identity=bar.bar_identity,

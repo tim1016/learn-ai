@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
 from app.marketdata.feed import (
     DELIVERY_ALLOWANCE_MS,
     ContinuityPolicy,
@@ -556,8 +557,19 @@ async def test_a_dry_run_records_the_asset_it_traded_and_that_assets_price(tmp_p
             await bot_trade_strategy.run_dry_run_bot(
                 binding, feed, journal, source_bars=bars, pricing_feed=feed, pricing_bar_wait_ms=20
             )
+            # What the simulation itself recorded, not what the runner says of it.
+            simulated = SynthesizedOrderLedger.beside_source_bars(
+                account_id=binding.sealed_account_id or "", source_bars=bars, label="test"
+            ).latest_records()
         finally:
             bars.close()
+
+        sale = next(record for record in simulated.values() if record.order.side == "sell")
+        assert (sale.order.filled_avg_price, sale.order.filled_at_ms) == (40.30, NOON + 3 * minute)
+        assert sale.anchor is not None
+        assert (sale.anchor.fill_model, sale.anchor.decision_bar_end_ms) == ("older_bar_close", NOON + minute)
+        purchase = next(record for record in simulated.values() if record.order.side == "buy")
+        assert purchase.anchor is not None and purchase.anchor.fill_model == "decision_bar_close"
 
         bought, sold = journal.tail(5)
         assert (bought.intent, bought.symbol, bought.fill_price, bought.price_bar_end_ms) == (

@@ -179,7 +179,7 @@ from app.broker.alpaca.clerk.stream_health import (
     stream_health_refusal,
 )
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
@@ -273,16 +273,15 @@ def _entry_wait_ending(outcome: EntryReadingOutcome, *, run_active: bool) -> str
 class _PricingBarBoundTradePort:
     """Bind each synthetic Clerk order to the one immutable retained bar that prices it.
 
-    ``fill_at_ms`` is set when that bar closed before the decision: the fill
-    is stamped at the decision's close, at the older bar's price.
+    ``decided_at_ms`` is the decision bar's close. A pricing bar that closed
+    before it is an older price: the fill is stamped at the decision's close,
+    at the older bar's price, and only a market order may fill that way.
     """
 
-    def __init__(
-        self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
-    ) -> None:
+    def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar, *, decided_at_ms: int) -> None:
         self._inner = inner
         self._retained_bar = retained_bar
-        self._fill_at_ms = fill_at_ms
+        self._decided_at_ms = decided_at_ms
 
     @property
     def broker_id(self) -> str:
@@ -294,7 +293,16 @@ class _PricingBarBoundTradePort:
         return self._inner.submission_response_is_authoritative_evidence
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
-        self._inner.bind_evaluated_bar(client_order_id, self._retained_bar, fill_at_ms=self._fill_at_ms)
+        if leg.extended_hours and self._retained_bar.end_ms < self._decided_at_ms:
+            # The sale was accepted while a market order could still go out and
+            # is being sent after it no longer can, re-priced as a limit to
+            # rest. An older price anchors no limit, so the send is refused as
+            # a broker would refuse it, and the EXIT's own recovery takes over.
+            raise BrokerOrderRejected(
+                "The simulation priced this sale from an earlier minute and will not rest a limit at that price.",
+                broker=self._inner.broker_id,
+            )
+        self._inner.bind_evaluated_bar(client_order_id, self._retained_bar, fill_at_ms=self._decided_at_ms)
         return await self._inner.submit(leg, client_order_id=client_order_id)
 
     async def cancel(self, order_id: str) -> None:
@@ -1274,6 +1282,15 @@ class SqliteAlpacaClerkFacade:
                 and retained_source_bar is not None
                 and priced_by.end_ms < retained_source_bar.end_ms
             )
+            if older_price and not market_leg_sendable(self._repo.clock()):
+                # An older price fills a market order only. Once the regular
+                # session cannot take one, the sale would be re-priced as a
+                # limit to rest, and no limit is anchored to an older price.
+                return rejected(
+                    reason_code=PRICING_BAR_UNAVAILABLE.reason_code,
+                    explanation=PRICING_BAR_UNAVAILABLE.explanation,
+                    next_step=PRICING_BAR_UNAVAILABLE.next_step,
+                )
             if pricing_bar is not None and priced_by is not pricing_bar:
                 # The order goes on without it (no decision bar to close with,
                 # or a broker-sent EXIT that needs no price), but a bar the
@@ -1523,9 +1540,9 @@ class SqliteAlpacaClerkFacade:
         trade: BrokerTradePort
         if self.binds_decision_bar:
             assert priced_by is not None and retained_source_bar is not None
-            trade = _PricingBarBoundTradePort(
-                self._trade, priced_by, fill_at_ms=retained_source_bar.end_ms if older_price else None
-            )
+            # The decision's close tells the port an older bar from the
+            # decision minute's own (``SynthesizedOrderLedger.bind_evaluated_bar``).
+            trade = _PricingBarBoundTradePort(self._trade, priced_by, decided_at_ms=retained_source_bar.end_ms)
         else:
             trade = self._trade
 

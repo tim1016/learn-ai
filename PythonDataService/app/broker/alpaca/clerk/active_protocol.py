@@ -61,6 +61,15 @@ class ActiveAlpacaClerk(Protocol):
         """
         ...
 
+    @property
+    def binds_decision_bar(self) -> bool:
+        """Whether this authority fills its own orders from retained bars (a Dry Run, a Live Shadow).
+
+        Declared here because a runner must know it: such an authority needs
+        a price for a sale that a broker, taking a market order, would not.
+        """
+        ...
+
     def exit_policy_for_instance(self, sid: str) -> ProgramLegPolicy: ...
 
     def exit_terms_for_instance(self, sid: str) -> ExitTerms | None: ...

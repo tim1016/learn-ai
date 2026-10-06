@@ -69,6 +69,13 @@ and a broken feed are three different facts and stay three codes."""
 _NOT_RETRIED: Final = "No order was sent, and the entry is not kept for a later bar."
 
 
+class _TwoPrices:
+    """A minute the feed delivered twice with different prices: neither prices an order."""
+
+
+_TWO_PRICES: Final = _TwoPrices()
+
+
 @dataclass(frozen=True)
 class PricingRefusal:
     """Why an ENTER has no pricing bar, in a code and in plain words."""
@@ -149,8 +156,8 @@ class PricingBarStream:
         whose own close time says how old the price is. ``None`` only when the
         traded instrument has never traded on this stream.
         """
-        own = await self.bar_for_entry(close_ms, time_left_ms=self._wait_ms)
-        if isinstance(own, RetainedSourceBar):
+        own = await self._arrival(close_ms, wait_ms=self._wait_ms)
+        if isinstance(own, RetainedSourceBar) and own.volume > 0:
             return own
         return self._ledger.latest_for_symbol(
             self._symbol, provider=self._feed.feed_id, at_or_before_ms=close_ms - 1, traded_only=True
@@ -163,28 +170,20 @@ class PricingBarStream:
         and no longer than ``time_left_ms``, the time the decision itself
         stays valid.
         """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + max(0, min(self._wait_ms, time_left_ms)) / 1000
-        while True:
-            bar = self._retained(close_ms)
-            if isinstance(bar, PricingRefusal):
-                return bar
-            if bar is not None:
-                if bar.volume == 0:
-                    return PricingRefusal(
-                        PRICING_BAR_NO_TRADE,
-                        f"{self._symbol} had no trade in this minute, so there was no price to buy at. "
-                        f"{_NOT_RETRIED}",
-                    )
-                return bar
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
-            self._arrived.clear()
-            try:
-                await asyncio.wait_for(self._arrived.wait(), timeout=remaining)
-            except TimeoutError:
-                break
+        bar = await self._arrival(close_ms, wait_ms=min(self._wait_ms, time_left_ms))
+        if bar is _TWO_PRICES:
+            return PricingRefusal(
+                PRICING_BAR_CONFLICT,
+                f"{self._symbol} was delivered with two different prices for this minute, "
+                f"so neither is a price to buy at. {_NOT_RETRIED}",
+            )
+        if isinstance(bar, RetainedSourceBar):
+            if bar.volume == 0:
+                return PricingRefusal(
+                    PRICING_BAR_NO_TRADE,
+                    f"{self._symbol} had no trade in this minute, so there was no price to buy at. {_NOT_RETRIED}",
+                )
+            return bar
         not_delivering = self._not_delivering()
         if not_delivering is not None:
             return PricingRefusal(
@@ -197,26 +196,33 @@ class PricingBarStream:
             f"{self._symbol}'s price for this minute had not arrived in time. {_NOT_RETRIED}",
         )
 
-    def _retained(self, close_ms: int) -> RetainedSourceBar | PricingRefusal | None:
-        """The ledger's one bar closing at ``close_ms``; a refusal when the minute has two."""
-        two_prices = close_ms in self._conflicted
-        bar: RetainedSourceBar | None = None
-        if not two_prices:
+    async def _arrival(self, close_ms: int, *, wait_ms: int) -> RetainedSourceBar | _TwoPrices | None:
+        """The bar closing at ``close_ms`` once it is in hand, waiting up to ``wait_ms`` for it; None if none came."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0, wait_ms) / 1000
+        while True:
+            bar = self._retained(close_ms)
+            if bar is not None:
+                return bar
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            self._arrived.clear()
             try:
-                bar = self._ledger.find_by_closed_end(
-                    provider=self._feed.feed_id, symbol=self._symbol, end_ms=close_ms
-                )
-            except SourceBarConflictError:
-                # Two retained bars close at this instant (they open at
-                # different ones): the ledger will not choose between them.
-                two_prices = True
-        if two_prices:
-            return PricingRefusal(
-                PRICING_BAR_CONFLICT,
-                f"{self._symbol} was delivered with two different prices for this minute, "
-                f"so neither is a price to buy at. {_NOT_RETRIED}",
-            )
-        return bar
+                await asyncio.wait_for(self._arrived.wait(), timeout=remaining)
+            except TimeoutError:
+                return None
+
+    def _retained(self, close_ms: int) -> RetainedSourceBar | _TwoPrices | None:
+        """The ledger's one bar closing at ``close_ms``; ``_TWO_PRICES`` when the minute has two."""
+        if close_ms in self._conflicted:
+            return _TWO_PRICES
+        try:
+            return self._ledger.find_by_closed_end(provider=self._feed.feed_id, symbol=self._symbol, end_ms=close_ms)
+        except SourceBarConflictError:
+            # Two retained bars close at this instant (they open at different
+            # ones): the ledger will not choose between them.
+            return _TWO_PRICES
 
     def _not_delivering(self) -> str | None:
         """Why the feed is not delivering this symbol's bars right now, or None when it is.

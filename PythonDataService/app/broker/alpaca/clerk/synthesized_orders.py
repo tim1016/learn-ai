@@ -33,7 +33,7 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal, TypeGuard
+from typing import Literal, NamedTuple, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,9 +90,17 @@ class SynthesizedAnchor(BaseModel):
     unfilled_reason: Literal["untouched", "no_evidence"] | None = None
 
 
-def immediate_fill_model(fill_at_ms: int | None) -> FillModel:
-    """The model an order filled at one bar's close records: its own minute's bar, or an older one."""
-    return "decision_bar_close" if fill_at_ms is None else "older_bar_close"
+class BoundBar(NamedTuple):
+    """The retained bar that prices one order, and when its fill is stamped if the bar is an older one."""
+
+    bar: RetainedSourceBar
+    # Set only for a bar that closed before the order was decided: the
+    # instant of that decision. ``None`` stamps the fill at the bar's close.
+    older_fill_at_ms: int | None
+
+    @property
+    def fill_model(self) -> FillModel:
+        return "decision_bar_close" if self.older_fill_at_ms is None else "older_bar_close"
 
 
 class SynthesizedOrderRecord(BaseModel):
@@ -195,7 +203,7 @@ class SynthesizedOrderLedger:
     ) -> None:
         self.account_id = account_id
         self._verify_bar = verify_bar
-        self._bound_bars: dict[str, tuple[RetainedSourceBar, int | None]] = {}
+        self._bound_bars: dict[str, BoundBar] = {}
         self._binding_lock = threading.Lock()
         # Thread-local because the transaction lock is held by one thread at a
         # time: a sibling thread outside a transaction must not read another
@@ -242,10 +250,11 @@ class SynthesizedOrderLedger:
         Rebinding the same id deterministically replaces an unconsumed binding,
         while a later retained bar for the same symbol cannot replace it.
 
-        ``fill_at_ms`` is given for a bar that closed before the order was
-        decided: a sell with no bar of its own minute fills at the newest
-        earlier price, stamped when it was decided, not when that price
-        traded (#2912). Without it the fill is stamped at the bar's own close.
+        ``fill_at_ms`` is the instant the order was decided. A bar that closed
+        before it is an older price: a sell with no bar of its own minute
+        fills at the newest earlier one, stamped when it was decided, not
+        when that price traded (#2912). A bar that closes at that instant, or
+        one bound with no instant, fills at its own close.
         """
         if not client_order_id:
             raise SynthesizedBarBindingError("Synthetic bar binding requires a client order id.")
@@ -254,18 +263,18 @@ class SynthesizedOrderLedger:
             raise SynthesizedBarBindingError(
                 "A synthetic fill cannot be stamped before the close of the bar that prices it."
             )
+        older = fill_at_ms is not None and fill_at_ms > canonical.end_ms
         with self._binding_lock:
-            self._bound_bars[client_order_id] = (
-                canonical, None if fill_at_ms == canonical.end_ms else fill_at_ms
-            )
+            self._bound_bars[client_order_id] = BoundBar(canonical, fill_at_ms if older else None)
 
-    def consume_binding(self, client_order_id: str) -> tuple[RetainedSourceBar | None, int | None]:
-        """The bar bound to this order and, for an older bar, the instant its fill is stamped at."""
+    def consume_binding(self, client_order_id: str) -> BoundBar | None:
+        """The bar bound to this order, with the instant its fill is stamped at when the bar is an older one."""
         with self._binding_lock:
-            return self._bound_bars.pop(client_order_id, (None, None))
+            return self._bound_bars.pop(client_order_id, None)
 
     def consume_bound_bar(self, client_order_id: str) -> RetainedSourceBar | None:
-        return self.consume_binding(client_order_id)[0]
+        bound = self.consume_binding(client_order_id)
+        return None if bound is None else bound.bar
 
     def verified_retained_bar(
         self,
@@ -393,13 +402,13 @@ def project_positions(orders: list[BrokerOrder]) -> dict[str, tuple[float, float
 __all__ = [
     "SYNTHESIZED_ORDER_LEDGER_FILENAME",
     "BarVerifier",
+    "BoundBar",
     "FillModel",
     "SynthesizedAnchor",
     "SynthesizedBarBindingError",
     "SynthesizedLedgerTransactionError",
     "SynthesizedOrderLedger",
     "SynthesizedOrderRecord",
-    "immediate_fill_model",
     "observed_in_send_session",
     "project_positions",
     "recovery_bar_in_send_session",
