@@ -995,3 +995,13 @@ def test_a_bot_with_two_symbols_starts_before_the_open_like_any_other() -> None:
     )
 
     assert evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW).allowed is True
+
+
+def test_a_feed_that_is_stale_for_both_symbols_is_not_blamed_on_one_of_them() -> None:
+    bot = _trading_qqq(_bot(market_state="STALE"), market_state="STALE")
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.reason_code == "MARKET_DATA_STALE"
+    assert "SPY" not in decision.explanation
+    assert "QQQ" not in decision.explanation

@@ -345,8 +345,12 @@ def evaluate_run_admission(
                     reason_code=reason_codes["HALTED" if symbol_halted else liveness.state],
                     explanation=side.say(
                         liveness.reason,
+                        # The same code can carry a sentence about one symbol only,
+                        # so the sentence has to be the same one too.
                         true_of_every_symbol=all(
-                            other.market_liveness.reason_code == liveness.reason_code for other in sides
+                            (other.market_liveness.reason_code, other.market_liveness.reason)
+                            == (liveness.reason_code, liveness.reason)
+                            for other in sides
                         ),
                     ),
                     next_step=(
