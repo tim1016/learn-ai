@@ -118,8 +118,10 @@ class LegDistanceStrike(BaseModel):
     @field_validator("dollars", "tolerance_dollars")
     @classmethod
     def _dollars_a_strike_can_differ_by(cls, dollars: float) -> float:
-        # Strikes are listed to a thousandth of a dollar, so a distance is too.
-        strike_thousandths(abs(dollars))
+        # Strikes are listed to a thousandth of a dollar, so a distance is too; and no two strikes a
+        # contract symbol can write are as far apart as the largest of them.
+        if strike_thousandths(abs(dollars)) >= MAX_STRIKE_THOUSANDTHS:
+            raise ValueError(f"no two strikes are {abs(dollars)} dollars apart")
         # Zero has one spelling: a plan with -0.0 must not hash apart from the same plan with 0.0.
         return dollars + 0.0
 

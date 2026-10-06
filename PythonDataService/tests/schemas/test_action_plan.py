@@ -254,9 +254,19 @@ def test_a_strike_measured_from_another_leg_must_land_on_a_listed_strike_unless_
             {"selector": "leg_distance", "leg_id": "a", "dollars": 2.5005}, "dollars", id="a distance finer than strikes are listed"
         ),
         pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": -99999.999},
+            "dollars",
+            id="a distance wider than the whole range of strikes",
+        ),
+        pytest.param(
             {"selector": "leg_distance", "leg_id": "a", "dollars": 5, "tolerance_dollars": -1},
             "tolerance_dollars",
             id="a negative dollar tolerance",
+        ),
+        pytest.param(
+            {"selector": "leg_distance", "leg_id": "a", "dollars": 5, "tolerance_dollars": 100000},
+            "tolerance_dollars",
+            id="a dollar tolerance wider than the whole range of strikes",
         ),
         pytest.param(
             {"selector": "leg_distance", "leg_id": "a", "dollars": 5, "tolerance_dollars": 0.0005},
