@@ -145,27 +145,6 @@ def _run_signal_only(bars: list[TradeBar]) -> list[str]:
     return decisions
 
 
-def test_cross_asset_mode_subscribes_signal_symbol_and_orders_trade_symbol() -> None:
-    strategy = DeploymentValidationConsecutiveGreen(symbol="SPY", trade_symbol="NVDA")
-    portfolio = Portfolio(initial_cash=Decimal("100000"))
-    ctx = StrategyContext(portfolio=portfolio)
-    strategy.ctx = ctx
-    strategy.initialize()
-
-    assert ctx.symbols == ["SPY"]
-
-    portfolio.update_reference_price("NVDA", Decimal("500"))
-    for bar in [
-        _bar(9, 44, "100", "101"),
-        _bar(9, 45, "101", "102"),
-    ]:
-        ctx.current_time_ms = bar.end_ms
-        strategy.on_minute_bar(bar)
-
-    assert len(portfolio.pending_orders) == 1
-    assert portfolio.pending_orders[0].symbol == "NVDA"
-
-
 def test_red_bar_resets_green_detection() -> None:
     bars = [
         _bar(9, 44, "100", "101"),

@@ -1835,7 +1835,7 @@ async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
     binding_for_control = registry.binding_for_control  # type: ignore[union-attr]
 
     def stale_binding(broker: str, sid: str) -> SimpleNamespace:
-        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "strategy_params": {"trade_symbol": 7}})
+        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "strategy_params": {"retired_setting": 7}})
 
     monkeypatch.setattr(registry, "binding_for_control", stale_binding)
 

@@ -1777,7 +1777,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=DeploymentValidationParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
+            golden_trace_root="f2427abee699b896822b2180b86b5c56f8af45eebe84e98e21251aaba4028dcc",
             provider="polygon",
             base_timeframe_ms=60_000,
             # This program's decision clock IS the raw minute bar -- there is
@@ -1879,10 +1879,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # this promotion.
                 equivalence_level="bit_exact",
             ),
-            parameter_units={
-                "symbol": "ticker",
-                "trade_symbol": "ticker",
-            },
+            parameter_units={"symbol": "ticker"},
             # Not indicator-driven: beyond the always-injected symbol, there
             # is no additional tunable this contract pins as validated.
             validated_settings={},
@@ -1902,8 +1899,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         algorithm_pseudocode=(
             "Universe\n"
-            "    signal symbol = configurable (default SPY)\n"
-            "    trade symbol  = configurable (defaults to signal symbol)\n"
+            "    symbol     = configurable (default SPY)\n"
             "    resolution = 1-minute bars\n"
             "    session    = regular session data; strategy starts at 09:45 ET\n"
             "\n"
@@ -1949,7 +1945,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         param_schema=DeploymentValidationParams,
         strategy_view=_DEPLOYMENT_VALIDATION_VIEW,
         strategy_bars=StrategyBarCadence("minute", 1),
-        hidden_params={"trade_symbol"},
         build=lambda p: build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_deployment_validation_signal_program,
     ),
