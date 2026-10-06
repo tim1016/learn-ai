@@ -22,6 +22,18 @@
       </div>
       <div><dt>Band · spread cap</dt><dd>{{ terms.band_multiple }}× · {{ terms.spread_cap_bps }} bps</dd></div>
     }
+    @if (bot.traded_asset_warning; as untested) {
+      <div>
+        <dt>Untested traded asset</dt>
+        <dd class="setup__untested">
+          <strong>{{ untested.headline }}</strong>
+          <span>{{ untested.detail }}</span>
+          @if (bot.traded_asset_acknowledgement; as accepted) {
+            <span>You accepted this at Deploy: “{{ accepted.reason }}”</span>
+          }
+        </dd>
+      </div>
+    }
     <div>
       <dt>Build</dt>
       <dd>

@@ -132,6 +132,14 @@ $time-column: 3.25rem;
 
 .decision__detail { margin-top: var(--space-1); }
 
+.decision__sentence {
+  margin-top: var(--space-1);
+  margin-bottom: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
 .decision__unrecorded {
   margin: var(--space-1) 0 0;
   color: var(--text-subtle);

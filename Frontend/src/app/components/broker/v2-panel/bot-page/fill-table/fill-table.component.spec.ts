@@ -20,5 +20,22 @@ describe('FillTableComponent', () => {
     expect(screen.getByText('Sell')).toBeTruthy();
     expect(screen.getByText('$625.10')).toBeTruthy();
     expect(screen.getByText('$626.20')).toBeTruthy();
+    expect(screen.queryByRole('columnheader', { name: 'Asset' })).toBeNull();
+  });
+
+  it('names each fill’s asset for a bot that trades something other than what it listens to (#2912)', async () => {
+    await render(FillTableComponent, {
+      inputs: {
+        label: 'Fills this run',
+        showAsset: true,
+        fills: [
+          { filled_at_ms: 1_753_800_000_000, side: 'buy', quantity: 1, price: 512.4, symbol: 'QQQ', order_ref: 'buy-1', event_key: 'exec-buy-1' },
+        ],
+      },
+    });
+
+    expect(screen.getByRole('columnheader', { name: 'Asset' })).toBeTruthy();
+    expect(screen.getByText('QQQ')).toBeTruthy();
+    expect(screen.getByText('$512.40')).toBeTruthy();
   });
 });

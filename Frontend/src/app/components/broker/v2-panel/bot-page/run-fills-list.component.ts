@@ -33,6 +33,8 @@ export class RunFillsListComponent {
   readonly fillCount = input(0);
   /** When the run started, int64 ms UTC; the list is dated by it. */
   readonly runStartedAtMs = input<number | null>(null);
+  /** Name each fill's asset: for a bot that trades something else (#2912). */
+  readonly showAsset = input(false);
 
   protected readonly hasFills = computed(() => this.fills().length > 0);
   protected readonly inlineFills = computed(() => this.fills().slice(-INLINE_FILL_LIMIT));

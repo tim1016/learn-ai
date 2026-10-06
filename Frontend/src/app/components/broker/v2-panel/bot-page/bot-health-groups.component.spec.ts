@@ -56,6 +56,33 @@ describe('BotHealthGroupsComponent (#2794)', () => {
       .toEqual(['During this run', 'Account right now']);
   });
 
+  it('reads the market for both symbols when the bot trades something other than what it listens to (#2912)', async () => {
+    const pulse = fakeBotPanelView().market_pulse;
+    await render(BotHealthGroupsComponent, {
+      inputs: {
+        health: HEALTH,
+        marketPulse: pulse,
+        tradedMarketPulse: { ...pulse, headline: 'QQQ is halted', explanation: 'Trading in QQQ is halted.', attention_required: true },
+        listensTo: 'SPY',
+        trades: 'QQQ',
+      },
+    });
+
+    const listened = screen.getByRole('heading', { name: 'Market right now · listens to SPY' });
+    const traded = screen.getByRole('heading', { name: 'Market right now · trades QQQ' });
+    expect(listened).toBeTruthy();
+    expect(traded.nextElementSibling?.textContent).toContain('QQQ is halted');
+  });
+
+  it('heads the one market read plainly for a bot that trades what it listens to', async () => {
+    await render(BotHealthGroupsComponent, {
+      inputs: { health: HEALTH, marketPulse: fakeBotPanelView().market_pulse, listensTo: 'SPY' },
+    });
+
+    expect(screen.getByRole('heading', { name: 'Market right now' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: /trades/ })).toBeNull();
+  });
+
   it('says how a run is joining its live stream, under the run', async () => {
     await render(BotHealthGroupsComponent, { inputs: { health: HEALTH, startupJoin: JOINING } });
 
