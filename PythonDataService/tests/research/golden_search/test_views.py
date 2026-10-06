@@ -389,7 +389,7 @@ def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candida
     # The stored measure reads back as recorded; evidence recorded before it was measured says so.
     assert all_period["concentration"] == measured
     assert incumbent["concentration"] == {"status": "missing", "reason": NOT_MEASURED}
-    assert [item["exam_eligible"] for item in view["candidates"]] == [False, True, True]
+    assert view["fits_to_test"] == [{"key": "all_period", "same_as": [], "label": "All-period fit"}, {"key": "recent", "same_as": [], "label": "Recent fit"}]
     assert all_period["guidance"]["title"] == "Nearby settings lose money"
     assert all_period["flags"] == [{"code": "NEIGHBORS_LOSE_MONEY", "text": "Nearby settings lose money"}]
     assert (recent["eligible"], recent["ineligibility"]) == (False, "DRAWDOWN_ABOVE_CEILING")

@@ -167,8 +167,7 @@ export type EvidenceScope = Schemas['GoldenSearchEvidenceScope'];
 
 /**
  * One candidate on the development scope. `guidance` comes from a closed copy
- * map keyed by its situation; `params_sentence` is Python-authored; the
- * incumbent is not `exam_eligible` (keeping it needs no final test).
+ * map keyed by its situation; `params_sentence` is Python-authored.
  */
 export type EvidenceCandidate = Omit<Schemas['GoldenSearchEvidenceCandidate'], 'point'> & { point: Point };
 /** `incomplete` when the budget stopped the stage before every candidate's evidence ran. */
@@ -209,8 +208,8 @@ export type StudyScope = Schemas['GoldenSearchScope'];
 
 /**
  * One study as the workbench reads it. `protocol` is the frozen plan echo;
- * `exposure_preview` is what opening the final test would record, while a
- * candidate is chosen (null otherwise).
+ * `exposure_preview` is what opening the final test would record, while the
+ * candidates are compared (null otherwise).
  */
 export type StudyDetail = Omit<Schemas['GoldenSearchStudyDetail'], 'protocol' | 'results' | 'action_refusals'> & {
   protocol: ProtocolRequest;

@@ -20612,10 +20612,6 @@
             "title": "Eligible",
             "type": "boolean"
           },
-          "exam_eligible": {
-            "title": "Exam Eligible",
-            "type": "boolean"
-          },
           "fixed_sentence": {
             "title": "Fixed Sentence",
             "type": "string"
@@ -20726,8 +20722,7 @@
           "guidance",
           "flags",
           "params_sentence",
-          "fixed_sentence",
-          "exam_eligible"
+          "fixed_sentence"
         ],
         "title": "GoldenSearchEvidenceCandidate",
         "type": "object"

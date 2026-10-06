@@ -8,7 +8,7 @@ import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateDetail, CandidateKey, ExamFit, ExamView, StudyCommand, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { candidateDetail, CHOSEN_NOTE, emaCapability, examFit, examView, exposure, finalRun, frequencyProtocol, protocol, studyDetail, tradeActivity, UNDECIDED_NOTE } from './testing/fixtures';
+import { candidateDetail, CHOSEN_NOTE, emaCapability, evidenceView, examFit, examView, exposure, finalRun, frequencyProtocol, protocol, studyDetail, tradeActivity, UNDECIDED_NOTE } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail, exam: (key: CandidateKey) => CandidateDetail['exam'] = finalRun) {
   const service = { candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key, { exam: exam(key) })) };
@@ -134,6 +134,16 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
 
     expect((screen.getByRole('button', { name: 'Open final test' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Another study is opening this interval.')).not.toBeNull();
+  });
+
+  it('names one run for two fits that chose the same settings, as the server lists it', async () => {
+    const base = studyDetail('awaiting_candidate');
+    const evidence = evidenceView({ fits_to_test: [{ key: 'all_period', same_as: ['recent'], label: 'All-period and recent fit' }] });
+    await renderStep({ ...base, results: { ...base.results, evidence } });
+
+    const lock = screen.getByRole('region', { name: /is still sealed/i });
+    expect(lock.textContent).toContain('All-period and recent fit and the frozen incumbent will be evaluated.');
+    expect(lock.textContent).not.toContain('Each fit is judged on its own');
   });
 
   it('before the candidates are ready it points back to Compare', async () => {
@@ -425,7 +435,10 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     const recorded = screen.getByRole('region', { name: 'Recorded decision' });
     expect(recorded.textContent).toContain('Keep current settings');
     expect(recorded.textContent).toContain('The test did not justify a change.');
-    expect(screen.getByRole('region', { name: 'Final test result' })).not.toBeNull();
+    const result = screen.getByRole('region', { name: 'Final test result' });
+    // Either fit can still be looked at, and nothing promises an approval.
+    expect(result.textContent).toContain('Everything below is about the fit you select here: its checks and its charts.');
+    expect(screen.getByRole('region', { name: 'Golden acceptance' }).textContent).toContain('Not approved');
     expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Return to evidence' }));
     expect(steps).toEqual(['compare']);

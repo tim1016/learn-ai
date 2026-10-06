@@ -21,7 +21,7 @@
           <app-golden-search-exam-result [study]="s" [exam]="exam" [fit]="f" (choose)="choose($event)" />
           <app-golden-search-final-charts [study]="s" [exam]="exam" [fit]="f" />
           <app-golden-search-tuple [study]="s" [capability]="capability()" [candidate]="candidate()" [point]="f.point" [incumbent]="incumbent()" />
-          <app-golden-search-approval [study]="s" [exam]="exam" [fit]="f" [busy]="busy()" (studyCommand)="studyCommand.emit($event)" />
+          <app-golden-search-approval [study]="s" [fit]="f" [busy]="busy()" (studyCommand)="studyCommand.emit($event)" />
         </div>
       }
     }
