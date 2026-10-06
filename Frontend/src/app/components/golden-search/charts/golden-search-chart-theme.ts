@@ -31,6 +31,8 @@ export interface ChartTheme {
   readonly development: string;
   /** Current settings grey, All-period fit blue, Recent fit amber. */
   readonly candidates: Readonly<Record<CandidateKey, string>>;
+  /** Colours for runs that have no name of their own, taken in order and reused past the last. */
+  readonly series: readonly string[];
 }
 
 export function chartTheme(element: HTMLElement): ChartTheme {
@@ -55,6 +57,7 @@ export function chartTheme(element: HTMLElement): ChartTheme {
       all_period: themeColor(element, '--chart-series-blue'),
       recent: themeColor(element, '--chart-series-amber'),
     },
+    series: ['blue', 'amber', 'teal', 'pink', 'sky', 'orange', 'purple', 'green', 'violet', 'red'].map((name) => themeColor(element, `--chart-series-${name}`)),
   };
 }
 

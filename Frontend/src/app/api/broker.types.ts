@@ -15714,6 +15714,11 @@ export interface components {
         /** GoldenSearchRunGroup */
         GoldenSearchRunGroup: {
             /**
+             * Completed
+             * @description How many of the group's runs finished with a result.
+             */
+            completed: number;
+            /**
              * Key
              * @enum {string}
              */
@@ -15724,7 +15729,7 @@ export interface components {
             runs: number;
             /**
              * With Curve
-             * @description How many of the group's runs kept their daily equity.
+             * @description How many kept their daily equity; a completed run without it was recorded before runs kept it.
              */
             with_curve: number;
         };

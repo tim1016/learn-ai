@@ -322,6 +322,26 @@ export type FoldChart = Omit<Schemas['GoldenSearchFoldChart'], 'winner'> & { win
 export type TestOverTimeCharts = Omit<Schemas['GoldenSearchTestOverTimeCharts'], 'folds'> & { folds: FoldChart[] };
 export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
 
+/** What asked for a run: the step, and for a walk-forward or evidence run which part of it. */
+export type RunGroupKey = Schemas['GoldenSearchRunGroup']['key'];
+export type RunGroup = Schemas['GoldenSearchRunGroup'];
+/** One engine run of a study (#2930), under the step that first asked for it. */
+export type StudyRun = Omit<Schemas['GoldenSearchRun'], 'point'> & { point: Point };
+export type RunsPage = Omit<Schemas['GoldenSearchRunsPage'], 'rows'> & { rows: StudyRun[] };
+export const RUN_SORTS = ['recorded', 'total_return_pct', 'sharpe_ratio', 'max_drawdown_pct', 'total_trades', 'net_profit'] as const;
+export type RunSort = (typeof RUN_SORTS)[number];
+export interface RunsQuery {
+  group: RunGroupKey | null;
+  sort: RunSort;
+  descending: boolean;
+  page: number;
+  page_size: number;
+}
+/** One run's daily curve as parallel lists over its session closes; `drawdown` is null when its peak never rose above 0. */
+export type RunCurve = Schemas['GoldenSearchRunCurve'];
+/** The named runs' curves, and the runs among them that kept none. */
+export type RunCurves = Schemas['GoldenSearchRunCurves'];
+
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */
 export type CandidateDetail = Omit<Schemas['GoldenSearchCandidateDetail'], 'point'> & { point: Point };
 

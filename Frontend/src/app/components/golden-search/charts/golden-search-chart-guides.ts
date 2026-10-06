@@ -36,7 +36,8 @@ export type GoldenSearchChartId =
   | 'final-checks'
   | 'final-comparison'
   | 'final-equity'
-  | 'final-months';
+  | 'final-months'
+  | 'run-curves';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -412,6 +413,16 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Look for one month far taller than the rest: a final result carried by a single month is fragile.', target: null },
       { text: 'Count the months each run won. Winning most months is steadier than winning one big one.', target: null },
       { text: 'Hover a month for every run’s return.', target: null },
+    ],
+  },
+  'run-curves': {
+    title: 'Run equity curves',
+    question: 'How did each run you ticked travel, not just where it ended?',
+    steps: [
+      { text: 'Each line is one run you ticked, from the study’s starting capital at every session close it scored.', target: { kind: 'series', group: 'equity' } },
+      { text: 'Runs over different windows sit on one date axis: a line starts and stops with its own window.', target: null },
+      { text: 'Drop to the lower part: each run’s fall from its own peak, against the worst-fall limit.', target: { kind: 'series', group: 'fall' } },
+      { text: 'Hover a session for the runs’ values there, best first. Past twelve runs it lists the best twelve.', target: null },
     ],
   },
 };

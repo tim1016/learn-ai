@@ -172,10 +172,12 @@ def runs_page(
     names = named_points(row)
     scenario_labels = {item["key"]: item["label"] for item in row.protocol.get("stress", [])}
     grouped = [(group_of(record, by_fold), record) for record in records]
-    counts = {key: [0, 0] for key in RUN_GROUPS}
+    # Per group: every run, the completed ones, and those that kept a curve. A completed run without one predates curves.
+    counts = {key: [0, 0, 0] for key in RUN_GROUPS}
     for key, record in grouped:
         counts[key][0] += 1
-        counts[key][1] += record.has_curve
+        counts[key][1] += record.status == "completed"
+        counts[key][2] += record.has_curve
     chosen = [(key, record) for key, record in grouped if (group is None or key == group) and (fold_index is None or record.fold_index == fold_index)]
     if sort != "recorded":
         measured = [item for item in chosen if _metric(item[1], sort) is not None]
@@ -189,7 +191,11 @@ def runs_page(
         "total": len(chosen),
         "page": page,
         "page_size": page_size,
-        "groups": [{"key": key, "label": GROUP_LABELS[key], "runs": counts[key][0], "with_curve": counts[key][1]} for key in RUN_GROUPS if counts[key][0] > 0],
+        "groups": [
+            {"key": key, "label": GROUP_LABELS[key], "runs": counts[key][0], "completed": counts[key][1], "with_curve": counts[key][2]}
+            for key in RUN_GROUPS
+            if counts[key][0] > 0
+        ],
         "rows": [
             run_view(record, group=key, names=names.of(record), scenario_labels=scenario_labels, declaration=declaration)
             for key, record in chosen[start : start + page_size]

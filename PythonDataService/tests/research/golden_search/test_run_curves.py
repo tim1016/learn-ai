@@ -100,9 +100,10 @@ def test_the_page_lists_one_group_sorted_with_unmeasured_runs_last_beside_every_
     assert [row["evaluation_key"] for row in _page(records, group="search", sort="total_return_pct")["rows"]] == ["s1", "s4", "s2", "s3"]
     assert best_first["total"] == 4
     assert best_first["groups"] == [
-        {"key": "search", "label": "All-period search", "runs": 4, "with_curve": 3},
-        {"key": "fold_test", "label": "Fold test", "runs": 1, "with_curve": 1},
-        {"key": "stress", "label": "Cost stress", "runs": 1, "with_curve": 1},
+        # The failed run never had a curve to keep; it is not one recorded before curves.
+        {"key": "search", "label": "All-period search", "runs": 4, "completed": 3, "with_curve": 3},
+        {"key": "fold_test", "label": "Fold test", "runs": 1, "completed": 1, "with_curve": 1},
+        {"key": "stress", "label": "Cost stress", "runs": 1, "completed": 1, "with_curve": 1},
     ]
     assert best_first["rows"][0]["label"] == "All-period search · Current settings"
     assert best_first["rows"][0]["params_sentence"].startswith("Gap $0.20")

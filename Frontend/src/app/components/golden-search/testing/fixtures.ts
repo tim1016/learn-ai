@@ -8,6 +8,10 @@ import type {
   ExamOutcome,
   ExamFit,
   ExamView,
+  RunCurve,
+  RunCurves,
+  RunsPage,
+  StudyRun,
   ExposureState,
   ExposureView,
   Finding,
@@ -1019,4 +1023,65 @@ function permittedFor(state: StudyState): StudyDetail['permitted_actions'] {
     default:
       return ['revise'];
   }
+}
+
+/** One run as the All runs page lists it: an all-period search point with its curve, unless overridden. */
+export function studyRun(key: string, overrides: Partial<StudyRun> = {}): StudyRun {
+  return {
+    evaluation_key: key,
+    group: 'search',
+    group_label: 'All-period search',
+    fold_index: null,
+    label: 'All-period search',
+    names: [],
+    point: { ...ALL_PERIOD_POINT },
+    params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
+    window_start_ms: DEVELOPMENT_START_MS,
+    window_end_ms: FINAL_START_MS,
+    scenario: 'base',
+    status: 'completed',
+    total_trades: 146,
+    net_profit: 8700,
+    total_return_pct: 0.087,
+    sharpe_ratio: 1.18,
+    max_drawdown_pct: 0.064,
+    error: null,
+    has_curve: true,
+    ...overrides,
+  };
+}
+
+/** A page of runs: the search's winner, a second search point, a run recorded before curves, a failed run and a fold's test run. */
+export function runsPage(overrides: Partial<RunsPage> = {}): RunsPage {
+  return {
+    total: 5,
+    page: 1,
+    page_size: 100,
+    groups: [
+      { key: 'search', label: 'All-period search', runs: 4, completed: 3, with_curve: 2 },
+      { key: 'fold_test', label: 'Fold test', runs: 1, completed: 1, with_curve: 1 },
+    ],
+    rows: [
+      studyRun('run-winner', { label: 'All-period search · All-period fit', names: ['All-period fit'] }),
+      studyRun('run-second', { total_return_pct: 0.041, sharpe_ratio: 0.72, params_sentence: 'Gap $0.10 · RSI 48–72 · EMA 8/21 · hold 4 bars' }),
+      studyRun('run-old', { has_curve: false, total_return_pct: 0.02 }),
+      studyRun('run-failed', { status: 'failed', error: 'no bars', has_curve: false, total_trades: 0, net_profit: null, total_return_pct: null, sharpe_ratio: null, max_drawdown_pct: null }),
+      studyRun('run-fold', { group: 'fold_test', group_label: 'Fold test', fold_index: 0, label: 'Fold 1 test · Fold winner', names: ['Fold winner'], window_start_ms: etMidnightMs('2025-07-01'), window_end_ms: etMidnightMs('2025-10-01') }),
+    ],
+    ...overrides,
+  };
+}
+
+/** A run's curve over three session closes, ending at `end`. */
+export function runCurve(key: string, end = 0.087): RunCurve {
+  return {
+    evaluation_key: key,
+    close_ms: [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')],
+    cumulative_return: [0, end / 2, end],
+    drawdown: [0, -end / 4, 0],
+  };
+}
+
+export function runCurves(keys: readonly string[], notRecorded: readonly string[] = []): RunCurves {
+  return { capital: 100000, curves: keys.map((key, i) => runCurve(key, 0.087 - i * 0.02)), not_recorded: [...notRecorded] };
 }

@@ -24462,6 +24462,11 @@
       "GoldenSearchRunGroup": {
         "additionalProperties": false,
         "properties": {
+          "completed": {
+            "description": "How many of the group's runs finished with a result.",
+            "title": "Completed",
+            "type": "integer"
+          },
           "key": {
             "enum": [
               "search",
@@ -24486,7 +24491,7 @@
             "type": "integer"
           },
           "with_curve": {
-            "description": "How many of the group's runs kept their daily equity.",
+            "description": "How many kept their daily equity; a completed run without it was recorded before runs kept it.",
             "title": "With Curve",
             "type": "integer"
           }
@@ -24495,6 +24500,7 @@
           "key",
           "label",
           "runs",
+          "completed",
           "with_curve"
         ],
         "title": "GoldenSearchRunGroup",

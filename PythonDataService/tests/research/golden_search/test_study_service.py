@@ -915,7 +915,7 @@ async def test_every_run_keeps_its_daily_curve_and_the_runs_read_groups_them(con
     page = await service.runs(row.id, page_size=500)
     groups = {group["key"]: group for group in page["groups"]}
     assert set(groups) == {"search", "pair_audit", "recent", "fold_training", "fold_test", "candidate", "neighbor", "stress", "final"}
-    assert all(group["runs"] == group["with_curve"] for group in groups.values())
+    assert all(group["runs"] == group["completed"] == group["with_curve"] for group in groups.values())
     assert page["total"] == sum(group["runs"] for group in groups.values()) == recorded["runs"] == len(page["rows"])
 
     final = (await service.runs(row.id, group="final", sort="sharpe_ratio", descending=True))["rows"]

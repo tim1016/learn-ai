@@ -1167,7 +1167,8 @@ class GoldenSearchRunGroup(_Wire):
     key: RunGroup
     label: str
     runs: int
-    with_curve: int = Field(description="How many of the group's runs kept their daily equity.")
+    completed: int = Field(description="How many of the group's runs finished with a result.")
+    with_curve: int = Field(description="How many kept their daily equity; a completed run without it was recorded before runs kept it.")
 
 
 class GoldenSearchRun(_Wire):
