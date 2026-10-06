@@ -26,7 +26,7 @@ def test_option_contract_match_round_trips() -> None:
         "trading_class": "SPY",
         "exchange": "SMART",
         "currency": "USD",
-        "expiry_ms": 1_766_188_800_000,
+        "expiry_ms": 1_766_178_000_000,
         "strike": 650.0,
         "right": "C",
         "multiplier": 100,

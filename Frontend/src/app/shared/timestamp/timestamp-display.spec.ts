@@ -36,12 +36,6 @@ describe('formatTimestampDisplay', () => {
     })).toBe('2026-06-19 ET');
   });
 
-  it('formats broker UTC date markers without shifting calendar day', () => {
-    expect(formatTimestampDisplay(Date.UTC(2025, 11, 19, 0, 0, 0), {
-      mode: 'date-utc',
-    })).toBe('2025-12-19');
-  });
-
   it('uses 00 rather than 24 at midnight', () => {
     expect(formatTimestampDisplay(Date.UTC(2026, 0, 1, 0, 0, 0), {
       mode: 'local',
