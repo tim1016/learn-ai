@@ -146,6 +146,40 @@ export class StrategyLabConfigStore {
       .filter(([field, property]) => field !== 'symbol' && values[field] !== property.default)
       .map(([field]) => field);
   });
+  /**
+   * Changed parameters whose value would not reach the LEAN twin (#2904).
+   *
+   * The catalog names what a twin reads. A `lean_parameter_names` setting
+   * travels as a strategy parameter, so only a blank one is lost: LEAN would
+   * run its own default. A `lean_data_policy_parameter_names` setting travels
+   * only as the strategy-bar cadence, so it is lost unless the policy this
+   * run sends carries its value. Every other changed setting is lost.
+   */
+  readonly parametersLeanWouldIgnore = computed<readonly string[]>(() => {
+    const strategy = this.selectedStrategy();
+    const values = this.paramValues();
+    const sent = new Set(strategy?.lean_parameter_names ?? []);
+    const policyBacked = new Set(strategy?.lean_data_policy_parameter_names ?? []);
+    const cadence = this.dataPolicy().strategy_bars.multiplier;
+    return this.changedParameterNames().filter((name) => {
+      if (sent.has(name)) return values[name] === undefined;
+      if (policyBacked.has(name)) {
+        return name !== strategy?.strategy_bars.parameter || values[name] !== cadence;
+      }
+      return true;
+    });
+  });
+  /**
+   * The strategy parameters a LEAN-only run sends: every setting the twin
+   * reads, changed or not, as the parity companion sends them. `null` when
+   * the twin takes none.
+   */
+  readonly leanStrategyParameters = computed<Record<string, unknown> | null>(() => {
+    const names = this.selectedStrategy()?.lean_parameter_names ?? [];
+    if (names.length === 0) return null;
+    const values = this.paramValues();
+    return Object.fromEntries(names.map((name) => [name, values[name]]));
+  });
 
   readonly selectedStrategy = computed(() => {
     const name = this.selectedStrategyName();

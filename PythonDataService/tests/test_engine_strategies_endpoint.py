@@ -244,3 +244,18 @@ def test_rsi_mean_reversion_advertises_its_matching_lean_validation_template():
     strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "rsi_mean_reversion")
 
     assert strategy["lean_twin"] == "rsi_mean_reversion"
+
+
+def test_catalog_names_the_settings_each_lean_twin_reads() -> None:
+    """Strategy Lab's LEAN-only run sends these settings and refuses the rest (#2904)."""
+    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
+
+    for name, strategy in strategies.items():
+        registration = _STRATEGY_REGISTRY[name]
+        assert strategy["lean_parameter_names"] == list(registration.lean_parameter_names), name
+        assert strategy["lean_data_policy_parameter_names"] == list(
+            registration.lean_data_policy_parameter_names
+        ), name
+    # Both kinds must be on the wire, or the loop above proves nothing.
+    assert strategies["ema_crossover_signal"]["lean_parameter_names"] == ["gap", "gap_bps", "rsi_min", "rsi_max"]
+    assert strategies["rsi_mean_reversion"]["lean_data_policy_parameter_names"] == ["resolution_minutes"]
