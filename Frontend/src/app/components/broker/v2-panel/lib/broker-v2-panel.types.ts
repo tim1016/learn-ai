@@ -145,6 +145,8 @@ export type ChartBar = components['schemas']['ChartBar'];
  * must key on it.
  */
 export type ChartFillMarker = components['schemas']['ChartFillMarker'];
+/** One fill in the bot page's list: a chart marker that also says how a simulated fill was priced (#2912). */
+export type RunFillView = components['schemas']['RunFillView'];
 
 export type ChartOverlayNoticeView = components['schemas']['ChartOverlayNoticeView'];
 export type ChartLiveResponse = components['schemas']['ChartLiveResponse'];

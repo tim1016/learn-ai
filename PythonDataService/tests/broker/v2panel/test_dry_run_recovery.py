@@ -531,6 +531,11 @@ async def test_a_crashed_dry_run_is_closed_by_its_simulation_at_the_last_price_i
     assert [(fill.side, fill.quantity, fill.price, fill.filled_at_ms) for fill in panel.recent_fills][:1] == [
         ("sell", 1.0, 600.0, NOON + 1_000),
     ]
+    # The page says each of the run's fills was simulated, and by which rule (#2912).
+    assert [(fill.side, fill.simulated.kind) for fill in panel.run_fills or [] if fill.simulated is not None] == [
+        ("buy", "bar_close"),
+        ("sell", "run_end_close"),
+    ]
     assert panel.health.duty_outcome is None or panel.health.duty_outcome.exposure_notices == []
     money = await budget_deploy.budget_view(ACCT, SID)
     assert (money.state, money.headline, money.segment) == ("ready", "Stopped · finished", None)

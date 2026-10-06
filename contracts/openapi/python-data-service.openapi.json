@@ -5516,7 +5516,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/ChartFillMarker"
+                  "$ref": "#/components/schemas/RunFillView"
                 },
                 "type": "array"
               },
@@ -39169,6 +39169,70 @@
         "title": "RunEvidenceProvenance",
         "type": "object"
       },
+      "RunFillView": {
+        "description": "One fill in the bot page's list of its latest run's fills (#2912).\n\n``simulated`` says how a Dry Run's or a Live Shadow's fill was priced.\n``None`` is a fill Alpaca made.",
+        "properties": {
+          "event_key": {
+            "title": "Event Key",
+            "type": "string"
+          },
+          "filled_at_ms": {
+            "title": "Filled At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "simulated": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulatedFillView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "required": [
+          "filled_at_ms",
+          "side",
+          "quantity",
+          "price",
+          "order_ref",
+          "event_key"
+        ],
+        "title": "RunFillView",
+        "type": "object"
+      },
       "RunLedger": {
         "additionalProperties": false,
         "description": "Immutable identity record for a single strategy run.\n\nPersisted as ``ledger.json`` in the run's artifact directory.\nPydantic ``extra='forbid'`` makes schema drift loud rather than\nsilent \u2014 adding a field is a deliberate ``schema_version`` bump.\n\nSchema versions:\n  * v1.0: Initial schema.\n  * v1.1: Added optional ``prediction_set_hash`` field for ML prediction set tracking.\n  * v1.2: Added optional ``window_summary`` field \u2014 calendar breakdown\n    (sessions included / weekends + holidays excluded) for the run's\n    date window. Older ledgers continue to load with this field as\n    ``None``.\n  * v1.3: Added optional ``warmup_start_ms`` so indicator pre-roll data\n    is part of the auditable run boundary without changing the reported\n    trading window.",
@@ -41352,6 +41416,55 @@
           "warmup_bars"
         ],
         "title": "SignalSeriesContract",
+        "type": "object"
+      },
+      "SimulatedFillView": {
+        "description": "How a fill that no venue made was priced (#2912).\n\nA Dry Run's and a Live Shadow's fills are worked out from market data.\nEach one says which rule priced it, so it is not read as what a real\norder would have got.",
+        "properties": {
+          "caution": {
+            "title": "Caution",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "bar_close",
+              "older_bar_close",
+              "limit_touch",
+              "live_quote",
+              "run_end_close",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "price_age_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Age Ms"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "sentence",
+          "caution"
+        ],
+        "title": "SimulatedFillView",
         "type": "object"
       },
       "SnapshotBar": {

@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
 
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+from app.broker.contract.models import OrderSide
 from app.schemas.bot_end import BotEnd, BotEndView, RecordedEnd
 from app.schemas.bot_page import HeldPositionFact, RunSummaryFacts
 from app.services.bot_end import bot_end_view, bot_end_view_waiting_for_operator
-from app.services.broker_v2_panel.bot_page_projection import RunFacts, run_facts, run_summary, run_summary_text
+from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel.bot_page_projection import (
+    RunFacts,
+    run_facts,
+    run_fill_views,
+    run_summary,
+    run_summary_text,
+)
+from app.services.broker_v2_panel.feed_continuity_projection import duration_label
+from app.services.source_bar_ledger import RECOVERY_QUOTE_PROVIDER, RUN_END_CLOSE_PROVIDER
 
 # Wed Sep 30 2026, 14:30 and 15:59 ET; the line is written that evening, or a year later.
 _START = 1_790_793_000_000
@@ -145,3 +157,114 @@ def test_each_effective_fill_is_a_trade_as_history_counts_it() -> None:
     )
 
     assert facts.trade_count == 2
+
+
+# ── how a simulated fill was priced (#2912) ─────────────────────────────
+
+_MINUTE_MS = 60_000
+
+
+def _sale(order_ref: str = "alpaca/exit-1", *, filled_at_ms: int = _START) -> FillRecord:
+    return FillRecord(
+        account_id="sim:spy-bot", sid="spy-bot", intent_id="exit-1", order_ref=order_ref, event_key=f"fill:{order_ref}",
+        symbol="QQQ", side=OrderSide.SELL, quantity=1.0, fill_price=512.4, filled_at_ms=filled_at_ms, fee=None,
+    )
+
+
+def _priced_by(fill_model: str = "decision_bar_close", *, provider: str = "ibkr", bar_end_ms: int = _START) -> SynthesizedAnchor:
+    return SynthesizedAnchor(
+        fill_model=fill_model, evidence_account_id="sim:spy-bot", provider=provider, bar_identity="QQQ:1m",
+        bar_ref="bar-1", decision_bar_start_ms=bar_end_ms - _MINUTE_MS, decision_bar_end_ms=bar_end_ms,
+    )
+
+
+@pytest.mark.parametrize(
+    ("anchor", "kind", "caution"),
+    [
+        (_priced_by(), "bar_close", False),
+        (_priced_by("limit_touch"), "limit_touch", False),
+        (_priced_by(provider=RECOVERY_QUOTE_PROVIDER), "live_quote", False),
+        (_priced_by(provider=RUN_END_CLOSE_PROVIDER), "run_end_close", True),
+        (_priced_by("older_bar_close", bar_end_ms=_START - 3 * _MINUTE_MS), "older_bar_close", True),
+    ],
+)
+def test_a_simulated_fill_says_which_rule_priced_it(anchor: SynthesizedAnchor, kind: str, caution: bool) -> None:
+    """A run-end close's and a recovery exit's own prices are told from a market bar's by who made them."""
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": anchor})
+
+    assert listed.simulated is not None
+    assert (listed.simulated.kind, listed.simulated.caution) == (kind, caution)
+
+
+def test_a_sale_at_an_older_price_carries_that_prices_age() -> None:
+    """#2912 story 27: the owner sees how old the price was, so they know how far to trust the fill."""
+    three_minutes = 3 * _MINUTE_MS
+    anchor = _priced_by("older_bar_close", bar_end_ms=_START - three_minutes)
+
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": anchor})
+
+    assert listed.simulated is not None and listed.simulated.price_age_ms == three_minutes
+    assert duration_label(three_minutes) in listed.simulated.label
+    assert duration_label(three_minutes) in listed.simulated.sentence
+
+
+def test_only_the_older_price_claims_an_age() -> None:
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": _priced_by()})
+
+    assert listed.simulated is not None and listed.simulated.price_age_ms is None
+
+
+@pytest.mark.parametrize(("side", "quoted"), [(OrderSide.SELL, "bid"), (OrderSide.BUY, "ask")])
+def test_a_recovery_exit_names_the_side_of_the_quote_it_filled_at(side: OrderSide, quoted: str) -> None:
+    """A sale fills at the bid and a buy to cover at the ask; the page never names the wrong one."""
+    recovery = FillRecord(
+        account_id="sim:spy-bot", sid="spy-bot", intent_id="exit-1", order_ref="alpaca/exit-1", event_key="fill:1",
+        symbol="QQQ", side=side, quantity=1.0, fill_price=512.4, filled_at_ms=_START, fee=None,
+    )
+
+    [listed] = run_fill_views([recovery], {"alpaca/exit-1": _priced_by(provider=RECOVERY_QUOTE_PROVIDER)})
+
+    assert listed.simulated is not None
+    assert set(re.findall(r"\b(?:bid|ask)\b", listed.simulated.sentence)) == {quoted}
+
+
+def test_a_fill_alpaca_made_is_not_called_simulated() -> None:
+    """A Paper or Live authority keeps no such record, and none of its fills is a simulated one."""
+    [listed] = run_fill_views([_sale()], None)
+
+    assert listed.simulated is None
+
+
+def test_a_simulated_fill_with_no_record_of_its_pricing_says_so() -> None:
+    """Every fill of a no-submit authority is simulated: one with no record never passes for a fill Alpaca made."""
+    priced = {"alpaca/enter-1": _priced_by()}
+
+    listed = run_fill_views([_sale("alpaca/enter-1"), _sale("alpaca/exit-1")], priced)
+
+    assert [(fill.simulated.kind, fill.simulated.caution) for fill in listed if fill.simulated is not None] == [
+        ("bar_close", False),
+        ("unknown", True),
+    ]
+
+
+@pytest.mark.parametrize("unreadable", [RuntimeError("corrupt"), OSError("gone"), ValueError("not a record")])
+def test_an_order_ledger_that_cannot_be_read_does_not_take_the_bot_page_down(unreadable: Exception) -> None:
+    """The fills are the Clerk's and still list; only how each was priced is lost, and each says so."""
+
+    def read() -> dict[str, SynthesizedAnchor]:
+        raise unreadable
+
+    no_submit = SimpleNamespace(binds_decision_bar=True, synthesized_fill_anchors=read)
+
+    anchors = panel_data_source._simulated_fill_anchors(no_submit, "spy-bot")
+
+    assert anchors == {}
+    assert [fill.simulated.kind for fill in run_fill_views([_sale()], anchors) if fill.simulated] == ["unknown"]
+
+
+def test_an_authority_whose_fills_alpaca_makes_is_never_asked_for_a_simulated_record() -> None:
+    vendor = SimpleNamespace(
+        binds_decision_bar=False, synthesized_fill_anchors=lambda: pytest.fail("Alpaca made these fills"),
+    )
+
+    assert panel_data_source._simulated_fill_anchors(vendor, "spy-bot") is None

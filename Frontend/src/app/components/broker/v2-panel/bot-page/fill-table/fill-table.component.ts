@@ -4,7 +4,7 @@ import {
   input,
 } from '@angular/core';
 
-import type { ChartFillMarker } from '../../lib/broker-v2-panel.types';
+import type { RunFillView } from '../../lib/broker-v2-panel.types';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import { TimestampDisplayComponent } from '../../../../../shared/timestamp/timestamp-display.component';
 import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
@@ -19,7 +19,7 @@ import { fmtCurrency } from '../../../format';
   styleUrl: './fill-table.component.scss',
 })
 export class FillTableComponent {
-  readonly fills = input<readonly ChartFillMarker[]>([]);
+  readonly fills = input<readonly RunFillView[]>([]);
   readonly label = input.required<string>();
   /** Say which asset each fill was in: for a bot that trades something other
    * than the symbol it listens to (#2912). An ordinary bot's table has no

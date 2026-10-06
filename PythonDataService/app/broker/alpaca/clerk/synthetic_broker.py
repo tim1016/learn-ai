@@ -21,7 +21,7 @@ instant it sold so the fill never predates its EXIT.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
@@ -216,6 +216,10 @@ class SyntheticBroker:
         Without a retained-bar ledger nothing can execute at all.
         """
         return self._ledger is not None
+
+    def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
+        """How each order this world filled was priced, by client order id (#2912)."""
+        return {} if self._ledger is None else self._ledger.fill_anchors()
 
     def bind_evaluated_bar(
         self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None

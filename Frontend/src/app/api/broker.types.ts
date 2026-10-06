@@ -8325,7 +8325,7 @@ export interface components {
             /** Revision */
             revision: number;
             /** Run Fills */
-            run_fills?: components["schemas"]["ChartFillMarker"][] | null;
+            run_fills?: components["schemas"]["RunFillView"][] | null;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
             startup_join?: components["schemas"]["StartupJoinView"] | null;
             /**
@@ -21617,6 +21617,33 @@ export interface components {
             statistics_basis: string;
         };
         /**
+         * RunFillView
+         * @description One fill in the bot page's list of its latest run's fills (#2912).
+         *
+         *     ``simulated`` says how a Dry Run's or a Live Shadow's fill was priced.
+         *     ``None`` is a fill Alpaca made.
+         */
+        RunFillView: {
+            /** Event Key */
+            event_key: string;
+            /** Filled At Ms */
+            filled_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Price */
+            price: number;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            simulated?: components["schemas"]["SimulatedFillView"] | null;
+            /** Symbol */
+            symbol?: string | null;
+        };
+        /**
          * RunLedger
          * @description Immutable identity record for a single strategy run.
          *
@@ -22556,6 +22583,29 @@ export interface components {
             period: number;
             /** Warmup Bars */
             warmup_bars: number;
+        };
+        /**
+         * SimulatedFillView
+         * @description How a fill that no venue made was priced (#2912).
+         *
+         *     A Dry Run's and a Live Shadow's fills are worked out from market data.
+         *     Each one says which rule priced it, so it is not read as what a real
+         *     order would have got.
+         */
+        SimulatedFillView: {
+            /** Caution */
+            caution: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bar_close" | "older_bar_close" | "limit_touch" | "live_quote" | "run_end_close" | "unknown";
+            /** Label */
+            label: string;
+            /** Price Age Ms */
+            price_age_ms?: number | null;
+            /** Sentence */
+            sentence: string;
         };
         /**
          * SnapshotBar

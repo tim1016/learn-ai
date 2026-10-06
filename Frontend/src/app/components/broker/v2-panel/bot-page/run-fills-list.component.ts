@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import { Drawer } from 'primeng/drawer';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import type { ChartFillMarker } from '../lib/broker-v2-panel.types';
+import type { RunFillView } from '../lib/broker-v2-panel.types';
 import { FillTableComponent } from './fill-table/fill-table.component';
 
 const INLINE_FILL_LIMIT = 4;
@@ -28,7 +28,7 @@ const INLINE_FILL_LIMIT = 4;
 })
 export class RunFillsListComponent {
   /** The run's newest fills, oldest first. */
-  readonly fills = input<readonly ChartFillMarker[]>([]);
+  readonly fills = input<readonly RunFillView[]>([]);
   /** Every fill the run has, as the backend counts its trades. */
   readonly fillCount = input(0);
   /** When the run started, int64 ms UTC; the list is dated by it. */

@@ -194,6 +194,7 @@ from app.services.session_authority import SessionAuthorityState
 from app.utils.session_anchors import et_date_at_ms
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -485,6 +486,15 @@ class SqliteAlpacaClerkFacade:
     def account_mode(self) -> Literal["paper", "live"]:
         """The environment every custody answer names (ADR 0054), learned at activation."""
         return self._account_mode
+
+    def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
+        """How this authority priced the fills no venue made, by order ref (#2912).
+
+        Read-model seam for the bot page. A Paper or Live authority's fills
+        come from Alpaca, so it has none: an empty answer says "nothing on
+        record" only where ``binds_decision_bar`` is true.
+        """
+        return self._trade.synthesized_fill_anchors()
 
     @property
     def intake(self) -> ReentrantAsyncLock:
