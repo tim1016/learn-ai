@@ -471,7 +471,7 @@ additive `DataLabSession` ms-UTC columns (dual-read).
 ## 13a. Data Lab quick ranges + auto-loading chart (2026-09-13)
 
 Follow-up slice (same week as the redesign): calendar-resolved quick-range
-chips (1D/5D/1M/3M/6M/1Y/2Y) resolved server-side by the canonical NYSE
+chips (1D/5D/1M/3M/6M/1Y/2Y/5Y) resolved server-side by the canonical NYSE
 calendar (`GET /api/chart/range-presets`), a lake-first chart ingest seam
 (ADR 0049 amendment A6), the `HttpErrorResponse` error-gate fix that
 re-arms the server-authored timeframe auto-correct, and numeric

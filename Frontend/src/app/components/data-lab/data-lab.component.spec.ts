@@ -122,7 +122,9 @@ const preset6M: ChartRangePreset = {
 
 /** Five sessions ending on the 1D preset's day; shown under the shared label 1W. */
 const preset5D: ChartRangePreset = { ...preset1D, key: '5D', label: '5 days', start_ms_utc: preset1D.start_ms_utc - 6 * 86_400_000, session_count: 5 };
-const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset5D, preset6M];
+/** Every session the provider serves, back to 2021-09-14; shown under the shared label 5Y. */
+const preset5Y: ChartRangePreset = { ...preset6M, key: '5Y', label: 'Past 5 years', start_ms_utc: Date.UTC(2021, 8, 14), session_count: 1254 };
+const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset5D, preset6M, preset5Y];
 
 /** Render the shell through a real router outlet (tabs, routing, dock). */
 async function renderRoutedShell(runSession = idleRunSession()) {
@@ -268,6 +270,17 @@ describe('DataLabComponent (shell)', () => {
     const group = screen.getByRole('group', { name: 'Quick ranges' });
     expect(group.querySelector('button')?.textContent?.trim()).toBe('1D');
     expect(screen.getByRole('button', { name: '6M' })).toBeTruthy();
+  });
+
+  it("shows Python's five-year preset under 5Y and applies its window as resolved", async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+
+    await userEvent.click(screen.getByRole('button', { name: '5Y' }));
+    fixture.detectChanges();
+
+    expect(store.committedWindow()).toEqual({ startMsUtc: preset5Y.start_ms_utc, endMsUtc: preset5Y.end_ms_utc });
   });
 
   it("shows Python's five-session preset under the shared label 1W, with its intraday timeframe (#2858)", async () => {

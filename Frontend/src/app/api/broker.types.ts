@@ -9591,7 +9591,7 @@ export interface components {
         };
         /**
          * ChartRangePreset
-         * @description One calendar-resolved quick range ("last N trading sessions").
+         * @description One calendar-resolved quick range ("last N trading sessions"; 5Y is every session the provider serves).
          *
          *     Temporal values are int64 ms UTC only — start anchors the first trading
          *     date at UTC midnight, end anchors the last trading date's final UTC
@@ -9612,7 +9612,7 @@ export interface components {
             };
             /**
              * Key
-             * @description Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y
+             * @description Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y, 5Y
              */
             key: string;
             /**
