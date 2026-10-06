@@ -25,6 +25,7 @@ from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES, CapturedDecisions
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import DECISION_LATE_REASON_CODE
+from app.services.pricing_bar_stream import PRICING_REFUSAL_REASON_CODES
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import now_ms_utc
 
@@ -92,6 +93,9 @@ EXPECTED_LIVE_GATE_REASON_CODES: frozenset[str] = frozenset(
         PRICING_BAR_UNAVAILABLE.reason_code,
         PRICING_BAR_MISMATCH.reason_code,
     }
+    # bot_trade_strategy._price_decision: the same fact found earlier, by the
+    # runner's own pricing stream.
+    | PRICING_REFUSAL_REASON_CODES
     # The SQLite facade's ENTER rejected() path calls
     # _append_pre_custody_refusal to record a protected `blocked` receipt for
     # this closed transient set. Import it rather than restate it so the

@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.action_plan import ActionPlan
+from app.schemas.action_plan import ActionPlan, traded_instrument, trades_the_signals_shares
 
 
 def test_unknown_top_level_key_rejected() -> None:
@@ -250,3 +250,56 @@ def test_vertical_spread_two_option_legs_round_trips() -> None:
 
     assert len(plan.on_enter) == 2
     assert len(plan.on_exit) == 2
+
+
+# ---- what a plan trades (#2912) --------------------------------------------
+
+
+def _stock_plan(underlying: str) -> ActionPlan:
+    return ActionPlan.model_validate(
+        {
+            "on_enter": [
+                {
+                    "leg_id": "primary",
+                    "instrument": {"kind": "stock", "underlying": underlying},
+                    "position": "long",
+                    "qty_ratio": 1,
+                }
+            ],
+            "on_exit": [{"kind": "close_leg", "entry_leg_id": "primary"}],
+        }
+    )
+
+
+def _option_leg(leg_id: str, underlying: str) -> dict[str, object]:
+    return {
+        "leg_id": leg_id,
+        "instrument": {"kind": "option", "underlying": underlying},
+        "position": "long",
+        "qty_ratio": 1,
+        "right": "call",
+        "strike": {"selector": "atm"},
+        "expiry": {"selector": "nearest_weekly"},
+    }
+
+
+def test_a_plan_in_the_signals_own_shares_is_not_trading_something_else() -> None:
+    assert trades_the_signals_shares(_stock_plan("SPY"), "spy")
+    assert not trades_the_signals_shares(_stock_plan("QQQ"), "SPY")
+
+
+def test_options_on_the_signals_own_symbol_are_something_else() -> None:
+    """Decided by the instrument's type and identity, not by comparing tickers."""
+    plan = ActionPlan.model_validate(
+        {"on_enter": [_option_leg("call", "SPY")], "on_exit": [{"kind": "close_leg", "entry_leg_id": "call"}]}
+    )
+
+    assert traded_instrument(plan).kind == "option"
+    assert not trades_the_signals_shares(plan, "SPY")
+
+
+def test_a_plan_whose_legs_name_two_instruments_has_no_one_answer() -> None:
+    plan = ActionPlan.model_validate({"on_enter": [_option_leg("a", "SPY"), _option_leg("b", "QQQ")]})
+
+    with pytest.raises(ValueError, match="exactly one instrument"):
+        traded_instrument(plan)

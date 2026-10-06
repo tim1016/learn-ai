@@ -110,6 +110,11 @@ def decision_valid_until_ms(policy: ContinuityPolicy | None, decision_bar_close_
     return decision_bar_close_ms + _delivery_allowance_ms(policy)
 
 
+def decision_time_left_ms(policy: ContinuityPolicy | None, decision_bar_close_ms: int) -> int:
+    """How much longer, from now, a decision on that bar stays on time; zero once it is late."""
+    return max(0, decision_valid_until_ms(policy, decision_bar_close_ms) - now_ms_utc())
+
+
 def _delivery_allowance_ms(policy: ContinuityPolicy | None) -> int:
     return DELIVERY_ALLOWANCE_MS if policy is None else policy.delivery_allowance_ms
 

@@ -266,6 +266,12 @@ class Settings(BaseSettings):
     # closing minute's row at once but revised it up to ~1.3 s later in
     # 3 of 16 minutes measured (ADR 0053, #2410 amendment).
     STARTUP_JOIN_SETTLE_MS: int = Field(default=5_000, ge=0, le=60_000)
+    # Pricing-bar wait (#2912): how long an ENTER of a bot that trades a
+    # different asset waits for that asset's bar of the decision minute, once
+    # its decision bar is in hand. Never longer than the decision's own time
+    # limit. A starting value, to be set from how late the second stream's
+    # minute actually arrives; a change applies to runs that start afterwards.
+    PRICING_BAR_WAIT_MS: int = Field(default=5_000, ge=0, le=20_000)
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
     # live/production path — it exists to rehearse reject/throttle/conflict/

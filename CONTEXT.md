@@ -576,6 +576,12 @@ so they survive a broker change.
   or any other minute never stands in for it. Orders that no decision prices — a
   recovery reduction, a flatten, a run-end close — read the live quote or the
   last bar instead. _Avoid_: reference bar, signal price, carried-over price
+- **Pricing-bar wait** — how long an ENTER waits for its pricing bar once its
+  decision bar is in hand: a short fixed time, and never past the instant the
+  decision itself stops being on time. The two streams deliver independently,
+  so the pricing bar may arrive first or second. A bar that arrives after the
+  wait is kept and never used for that decision.
+  _Avoid_: retry window, price timeout
 - **Decision session** — the phases a sealed instance decides in: the
   regular session, or the broker's declared extended session around it
   (pre-market, regular, after-hours). The window is broker capability data;
