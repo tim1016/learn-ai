@@ -20,7 +20,7 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerAsset
 from app.broker.contract.registry import get_broker_registry
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
@@ -166,21 +166,30 @@ async def test_an_asset_alpaca_cannot_trade_is_refused_before_the_bot_exists(
     assert registry.deploy_calls == []
 
 
-async def test_alpaca_being_unreachable_is_not_a_verdict_on_the_asset(
-    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("failure", "status", "worth_trying_again"),
+    [
+        pytest.param(BrokerUnavailable("Alpaca did not answer.", broker="alpaca"), 503, True, id="unreachable"),
+        pytest.param(BrokerAuthError("Alpaca rejected the credentials.", broker="alpaca"), 502, False, id="credentials"),
+    ],
+)
+async def test_alpaca_failing_to_answer_is_not_a_verdict_on_the_asset(
+    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch,
+    failure: BrokerError, status: int, worth_trying_again: bool,
 ) -> None:
-    """Nothing was learned about QQQ, so the Deploy may be sent again: a 503, never a refusal of the asset."""
+    """Nothing was learned about QQQ, so it is never refused as untradable; only an unreachable Alpaca is worth a retry."""
     app, registry = deploy_app
 
-    async def unreachable(symbol: str) -> BrokerAsset | None:
-        raise BrokerUnavailable("Alpaca did not answer.", broker="alpaca")
+    async def failing(symbol: str) -> BrokerAsset | None:
+        raise failure
 
-    monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "get_asset", unreachable, raising=False)
+    monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "get_asset", failing, raising=False)
 
     response = await _deploy(app, execution_mode="dry_run", traded_symbol="QQQ")
 
-    assert response.status_code == 503
-    assert "could not be asked whether it trades QQQ" in response.text
+    assert response.status_code == status
+    assert "cannot trade QQQ" not in response.text
+    assert ("Try again once Alpaca can be reached" in response.text) is worth_trying_again
     assert response.json()["detail"]["submission_settled"] is True
     assert registry.deploy_calls == []
 

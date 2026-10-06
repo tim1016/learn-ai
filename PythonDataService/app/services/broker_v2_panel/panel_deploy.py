@@ -816,11 +816,19 @@ async def _require_tradable_traded_asset(broker: str, request: AlpacaPaperDeploy
     try:
         asset = await get_broker_registry().resolve(broker).get_asset(symbol)
     except BrokerError as exc:
+        # The broker contract's own status: only an unreachable or throttled
+        # Alpaca (503) is worth trying again. Rejected credentials or a
+        # request Alpaca would not read are not connection problems.
+        unreachable = exc.http_status == 503
         raise PanelRunnerError(
             f"Alpaca could not be asked whether it trades {symbol}.",
             detail=exc.detail or str(exc),
-            next_action="Try again once Alpaca can be reached.",
-            http_status=503,
+            next_action=(
+                "Try again once Alpaca can be reached."
+                if unreachable
+                else "Alpaca answered with an error, so sending this again will not help until that is fixed."
+            ),
+            http_status=exc.http_status,
         ) from exc
     if not is_active_tradable_us_equity(asset):
         raise PanelRunnerError(
