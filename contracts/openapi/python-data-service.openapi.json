@@ -53883,6 +53883,22 @@
             }
           },
           {
+            "description": "Whose candles: the symbol the bot listens to, or the asset it trades. The same chart for a bot that trades what it listens to.",
+            "in": "query",
+            "name": "asset",
+            "required": false,
+            "schema": {
+              "default": "listens",
+              "description": "Whose candles: the symbol the bot listens to, or the asset it trades. The same chart for a bot that trades what it listens to.",
+              "enum": [
+                "listens",
+                "trades"
+              ],
+              "title": "Asset",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Data-Plane-Control-Secret",
             "required": false,

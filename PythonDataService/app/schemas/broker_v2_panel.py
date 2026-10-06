@@ -1067,6 +1067,11 @@ class ChartBar(BaseModel):
     source: ChartSource
 
 
+# Whose candles a bot's chart draws (#2912): the symbol it listens to, or the
+# asset it trades. One chart for a bot that trades what it listens to.
+ChartAsset = Literal["listens", "trades"]
+
+
 class ChartFillMarker(BaseModel):
     """One fill marker for a chart pane.
 

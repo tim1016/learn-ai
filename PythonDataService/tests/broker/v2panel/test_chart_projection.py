@@ -8,6 +8,7 @@ cap is not widened.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,7 @@ from app.lean_sidecar.trading_calendar import (
     session_open_ms_utc,
     session_start_for_bar_count,
 )
+from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ChartBar, ChartOverlayNoticeView
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
@@ -878,6 +880,49 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
 
     assert calls == [("alpaca", "paper-account", SID, _NOW - 86_400_000, _NOW)]
     assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]
+
+
+@pytest.mark.parametrize(
+    ("asset", "charted", "drawn"),
+    [("listens", "SPY", []), ("trades", "QQQ", ["qqq-fill"])],
+    ids=["what-it-listens-to", "what-it-trades"],
+)
+async def test_the_history_chart_can_be_asked_for_the_asset_the_bot_trades(
+    monkeypatch: pytest.MonkeyPatch, asset: str, charted: str, drawn: list[str]
+) -> None:
+    """#2912: a bot listens to SPY and trades QQQ. Its QQQ fill belongs on QQQ's candles, never on SPY's."""
+    qqq_fill = replace(_sqlite_fill(event_key="qqq-fill", filled_at_ms=_NOW - 1), symbol="QQQ")
+    status = BotStatusView(
+        strategy_instance_id=SID, broker="alpaca", symbol="SPY",
+        traded=TradedInstrumentView(kind="stock", symbol="QQQ"), mode="trade", quantity=1, running=True,
+        phase="ON_DUTY", desired_state="RUNNING", active_run_id="run-1", duty_outcome=None,
+        binding_created_at_ms=_NOW - 60_000, last_transition_at_ms=_NOW - 60_000,
+    )
+    asked_for: list[str] = []
+
+    async def validate_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def chart_evidence(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=(qqq_fill,)))
+
+    async def batch_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        asked_for.append(query.symbol)
+        return HistoryBatchResponse(bars=[], source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms)
+
+    monkeypatch.setattr(panel_chart_data_source, "validate_account", validate_account)
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(
+        panel_chart_data_source, "history_fill_window", lambda timeframe, now_ms: (_NOW - 86_400_000, now_ms)
+    )
+    monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
+    monkeypatch.setattr(panel_chart_data_source, "build_history_batch_provider", lambda: batch_provider)
+
+    chart = await panel_chart_data_source.get_history_chart("alpaca", "paper-account", SID, "1m", asset=asset)
+
+    assert chart.symbol == charted
+    assert set(asked_for) == {charted}
+    assert [marker.event_key for marker in chart.fill_markers] == drawn
 
 
 async def test_get_history_chart_under_clerk_agent_never_reaches_polygon_directly(

@@ -28001,6 +28001,8 @@ export interface operations {
                 timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
                 from_ms?: number | null;
                 to_ms?: number | null;
+                /** @description Whose candles: the symbol the bot listens to, or the asset it trades. The same chart for a bot that trades what it listens to. */
+                asset?: "listens" | "trades";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

@@ -46,6 +46,7 @@ from app.schemas.broker_v2_panel import (
     BotClearRequest,
     BotPanelLiveSnapshot,
     BotPanelView,
+    ChartAsset,
     ChartHistoryResponse,
     ChartHistoryTimeframe,
     CohortActionResult,
@@ -901,6 +902,7 @@ async def _history_chart(
     sid: str,
     timeframe: str,
     window: tuple[int, int] | None = None,
+    asset: ChartAsset = "listens",
 ) -> ChartHistoryResponse:
     # The route signature already closes the enum at the schema boundary; this
     # coercion stays as the service-side guard for non-HTTP callers.
@@ -909,7 +911,7 @@ async def _history_chart(
     except ChartTimeframeError as exc:
         raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from None
     try:
-        return await ds.get_history_chart(broker, account_id, sid, coerced, window)
+        return await ds.get_history_chart(broker, account_id, sid, coerced, window, asset)
     except ChartWindowError as exc:
         raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from None
     except panel_errors.PanelDataError as error:
@@ -928,6 +930,13 @@ async def get_history_chart_scoped(
     timeframe: ChartHistoryTimeframe = Query(...),
     from_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
     to_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
+    asset: ChartAsset = Query(
+        "listens",
+        description=(
+            "Whose candles: the symbol the bot listens to, or the asset it trades. "
+            "The same chart for a bot that trades what it listens to."
+        ),
+    ),
 ) -> ChartHistoryResponse:
     """The newest bars for ``timeframe``; with ``from_ms`` and ``to_ms``, that window of the bot's latest run."""
     if (from_ms is None) != (to_ms is None):
@@ -935,7 +944,7 @@ async def get_history_chart_scoped(
             status_code=422, detail={"message": "A run window needs both from_ms and to_ms.", "why": None}
         )
     window = None if from_ms is None or to_ms is None else (from_ms, to_ms)
-    return await _history_chart(broker, account_id, sid, timeframe, window)
+    return await _history_chart(broker, account_id, sid, timeframe, window, asset)
 
 
 @router.get(
