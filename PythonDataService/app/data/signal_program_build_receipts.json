@@ -34,17 +34,17 @@
     {
       "schema_version": 2,
       "program_key": "ema_previous_crossover",
-      "program_version": "ema-previous-crossover/v1",
-      "golden_trace_root": "bfcba46e8b3e479fc6d80e271e12b277121ac82ef36f02b70eae4c70cb4578ec",
-      "artifact_digest": "4bfaf13278b748823b60e00078a5420ebfb27e584a5d4e2a532f11564406119d",
-      "wiring_digest": "5fd119d90cf19d9e96eb804b64d113432a524dda34d1a0951c3eb180aa7d52d1",
+      "program_version": "ema-previous-crossover/v2",
+      "golden_trace_root": "e1ee049b0df0638f6ba1c27889bfbd4ebfa8e18eb229fc2a35eacec851e9a746",
+      "artifact_digest": "ddd10cdc4f142874def3c1128e7ab5bc1dc93b36b7a343e1ab935520f0e20856",
+      "wiring_digest": "8c66a5f92b24a27fc6d9f5c390544baf8c93bfa3954e9b33f2f9991d1a21f5dc",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_previous_crossover]",
-      "qualified_at_ms": 1791232722029,
+      "qualified_at_ms": 1791246777615,
       "git_provenance": {
-        "commit_sha": "8f7954b3b69ad8fca54959876794f98be3c4046e",
+        "commit_sha": "2bd4476fac0fedd2ae80a8cc197a208bccf43710",
         "dirty": false
       },
-      "receipt_hash": "0594a671c6ceb9ee41db9263a2c44d972c3cc5259a196ce9a62709f6064b1e48"
+      "receipt_hash": "5def5461742a392b3f4a7552b8969120f5389b6b0ca8d38deb1bbc0bf2c29f76"
     },
     {
       "schema_version": 2,
