@@ -1886,6 +1886,141 @@
       "validated_by": [
         "tests/fixtures/test_option_structure_money_fixture.py::test_structure_money_matches_alpacas_examples_and_the_hand_derived_cases"
       ]
+    },
+    {
+      "id": "AM-001",
+      "name": "American option price and delta, no dividend — QuantLib Leisen-Reimer tree",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/options/american.py",
+      "canonical_callable": "american_value",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "QuantLib 1.42.1 BinomialLRVanillaEngine (AmericanExercise)",
+        "citation": "QuantLib 1.42.1 BinomialLRVanillaEngine; Leisen & Reimer (1996), Applied Mathematical Finance 3(4). See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/american_options.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Strict default. The canonical tree is the same construction as the reference engine, so the two differ by rounding only; measured maximum 4.4e-10 in price and 1.3e-11 in delta over 400 cases."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "70f5e9db411e3a15cd7f266f24388a1ebe3c28d5984bf08d06861a14e05fdfb4",
+            "output.json": "f3af23d0a5a8633c4ba130758995de39598eeb2ddc36c95d1ed45cc3afa4c5c3",
+            "attribution.md": "40871ee9e921fd73c64a28a50789c07d023f35cdcc1cb0d0133755ec275e93be"
+          },
+          "file_sha256": {
+            "input.json": "23eab1b4bce4a5d7c787f45dbdf71b9fb713b3732abce956b114618380bb1688",
+            "output.json": "d0efc878428548e4e1e20cedc2485491e84027181cd5f84f2903346196c8a19f",
+            "attribution.md": "40871ee9e921fd73c64a28a50789c07d023f35cdcc1cb0d0133755ec275e93be"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_american_option_fixtures.py::test_price_and_delta_without_dividends_match_quantlibs_leisen_reimer_tree"
+      ]
+    },
+    {
+      "id": "AM-002",
+      "name": "American option price and delta with cash dividends — QuantLib escrowed finite-difference engine",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/options/american.py",
+      "canonical_callable": "american_value",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "QuantLib 1.42.1 FdBlackScholesVanillaEngine, CashDividendModel.Escrowed, Douglas scheme, 2000 x 2000 grid",
+        "citation": "QuantLib 1.42.1 FdBlackScholesVanillaEngine with escrowed cash dividends; Hull, Options, Futures, and Other Derivatives, known dollar dividend. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/american_options.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0002,
+        "rtol": 0.0,
+        "note": "Looser than the strict default because the reference is a different numerical scheme for the same model: the two agree only as closely as both have converged. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4, falling in proportion to the steps (3.9e-5 and 1.8e-4 at 4,001). The test file states both tolerances."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "d93fd56b79e594c60cd37b82a3e4b9bf4995ee250edc3186423a1c84cc7c98bc",
+            "output.json": "d5a16c3b14b0c3be935e151992cd96a49bb29136a0594f188db54a66b3377f31",
+            "attribution.md": "d6c581ec30f4371fd26416785894034f40a4d254846d6e09aa2fe26605b5d86b"
+          },
+          "file_sha256": {
+            "input.json": "f0b469c5ee9fa185a25ba2513b284c512f83b794e4bb9248430eabdecdc65da2",
+            "output.json": "2b27381ddedc9f4c1f1d89ac188d4924f419d15f4c9534c89ee43f3dfa7663e6",
+            "attribution.md": "d6c581ec30f4371fd26416785894034f40a4d254846d6e09aa2fe26605b5d86b"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_american_option_fixtures.py::test_price_and_delta_with_cash_dividends_match_quantlibs_escrowed_finite_difference_engine"
+      ]
+    },
+    {
+      "id": "AM-003",
+      "name": "American implied volatility recovery and the delta at it — QuantLib Leisen-Reimer prices",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/options/american.py",
+      "canonical_callable": "american_implied_volatility",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "the volatility each price was generated at, with QuantLib 1.42.1 BinomialLRVanillaEngine as the pricer",
+        "citation": "QuantLib 1.42.1 BinomialLRVanillaEngine prices at known volatilities (fixture AM-001). See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/american_options.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Volatility atol 1e-6, delta atol 1e-9. The price agreement of about 4e-10 becomes a volatility gap of that divided by vega, which is small far from the money; measured maxima 7.2e-8 in volatility and 3.4e-11 in delta over 140 cases."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "b5a8bf53739c69520b9feb26f0c715e5e8de4413375306b0e2958a3310871aa1",
+            "output.json": "d98707f65bc3a9991aaa4dd3b800da340b794f90bd525527a168d062555f661b",
+            "attribution.md": "bb52d2eb4329a2ed3efacb79b3d693745398ac235f8eca0acc26f7e2c8b83040"
+          },
+          "file_sha256": {
+            "input.json": "0280e0d01913045682e9e949b245fe7c63c28c9d59e92517012174ed55ced82d",
+            "output.json": "d35a87f1fbc3938e739d05074bd61406499ebc481258579abde4178ede7dd603",
+            "attribution.md": "bb52d2eb4329a2ed3efacb79b3d693745398ac235f8eca0acc26f7e2c8b83040"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_american_option_fixtures.py::test_a_price_quantlib_computed_is_solved_back_to_the_volatility_it_was_computed_at"
+      ]
     }
   ]
 }

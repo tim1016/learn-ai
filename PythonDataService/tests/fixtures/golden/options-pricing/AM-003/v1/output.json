@@ -1,0 +1,704 @@
+{
+  "cases": [
+    {
+      "case": "30d_vol0.15_rate0.045_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999795530711489
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8656697472926759
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.13628326500210403
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5427649679161851
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.4685726822095482
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.18636858734818498
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.852200331624763
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999727640614514
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8506770108798353
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.14965602953280335
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5161889222517506
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.4855464564302323
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.16898875536204058
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8363670431500614
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.999978255524058
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8625604046949626
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.13797112381493384
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5371033803241492
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.465896219382821
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.182569246689385
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8274796196531694
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+4_call_401steps",
+      "volatility": 0.45,
+      "delta": 4.7732519781468636e-05
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999760708254575
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8576058799740259
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.14248691441618572
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.528248773646073
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.47224221662426297
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.17673294179933022
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8248301320186023
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+4_call_401steps",
+      "volatility": 0.45,
+      "delta": 4.352588947256896e-05
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999740472117783
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8532811819060824
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.14755020203285632
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5206878834754856
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.48377395270881757
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.17185158952799606
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.842219214318146
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999702272538352
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8457411808138816
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.1544021953949374
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5078216386576229
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.4928917907094009
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.16375380789352398
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8383585862815989
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999732710886313
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8516974138932621
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.14853093903184716
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5179424986390437
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.4832460886841402
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.170101689637349
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8335766470908551
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999720181301891
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8491941952300313
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.15084681293227814
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.513654210112662
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.48654779269186305
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.1673923695094838
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8332083993500474
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999702178731371
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8457587621142698
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.1545066238383069
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5078222915053905
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.49351618057400753
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.1637623849061905
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8402300716200636
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.999968639507873
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8428435452096663
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.15720390109397994
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5029564638930574
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.4972695529148107
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.1607671816989854
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8398791573672326
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999698935415059
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8451293648291285
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.15494557462686273
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.506783588008194
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.4935822592715197
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.16310838397205826
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8379608008095164
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999693706391617
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8441590224372105
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.15585494700631766
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5051616703011657
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.49490326845731936
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.16210859093408658
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8380751377142563
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999684139742273
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.842418406458559
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.1576453626710985
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5022582337067101
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.49804701651335154
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.16033901526289313
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8405356107502269
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.999967940611978
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8415686546994035
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.15844329793969172
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5008534647761281
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.49920102985797565
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.15948256626791468
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8406686571952952
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999683057475809
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8422146284104995
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.15780404239747595
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5019583396923547
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.4981281294234212
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.1601366321075028
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8401061267096218
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999681481910452
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8419314710300626
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.15807215554793524
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5014900839806524
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.49852594403997036
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.15985105176133108
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.840192655978249
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-4_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.9999678924987063
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8415258344142947
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.15849410152252297
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5007984099233985
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.49929370855929717
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.1593357248768342
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8409220928860736
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.8412246305610386
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.1587792353337682
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.5003017455670935
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.4997153010042988
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_call_401steps",
+      "volatility": 0.15,
+      "delta": 0.1590338245574332
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_put_401steps",
+      "volatility": 0.15,
+      "delta": -0.8410125080897491
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-4_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.9999678955534744
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8414539383997395
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.1585520531455765
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5006923800717148
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.4993343907942712
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.1593647782159555
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8407086194724848
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.8413535489301484
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.15864764647072407
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.5005268253240656
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.49947827916412646
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_call_401steps",
+      "volatility": 0.45,
+      "delta": 0.15926409108816994
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_put_401steps",
+      "volatility": 0.45,
+      "delta": -0.8407495068442374
+    }
+  ]
+}

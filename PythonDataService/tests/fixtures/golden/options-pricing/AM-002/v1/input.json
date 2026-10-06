@@ -1,0 +1,1246 @@
+{
+  "quantlib_version": "1.42.1",
+  "engine": "FdBlackScholesVanillaEngine",
+  "cash_dividend_model": "Escrowed",
+  "scheme": "Douglas",
+  "time_steps": 2000,
+  "price_steps": 2000,
+  "cases": [
+    {
+      "case": "30d_one_dividend_vol0.2_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k90_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k90_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k95_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k95_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k100_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k100_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k105_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k105_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k110_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k110_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k120_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.2_k120_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k90_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k90_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k95_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k95_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k100_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k100_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k105_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k105_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k110_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k110_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k120_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "30d_one_dividend_vol0.4_k120_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.03287671232876712,
+            "cash": 1.75
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k90_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k90_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k95_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k95_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k100_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k100_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k105_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k105_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k110_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.2_k110_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k90_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k90_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k95_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k95_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k100_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k100_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k105_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k105_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 105.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k110_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "7d_one_dividend_vol0.4_k110_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.00821917808219178,
+            "cash": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k90_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k90_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k100_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k100_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k110_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k110_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k120_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.2_k120_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.2,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k80_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k80_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 80.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k90_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k90_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 90.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k100_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k100_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k110_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k110_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k120_call",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "call",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "case": "90d_two_dividends_vol0.4_k120_put",
+      "input": {
+        "spot": 100.0,
+        "strike": 120.0,
+        "years_to_expiry": 0.2465753424657534,
+        "rate": 0.045,
+        "volatility": 0.4,
+        "right": "put",
+        "dividends": [
+          {
+            "years_to_ex": 0.0547945205479452,
+            "cash": 0.9
+          },
+          {
+            "years_to_ex": 0.2191780821917808,
+            "cash": 0.9
+          }
+        ]
+      }
+    }
+  ]
+}
