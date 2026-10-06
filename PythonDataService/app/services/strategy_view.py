@@ -74,6 +74,22 @@ class ResolvedStrategyView:
             ) from exc
         return cls(strategy_key=strategy_key, registration=registration, view=registration.strategy_view, params=params)
 
+    @classmethod
+    def for_saved_settings(
+        cls, strategy_key: str, strategy_params: Mapping[str, Any] | None, *, symbol: str
+    ) -> ResolvedStrategyView:
+        """As :meth:`for_settings`, for the settings a bot was deployed with, possibly under an earlier schema.
+
+        A saved setting the strategy no longer declares (a retired parameter)
+        is left out, so the bot's page still shows the rest. A request's
+        settings go through :meth:`for_settings`, where an unknown name is a
+        mistake.
+        """
+        registration = _STRATEGY_REGISTRY.get(strategy_key)
+        declared = () if registration is None else registration.param_schema.model_fields
+        kept = {name: value for name, value in (strategy_params or {}).items() if name in declared}
+        return cls.for_settings(strategy_key, kept, symbol=symbol)
+
     @property
     def settings(self) -> dict[str, Any]:
         """The deployed settings by name, as templates and custom gates read them.

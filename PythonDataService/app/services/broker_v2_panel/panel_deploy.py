@@ -712,12 +712,18 @@ def _owner_parameters(binding: BrokerBotBinding) -> dict[str, object]:
     With a v2 seal these are exactly the ``deploy_override`` origins: a
     registered default re-sent would be recorded as an override the owner
     never made. Without a seal the origins are unknowable, so the public
-    schema's values stand in. Never ``symbol`` (the request's own field) or
-    a hidden parameter, which a Deploy refuses.
+    schema's values stand in. Never ``symbol`` (the request's own field), a
+    hidden parameter, or one the strategy has since retired: a Deploy
+    refuses each.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     hidden = {"symbol", *(() if registration is None else registration.hidden_params)}
-    public = {name: value for name, value in (binding.strategy_params or {}).items() if name not in hidden}
+    declared = None if registration is None else registration.param_schema.model_fields
+    public = {
+        name: value
+        for name, value in (binding.strategy_params or {}).items()
+        if name not in hidden and (declared is None or name in declared)
+    }
     origins = binding.strategy_param_origins
     if origins is None:
         return public

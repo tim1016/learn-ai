@@ -128,7 +128,7 @@ def resolve_deploy_strategy_params(
     default, not a fabricated dataset.
 
     Raises ``ValueError`` with a human-readable message for an unknown
-    strategy, a hidden/live-only parameter, a schema validation failure, a
+    strategy, a hidden parameter, a schema validation failure, a
     combination the strategy's own rule refuses (``params_refusal``), a bar
     no lookback can be sized for, or periods whose warmup needs more history
     than a bot can load — callers translate this into their own typed error

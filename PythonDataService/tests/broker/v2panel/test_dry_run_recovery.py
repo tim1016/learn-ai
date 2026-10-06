@@ -556,6 +556,10 @@ async def test_a_dry_run_whose_process_died_is_closed_when_next_opened_even_over
     assert [(fill.side, fill.quantity, fill.price, fill.filled_at_ms) for fill in panel.recent_fills][:1] == [
         ("sell", 1.0, 600.0, OVERNIGHT),
     ]
+    # The page says the sale used the run's last price and how old that price was when it sold (#2912).
+    close = next(fill for fill in panel.run_fills or [] if fill.side == "sell")
+    assert close.simulated is not None
+    assert (close.simulated.kind, close.simulated.price_age_ms) == ("run_end_close", OVERNIGHT - NOON)
     assert not panel.health.running
     assert crashed_dry_run.alpaca.calls == []
 

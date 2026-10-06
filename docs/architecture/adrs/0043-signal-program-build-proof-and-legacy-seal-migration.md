@@ -41,7 +41,7 @@ shallow-copies every field not explicitly overridden — including a new
 — so both derived strategies silently inherited the canonical program's
 `golden_trace_root` despite running genuinely different decision math (a
 relative basis-point gap vs. an absolute-price gap; a bare
-`action_plan_contract="none"` wrapper vs. the canonical program). Because the
+legacy wrapper vs. the canonical program). Because the
 qualification receipt manifest is keyed on `strategy_key`, no receipt could
 ever match either derived key, so every bot on either strategy would have
 received `PROGRAM_BUILD_UNPROVEN` permanently. This is recorded here because it

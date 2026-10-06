@@ -256,7 +256,7 @@ def test_changed_resolved_parameter_is_not_a_comparable_pair() -> None:
         (
             "deployment_validation",
             "deployment-validation/v1",
-            {"symbol": "SPY", "trade_symbol": "SPY"},
+            {"symbol": "SPY"},
         ),
     ),
 )

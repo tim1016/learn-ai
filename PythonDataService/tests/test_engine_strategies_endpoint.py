@@ -62,9 +62,6 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     assert strategy["lean_twin"] == "deployment_validation"
     props = strategy["params_schema"]["properties"]
     assert set(props) == {"symbol"}
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    assert _STRATEGY_REGISTRY["deployment_validation"].hidden_params == {"trade_symbol"}
     combined = " ".join(strategy["gotchas"]).lower()
     assert "next_bar_open" in combined
 
@@ -92,22 +89,24 @@ def test_deployment_validation_has_matching_spec_fixture():
     assert fixtures["deployment_validation"].path.endswith("deployment_validation.spec.json")
 
 
-def test_deployment_validation_trade_symbol_is_live_only_for_engine_lab_backtests():
+def test_an_engine_lab_backtest_refuses_a_parameter_its_strategy_hides(monkeypatch: pytest.MonkeyPatch):
+    from dataclasses import replace
+
     from fastapi import HTTPException
 
     from app.schemas.engine_backtest import EngineBacktestRequest
     from app.services.engine_backtest_service import execute_engine_backtest
 
-    request = EngineBacktestRequest(
-        strategy_name="deployment_validation",
-        params={"symbol": "SPY", "trade_symbol": "NVDA"},
-    )
+    # No registered strategy hides a parameter today, so the test hides one.
+    registration = _STRATEGY_REGISTRY["sma_crossover"]
+    monkeypatch.setitem(_STRATEGY_REGISTRY, "sma_crossover", replace(registration, hidden_params={"long_window"}))
+    request = EngineBacktestRequest(strategy_name="sma_crossover", params={"symbol": "SPY", "long_window": 40})
 
     with pytest.raises(HTTPException) as exc:
         execute_engine_backtest(request=request, on_phase=lambda _phase: None, on_log=lambda _line: None)
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["params_errors"][0]["loc"] == ["params", "trade_symbol"]
+    assert exc.value.detail["params_errors"][0]["loc"] == ["params", "long_window"]
 
 
 def test_all_registered_strategies_have_algorithm_and_gotchas():

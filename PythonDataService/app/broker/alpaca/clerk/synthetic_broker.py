@@ -278,14 +278,27 @@ class SyntheticBroker:
         That price is the newest bar the market delivered, not a live quote:
         the close must not wait on a feed that may be why the run ended, and
         it works overnight (owner decision 2026-09-29). Re-stating it at now
-        keeps the fill after the EXIT that caused it. ``False`` (no bar was
-        ever delivered for ``symbol``) leaves the close unsent.
+        keeps the fill after the EXIT that caused it. The order's record
+        keeps when that price last traded, which the re-stated bar no longer
+        shows, so the price's age is not lost (#2912); it keeps none when no
+        trade this run retained made that price. ``False`` (no bar was ever
+        delivered for ``symbol``) leaves the close unsent.
         """
         if self._ledger is None or self._source_bars is None:
             return False
         last_seen = self._source_bars.latest_for_symbol(symbol, market_only=True)
         if last_seen is None:
             return False
+        # The feed delivers a bar for a minute nothing traded in, repeating
+        # the last trade's price: that price is as old as the trade. When the
+        # last trade this run kept made another price, or it kept none, when
+        # this price traded is not known, and no time is recorded.
+        last_traded = self._source_bars.latest_for_symbol(
+            symbol, market_only=True, traded_only=True, at_or_before_ms=last_seen.end_ms
+        )
+        price_traded_at_ms = (
+            last_traded.end_ms if last_traded is not None and last_traded.close == last_seen.close else None
+        )
         now_ms = self._clock()
         session = order_session_state_at_ms(now_ms=now_ms, extended_window=SYNTHETIC_CAPABILITIES.extended_hours_window)
         price = last_seen.close
@@ -303,12 +316,13 @@ class SyntheticBroker:
                        "symbol": symbol, "client_order_id": client_order_id},
             )
             return False
-        self._ledger.bind_evaluated_bar(client_order_id, retained_bar)
+        self._ledger.bind_evaluated_bar(client_order_id, retained_bar, restated_bar_end_ms=price_traded_at_ms)
         logger.info(
             "bound a Dry Run's run-end close to the last price its run saw",
             extra={"action": "simulated_run_end_close_bound", "account_id": self._account_id,
                    "symbol": symbol, "client_order_id": client_order_id, "price": str(price),
-                   "last_seen_bar_ref": last_seen.bar_ref, "last_seen_end_ms": last_seen.end_ms},
+                   "last_seen_bar_ref": last_seen.bar_ref, "last_seen_end_ms": last_seen.end_ms,
+                   "price_traded_at_ms": price_traded_at_ms},
         )
         return True
 
@@ -359,6 +373,7 @@ class SyntheticBroker:
                     decision_bar_start_ms=bar.start_ms,
                     decision_bar_end_ms=bar.end_ms,
                     fill_bar_ref=bar.bar_ref if order.status == "filled" else None,
+                    restated_bar_end_ms=priced_by.restated_bar_end_ms,
                 ),
             )
             return order
@@ -402,14 +417,14 @@ class SyntheticBroker:
         symbol: str,
         retained_bar: RetainedSourceBar | None,
     ) -> BoundBar:
-        """The bar this order fills at, and when the fill is stamped if that bar is an older one."""
+        """The bar this order fills at, with the fill instant and re-stated price's time it was bound with."""
         if self._ledger is None or self._source_bars is None:
             raise SimulatedPriceUnavailableError(
                 "Synthetic execution requires an authority-scoped retained-bar ledger."
             )
         bound = self._ledger.consume_binding(client_order_id)
         if retained_bar is not None:
-            bound = BoundBar(retained_bar, None)
+            bound = BoundBar(retained_bar, None, None)
         if bound is not None:
             return bound._replace(bar=self._ledger.verified_retained_bar(bound.bar, symbol=symbol))
         # The last price the market delivered: a no-submit world's own fill
@@ -419,7 +434,7 @@ class SyntheticBroker:
             raise SimulatedPriceUnavailableError(
                 f"No retained source bar exists for {symbol!r}; refusing a synthetic fill."
             )
-        return BoundBar(latest, None)
+        return BoundBar(latest, None, None)
 
     def _resolved_order(self, leg: BrokerOrderLeg, *, client_order_id: str, priced_by: BoundBar) -> BrokerOrder:
         """The order this leg becomes against one bar: filled, or cancelled unfilled (ruling R9)."""

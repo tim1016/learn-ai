@@ -1,4 +1,4 @@
-export type TimestampDisplayMode = 'local' | 'et' | 'date-et' | 'date-utc';
+export type TimestampDisplayMode = 'local' | 'et' | 'date-et';
 /** `minute` is `HH:MM` — for a value that lives on a minute boundary (a
  * decision bar's close), where seconds would only add noise. */
 export type TimestampGranularity = 'date' | 'time' | 'minute' | 'datetime' | 'chart';
@@ -20,7 +20,6 @@ interface WallClockParts {
 }
 
 const ET_ZONE = 'America/New_York';
-const UTC_ZONE = 'UTC';
 const DEFAULT_FALLBACK = '—';
 const PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
   year: 'numeric',
@@ -94,14 +93,10 @@ export function formatTimestampDisplay(
   if (!isFiniteMs(value)) return fallback;
 
   const mode = options.mode ?? 'local';
-  const granularity: TimestampGranularity = mode === 'date-et' || mode === 'date-utc'
+  const granularity: TimestampGranularity = mode === 'date-et'
     ? 'date'
     : (options.granularity ?? 'datetime');
-  const timeZone = mode === 'local'
-    ? options.localTimeZone
-    : mode === 'date-utc'
-      ? UTC_ZONE
-      : ET_ZONE;
+  const timeZone = mode === 'local' ? options.localTimeZone : ET_ZONE;
   const text = granularity === 'chart'
     ? joinChartParts(formatParts(value, CHART_PARTS_OPTIONS, timeZone))
     : joinParts(getParts(value, timeZone), granularity);

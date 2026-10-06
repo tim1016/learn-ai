@@ -89,9 +89,9 @@ export function fmtTimestampNy(ms: number | null | undefined): string {
   return formatTimestampDisplay(ms, { mode: 'et' });
 }
 
-/** Format broker expiry markers that encode IBKR ``YYYYMMDD`` as midnight UTC. */
+/** Format an option expiry (16:00 New York time on its date) as that date. */
 export function fmtBrokerExpiryDate(ms: number | null | undefined): string {
-  return formatTimestampDisplay(ms, { mode: 'date-utc' });
+  return formatTimestampDisplay(ms, { mode: 'date-et' });
 }
 
 /**

@@ -17,43 +17,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import OptionRight
+from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
 
 logger = logging.getLogger(__name__)
 
 
-# IBKR encodes option expiry as ``YYYYMMDD`` strings tied to the
-# exchange's local calendar, not UTC. For US equity options that's
-# America/New_York. We accept and emit ``int64`` ms UTC at the boundary
-# and translate at the wire only.
+# IBKR names an option expiry by its date in the exchange's calendar, as a
+# ``YYYYMMDD`` string. Here an expiry is one ``int64 ms UTC`` instant, the
+# date's 16:00 New York anchor (ADR 0022 (a)); the string exists at the wire only.
 
 
 def expiry_ms_to_yyyymmdd(expiry_ms: int) -> str:
-    """``int64 ms UTC`` → ``YYYYMMDD`` string for IBKR.
-
-    Uses the **UTC date** of the expiry timestamp. Callers are expected
-    to pass timestamps that already represent the exchange-local
-    expiration date midnight-UTC-equivalent — the convention used by the
-    rest of the engine for option expiry.
-    """
-    dt = datetime.fromtimestamp(expiry_ms / 1000.0, tz=UTC)
-    return dt.strftime("%Y%m%d")
+    """An option expiry → the ``YYYYMMDD`` string IBKR names it by. Refuses an instant that is not an expiry."""
+    return option_expiry_date(expiry_ms).strftime("%Y%m%d")
 
 
 def yyyymmdd_to_expiry_ms(yyyymmdd: str) -> int:
-    """``YYYYMMDD`` → midnight-UTC ``int64 ms``.
-
-    Companion to ``expiry_ms_to_yyyymmdd`` — round-trips cleanly through
-    the date floor. We do NOT try to encode the 4pm ET close because
-    Phase 1 only uses the date for symbol matching, not for time
-    arithmetic.
-    """
-    dt = datetime.strptime(yyyymmdd, "%Y%m%d").replace(tzinfo=UTC)
-    return int(dt.timestamp() * 1000)
+    """IBKR's ``YYYYMMDD`` expiry → that date's 16:00 New York anchor, ``int64 ms UTC``."""
+    return option_expiry_anchor_ms(datetime.strptime(yyyymmdd, "%Y%m%d").date())
 
 
 async def qualify_underlying(client: IbkrClient, symbol: str):
@@ -76,8 +62,8 @@ async def qualify_underlying(client: IbkrClient, symbol: str):
 async def list_expirations(client: IbkrClient, symbol: str) -> list[int]:
     """Return all currently-listed option expiries for ``symbol``.
 
-    Result is sorted ascending and converted to ``int64`` ms UTC at the
-    boundary so consumers stay timezone-safe per repo timestamp rigor.
+    Result is sorted ascending, each expiry as its 16:00 New York anchor
+    in ``int64`` ms UTC.
     """
     client.require_connected()
     stock = await qualify_underlying(client, symbol)

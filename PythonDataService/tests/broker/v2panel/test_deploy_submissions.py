@@ -855,6 +855,21 @@ async def test_deploy_again_prefill_resolves_to_the_same_params_and_origins(
         assert again.origins == source.strategy_param_origins
 
 
+async def test_deploy_again_prefill_leaves_out_a_setting_the_strategy_has_since_retired(prefill_app) -> None:
+    """#2912: a bot deployed while deployment-validation still had ``trade_symbol``, before origins were kept."""
+    source = _sealed_source("deployment_validation", "pt-src-0916", {}, sealed=False).model_copy(
+        update={"strategy_params": {"trade_symbol": "SPY"}}
+    )
+    prefill_app.sources[source.strategy_instance_id] = source
+
+    async with _client(prefill_app.app) as client:
+        prefill = (await client.get(f"{_BOTS}/{source.strategy_instance_id}/deploy-prefill")).json()
+
+    assert prefill["parameters"] == {}
+    # Deploy takes the prefill as it stands.
+    resolve_deploy_strategy_params("deployment_validation", prefill["symbol"], prefill["parameters"])
+
+
 async def test_deploy_again_prefill_is_accepted_by_preview_and_deploy_with_the_sources_resolution(
     prefill_app, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
