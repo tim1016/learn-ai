@@ -139,14 +139,14 @@ class ChartDataRequest(BaseModel):
 
 
 class ChartRangePreset(BaseModel):
-    """One calendar-resolved quick range ("last N trading sessions").
+    """One calendar-resolved quick range ("last N trading sessions"; 5Y is every session the provider serves).
 
     Temporal values are int64 ms UTC only — start anchors the first trading
     date at UTC midnight, end anchors the last trading date's final UTC
     instant; clients derive any display strings at the rendering boundary.
     """
 
-    key: str = Field(..., description="Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y")
+    key: str = Field(..., description="Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y, 5Y")
     label: str = Field(..., description="Human label for the preset")
     start_ms_utc: int = Field(
         ...,

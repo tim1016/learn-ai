@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import urllib3.exceptions
 
+from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.data_lake.run_materialization import materialize_chart_range
 from app.data_lake.types import polygon_mode_for
 from app.lean_sidecar.trading_calendar import (
@@ -261,7 +262,12 @@ def get_allowed_timeframes(from_date: str, to_date: str, session: str) -> tuple[
 #: ``dataset_service.SESSIONS_PER_BAR_UNIT`` (the repo's only other
 #: period→sessions mapping); presets add the half-year span a bar unit has
 #: no use for, so the table is its own.
-RANGE_PRESETS: tuple[tuple[str, str, int], ...] = (
+#:
+#: A count of ``None`` means every session the provider serves. 5Y is that:
+#: the provider's plan is five years, kept two days inside the boundary
+#: (:func:`polygon_history_floor`), so 1,260 sessions back would start on a
+#: day it refuses, and one refused day fails the whole chart fetch.
+RANGE_PRESETS: tuple[tuple[str, str, int | None], ...] = (
     ("1D", "Past day", 1),
     ("5D", "Past week", 5),
     ("1M", "Past month", 21),
@@ -269,6 +275,7 @@ RANGE_PRESETS: tuple[tuple[str, str, int], ...] = (
     ("6M", "Past 6 months", 126),
     ("1Y", "Past year", 252),
     ("2Y", "Past 2 years", 504),
+    ("5Y", "Past 5 years", None),
 )
 
 _UNIX_EPOCH = date(1970, 1, 1)
@@ -329,7 +336,8 @@ def resolve_request_dates(
 def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str, Any]]:
     """Resolve every :data:`RANGE_PRESETS` entry against the canonical calendar.
 
-    Each preset is the last N **scheduled NYSE sessions**. The end date is
+    Each preset is the last N **scheduled NYSE sessions**; 5Y is every
+    session from the provider's first day on. The end date is
     the New York trading date of ``now_ms`` once that session has begun
     (the chart serves its forming tail from the provider by design) —
     before the 09:30 ET open nothing exists for today, so the preset ends
@@ -360,11 +368,12 @@ def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str
             raise ValueError(f"no NYSE session in the 10 days before {ny_today.isoformat()}")
         end_date = prior[-1]
 
-    deepest = RANGE_PRESETS[-1][2]
+    floor = polygon_history_floor(ny_today)
+    deepest = max(count for _key, _label, count in RANGE_PRESETS if count is not None)
     # 1.5 calendar days per session plus slack absorbs weekends, the ~10
     # NYSE holidays a year, and holiday clusters; a generous lookback costs
     # nothing — the schedule build is one call either way.
-    lookback_start = end_date - timedelta(days=math.ceil(deepest * 3 / 2) + 30)
+    lookback_start = min(floor, end_date - timedelta(days=math.ceil(deepest * 3 / 2) + 30))
     sessions = expected_sessions(lookback_start, end_date)
     if len(sessions) < deepest:
         raise ValueError(
@@ -374,7 +383,7 @@ def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str
 
     presets: list[dict[str, Any]] = []
     for key, label, count in RANGE_PRESETS:
-        window = sessions[-count:]
+        window = [day for day in sessions if day >= floor] if count is None else sessions[-count:]
         start_date = window[0]
         presets.append(
             {

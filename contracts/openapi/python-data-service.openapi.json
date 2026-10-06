@@ -8644,7 +8644,7 @@
         "type": "object"
       },
       "ChartRangePreset": {
-        "description": "One calendar-resolved quick range (\"last N trading sessions\").\n\nTemporal values are int64 ms UTC only \u2014 start anchors the first trading\ndate at UTC midnight, end anchors the last trading date's final UTC\ninstant; clients derive any display strings at the rendering boundary.",
+        "description": "One calendar-resolved quick range (\"last N trading sessions\"; 5Y is every session the provider serves).\n\nTemporal values are int64 ms UTC only \u2014 start anchors the first trading\ndate at UTC midnight, end anchors the last trading date's final UTC\ninstant; clients derive any display strings at the rendering boundary.",
         "properties": {
           "end_ms_utc": {
             "description": "Final UTC instant of the last trading date, 23:59:59.999 (int64 ms UTC) \u2014 pairs with start_ms_utc as an inclusive trading-date window",
@@ -8662,7 +8662,7 @@
             "type": "object"
           },
           "key": {
-            "description": "Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y",
+            "description": "Preset key: 1D, 5D, 1M, 3M, 6M, 1Y, 2Y, 5Y",
             "title": "Key",
             "type": "string"
           },

@@ -24,6 +24,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
+from app.lean_sidecar.trading_calendar import expected_sessions
 from app.services.chart_service import (
     RANGE_PRESETS,
     _utc_date_of_ms,
@@ -41,6 +42,8 @@ MONDAY_MID_SESSION_MS = int(datetime(2026, 9, 14, 15, 0, tzinfo=UTC).timestamp()
 # 2026-09-14 12:00 UTC == 08:00 ET (EDT) — a trading day whose session has
 # not opened yet; nothing exists for today, so presets end at Friday.
 MONDAY_PRE_OPEN_MS = int(datetime(2026, 9, 14, 12, 0, tzinfo=UTC).timestamp() * 1000)
+# 2026-09-10 is a Thursday, 15:00 UTC == 11:00 ET — mid regular session.
+THURSDAY_MID_SESSION_MS = int(datetime(2026, 9, 10, 15, 0, tzinfo=UTC).timestamp() * 1000)
 
 
 def _by_key(now_ms: int, *, session: str = "rth") -> dict[str, dict]:
@@ -76,7 +79,31 @@ def test_one_week_preset_skips_the_labor_day_holiday() -> None:
 def test_session_counts_follow_the_preset_table() -> None:
     presets = {p["key"]: p for p in resolve_range_presets(SATURDAY_MS)}
     for key, _label, count in RANGE_PRESETS:
-        assert presets[key]["session_count"] == count
+        if count is not None:
+            assert presets[key]["session_count"] == count
+
+
+def test_five_year_preset_is_everything_the_provider_serves() -> None:
+    """5Y starts on the provider's first day, two days inside five years, so every bar it asks for can be fetched."""
+    preset = _by_key(SATURDAY_MS)["5Y"]
+
+    # Five years before Saturday 2026-09-12 is 2021-09-12; two days inside is Tuesday the 14th.
+    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2021, 9, 14))
+    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11))
+    assert preset["session_count"] == len(expected_sessions(date(2021, 9, 14), date(2026, 9, 11)))
+    assert preset["label"] == "Past 5 years"
+
+
+def test_five_year_preset_starts_on_a_session_when_the_provider_first_day_is_closed() -> None:
+    # Five years before Thursday 2026-09-10, two days inside, is Sunday 2021-09-12.
+    preset = _by_key(THURSDAY_MID_SESSION_MS)["5Y"]
+
+    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2021, 9, 13))
+    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 10))
+
+
+def test_five_year_preset_comes_last_after_two_years() -> None:
+    assert [preset["key"] for preset in resolve_range_presets(SATURDAY_MS)] == ["1D", "5D", "1M", "3M", "6M", "1Y", "2Y", "5Y"]
 
 
 def test_mid_session_preset_includes_today() -> None:

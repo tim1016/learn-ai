@@ -16,7 +16,7 @@ special-case the walk: it hands :func:`fetch_complete_history_batch`
 (``history_batch_walk.py``, unchanged) a recorded :data:`HistoryBarSource`
 that stands in for the one real HTTP dependency (Polygon), exactly where the
 production coordinator already injects one. The result is that the entire
-backward-widening walk, the two-year floor, the completed-bar/half-day
+backward-widening walk, the provider's history floor, the completed-bar/half-day
 calendar rules, and the notice-conversion path all keep running for real --
 only the vendor HTTP call is replaced. Faking one level lower than the
 complete-batch builder exercises strictly more of the production code than
@@ -99,6 +99,7 @@ from app.services.broker_v2_panel.history_batch_walk import (
     fetch_complete_history_batch,
     span_ms_for,
 )
+from app.utils.session_anchors import et_date_at_ms
 
 #: The generator's own constants, all in integer cents (see the module
 #: docstring's "Bit-exact across platforms"). Not a "seed" in the RNG sense
@@ -328,6 +329,8 @@ async def build_qualification_recorded_history_batch(
         required_bar_count=required_bar_count,
         as_of_ms=as_of_ms,
         bar_source=recorded_bar_source,
+        # The ceremony sends ``as_of_ms = now``, and reading it keeps the recorded answer a function of the request alone.
+        today=et_date_at_ms(as_of_ms),
     )
 
 

@@ -107,6 +107,7 @@ const PRESET_LABELS: Readonly<Record<string, QuickRangeKey>> = {
   '6M': '6M',
   '1Y': '1Y',
   '2Y': '2Y',
+  '5Y': '5Y',
 };
 
 /** The UTC calendar date of a window boundary; empty for ms 0, which is "no window yet", not 1970. */

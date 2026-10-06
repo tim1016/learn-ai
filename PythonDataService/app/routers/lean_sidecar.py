@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
+from app.data_lake.polygon_fetcher import POLYGON_HISTORY_YEARS
 from app.lean_sidecar.config import MAX_ALGORITHM_SOURCE_BYTES
 from app.lean_sidecar.diagnostics import (
     LauncherDiagnosticReport,
@@ -64,15 +65,14 @@ router = APIRouter()
 # project's data-availability boundary so a meaningful 422 surfaces
 # before any container work.
 #
-# ``_MAX_TRADING_DAYS = 504`` ≈ 2 calendar years of US-equity trading
-# days (252 per year). Aligns the API ceiling with Polygon.io minute-
-# bar history on the project's Starter plan — LEAN is just the engine;
-# the actual data ingestion ceiling is the vendor's history depth, so
-# windows longer than ~2 years can't produce useful results. The
-# matching ``wall_clock_timeout_s`` in ``DEFAULT_RUN_LIMITS`` is
-# bumped in lockstep so the P1.1 cidfile kill switch doesn't fire
-# mid-run on a legitimate 2-year backtest.
-_MAX_TRADING_DAYS = 504
+# ``_MAX_TRADING_DAYS`` is the provider's history in US-equity trading
+# days (252 per year): five years, 1,260 days. LEAN is just the engine;
+# the actual data ingestion ceiling is the vendor's history depth, so a
+# longer window can't produce useful results. (It was 504 while the plan
+# was believed to serve two years.) The matching ``wall_clock_timeout_s``
+# in ``DEFAULT_RUN_LIMITS`` moves in lockstep so the P1.1 cidfile kill
+# switch doesn't fire mid-run on a legitimate five-year backtest.
+_MAX_TRADING_DAYS = POLYGON_HISTORY_YEARS * 252
 _MAX_STARTING_CASH = 10_000_000.0
 _MIN_STARTING_CASH = 1_000.0
 
