@@ -7,6 +7,7 @@ import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { reloadOnProgress } from './charts/golden-search-reload';
+import { GoldenSearchCurveSetComponent } from './golden-search-curve-set.component';
 import {
   driftHeight,
   foldActivitySpec,
@@ -31,7 +32,7 @@ import { isLive, type StrategyCapability, type StudyDetail, type TestOverTimeCha
  */
 @Component({
   selector: 'app-golden-search-test-step',
-  imports: [DecimalPipe, GoldenSearchChartComponent, GoldenSearchGridComponent, GoldenSearchPanelComponent, PercentPipe],
+  imports: [DecimalPipe, GoldenSearchChartComponent, GoldenSearchCurveSetComponent, GoldenSearchGridComponent, GoldenSearchPanelComponent, PercentPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-test-step.component.html',
   styleUrl: './golden-search-test-step.component.scss',

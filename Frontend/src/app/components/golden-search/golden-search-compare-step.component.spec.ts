@@ -6,11 +6,12 @@ import { MarkdownDrawerService } from '../../shared/markdown-drawer/markdown-dra
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
-import type { CandidateDetail, CandidateKey, StudyCommand, StudyDetail } from './golden-search.types';
+import type { CandidateDetail, CandidateKey, CurveSet, CurveSetKey, StudyCommand, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
 import {
   candidateDetail,
   decisionSummary,
+  curveSet,
   emaCapability,
   evidenceCandidate,
   evidenceView,
@@ -23,10 +24,14 @@ import {
 
 interface FakeService {
   candidate: ReturnType<typeof vi.fn<(id: string, key: CandidateKey) => Promise<CandidateDetail>>>;
+  curveSet: ReturnType<typeof vi.fn<(id: string, set: CurveSetKey, candidate?: CandidateKey | null) => Promise<CurveSet>>>;
 }
 
 function fakeService(): FakeService {
-  return { candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key)) };
+  return {
+    candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key)),
+    curveSet: vi.fn(async (_id: string, set: CurveSetKey) => curveSet(set)),
+  };
 }
 
 async function renderStep(study: StudyDetail = studyDetail('awaiting_candidate'), service: FakeService = fakeService()) {
@@ -225,13 +230,14 @@ describe('GoldenSearchCompareStepComponent', () => {
     ]);
 
     // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.
-    // Seven charts on the step, and the Trades tab's five.
+    // Eight charts on the step (the stress and neighbor curves among them), and the Trades tab's five.
     const live = () => charts.filter((chart) => !chart.disposed);
-    await waitFor(() => expect(live()).toHaveLength(12));
+    await waitFor(() => expect(live()).toHaveLength(13));
     view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
     await view.fixture.whenStable();
     expect(service.candidate).toHaveBeenCalledTimes(3);
-    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 12 }, () => 1));
+    expect(live().map((chart) => chart.options.length)).toEqual(Array.from({ length: 13 }, () => 1));
+    expect(service.curveSet).toHaveBeenCalledTimes(1);
   });
 
   it('About this chart opens the guide beside the chart, at that chart’s section', async () => {

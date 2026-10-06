@@ -341,6 +341,13 @@ export interface RunsQuery {
 }
 /** One run's daily curve as parallel lists over its session closes; `drawdown` is null when its peak never rose above 0. */
 export type RunCurve = Schemas['GoldenSearchRunCurve'];
+/** The runs one step draws together: a search's scored points, the folds' tests, or one candidate with its stresses and neighbors. */
+export type CurveSetKey = 'search' | 'recent' | 'fold_tests' | 'candidate';
+/** How a step draws a line: the set's chosen settings, the incumbent, a candidate's own run, a stress or neighbor of it, or one of a search's other points. */
+export type LineRole = Schemas['GoldenSearchCurveLine']['role'];
+export type CurveLine = Omit<Schemas['GoldenSearchCurveLine'], 'run'> & { run: StudyRun };
+/** `left_out` runs had a curve the read's cap did not return; `not_recorded` runs kept none. */
+export type CurveSet = Omit<Schemas['GoldenSearchCurveSet'], 'lines'> & { lines: CurveLine[] };
 /** The named runs' curves, and the runs among them that kept none. */
 export type RunCurves = Schemas['GoldenSearchRunCurves'];
 

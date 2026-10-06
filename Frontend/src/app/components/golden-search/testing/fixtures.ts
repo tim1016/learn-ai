@@ -6,6 +6,8 @@ import type {
   EvidenceCandidate,
   EvidenceView,
   ExamOutcome,
+  CurveSet,
+  CurveSetKey,
   ExamFit,
   ExamView,
   RunCurve,
@@ -1088,4 +1090,26 @@ export function runCurve(key: string, end = 0.087): RunCurve {
 
 export function runCurves(keys: readonly string[], notRecorded: readonly string[] = []): RunCurves {
   return { capital: 100000, curves: keys.map((key, i) => runCurve(key, 0.087 - i * 0.02)), not_recorded: [...notRecorded] };
+}
+
+/** A step's set of lines: a search's winner, the current settings and one other scored point, unless the set is another. */
+export function curveSet(set: CurveSetKey = 'search', overrides: Partial<CurveSet> = {}): CurveSet {
+  const lines: Record<CurveSetKey, CurveSet['lines']> = {
+    search: [
+      { run: studyRun('run-incumbent', { label: 'All-period search · Current settings' }), role: 'incumbent', label: 'Current settings', curve: runCurve('run-incumbent', 0.052) },
+      { run: studyRun('run-second'), role: 'other', label: 'Scored point', curve: runCurve('run-second', 0.041) },
+      { run: studyRun('run-winner', { label: 'All-period search · All-period fit' }), role: 'winner', label: 'Winner', curve: runCurve('run-winner', 0.087) },
+    ],
+    recent: [{ run: studyRun('run-recent', { group: 'recent', group_label: 'Recent fit search' }), role: 'winner', label: 'Winner', curve: runCurve('run-recent', 0.116) }],
+    fold_tests: [
+      { run: studyRun('run-fold', { group: 'fold_test', fold_index: 0 }), role: 'winner', label: 'Fold 1 winner', curve: runCurve('run-fold', 0.02) },
+      { run: studyRun('run-fold-inc', { group: 'fold_test', fold_index: 0 }), role: 'incumbent', label: 'Fold 1 current settings', curve: runCurve('run-fold-inc', 0.01) },
+    ],
+    candidate: [
+      { run: studyRun('run-candidate', { group: 'candidate' }), role: 'candidate', label: 'All-period fit', curve: runCurve('run-candidate', 0.087) },
+      { run: studyRun('run-stress', { group: 'stress', scenario: 'slippage_1c' }), role: 'stress', label: 'Extra 1¢/share slippage', curve: runCurve('run-stress', 0.041) },
+      { run: studyRun('run-neighbor', { group: 'neighbor' }), role: 'neighbor', label: 'Fast EMA length one step below (7)', curve: runCurve('run-neighbor', 0.052) },
+    ],
+  };
+  return { capital: 100000, lines: lines[set], left_out: 0, not_recorded: 0, ...overrides };
 }

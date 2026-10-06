@@ -37,7 +37,10 @@ export type GoldenSearchChartId =
   | 'final-comparison'
   | 'final-equity'
   | 'final-months'
-  | 'run-curves';
+  | 'run-curves'
+  | 'search-curves'
+  | 'fold-test-curves'
+  | 'candidate-curves';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -413,6 +416,36 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Look for one month far taller than the rest: a final result carried by a single month is fragile.', target: null },
       { text: 'Count the months each run won. Winning most months is steadier than winning one big one.', target: null },
       { text: 'Hover a month for every run’s return.', target: null },
+    ],
+  },
+  'search-curves': {
+    title: 'Every scored point',
+    question: 'Does the winner travel with the crowd, or stand alone?',
+    steps: [
+      { text: 'Each faint line is one point the search scored, on the same window.', target: { kind: 'series', group: 'equity' } },
+      { text: 'The bold line is the winner; the dashed line is the current settings.', target: { kind: 'point', group: 'equity', at: 'last' } },
+      { text: 'Look at where the bold line sits among the faint ones through the whole window, not only at the end.', target: null },
+      { text: 'Drop to the lower part: the winner’s fall from its peak beside everyone else’s.', target: { kind: 'series', group: 'fall' } },
+    ],
+  },
+  'fold-test-curves': {
+    title: 'Fold test equity',
+    question: 'How did each fold’s winner travel through its test window?',
+    steps: [
+      { text: 'Each bold line is one fold’s winner on that fold’s test window, starting flat with fresh capital.', target: { kind: 'series', group: 'equity' } },
+      { text: 'The dashed line beside it is the current settings on the same window.', target: null },
+      { text: 'Read fold by fold, left to right: which line ends higher, and which climbs more steadily.', target: null },
+      { text: 'Drop to the lower part for each run’s fall from its own peak inside its window.', target: { kind: 'series', group: 'fall' } },
+    ],
+  },
+  'candidate-curves': {
+    title: 'Stress and neighbor equity',
+    question: 'Does the candidate’s path survive higher costs and a one-step change?',
+    steps: [
+      { text: 'The bold line is the candidate itself on the development period.', target: { kind: 'point', group: 'equity', at: 'last' } },
+      { text: 'The teal lines are the same settings rerun under each cost stress.', target: null },
+      { text: 'The light blue lines are its neighbors: one knob moved one step, everything else unchanged.', target: null },
+      { text: 'Lines that stay close to the bold one mean the result is not a knife edge.', target: { kind: 'series', group: 'equity' } },
     ],
   },
   'run-curves': {

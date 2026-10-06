@@ -35,7 +35,7 @@ from app.research.golden_search.protocol import (
     SelectionPolicy,
     ZoomSettings,
 )
-from app.research.golden_search.run_curves import RunGroup
+from app.research.golden_search.run_curves import LineRole, RunGroup
 from app.research.golden_search.zoom import StopReason
 from app.research.sweep.identity import TreeState
 from app.research.sweep.ranking import RankingMeasure
@@ -1227,6 +1227,22 @@ class GoldenSearchRunCurves(_Wire):
     capital: float
     curves: list[GoldenSearchRunCurve]
     not_recorded: list[str] = Field(description="The runs asked for that kept no daily equity; never drawn as a flat line.")
+
+
+class GoldenSearchCurveLine(_Wire):
+    """One run a step draws: its role says how, its label what to call it on that chart."""
+
+    run: GoldenSearchRun
+    role: LineRole
+    label: str
+    curve: GoldenSearchRunCurve
+
+
+class GoldenSearchCurveSet(_Wire):
+    capital: float
+    lines: list[GoldenSearchCurveLine]
+    left_out: int = Field(description="Runs of the set with a curve that this read did not return, past its cap; named lines are never left out.")
+    not_recorded: int = Field(description="Runs of the set that kept no daily equity.")
 
 
 class GoldenSearchCumulativeReturnPoint(_Wire):

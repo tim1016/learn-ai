@@ -3,13 +3,23 @@ import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { percentText, signedPercentText } from './golden-search-display';
-import type { RunCurve } from './golden-search.types';
+import type { LineRole, RunCurve } from './golden-search.types';
 
-/** One run to draw: what the All runs list calls it, and its curve as the server sent it. */
+/** One run to draw: what to call it, its curve as the server sent it, and on a step's chart the role that says how to draw it. */
 export interface RunLine {
   readonly key: string;
   readonly label: string;
   readonly curve: RunCurve;
+  readonly role?: LineRole;
+}
+
+interface LineStyle {
+  readonly color: string;
+  readonly width: number;
+  readonly opacity: number;
+  readonly dashed: boolean;
+  /** Drawn above the lines with a lower number. */
+  readonly z: number;
 }
 
 interface AlignedRun {
@@ -24,13 +34,15 @@ const HOVER_ROWS = 12;
 const END_LABELS = 8;
 
 /**
- * The runs the owner ticked, drawn together (#2930): each run's cumulative
- * return on top and its fall from its own peak beneath, on one session axis.
- * Runs over different windows share the axis and each spans only its own
+ * Runs drawn together (#2930): each run's cumulative return on top and its
+ * fall from its own peak beneath, on one session axis — the runs the owner
+ * ticked on All runs, or the set a step draws, where a line's role decides
+ * its weight (a search's other points stay faint behind its winner). Runs
+ * over different windows share the axis and each spans only its own
  * sessions; a session a run did not score stays empty, never zero. Every
  * value is the server's.
  */
-export function runCurvesSpec(lines: readonly RunLine[], ceiling: number): ChartSpec {
+export function runCurvesSpec(lines: readonly RunLine[], ceiling: number, label = 'Run cumulative return and fall from peak'): ChartSpec {
   const sessions = [...new Set(lines.flatMap((line) => line.curve.close_ms))].sort((a, b) => a - b);
   const dates = sessions.map((ms) => formatTimestampDisplay(ms, { mode: 'date-et' }));
   const aligned: AlignedRun[] = lines.map((line) => ({
@@ -39,9 +51,9 @@ export function runCurvesSpec(lines: readonly RunLine[], ceiling: number): Chart
     falls: line.curve.drawdown === null ? sessions.map(() => null) : align(sessions, line.curve.close_ms, line.curve.drawdown),
   }));
   return {
-    label: 'Run cumulative return and fall from peak',
+    label,
     summary: `${lines.length} run${lines.length === 1 ? '' : 's'} drawn at every session close; beneath, each run's fall from its own peak.`,
-    featured: lines[0]?.key ?? null,
+    featured: (lines.find((line) => line.role === 'winner' || line.role === 'candidate') ?? lines[0])?.key ?? null,
     option: (theme) => option(aligned, dates, ceiling, theme),
     table: {
       caption: 'Each drawn run: where it ended and its deepest fall at a session close; — marks a value the run did not record',
@@ -58,8 +70,11 @@ function option(aligned: readonly AlignedRun[], dates: readonly string[], ceilin
   const axisLabel = { color: theme.textSecondary, fontSize: 11 };
   const axisLine = { lineStyle: { color: theme.axis } };
   const splitLine = { lineStyle: { color: theme.gridLine } };
-  const colorOf = (index: number): string => theme.series[index % theme.series.length];
-  const crowded = aligned.length > END_LABELS;
+  const styles = aligned.map(({ line }, index) => styleOf(line, index, aligned.length, theme));
+  const colorOf = (index: number): string => styles[index].color;
+  // A search's many faint points carry no end label; the lines that do must not pile up.
+  const labelled = aligned.filter(({ line }) => line.role !== 'other').length;
+  const crowded = labelled > END_LABELS;
   return {
     grid: [
       { left: 56, right: crowded ? 16 : 76, top: 12, height: '54%' },
@@ -92,18 +107,21 @@ function option(aligned: readonly AlignedRun[], dates: readonly string[], ceilin
       },
     ],
     series: aligned.flatMap(({ line, returns, falls }, index) => {
-      const color = colorOf(index);
+      const style = styles[index];
+      const color = style.color;
       const common = {
         type: 'line' as const,
         name: line.label,
         showSymbol: false,
         connectNulls: false,
-        lineStyle: { color, width: crowded ? 1 : 1.75, opacity: crowded ? 0.7 : 1 },
+        z: style.z,
+        lineStyle: { color, width: style.width, opacity: style.opacity, type: style.dashed ? ('dashed' as const) : ('solid' as const) },
         itemStyle: { color },
         emphasis: { focus: 'series' as const, blurScope: 'global' as const, lineStyle: { width: 'bolder' as const } },
       };
+      const endLabel = !crowded && line.role !== 'other';
       return [
-        { ...common, id: `equity:${line.key}`, xAxisIndex: 0, yAxisIndex: 0, data: plotted(returns), endLabel: { show: !crowded, color, fontSize: 11, formatter: () => signedPercentText(lastValue(returns)) } },
+        { ...common, id: `equity:${line.key}`, xAxisIndex: 0, yAxisIndex: 0, data: plotted(returns), endLabel: { show: endLabel, color, fontSize: 11, formatter: () => signedPercentText(lastValue(returns)) } },
         {
           ...common,
           id: `fall:${line.key}`,
@@ -128,12 +146,13 @@ function option(aligned: readonly AlignedRun[], dates: readonly string[], ceilin
 }
 
 function tooltip(aligned: readonly AlignedRun[], date: string, index: number, ceiling: number, colorOf: (index: number) => string, theme: ChartTheme): string {
-  // The runs that scored this session, best return first.
+  // The runs that scored this session: a step's named lines first, then best return first.
   const scored = aligned.map((run, at) => ({ run, at })).filter(({ run }) => run.returns[index] !== null);
-  scored.sort((a, b) => (b.run.returns[index] ?? 0) - (a.run.returns[index] ?? 0));
+  const faint = (run: AlignedRun): number => (run.line.role === 'other' ? 1 : 0);
+  scored.sort((a, b) => faint(a.run) - faint(b.run) || (b.run.returns[index] ?? 0) - (a.run.returns[index] ?? 0));
   const shown = scored.slice(0, HOVER_ROWS);
   const notes = [`Worst-fall limit ${percentText(ceiling)}. The rules judge each run’s bar-by-bar fall, which can be deeper than this session-close line.`];
-  if (scored.length > shown.length) notes.unshift(`The ${shown.length} best of ${scored.length} runs at this session. Tick fewer runs to read them all.`);
+  if (scored.length > shown.length) notes.unshift(`${shown.length} of the ${scored.length} runs at this session. All runs lists every one.`);
   if (scored.length < aligned.length) notes.push(`${aligned.length - scored.length} drawn run${aligned.length - scored.length === 1 ? '' : 's'} did not score this session.`);
   return tooltipHtml(
     {
@@ -141,13 +160,34 @@ function tooltip(aligned: readonly AlignedRun[], date: string, index: number, ce
       columns: ['Return', 'Fall from peak'],
       rows: shown.map(({ run, at }) => ({
         label: run.line.label,
-        swatch: { color: colorOf(at), dashed: false },
+        swatch: { color: colorOf(at), dashed: run.line.role === 'incumbent' },
         values: [signedPercentOrNotRecorded(run.returns[index]), run.line.curve.drawdown === null ? NOT_RECORDED : signedPercentOrNotRecorded(run.falls[index])],
       })),
       notes,
     },
     theme,
   );
+}
+
+/** A ticked run takes the next palette colour; a step's line is drawn by its role. */
+function styleOf(line: RunLine, index: number, count: number, theme: ChartTheme): LineStyle {
+  switch (line.role) {
+    case undefined: {
+      const many = count > END_LABELS;
+      return { color: theme.series[index % theme.series.length], width: many ? 1 : 1.75, opacity: many ? 0.7 : 1, dashed: false, z: 2 };
+    }
+    case 'winner':
+    case 'candidate':
+      return { color: theme.candidates.all_period, width: 2.5, opacity: 1, dashed: false, z: 5 };
+    case 'incumbent':
+      return { color: theme.candidates.incumbent, width: 1.75, opacity: 1, dashed: true, z: 4 };
+    case 'stress':
+      return { color: theme.stressed, width: 1.5, opacity: 1, dashed: false, z: 3 };
+    case 'neighbor':
+      return { color: theme.stepBelow, width: 1.25, opacity: 0.9, dashed: false, z: 3 };
+    case 'other':
+      return { color: theme.textSecondary, width: 1, opacity: 0.3, dashed: false, z: 1 };
+  }
 }
 
 function dateText(ms: number | undefined): string {

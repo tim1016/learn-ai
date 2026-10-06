@@ -5180,6 +5180,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/golden-search/studies/{study_id}/charts/run-curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Curve Set
+         * @description The runs one step draws together, each with its role and its daily curve (#2930).
+         */
+        get: operations["get_curve_set_api_research_golden_search_studies__study_id__charts_run_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/golden-search/studies/{study_id}/charts/search": {
         parameters: {
             query?: never;
@@ -14030,6 +14050,21 @@ export interface components {
              */
             value: number;
         };
+        /**
+         * GoldenSearchCurveLine
+         * @description One run a step draws: its role says how, its label what to call it on that chart.
+         */
+        GoldenSearchCurveLine: {
+            curve: components["schemas"]["GoldenSearchRunCurve"];
+            /** Label */
+            label: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "winner" | "incumbent" | "candidate" | "stress" | "neighbor" | "other";
+            run: components["schemas"]["GoldenSearchRun"];
+        };
         /** GoldenSearchCurvePoint */
         GoldenSearchCurvePoint: {
             /**
@@ -14052,6 +14087,23 @@ export interface components {
              * @description Trades counted so far, best first.
              */
             trades: number;
+        };
+        /** GoldenSearchCurveSet */
+        GoldenSearchCurveSet: {
+            /** Capital */
+            capital: number;
+            /**
+             * Left Out
+             * @description Runs of the set with a curve that this read did not return, past its cap; named lines are never left out.
+             */
+            left_out: number;
+            /** Lines */
+            lines: components["schemas"]["GoldenSearchCurveLine"][];
+            /**
+             * Not Recorded
+             * @description Runs of the set that kept no daily equity.
+             */
+            not_recorded: number;
         };
         /** GoldenSearchDecision */
         GoldenSearchDecision: {
@@ -35246,6 +35298,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenSearchPlanCharts"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_curve_set_api_research_golden_search_studies__study_id__charts_run_curves_get: {
+        parameters: {
+            query: {
+                /** @description search, recent, fold_tests or candidate. */
+                set: string;
+                /** @description The candidate whose run, stresses and neighbors to draw; for the candidate set only. */
+                candidate?: ("incumbent" | "all_period" | "recent") | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchCurveSet"];
                 };
             };
             /** @description Bad Request */

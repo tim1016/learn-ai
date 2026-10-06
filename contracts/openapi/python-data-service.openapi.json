@@ -19755,6 +19755,42 @@
         "title": "GoldenSearchCumulativeReturnPoint",
         "type": "object"
       },
+      "GoldenSearchCurveLine": {
+        "additionalProperties": false,
+        "description": "One run a step draws: its role says how, its label what to call it on that chart.",
+        "properties": {
+          "curve": {
+            "$ref": "#/components/schemas/GoldenSearchRunCurve"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "winner",
+              "incumbent",
+              "candidate",
+              "stress",
+              "neighbor",
+              "other"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "run": {
+            "$ref": "#/components/schemas/GoldenSearchRun"
+          }
+        },
+        "required": [
+          "run",
+          "role",
+          "label",
+          "curve"
+        ],
+        "title": "GoldenSearchCurveLine",
+        "type": "object"
+      },
       "GoldenSearchCurvePoint": {
         "additionalProperties": false,
         "properties": {
@@ -19786,6 +19822,40 @@
           "net_profit"
         ],
         "title": "GoldenSearchCurvePoint",
+        "type": "object"
+      },
+      "GoldenSearchCurveSet": {
+        "additionalProperties": false,
+        "properties": {
+          "capital": {
+            "title": "Capital",
+            "type": "number"
+          },
+          "left_out": {
+            "description": "Runs of the set with a curve that this read did not return, past its cap; named lines are never left out.",
+            "title": "Left Out",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchCurveLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "not_recorded": {
+            "description": "Runs of the set that kept no daily equity.",
+            "title": "Not Recorded",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "capital",
+          "lines",
+          "left_out",
+          "not_recorded"
+        ],
+        "title": "GoldenSearchCurveSet",
         "type": "object"
       },
       "GoldenSearchDecision": {
@@ -68690,6 +68760,142 @@
           }
         },
         "summary": "Get Plan Charts",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/charts/run-curves": {
+      "get": {
+        "description": "The runs one step draws together, each with its role and its daily curve (#2930).",
+        "operationId": "get_curve_set_api_research_golden_search_studies__study_id__charts_run_curves_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "search, recent, fold_tests or candidate.",
+            "in": "query",
+            "name": "set",
+            "required": true,
+            "schema": {
+              "description": "search, recent, fold_tests or candidate.",
+              "maxLength": 32,
+              "title": "Set",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The candidate whose run, stresses and neighbors to draw; for the candidate set only.",
+            "in": "query",
+            "name": "candidate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "incumbent",
+                    "all_period",
+                    "recent"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The candidate whose run, stresses and neighbors to draw; for the candidate set only.",
+              "title": "Candidate"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchCurveSet"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Curve Set",
         "tags": [
           "research-golden-search"
         ]

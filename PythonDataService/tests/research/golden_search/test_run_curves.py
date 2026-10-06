@@ -12,7 +12,17 @@ from app.research.golden_search.declarations import declaration_for, point_hash
 from app.research.golden_search.evidence import drawdown_series
 from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.procedure_history import FoldWindow
-from app.research.golden_search.run_curves import curve_view, curves_view, group_of, named_points, runs_page
+from app.research.golden_search.run_curves import (
+    MAX_SET_CURVES,
+    SetLine,
+    curve_set_lines,
+    curve_view,
+    curves_view,
+    group_of,
+    named_points,
+    runs_page,
+    within_cap,
+)
 
 EMA = declaration_for("ema_crossover_signal")
 assert EMA is not None
@@ -140,3 +150,57 @@ def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_n
 
     assert [curve["evaluation_key"] for curve in view["curves"]] == ["a", "b"]
     assert view["not_recorded"] == ["old"] and view["capital"] == 100.0
+
+
+def _lines(records: list[EvaluationRecord], curve_set: str, **study: Any) -> list[tuple[str, str, str]]:
+    lines = curve_set_lines(_study(**study), records, folds=FOLDS, declaration=EMA, curve_set=curve_set)  # type: ignore[arg-type]
+    return [(line.record.evaluation_key, line.role, line.label) for line in lines]
+
+
+def test_a_search_set_is_every_point_the_procedure_scored_with_its_winner_and_the_incumbent_named() -> None:
+    records = [
+        _run("s1", "search", INCUMBENT),
+        _run("s2", "search", {**INCUMBENT, "gap": 0.25}),
+        _run("s3", "search", WINNER),
+        # Another procedure's point, and a neighbor the evidence asked for, are not this search's.
+        _run("r1", "recent", WINNER),
+        _run("n1", "evidence", {**INCUMBENT, "gap": 0.35}),
+    ]
+
+    assert _lines(records, "search", search={"procedure": {"winner": WINNER}}) == [
+        ("s1", "incumbent", "Current settings"),
+        ("s2", "other", "Scored point"),
+        ("s3", "winner", "Winner"),
+    ]
+    assert _lines(records, "recent", recent={"procedure": {"winner": WINNER}}) == [("r1", "winner", "Winner")]
+
+
+def test_a_fold_test_set_pairs_each_folds_winner_with_the_incumbent_on_its_test_window() -> None:
+    records = [
+        _run("t1", "validation", INCUMBENT, fold_index=1, window_start_ms=200, window_end_ms=300),
+        _run("t0", "validation", INCUMBENT, fold_index=0, window_start_ms=100, window_end_ms=200),
+        _run("w0", "validation", FOLD_WINNER, fold_index=0, window_start_ms=100, window_end_ms=200),
+        # A training run of the winner is not a test.
+        _run("x0", "validation", FOLD_WINNER, fold_index=0, window_start_ms=0, window_end_ms=100),
+    ]
+
+    assert _lines(records, "fold_tests", validation={"folds": [{"fold_index": 0, "winner": FOLD_WINNER}, {"fold_index": 1, "winner": None}]}) == [
+        ("w0", "winner", "Fold 1 winner"),
+        ("t0", "incumbent", "Fold 1 current settings"),
+        ("t1", "incumbent", "Fold 2 current settings"),
+    ]
+
+
+def test_a_set_keeps_every_named_line_before_the_others_and_counts_what_it_leaves_out() -> None:
+    def other(index: int, **overrides: Any) -> SetLine:
+        return SetLine(_run(f"o{index}", "search", {**INCUMBENT, "gap": index / 1000}, **overrides), "other", "Scored point")
+
+    crowd = [other(index) for index in range(MAX_SET_CURVES + 5)]
+    winner = SetLine(_run("w", "search", WINNER), "winner", "Winner")
+    old = other(9999, has_curve=False)
+
+    returned, left_out, not_recorded = within_cap([*crowd, old, winner])
+
+    # The winner arrived last and is still drawn; six of the others give way to it and to the cap.
+    assert len(returned) == MAX_SET_CURVES and returned[-1].role == "winner"
+    assert (left_out, not_recorded) == (6, 1)

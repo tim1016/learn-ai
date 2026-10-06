@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchSearchStepComponent } from './golden-search-search-step.component';
 import { GoldenSearchService } from './golden-search.service';
-import type { SearchCharts, StudyDetail } from './golden-search.types';
+import type { CurveSetKey, SearchCharts, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { emaCapability, metrics, procedureCharts, searchCharts, searchView, studyDetail } from './testing/fixtures';
+import { curveSet, emaCapability, metrics, procedureCharts, searchCharts, searchView, studyDetail } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail, charts: () => Promise<SearchCharts> = async () => searchCharts()) {
   const library = fakeCharts();
-  const service = { searchCharts: vi.fn(charts) };
+  const service = { searchCharts: vi.fn(charts), curveSet: vi.fn(async (_id: string, set: CurveSetKey) => curveSet(set)) };
   return render(GoldenSearchSearchStepComponent, {
     inputs: { study, capability: emaCapability() },
     providers: [{ provide: GoldenSearchService, useValue: service }, ...library.providers],

@@ -11,6 +11,7 @@ import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-a
 import { GoldenSearchCandidateCardsComponent } from './golden-search-candidate-cards.component';
 import { candidateRows, initialRowKey, rowKeyFor, rowSummary, type CandidateRow } from './golden-search-compare';
 import { sideBySideSpec, stressSpec, tornadoSpec } from './golden-search-compare-charts';
+import { GoldenSearchCurveSetComponent } from './golden-search-curve-set.component';
 import { GoldenSearchDecisionSummaryComponent } from './golden-search-decision-summary.component';
 import { studyTradeFloor } from './golden-search-display';
 import { GoldenSearchEquityChartComponent } from './golden-search-equity-chart.component';
@@ -45,6 +46,7 @@ interface DetailRequest {
     GoldenSearchCandidateAsideComponent,
     GoldenSearchCandidateCardsComponent,
     GoldenSearchChartComponent,
+    GoldenSearchCurveSetComponent,
     GoldenSearchDecisionSummaryComponent,
     GoldenSearchEquityChartComponent,
     GoldenSearchEvidenceTabsComponent,

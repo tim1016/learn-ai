@@ -33,6 +33,7 @@ from app.schemas.golden_search import (
     GoldenSearchCapability,
     GoldenSearchCommandRequest,
     GoldenSearchCreateStudyRequest,
+    GoldenSearchCurveSet,
     GoldenSearchDefaults,
     GoldenSearchEvaluationPage,
     GoldenSearchJobAccepted,
@@ -242,6 +243,20 @@ async def get_run_curves(
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     return GoldenSearchRunCurves.model_validate(result)
+
+
+@router.get("/studies/{study_id}/charts/run-curves", response_model=GoldenSearchCurveSet, responses=_REFUSALS)
+async def get_curve_set(
+    study_id: StudyId,
+    curve_set: Annotated[str, Query(alias="set", max_length=32, description="search, recent, fold_tests or candidate.")],
+    candidate: CandidateKey | None = Query(None, description="The candidate whose run, stresses and neighbors to draw; for the candidate set only."),
+) -> GoldenSearchCurveSet:
+    """The runs one step draws together, each with its role and its daily curve (#2930)."""
+    try:
+        result = await service.curve_set(study_id, curve_set=curve_set, candidate_key=candidate)
+    except GoldenSearchRefusal as exc:
+        raise await _refused(exc) from exc
+    return GoldenSearchCurveSet.model_validate(result)
 
 
 @router.get("/studies/{study_id}/charts/plan", response_model=GoldenSearchPlanCharts, responses=_REFUSALS)
