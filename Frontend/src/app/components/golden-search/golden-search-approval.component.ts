@@ -70,13 +70,12 @@ export class GoldenSearchApprovalComponent {
   constructor() {
     effect(() => {
       const study = this.study();
-      const exam = this.exam();
       const fit = this.fit();
       const subject = `${study.id}:${fit.key}`;
       if (subject === this.preparedFor || fit.outcome === null) return;
       this.preparedFor = subject;
       untracked(() => {
-        this.note.set(factualNote(exam, fit));
+        this.note.set(factualNote(fit));
         this.parityAcknowledged.set(false);
         this.weaknessAcknowledged.set(false);
       });

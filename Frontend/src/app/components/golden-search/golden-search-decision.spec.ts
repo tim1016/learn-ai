@@ -6,21 +6,16 @@ import { examFit, examView, protocol } from './testing/fixtures';
 const UNSCORED = { outcome: null, checks: [] };
 
 describe('golden-search-decision', () => {
-  it('prefills the factual reason only for a judged fit the server names no weakness in, and says when it was chosen from two', () => {
-    const both = examView();
-    expect(factualNote(both, both.fits[0])).toBe(
-      'The All-period fit meets the stated rules on a confirmatory final test. It was chosen after the final test, from 2 fits. The evidence is Python-only; independent engine agreement is not available.',
-    );
-    const one = examView({ fits: [examFit()] });
-    expect(factualNote(one, one.fits[0])).not.toContain('chosen after');
-    expect(factualNote(both, examFit('all_period', UNSCORED))).toBe('');
+  it('prefills the factual reason only for a judged fit the server names no weakness in', () => {
+    expect(factualNote(examFit('recent'))).toBe('The Recent fit meets the stated rules on a confirmatory final test. The evidence is Python-only; independent engine agreement is not available.');
+    expect(factualNote(examFit('all_period', UNSCORED))).toBe('');
   });
 
   it('a weakness the server names reads as weak evidence, even beside a passing outcome', () => {
     const exam = examView();
     const fit = examFit('all_period', { weakness: [{ code: 'EXPOSURE_HISTORY_UNKNOWN', text: 'the unknown history of this test interval' }] });
 
-    expect(factualNote(exam, fit)).toBe('');
+    expect(factualNote(fit)).toBe('');
     expect(researchRow(exam, fit).tone).toBe('warn');
   });
 

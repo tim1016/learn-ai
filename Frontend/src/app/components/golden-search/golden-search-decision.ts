@@ -47,10 +47,8 @@ export function meetsRules(fit: ExamFit): boolean {
 }
 
 /** The reason prefilled only when the server names no weakness in the fit's judged final test — a fact, not an opinion. */
-export function factualNote(exam: ExamView, fit: ExamFit): string {
-  if (!meetsRules(fit)) return '';
-  const chosen = exam.fits.length > 1 ? ` It was chosen after the final test, from ${exam.fits.length} fits.` : '';
-  return `The ${fit.label} meets the stated rules on a confirmatory final test.${chosen} The evidence is Python-only; independent engine agreement is not available.`;
+export function factualNote(fit: ExamFit): string {
+  return meetsRules(fit) ? `The ${fit.label} meets the stated rules on a confirmatory final test. The evidence is Python-only; independent engine agreement is not available.` : '';
 }
 
 /** The research row: the fit's outcome, the exposure claim when it is exploratory, and why. */

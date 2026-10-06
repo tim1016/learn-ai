@@ -14,7 +14,7 @@ from app.research.golden_search.actions import NOTHING_TO_TEST, action_refusals,
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.concentration import NOT_MEASURED
 from app.research.golden_search.declarations import declaration_for
-from app.research.golden_search.final_test import fits_to_test, summary_outcome
+from app.research.golden_search.final_test import fits_to_test
 from app.research.golden_search.guidance import (
     WEAK_EVIDENCE_DETAIL,
     candidate_flags,
@@ -35,8 +35,10 @@ from app.research.golden_search.views import (
     knob_summary,
     passes_completed,
     run_detail,
+    summary_outcome,
 )
 from app.research.golden_search.zoom import ProcedureResult, ZoomRound
+from app.schemas.golden_qualifications import GoldenQualificationResearch
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import metrics
 from tests._helpers.golden_search_study import plan_request
@@ -159,6 +161,8 @@ def test_the_exam_view_shows_every_fit_and_says_when_the_pick_followed_the_test(
 
     chosen = exam_view(stored, chosen_key="recent")
     assert (chosen["chosen_key"], chosen["selection_note"]) == ("recent", "Chosen after the final test, from 2 fits.")
+    # A study that ended without an approval promises none.
+    assert exam_view(stored, chosen_key=None, approvable=False)["selection_note"] == "2 fits ran on the final test."
     # One result for two fits with the same settings is no choice, so nothing is noted; either name finds it.
     twins = exam_view(_exam(_fit("all_period", "meets_rules", same_as=("recent",))), chosen_key="recent")
     assert (twins["fits"][0]["label"], twins["chosen_key"], twins["selection_note"]) == ("All-period and recent fit", "all_period", None)
@@ -176,6 +180,14 @@ def test_a_final_test_recorded_with_one_locked_candidate_reads_as_that_one_fit()
     (fit,) = view["fits"]
     assert (fit["key"], fit["outcome"], fit["retention"], fit["metrics"]) == ("recent", "meets_rules", 0.8, legacy["candidate_metrics"])
     assert (view["pick"], view["chosen_key"], view["selection_note"]) == ("before_test", "recent", None)
+
+
+def test_a_qualified_version_says_when_its_fit_was_chosen_with_two_results_in_view() -> None:
+    chosen_from_two = {"exam_outcome": "meets_rules", "fits_tested": 2, "pick": "after_test"}
+    assert GoldenQualificationResearch.from_research(chosen_from_two).selection_note == "Chosen after the final test, from 2 fits."
+    # One fit, a pick locked before the test, or research recorded before both fits sat it: nothing to note.
+    for research in ({**chosen_from_two, "fits_tested": 1}, {**chosen_from_two, "pick": "before_test"}, {"exam_outcome": "meets_rules"}):
+        assert GoldenQualificationResearch.from_research(research).selection_note is None
 
 
 def test_one_outcome_stands_for_the_final_test_the_named_fits_else_the_strongest() -> None:

@@ -41,7 +41,6 @@ COMMANDS: tuple[CommandName, ...] = (
     "continue", "run_research", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 )
 RETAIN_KINDS: tuple[RetainKind, ...] = ("keep_current", "wait_for_fresh_data", "retain_exploration")
-CANDIDATE_KEYS: tuple[CandidateKey, ...] = ("incumbent", "all_period", "recent")
 
 #: The state a stage runs in, by stage; a stage run owns a worker while its study is in this state.
 STAGE_STATES: dict[StageName, StudyState] = {

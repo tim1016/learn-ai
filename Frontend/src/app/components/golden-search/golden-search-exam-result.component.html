@@ -31,7 +31,7 @@
     </table>
   </div>
   @if (e.selection_note; as note) { <p class="caption" role="note"><strong>{{ note }}</strong></p> }
-  @if (choosable()) { <p class="caption">Everything below is about the fit you select here: its checks, its charts, its settings and the approval.</p> }
+  @if (choosable()) { <p class="caption">Everything below is about the fit you select here: {{ follows() }}.</p> }
   <p class="caption">${{ s.scope.capital | number: '1.0-0' }} frozen starting capital · {{ s.scope.costs_sentence }}</p>
   @if (retention(); as kept) {
     <p class="caption">{{ fit().label }} kept {{ kept }} of its development {{ s.protocol.policy.objective | receiptLabel }} — descriptive only, never a check.</p>

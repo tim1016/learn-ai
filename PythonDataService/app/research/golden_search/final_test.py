@@ -20,8 +20,6 @@ from typing import Any, Literal
 Pick = Literal["before_test", "after_test"]
 
 FIT_KEYS: tuple[str, ...] = ("all_period", "recent")
-# Read in this order when several fits are summarized by one outcome: the strongest result first.
-_OUTCOME_ORDER: tuple[str, ...] = ("meets_rules", "not_enough_evidence", "does_not_meet_rules", "could_not_evaluate")
 
 
 def fits_to_test(candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -84,15 +82,4 @@ def fit_for(exam: Mapping[str, Any], candidate_key: str | None) -> dict[str, Any
     if candidate_key is None:
         return None
     return next((fit for fit in recorded_fits(exam) if candidate_key == fit["key"] or candidate_key in fit["same_as"]), None)
-
-
-def summary_outcome(exam: Mapping[str, Any], chosen_key: str | None) -> str | None:
-    """One outcome for the whole final test: the chosen fit's, else the strongest recorded; ``None`` until every fit has one."""
-    chosen = fit_for(exam, chosen_key)
-    if chosen is not None:
-        return chosen["outcome"]
-    outcomes = [fit["outcome"] for fit in recorded_fits(exam)]
-    if not outcomes or any(outcome is None for outcome in outcomes):
-        return None
-    return min(outcomes, key=_OUTCOME_ORDER.index)
 

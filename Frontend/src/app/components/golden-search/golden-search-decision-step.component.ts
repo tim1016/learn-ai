@@ -4,11 +4,10 @@ import { ButtonModule } from 'primeng/button';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { GoldenSearchApprovalComponent } from './golden-search-approval.component';
-import { candidateRows } from './golden-search-compare';
 import { examScored, fitFor } from './golden-search-decision';
 import { GoldenSearchExamResultComponent } from './golden-search-exam-result.component';
 import { GoldenSearchFinalChartsComponent } from './golden-search-final-charts.component';
-import { GoldenSearchLockboxComponent } from './golden-search-lockbox.component';
+import { GoldenSearchLockboxComponent, type LockFit } from './golden-search-lockbox.component';
 import { RETAIN_KINDS } from './golden-search-retain.component';
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchTupleComponent } from './golden-search-tuple.component';
@@ -63,8 +62,13 @@ export class GoldenSearchDecisionStepComponent {
     return study.state === 'awaiting_candidate' && study.results.evidence !== null ? 'lock' : 'before';
   });
   private readonly candidates = computed(() => this.study().results.evidence?.candidates ?? []);
-  /** The fits the final test will run: one row per distinct settings other than the current ones. */
-  protected readonly fitsToTest = computed(() => candidateRows(this.candidates()).filter((row) => row.candidate.exam_eligible));
+  /** The fits the final test will run, as the server lists them, each with its development evidence. */
+  protected readonly fitsToTest = computed<LockFit[]>(() =>
+    (this.study().results.evidence?.fits_to_test ?? []).flatMap((fit) => {
+      const candidate = this.candidates().find((item) => item.key === fit.key);
+      return candidate === undefined ? [] : [{ ...fit, candidate }];
+    }),
+  );
   /** The scored final test, or null before it has a result. */
   protected readonly exam = computed(() => {
     const exam = this.study().results.exam;

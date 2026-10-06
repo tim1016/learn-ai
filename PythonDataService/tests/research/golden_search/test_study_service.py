@@ -624,23 +624,32 @@ async def test_a_superseded_attempt_can_neither_record_nor_spend(conn: asyncpg.C
 async def test_a_spent_development_budget_still_leaves_the_exam_and_proof_their_reservation(
     conn: asyncpg.Connection, driver: Driver, symbol: str
 ) -> None:
-    row = await driver.lock(symbol)
-    # The plan's bound fits 5000; a cap of 12 leaves the development stages 6 and holds 3 + 3 back:
-    # the final test's incumbent and two fits, and the proof.
+    # Two different fits, so the final test needs all three of its reserved runs.
+    driver.engine.score = _recent_prefers_a_wide_gap
+    row = await driver.to_candidate(symbol)
     assert row.receipt["estimate"]["reserved_for_exam_and_proof"] == 6
+    # A cap of exactly what development spent plus the reserve: 3 for the final test's incumbent and two fits, 3 for the proof.
+    spent = row.consumed_evaluations
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = $2 WHERE id = $1", row.id, spent + 6)
+
+    row = await driver.advance(await service.get_row(row.id), "open_exam", {"acknowledge_final_test": True})
+    fits = row.results["exam"]["fits"]
+    assert len(fits) == 2 and (row.state, row.consumed_evaluations) == ("awaiting_review", spent + 3)
+    assert all(fit["metrics"]["status"] == "completed" for fit in fits)
+
+    row = await driver.advance(row, "approve", APPROVE)
+    assert (row.state, row.consumed_evaluations, row.budget_cap) == ("approved", spent + 6, spent + 6)
+
+
+async def test_development_stages_never_spend_the_exam_and_proof_reservation(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    # The plan's bound fits 5000; a cap of 12 leaves the development stages 6 and holds 3 + 3 back.
     await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 12 WHERE id = $1", row.id)
     row = await driver.advance(await service.get_row(row.id), "continue")
     row = await driver.advance(row, "continue")
+
     assert (row.state, row.consumed_evaluations) == ("awaiting_candidate", 6)
     assert all(fold["failure_code"] == "BUDGET" for fold in row.results["validation"]["folds"])
-
-    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
-    fits = row.results["exam"]["fits"]
-    assert (row.state, row.consumed_evaluations) == ("awaiting_review", 6 + 1 + len(fits))
-    assert all(fit["metrics"]["status"] == "completed" for fit in fits)
-
-    row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": fits[0]["key"], "acknowledge_research_weakness": True})
-    assert (row.state, row.consumed_evaluations, row.budget_cap) == ("approved", 6 + 1 + len(fits) + 3, 12)
 
 
 # ── Leakage and capability ───────────────────────────────────────────────
@@ -831,6 +840,10 @@ async def test_both_fits_sit_the_final_test_and_the_owner_names_one_afterwards(c
     detail = await driver.detail(row)
     exam = detail["results"]["exam"]
     assert [(fit["key"], fit["same_as"], fit["label"]) for fit in exam["fits"]] == [("all_period", [], "All-period fit"), ("recent", [], "Recent fit")]
+    # The lock promised exactly these fits, and marked exactly their candidates as testable.
+    evidence = detail["results"]["evidence"]
+    assert [(fit["key"], fit["label"]) for fit in evidence["fits_to_test"]] == [(fit["key"], fit["label"]) for fit in exam["fits"]]
+    assert {item["key"]: item["exam_eligible"] for item in evidence["candidates"]} == {"incumbent": False, "all_period": True, "recent": True}
     assert exam["fits"][0]["point"] != exam["fits"][1]["point"]
     # Each fit is judged on its own run; the incumbent ran once beside them.
     assert [fit["outcome"] for fit in exam["fits"]] == ["meets_rules", "meets_rules"]
@@ -909,6 +922,7 @@ async def test_fits_that_return_the_current_settings_leave_nothing_to_test(drive
     row = await driver.to_candidate(symbol)
     detail = await driver.detail(row)
     assert [item["exam_eligible"] for item in detail["results"]["evidence"]["candidates"]] == [False, False, False]
+    assert detail["results"]["evidence"]["fits_to_test"] == []
     assert "open_exam" not in detail["permitted_actions"] and "retain" in detail["permitted_actions"]
     with pytest.raises(GoldenSearchRefusal) as refused:
         await driver.command(row, "open_exam", {"acknowledge_final_test": True})

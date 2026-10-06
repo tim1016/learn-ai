@@ -16,7 +16,7 @@
 
     <dl class="rules">
       @for (fit of fits(); track fit.key) {
-        <div><dt>{{ fit.candidate.label }}@if (fit.sameAs.length > 0) { <small>same settings as {{ fit.sameAs.join(' and ') }}</small> }</dt><dd><strong>{{ fit.candidate.params_sentence }}</strong></dd></div>
+        <div><dt>{{ fit.label }}</dt><dd><strong>{{ fit.candidate.params_sentence }}</strong></dd></div>
       }
       <div><dt>Profit after stated costs</dt><dd>Must be positive</dd></div>
       <div><dt>Worst drawdown / activity</dt><dd>≤ {{ ceiling() }} / {{ tradeFloor() === null ? 'Minimum unavailable' : '≥ ' + tradeFloor() + ' trades' }}</dd></div>
@@ -35,7 +35,7 @@
 
     @for (fit of warned(); track fit.key) {
       <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-        <span>Development warning for {{ fit.candidate.label }}: @for (flag of fit.candidate.flags; track $index) { {{ flag.text }}. }Keeping the incumbent may be the better decision.</span></p>
+        <span>Development warning for {{ fit.label }}: @for (flag of fit.candidate.flags; track $index) { {{ flag.text }}. }Keeping the incumbent may be the better decision.</span></p>
     }
 
     <label class="check"><input type="checkbox" [checked]="acknowledged()" (change)="onAcknowledge($event)" /><span>I understand this consumes this test interval for this study.</span></label>

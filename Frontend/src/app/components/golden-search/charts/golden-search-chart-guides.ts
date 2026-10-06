@@ -320,7 +320,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'The search method: Zoom moves one knob at a time; Grid tries every combination.', target: null },
       { text: 'The development period: the data the search chooses on, with its trading sessions.', target: null },
-      { text: 'The final test: kept sealed until you choose, then opened once.', target: null },
+      { text: 'The final test: kept sealed until you open it, once, for every fit.', target: null },
       { text: 'The engine runs the plan may use, against the study’s cap.', target: null },
     ],
   },
