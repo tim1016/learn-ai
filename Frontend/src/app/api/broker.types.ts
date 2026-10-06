@@ -8325,7 +8325,7 @@ export interface components {
             /** Revision */
             revision: number;
             /** Run Fills */
-            run_fills?: components["schemas"]["ChartFillMarker"][] | null;
+            run_fills?: components["schemas"]["RunFillView"][] | null;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
             startup_join?: components["schemas"]["StartupJoinView"] | null;
             /**
@@ -9381,7 +9381,6 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
-            simulated?: components["schemas"]["SimulatedFillView"] | null;
             /** Symbol */
             symbol?: string | null;
         };
@@ -21616,6 +21615,33 @@ export interface components {
             schema_version?: 1;
             /** Statistics Basis */
             statistics_basis: string;
+        };
+        /**
+         * RunFillView
+         * @description One fill in the bot page's list of its latest run's fills (#2912).
+         *
+         *     ``simulated`` says how a Dry Run's or a Live Shadow's fill was priced.
+         *     ``None`` is a fill Alpaca made.
+         */
+        RunFillView: {
+            /** Event Key */
+            event_key: string;
+            /** Filled At Ms */
+            filled_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Price */
+            price: number;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            simulated?: components["schemas"]["SimulatedFillView"] | null;
+            /** Symbol */
+            symbol?: string | null;
         };
         /**
          * RunLedger

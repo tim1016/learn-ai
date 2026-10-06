@@ -156,8 +156,10 @@ def test_fill_anchors_name_how_each_filled_order_was_priced_and_follow_the_ledge
         ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:old"))
     assert ledger.fill_anchors() == {"learn-ai/ema-1/v1:a": anchor}, "an unfilled order has no fill to explain"
 
-    with ledger.transaction() as records:
-        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:b", side="sell"), anchor=anchor)
+    # Another holder of the same ledger file writes: a second process, or a second broker over one account.
+    sibling = SynthesizedOrderLedger.beside_source_bars(account_id=ledger.account_id, source_bars=bars, label="sibling")
+    with sibling.transaction() as records:
+        sibling.append_locked(records, order=_order("learn-ai/ema-1/v1:b", side="sell"), anchor=anchor)
 
     assert set(ledger.fill_anchors()) == {"learn-ai/ema-1/v1:a", "learn-ai/ema-1/v1:b"}
 

@@ -66,6 +66,7 @@ describe('FillTableComponent', () => {
     expect(screen.getAllByText(/Simulated/)).toHaveLength(2);
     // Only the cautioned one spells its sentence out, where it reads without a pointer.
     expect(screen.getByText('It used a price that was 3 minutes old.').closest('td')?.getAttribute('colspan')).toBe('4');
-    expect(screen.queryByText('Filled at its minute’s close.')).toBeNull();
+    // The other's sentence is there for a screen reader, and not as a second row.
+    expect(screen.getByText('Filled at its minute’s close.').closest('tr')?.className).toContain('fill-table__row');
   });
 });

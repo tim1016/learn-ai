@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,7 @@ from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.bot_page_projection import (
     RunFacts,
     run_facts,
-    run_fill_markers,
+    run_fill_views,
     run_summary,
     run_summary_text,
 )
@@ -189,42 +190,61 @@ def _priced_by(fill_model: str = "decision_bar_close", *, provider: str = "ibkr"
 )
 def test_a_simulated_fill_says_which_rule_priced_it(anchor: SynthesizedAnchor, kind: str, caution: bool) -> None:
     """A run-end close's and a recovery exit's own prices are told from a market bar's by who made them."""
-    [marker] = run_fill_markers([_sale()], {"alpaca/exit-1": anchor})
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": anchor})
 
-    assert marker.simulated is not None
-    assert (marker.simulated.kind, marker.simulated.caution) == (kind, caution)
+    assert listed.simulated is not None
+    assert (listed.simulated.kind, listed.simulated.caution) == (kind, caution)
 
 
 def test_a_sale_at_an_older_price_carries_that_prices_age() -> None:
-    """Story 27: the owner sees how old the price was, so they know how far to trust the fill."""
+    """#2912 story 27: the owner sees how old the price was, so they know how far to trust the fill."""
     three_minutes = 3 * _MINUTE_MS
     anchor = _priced_by("older_bar_close", bar_end_ms=_START - three_minutes)
 
-    [marker] = run_fill_markers([_sale()], {"alpaca/exit-1": anchor})
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": anchor})
 
-    assert marker.simulated is not None and marker.simulated.price_age_ms == three_minutes
-    assert duration_label(three_minutes) in marker.simulated.label
-    assert duration_label(three_minutes) in marker.simulated.sentence
+    assert listed.simulated is not None and listed.simulated.price_age_ms == three_minutes
+    assert duration_label(three_minutes) in listed.simulated.label
+    assert duration_label(three_minutes) in listed.simulated.sentence
 
 
 def test_only_the_older_price_claims_an_age() -> None:
-    [marker] = run_fill_markers([_sale()], {"alpaca/exit-1": _priced_by()})
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": _priced_by()})
 
-    assert marker.simulated is not None and marker.simulated.price_age_ms is None
+    assert listed.simulated is not None and listed.simulated.price_age_ms is None
+
+
+@pytest.mark.parametrize(("side", "quoted"), [(OrderSide.SELL, "bid"), (OrderSide.BUY, "ask")])
+def test_a_recovery_exit_names_the_side_of_the_quote_it_filled_at(side: OrderSide, quoted: str) -> None:
+    """A sale fills at the bid and a buy to cover at the ask; the page never names the wrong one."""
+    recovery = FillRecord(
+        account_id="sim:spy-bot", sid="spy-bot", intent_id="exit-1", order_ref="alpaca/exit-1", event_key="fill:1",
+        symbol="QQQ", side=side, quantity=1.0, fill_price=512.4, filled_at_ms=_START, fee=None,
+    )
+
+    [listed] = run_fill_views([recovery], {"alpaca/exit-1": _priced_by(provider=RECOVERY_QUOTE_PROVIDER)})
+
+    assert listed.simulated is not None
+    assert set(re.findall(r"\b(?:bid|ask)\b", listed.simulated.sentence)) == {quoted}
 
 
 def test_a_fill_alpaca_made_is_not_called_simulated() -> None:
-    """A Paper or Live authority has no such record, and one of its fills says nothing about a rule."""
-    [marker] = run_fill_markers([_sale()], {})
+    """A Paper or Live authority keeps no such record, and none of its fills is a simulated one."""
+    [listed] = run_fill_views([_sale()], None)
 
-    assert marker.simulated is None
+    assert listed.simulated is None
 
 
-def test_simulated_fills_whose_pricing_record_cannot_be_read_say_so() -> None:
-    markers = run_fill_markers([_sale("alpaca/enter-1"), _sale("alpaca/exit-1")], None)
+def test_a_simulated_fill_with_no_record_of_its_pricing_says_so() -> None:
+    """Every fill of a no-submit authority is simulated: one with no record never passes for a fill Alpaca made."""
+    priced = {"alpaca/enter-1": _priced_by()}
 
-    assert [marker.simulated.kind for marker in markers if marker.simulated is not None] == ["unknown", "unknown"]
-    assert all(marker.simulated is not None and marker.simulated.caution for marker in markers)
+    listed = run_fill_views([_sale("alpaca/enter-1"), _sale("alpaca/exit-1")], priced)
+
+    assert [(fill.simulated.kind, fill.simulated.caution) for fill in listed if fill.simulated is not None] == [
+        ("bar_close", False),
+        ("unknown", True),
+    ]
 
 
 @pytest.mark.parametrize("unreadable", [RuntimeError("corrupt"), OSError("gone"), ValueError("not a record")])
@@ -234,7 +254,17 @@ def test_an_order_ledger_that_cannot_be_read_does_not_take_the_bot_page_down(unr
     def read() -> dict[str, SynthesizedAnchor]:
         raise unreadable
 
-    anchors = panel_data_source._simulated_fill_anchors(SimpleNamespace(synthesized_fill_anchors=read), "spy-bot")
+    no_submit = SimpleNamespace(binds_decision_bar=True, synthesized_fill_anchors=read)
 
-    assert anchors is None
-    assert [marker.simulated.kind for marker in run_fill_markers([_sale()], anchors) if marker.simulated] == ["unknown"]
+    anchors = panel_data_source._simulated_fill_anchors(no_submit, "spy-bot")
+
+    assert anchors == {}
+    assert [fill.simulated.kind for fill in run_fill_views([_sale()], anchors) if fill.simulated] == ["unknown"]
+
+
+def test_an_authority_whose_fills_alpaca_makes_is_never_asked_for_a_simulated_record() -> None:
+    vendor = SimpleNamespace(
+        binds_decision_bar=False, synthesized_fill_anchors=lambda: pytest.fail("Alpaca made these fills"),
+    )
+
+    assert panel_data_source._simulated_fill_anchors(vendor, "spy-bot") is None

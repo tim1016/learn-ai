@@ -97,7 +97,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     execute_action,
 )
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, custody_facade
-from app.services.broker_v2_panel.bot_page_projection import bot_page_view, run_facts, run_fill_markers
+from app.services.broker_v2_panel.bot_page_projection import bot_page_view, run_facts, run_fill_views
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     custody_bot_status,
@@ -655,20 +655,22 @@ def _latest_run(
 
 
 def _simulated_fill_anchors(facade: SqliteAlpacaClerkFacade, sid: str) -> Mapping[str, SynthesizedAnchor] | None:
-    """How this authority priced its simulated fills; ``None`` when its order ledger cannot be read.
+    """How a no-submit authority priced its fills, by order ref; ``None`` for one whose fills Alpaca makes.
 
-    The fills themselves are the Clerk's and still show. Only how each was
-    priced is lost, and the page says that instead of failing.
+    An order ledger that cannot be read answers with nothing on record. The
+    fills themselves are the Clerk's and still show; each then says its
+    pricing is not on record, and the page does not fail.
     """
+    if not facade.binds_decision_bar:
+        return None
     try:
         return facade.synthesized_fill_anchors()
     except (RuntimeError, OSError, ValueError) as error:
         logger.warning(
             "Bot page: the simulated order ledger cannot be read",
-            exc_info=True,
             extra={"action": "bot_page_simulated_fills_unreadable", "strategy_instance_id": sid, "error": str(error)},
         )
-        return None
+        return {}
 
 
 def _with_bot_page(
@@ -706,7 +708,7 @@ def _with_bot_page(
                 execution_coverage_complete=evidence.economics.snapshot.execution_coverage == "complete",
                 now_ms=now_ms,
             ),
-            "run_fills": run_fill_markers(run_fills, _simulated_fill_anchors(facade, sid)),
+            "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid)),
         }
     )
 

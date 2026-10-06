@@ -799,7 +799,7 @@ class BotPanelView(BaseModel):
     # marker carries no symbol or authority stamp. Labelled with the run's date
     # (``bot_page.summary.facts.started_at_ms``), never "today" (#2794 R8).
     # ``None`` exactly when ``bot_page`` is.
-    run_fills: list[ChartFillMarker] | None = None
+    run_fills: list[RunFillView] | None = None
 
     @model_validator(mode="after")
     def _open_pnl_is_authored_with_its_figure(self) -> BotPanelView:
@@ -1117,7 +1117,7 @@ class SimulatedFillView(BaseModel):
     # ``limit_touch`` is a resting limit a later minute reached.
     # ``live_quote`` is the live IBKR bid or ask, for a recovery exit.
     # ``run_end_close`` is the last price the run saw, at a run-end close.
-    # ``unknown`` is a simulated fill whose pricing record cannot be read.
+    # ``unknown`` is a simulated fill with no readable record of its pricing.
     kind: Literal["bar_close", "older_bar_close", "limit_touch", "live_quote", "run_end_close", "unknown"]
     label: str
     sentence: str
@@ -1154,8 +1154,15 @@ class ChartFillMarker(BaseModel):
     # order_ref; two fills — of the same or different orders — can share a
     # millisecond timestamp).
     event_key: str
-    # Set on the bot page's run fills for a fill that was simulated. A chart
-    # marker carries none.
+
+
+class RunFillView(ChartFillMarker):
+    """One fill in the bot page's list of its latest run's fills (#2912).
+
+    ``simulated`` says how a Dry Run's or a Live Shadow's fill was priced.
+    ``None`` is a fill Alpaca made.
+    """
+
     simulated: SimulatedFillView | None = None
 
 

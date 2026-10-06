@@ -54,8 +54,8 @@ from app.schemas.broker_bots import BotRunView
 from app.schemas.broker_v2_panel import (
     BotPanelView,
     ChannelHealthView,
-    ChartFillMarker,
     PanelAction,
+    RunFillView,
     SimulatedFillView,
 )
 from app.services.broker_v2_panel.catalog_projection_service import duty_outcome_needs_attention
@@ -677,10 +677,10 @@ def bot_page_view(
 
 
 _NOT_A_REAL_FILL = "A real order might not have filled at that price."
-_UNREAD_SIMULATED_FILL = SimulatedFillView(
+_UNRECORDED_SIMULATED_FILL = SimulatedFillView(
     kind="unknown",
-    label="Simulated · pricing not readable",
-    sentence="Simulated. The record of how this fill was priced could not be read.",
+    label="Simulated · pricing not on record",
+    sentence="Simulated. There is no readable record of how this fill was priced.",
     caution=True,
 )
 
@@ -738,26 +738,25 @@ def simulated_fill_view(anchor: SynthesizedAnchor, fill: FillRecord) -> Simulate
     )
 
 
-def run_fill_markers(
+def run_fill_views(
     run_fills: Sequence[FillRecord], anchors: Mapping[str, SynthesizedAnchor] | None
-) -> list[ChartFillMarker]:
+) -> list[RunFillView]:
     """The run's newest fills as the page lists them, each simulated one saying how it was priced (#2912).
 
     ``anchors`` is a no-submit authority's record of how it priced each
-    order, by order ref; a Paper or Live authority has none. ``None`` is a
-    record that could not be read: every fill is then a simulated one whose
-    pricing is unknown, and says so.
+    order, by order ref. Every fill of such an authority is simulated, so
+    one with no record there says its pricing is not on record instead of
+    passing for a fill Alpaca made. ``None`` is an authority whose fills
+    Alpaca makes: none of them is simulated.
     """
-    markers: list[ChartFillMarker] = []
+    views: list[RunFillView] = []
     for fill in run_fills[-RUN_FILL_LIMIT:]:
-        marker = fill_to_marker(fill)
-        if anchors is None:
-            simulated: SimulatedFillView | None = _UNREAD_SIMULATED_FILL
-        else:
+        simulated: SimulatedFillView | None = None
+        if anchors is not None:
             anchor = anchors.get(fill.order_ref)
-            simulated = None if anchor is None else simulated_fill_view(anchor, fill)
-        markers.append(marker if simulated is None else marker.model_copy(update={"simulated": simulated}))
-    return markers
+            simulated = _UNRECORDED_SIMULATED_FILL if anchor is None else simulated_fill_view(anchor, fill)
+        views.append(RunFillView(**fill_to_marker(fill).model_dump(), simulated=simulated))
+    return views
 
 
 __all__ = [
@@ -769,7 +768,7 @@ __all__ = [
     "health_groups",
     "run_ending",
     "run_facts",
-    "run_fill_markers",
+    "run_fill_views",
     "run_summary",
     "run_summary_facts",
     "run_summary_text",

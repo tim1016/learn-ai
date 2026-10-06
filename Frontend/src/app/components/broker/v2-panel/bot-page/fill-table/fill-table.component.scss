@@ -1,4 +1,8 @@
+@use '../../../../../styles/visually-hidden' as *;
+
 :host { display: block; min-width: 0; }
+
+.sr-only { @include visually-hidden; }
 
 .fill-table {
   width: 100%;
@@ -50,6 +54,8 @@
 
 // The whole sentence, under a fill whose price may not be its own moment's.
 .fill-table__row:has(+ .fill-table__note) td { border-bottom: 0; }
+
+.fill-table .fill-table__note:last-child td { border-bottom: 0; }
 
 .fill-table .fill-table__note td {
   padding-top: 0;

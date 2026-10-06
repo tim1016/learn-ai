@@ -29,6 +29,9 @@
               [class.fill-table__simulated--caution]="simulated.caution"
               [title]="simulated.sentence"
             >{{ simulated.label }}</small>
+            @if (!simulated.caution) {
+              <span class="sr-only">{{ simulated.sentence }}</span>
+            }
           }
         </td>
       </tr>

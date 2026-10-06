@@ -33,6 +33,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, NamedTuple, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -318,11 +319,12 @@ class SynthesizedOrderLedger:
         answered = self._fill_anchors
         if answered is not None and answered[0] == stamp:
             return answered[1]
-        anchors = {
+        # Read-only: the answer is kept, and a caller must not be able to change the next one.
+        anchors = MappingProxyType({
             client_order_id: record.anchor
             for client_order_id, record in self.latest_records().items()
             if record.anchor is not None and record.order.filled_quantity > 0
-        }
+        })
         self._fill_anchors = (stamp, anchors)
         return anchors
 

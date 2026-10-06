@@ -5516,7 +5516,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/ChartFillMarker"
+                  "$ref": "#/components/schemas/RunFillView"
                 },
                 "type": "array"
               },
@@ -8196,16 +8196,6 @@
             ],
             "title": "Side",
             "type": "string"
-          },
-          "simulated": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SimulatedFillView"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "symbol": {
             "anyOf": [
@@ -39177,6 +39167,70 @@
           "daily_return_convention"
         ],
         "title": "RunEvidenceProvenance",
+        "type": "object"
+      },
+      "RunFillView": {
+        "description": "One fill in the bot page's list of its latest run's fills (#2912).\n\n``simulated`` says how a Dry Run's or a Live Shadow's fill was priced.\n``None`` is a fill Alpaca made.",
+        "properties": {
+          "event_key": {
+            "title": "Event Key",
+            "type": "string"
+          },
+          "filled_at_ms": {
+            "title": "Filled At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "simulated": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulatedFillView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "required": [
+          "filled_at_ms",
+          "side",
+          "quantity",
+          "price",
+          "order_ref",
+          "event_key"
+        ],
+        "title": "RunFillView",
         "type": "object"
       },
       "RunLedger": {
