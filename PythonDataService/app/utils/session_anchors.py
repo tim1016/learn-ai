@@ -86,6 +86,33 @@ def require_schedulable_end(end_ms: int) -> None:
         )
 
 
+# The New York wall-clock hour an option expiry date is anchored at (ADR 0022 (a)).
+_OPTION_EXPIRY_ANCHOR_HOUR_ET = 16
+
+
+def option_expiry_anchor_ms(expiry_date: date) -> int:
+    """The one instant an option's expiry date is stored and compared as: 16:00 New York time on that date.
+
+    It names the date; it is not a session time. On a half day the anchor is
+    still 16:00, and when the contract stops trading that day comes from the
+    calendar's session close.
+    """
+    return to_ms_utc(
+        datetime(expiry_date.year, expiry_date.month, expiry_date.day, _OPTION_EXPIRY_ANCHOR_HOUR_ET, tzinfo=_NY)
+    )
+
+
+def option_expiry_date(expiry_ms: int) -> date:
+    """The expiry date an anchor instant names; refuses an instant that is not an expiry anchor."""
+    expiry_date = et_date_at_ms(expiry_ms)
+    if option_expiry_anchor_ms(expiry_date) != expiry_ms:
+        raise ValueError(
+            f"{expiry_ms} is not an option expiry: an expiry is 16:00 New York time on its date, "
+            f"which for {expiry_date.isoformat()} is {option_expiry_anchor_ms(expiry_date)}."
+        )
+    return expiry_date
+
+
 def calendar_days_to_expiry(expiration_date: str, now_ms: int | None = None) -> int:
     """Calendar days from today's ET date to ``expiration_date`` (``YYYY-MM-DD``), floored at 0.
 

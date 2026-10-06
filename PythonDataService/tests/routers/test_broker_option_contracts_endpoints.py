@@ -64,7 +64,7 @@ def _spy_call_match() -> OptionContractMatch:
         trading_class="SPY",
         exchange="SMART",
         currency="USD",
-        expiry_ms=1_766_188_800_000,
+        expiry_ms=1_766_178_000_000,
         strike=650.0,
         right="C",
         multiplier=100,
@@ -86,7 +86,7 @@ async def test_option_contracts_returns_qualified_match(monkeypatch, _connected_
         resp = await c.get(
             "/api/broker/option-contracts/SPY",
             params={
-                "expiry_ms": 1_766_188_800_000,
+                "expiry_ms": 1_766_178_000_000,
                 "strike": 650.0,
                 "right": "C",
             },
@@ -107,7 +107,7 @@ async def test_option_contracts_returns_503_when_disconnected(monkeypatch, _conn
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get(
             "/api/broker/option-contracts/SPY",
-            params={"expiry_ms": 1_766_188_800_000, "strike": 650.0, "right": "C"},
+            params={"expiry_ms": 1_766_178_000_000, "strike": 650.0, "right": "C"},
         )
 
     assert resp.status_code == 503
@@ -125,7 +125,7 @@ async def test_option_contracts_validates_right_query_param(monkeypatch, _connec
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get(
             "/api/broker/option-contracts/SPY",
-            params={"expiry_ms": 1_766_188_800_000, "strike": 650.0, "right": "X"},
+            params={"expiry_ms": 1_766_178_000_000, "strike": 650.0, "right": "X"},
         )
 
     assert resp.status_code == 422

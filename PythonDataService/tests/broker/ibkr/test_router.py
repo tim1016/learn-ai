@@ -14,6 +14,8 @@ from httpx import ASGITransport, AsyncClient
 from app.broker.ibkr.client import set_client
 from app.main import app
 
+_MIDNIGHT_UTC_EXPIRY_MS = 1_800_057_600_000  # 2027-01-16T00:00:00Z
+
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
 
 
@@ -62,7 +64,7 @@ async def test_chain_returns_422_when_strikes_missing() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get(
             "/api/broker/option-chain/SPY",
-            params={"expiry_ms": 1_800_000_000_000},
+            params={"expiry_ms": 1_800_046_800_000},
         )
 
     # FastAPI rejects the missing required query before the handler runs.
@@ -77,7 +79,7 @@ async def test_chain_returns_400_when_strike_is_non_positive() -> None:
         resp = await ac.get(
             "/api/broker/option-chain/SPY",
             params=[
-                ("expiry_ms", 1_800_000_000_000),
+                ("expiry_ms", 1_800_046_800_000),
                 ("strikes", 0),
             ],
         )
@@ -123,7 +125,7 @@ async def test_strikes_endpoint_returns_503_when_disconnected() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get(
             "/api/broker/strikes/SPY",
-            params={"expiry_ms": 1_800_000_000_000},
+            params={"expiry_ms": 1_800_046_800_000},
         )
 
     assert resp.status_code == 503
@@ -162,7 +164,7 @@ async def test_surface_returns_422_when_strikes_missing() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get(
             "/api/broker/option-surface/SPY",
-            params=[("expiry_ms", 1_800_000_000_000)],
+            params=[("expiry_ms", 1_800_046_800_000)],
         )
 
     assert resp.status_code == 422
@@ -193,7 +195,7 @@ async def test_surface_rejects_nan_strikes() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get(
             "/api/broker/option-surface/SPY",
-            params=[("expiry_ms", 1_800_000_000_000), ("strikes", "nan")],
+            params=[("expiry_ms", 1_800_046_800_000), ("strikes", "nan")],
         )
 
     assert resp.status_code == 400
@@ -207,10 +209,40 @@ async def test_surface_returns_503_when_disconnected() -> None:
         resp = await ac.get(
             "/api/broker/option-surface/SPY",
             params=[
-                ("expiry_ms", 1_800_000_000_000),
+                ("expiry_ms", 1_800_046_800_000),
                 ("strikes", 420),
                 ("strikes", 425),
             ],
         )
 
     assert resp.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        ("/api/broker/strikes/SPY", [("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS)]),
+        (
+            "/api/broker/option-contracts/SPY",
+            [("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS), ("strike", 420), ("right", "C")],
+        ),
+        ("/api/broker/option-chain/SPY", [("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS), ("strikes", 420)]),
+        (
+            "/api/broker/option-surface/SPY",
+            [("expiry_ms", 1_800_046_800_000), ("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS), ("strikes", 420)],
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_expiry_that_is_not_16_00_new_york_on_its_date_is_refused(
+    path: str, params: list[tuple[str, object]]
+) -> None:
+    """An expiry is one instant per date. Midnight UTC, how these routes once
+    took it, would otherwise name the day before to a reader in New York."""
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(path, params=params)
+
+    assert resp.status_code == 422
+    assert "is not an option expiry" in resp.json()["detail"]

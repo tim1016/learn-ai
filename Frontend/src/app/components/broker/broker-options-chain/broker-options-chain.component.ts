@@ -17,6 +17,7 @@ import { MarketDataFeedService } from '../../../services/market-data-feed.servic
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { brokerSse, type SseStatus, type SseStream } from '../../../services/broker-sse';
 import { QuantLibService } from '../../../services/quantlib.service';
+import { etIsoDate } from '../../../shared/date/et-midnight';
 import type {
   IbkrChainSnapshot,
   IbkrOptionQuote,
@@ -344,8 +345,7 @@ export class BrokerOptionsChainComponent {
   private maybeRepriceEngine(snap: IbkrChainSnapshot, expiryMs: number): void {
     const spot = snap.underlying_price;
     if (spot === null) return;
-    const expirationDate = isoDateFromMs(expiryMs);
-    if (expirationDate === null) return;
+    const expirationDate = etIsoDate(expiryMs);
 
     const promises: Promise<void>[] = [];
     for (const q of snap.quotes) {
@@ -410,22 +410,4 @@ function midOrNull(q: IbkrOptionQuote): number | null {
   // already covers most cases, but a defensive bound here keeps the
   // engine off bad inputs even if a future surface forgets to.
   return mid > 0 ? mid : null;
-}
-
-function isoDateFromMs(ms: number): string | null {
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return null;
-  // Convert in UTC. The backend stores option expiries as midnight-UTC
-  // date markers (``yyyymmdd_to_expiry_ms`` parses ``YYYYMMDD`` with
-  // ``tzinfo=UTC``), so the round-trip from ms back to ``YYYY-MM-DD``
-  // must also use UTC. Converting in ET would shift expiries one day
-  // earlier whenever ``expiry_ms`` lands at 00:00 UTC and skew
-  // QuantLib's time-to-expiry near the close.
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'UTC',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return fmt.format(d); // en-CA emits YYYY-MM-DD
 }

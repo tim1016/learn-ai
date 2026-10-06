@@ -11,13 +11,14 @@ teardown logic — actual tick conversion is covered in
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.surface import stream_option_surface
+from app.utils.session_anchors import option_expiry_anchor_ms
 
 
 def _greeks(*, iv: float, delta: float) -> SimpleNamespace:
@@ -97,7 +98,7 @@ class _FakeClient:
 @pytest.mark.asyncio
 async def test_surface_emits_one_snapshot_per_debounce_window() -> None:
     client = _FakeClient()
-    expiries = [1_800_000_000_000, 1_802_592_000_000]
+    expiries = [1_800_046_800_000, 1_803_070_800_000]
     strikes = [420.0, 425.0]
 
     agen = stream_option_surface(
@@ -131,7 +132,7 @@ async def test_surface_rejects_oversubscription() -> None:
     """N expiries × M strikes × 2 + 1 above the cap must fail fast."""
     client = _FakeClient()
     # 10 expiries × 6 strikes × 2 + 1 underlying = 121 lines > 100.
-    expiries = list(range(1_800_000_000_000, 1_800_000_000_000 + 10))
+    expiries = [option_expiry_anchor_ms(date(2027, 1, 15) + timedelta(days=day)) for day in range(10)]
     strikes = [400.0, 405.0, 410.0, 415.0, 420.0, 425.0]
 
     agen = stream_option_surface(
@@ -170,10 +171,10 @@ async def test_surface_counts_lines_after_input_dedup() -> None:
     # Without dedup: 4 expiries × 12 strikes × 2 + 1 = 97 — fits under 100
     # only because dedupe collapses to 2 × 6.
     duplicated_expiries = [
-        1_800_000_000_000,
-        1_800_000_000_000,
-        1_802_592_000_000,
-        1_802_592_000_000,
+        1_800_046_800_000,
+        1_800_046_800_000,
+        1_803_070_800_000,
+        1_803_070_800_000,
     ]
     duplicated_strikes = [420.0, 420.0, 421.0, 421.0, 422.0, 422.0, 423.0, 423.0,
                           424.0, 424.0, 425.0, 425.0]
@@ -190,7 +191,7 @@ async def test_surface_counts_lines_after_input_dedup() -> None:
 
     # Deduped: 2 expiries × 6 strikes × 2 + 1 = 25.
     assert snap.line_count == 1 + 2 * 6 * 2
-    assert [e.expiry_ms for e in snap.expiries] == [1_800_000_000_000, 1_802_592_000_000]
+    assert [e.expiry_ms for e in snap.expiries] == [1_800_046_800_000, 1_803_070_800_000]
     for group in snap.expiries:
         assert {q.strike for q in group.quotes} == {420.0, 421.0, 422.0, 423.0, 424.0, 425.0}
 
@@ -203,7 +204,7 @@ async def test_surface_rejects_empty_strikes() -> None:
     agen = stream_option_surface(
         client,
         "SPY",
-        [1_800_000_000_000],
+        [1_800_046_800_000],
         [],
         debounce_seconds=0.0,
     )

@@ -50392,12 +50392,12 @@
             }
           },
           {
-            "description": "Expiry timestamp in int64 ms UTC.",
+            "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
             "in": "query",
             "name": "expiry_ms",
             "required": true,
             "schema": {
-              "description": "Expiry timestamp in int64 ms UTC.",
+              "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
               "exclusiveMinimum": 0,
               "maximum": 253402300799999,
               "title": "Expiry Ms",
@@ -50495,12 +50495,12 @@
             }
           },
           {
-            "description": "Expiry timestamp in int64 ms UTC.",
+            "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
             "in": "query",
             "name": "expiry_ms",
             "required": true,
             "schema": {
-              "description": "Expiry timestamp in int64 ms UTC.",
+              "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
               "exclusiveMinimum": 0,
               "maximum": 253402300799999,
               "title": "Expiry Ms",
@@ -50592,7 +50592,7 @@
             }
           },
           {
-            "description": "Expirations to fan over (repeated). Each value is an int64 ms UTC timestamp from /api/broker/expirations/{symbol}.",
+            "description": "Expirations to fan over (repeated). Each value is an option expiry from /api/broker/expirations/{symbol}: 16:00 New York time on the expiry date, as int64 ms UTC.",
             "in": "query",
             "name": "expiry_ms",
             "required": false,
@@ -50609,7 +50609,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Expirations to fan over (repeated). Each value is an int64 ms UTC timestamp from /api/broker/expirations/{symbol}.",
+              "description": "Expirations to fan over (repeated). Each value is an option expiry from /api/broker/expirations/{symbol}: 16:00 New York time on the expiry date, as int64 ms UTC.",
               "title": "Expiry Ms"
             }
           },
@@ -50768,12 +50768,12 @@
             }
           },
           {
-            "description": "Expiry timestamp in int64 ms UTC.",
+            "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
             "in": "query",
             "name": "expiry_ms",
             "required": true,
             "schema": {
-              "description": "Expiry timestamp in int64 ms UTC.",
+              "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
               "exclusiveMinimum": 0,
               "maximum": 253402300799999,
               "title": "Expiry Ms",
