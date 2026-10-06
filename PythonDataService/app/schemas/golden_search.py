@@ -1019,8 +1019,19 @@ class GoldenSearchEvidenceScope(_Wire):
     costs: GoldenSearchCosts
 
 
+class GoldenSearchFitToTest(_Wire):
+    """One set of fitted settings the final test runs, under the candidates that chose it."""
+
+    key: CandidateKey
+    same_as: list[CandidateKey]
+    label: str
+
+
 class GoldenSearchEvidenceView(_Wire):
     candidates: list[GoldenSearchEvidenceCandidate]
+    fits_to_test: list[GoldenSearchFitToTest] = Field(
+        description="What opening the final test will run beside the current settings; empty when every fit returned them."
+    )
     pair_maps: list[GoldenSearchPairMap]
     recommendation: GoldenSearchRecommendation
     scope: GoldenSearchEvidenceScope
@@ -1124,7 +1135,7 @@ class GoldenSearchStudyDetail(GoldenSearchStudySummary):
     exam_locked: bool
     scope: GoldenSearchScope
     exposure_preview: GoldenSearchExposure | None = Field(
-        description="What opening the final test would record, while a candidate is chosen; null otherwise."
+        description="What opening the final test would record, while the candidates are compared; null otherwise."
     )
 
 

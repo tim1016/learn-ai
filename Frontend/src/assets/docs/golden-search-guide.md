@@ -88,7 +88,7 @@ Four tiles: the search method and its settings, the development period with its 
 
 1. The search method: Zoom moves one knob at a time; Grid tries every combination.
 2. The development period: the data the search chooses on, with its trading sessions.
-3. The final test: kept sealed until you choose, then opened once.
+3. The final test: kept sealed until you open it, once, for every fit.
 4. The engine runs the plan may use, against the study’s cap.
 
 #### Good signs and warning signs

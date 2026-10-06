@@ -263,12 +263,17 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
   it('choosing the other fit turns the whole page to it: its checks, its settings, and the approval that names it', async () => {
     const { commands, service } = await renderStep(studyDetail('awaiting_review'));
     expect(approveButton().textContent).toContain('Approve the All-period fit as golden');
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+    expect(approveButton().disabled).toBe(false);
 
     fireEvent.click(screen.getByRole('radio', { name: 'Recent fit' }));
 
+    // An acknowledgement given for one fit never carries to the other: the form starts again.
+    expect((screen.getByRole('checkbox', { name: /missing independent engine agreement/i }) as HTMLInputElement).checked).toBe(false);
+    expect(approveButton().disabled).toBe(true);
+
     expect(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks for Recent fit' }).textContent).toContain('Sharpe 0.66 against 0.54.');
     expect(screen.getByRole('region', { name: 'The exact settings you are approving' }).textContent).toContain('Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars');
-    // The form starts again for the newly chosen fit, so an acknowledgement given for one never carries to the other.
     expect(reason().value).toContain('The Recent fit meets the stated rules');
     fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve the Recent fit as golden' }));
@@ -278,14 +283,18 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(service.candidate).toHaveBeenCalledTimes(3);
   });
 
-  it('a fit that failed asks for its own acknowledgement while the fit that met the rules does not', async () => {
+  it('a fit that failed asks for its own acknowledgement, which does not carry back to the fit that met the rules', async () => {
     const exam = examView({ fits: [examFit('all_period'), examFit('recent', { outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] })] });
     await renderStep(reviewWith(exam));
 
     expect(screen.queryByRole('checkbox', { name: /i approve despite/i })).toBeNull();
     fireEvent.click(screen.getByRole('radio', { name: 'Recent fit' }));
 
-    expect(screen.getByRole('checkbox', { name: /i approve despite failing the stated rules \(profit after stated costs\)/i })).not.toBeNull();
+    const weak = screen.getByRole('checkbox', { name: /i approve despite failing the stated rules \(profit after stated costs\)/i });
+    fireEvent.click(weak);
+    fireEvent.click(screen.getByRole('radio', { name: 'All-period fit' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Recent fit' }));
+    expect((screen.getByRole('checkbox', { name: /i approve despite failing the stated rules/i }) as HTMLInputElement).checked).toBe(false);
     expect(within(screen.getByRole('region', { name: 'Final test result' })).getAllByRole('row')[2].textContent).toContain('Does not meet the rules');
   });
 

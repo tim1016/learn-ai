@@ -626,6 +626,10 @@ export function concentration(overrides: Partial<MeasuredConcentration> = {}): M
 export function evidenceView(overrides: Partial<EvidenceView> = {}): EvidenceView {
   return {
     candidates: [evidenceCandidate('incumbent'), evidenceCandidate('all_period'), evidenceCandidate('recent')],
+    fits_to_test: [
+      { key: 'all_period', same_as: [], label: 'All-period fit' },
+      { key: 'recent', same_as: [], label: 'Recent fit' },
+    ],
     pair_maps: [pairMap()],
     recommendation: {
       headline: 'The recent fit earns more in this replay, but nearby settings lose money. Inspect that sensitivity before using your final test.',

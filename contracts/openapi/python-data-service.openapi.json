@@ -20764,6 +20764,14 @@
             "title": "Candidates",
             "type": "array"
           },
+          "fits_to_test": {
+            "description": "What opening the final test will run beside the current settings; empty when every fit returned them.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFitToTest"
+            },
+            "title": "Fits To Test",
+            "type": "array"
+          },
           "incomplete": {
             "title": "Incomplete",
             "type": "boolean"
@@ -20784,6 +20792,7 @@
         },
         "required": [
           "candidates",
+          "fits_to_test",
           "pair_maps",
           "recommendation",
           "scope",
@@ -21204,6 +21213,44 @@
           "text"
         ],
         "title": "GoldenSearchFinding",
+        "type": "object"
+      },
+      "GoldenSearchFitToTest": {
+        "additionalProperties": false,
+        "description": "One set of fitted settings the final test runs, under the candidates that chose it.",
+        "properties": {
+          "key": {
+            "enum": [
+              "incumbent",
+              "all_period",
+              "recent"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "same_as": {
+            "items": {
+              "enum": [
+                "incumbent",
+                "all_period",
+                "recent"
+              ],
+              "type": "string"
+            },
+            "title": "Same As",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "same_as",
+          "label"
+        ],
+        "title": "GoldenSearchFitToTest",
         "type": "object"
       },
       "GoldenSearchFixedControl": {
@@ -25300,7 +25347,7 @@
                 "type": "null"
               }
             ],
-            "description": "What opening the final test would record, while a candidate is chosen; null otherwise."
+            "description": "What opening the final test would record, while the candidates are compared; null otherwise."
           },
           "failure_reason": {
             "anyOf": [

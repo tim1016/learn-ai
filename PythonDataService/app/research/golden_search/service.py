@@ -914,7 +914,7 @@ def _fit_to_approve(row: StudyRow, body: Mapping[str, Any]) -> dict[str, Any]:
         tested = ", ".join(fit["key"] for fit in recorded_fits(row.results["exam"]))
         raise GoldenSearchRefusal(f"Name the fit to approve: one of {tested}.", code="PAYLOAD_INVALID", field="candidate_key")
     started = fit_for(row.results["exam"], row.candidate_key)
-    if row.state == "qualification_failed" and started is not None and started["point_hash"] != chosen["point_hash"]:
+    if row.state == "qualification_failed" and (started is None or started["point_hash"] != chosen["point_hash"]):
         raise GoldenSearchRefusal(
             "This study's approval was started for another fit; retry that one, or keep the current settings.",
             code="FIT_ALREADY_CHOSEN",

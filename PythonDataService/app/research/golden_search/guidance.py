@@ -184,13 +184,17 @@ def weakness_items(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> list[dict
 
 # ── The final test's fits ────────────────────────────────────────────────
 
-def selection_note(*, fits_tested: int, picked_after_test: bool, chosen: bool) -> str | None:
-    """What the record says about a pick made with two final-test results in view; ``None`` when there was one fit or a blind pick."""
+def selection_note(*, fits_tested: int, picked_after_test: bool, chosen: bool, approvable: bool = True) -> str | None:
+    """What the record says about a pick made with two final-test results in view; ``None`` when there was one fit or a blind pick.
+
+    A study that ended without an approval (``approvable`` false) says only how many fits ran.
+    """
     if not picked_after_test or fits_tested < 2:
         return None
-    if not chosen:
-        return f"{fits_tested} fits ran on the final test. The one you approve is recorded as chosen after the final test, from {fits_tested} fits."
-    return f"Chosen after the final test, from {fits_tested} fits."
+    if chosen:
+        return f"Chosen after the final test, from {fits_tested} fits."
+    ran = f"{fits_tested} fits ran on the final test."
+    return f"{ran} The one you approve is recorded as chosen after the final test, from {fits_tested} fits." if approvable else ran
 
 
 # ── Stop explanations ────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ export class GoldenSearchTupleComponent {
   /** The evidence (settings sentence) of the fit the page is about, when recorded. */
   readonly candidate = input<EvidenceCandidate | null>(null);
   /** That fit's exact point as the final test ran it. */
-  readonly point = input<Point | null>(null);
+  readonly point = input.required<Point>();
   /** The frozen incumbent's evidence: what approval replaces. */
   readonly incumbent = input<EvidenceCandidate | null>(null);
 
@@ -32,11 +32,8 @@ export class GoldenSearchTupleComponent {
   protected readonly qualificationId = computed(() => this.study().results.qualification?.qualification_id ?? this.study().qualification_id);
   protected readonly programVersion = computed(() => this.study().results.qualification?.deploy?.program_version ?? this.study().receipt.program_version);
   /** The approved parameters once published; before that, the tested fit's point. */
-  private readonly shown = computed<Point | null>(() => this.study().results.qualification?.deploy?.parameters ?? this.point() ?? this.candidate()?.point ?? null);
-  protected readonly entries = computed(() => {
-    const point = this.shown();
-    return point === null ? [] : fullPointEntries(point, this.capability());
-  });
+  private readonly shown = computed<Point>(() => this.study().results.qualification?.deploy?.parameters ?? this.point());
+  protected readonly entries = computed(() => fullPointEntries(this.shown(), this.capability()));
   protected readonly fixedChips = computed(() => {
     const sentence = this.candidate()?.fixed_sentence.trim() ?? '';
     const fixed = (this.capability()?.fixed ?? []).map((control) => `${control.label} ${control.value}`);

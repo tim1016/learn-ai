@@ -3,10 +3,14 @@ import { ButtonModule } from 'primeng/button';
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
-import type { CandidateRow } from './golden-search-compare';
 import { exposurePreview, percentInputValue, studyTradeFloor } from './golden-search-display';
 import type { StudyStep } from './golden-search-steps';
-import type { StudyCommand, StudyDetail } from './golden-search.types';
+import type { EvidenceCandidate, FitToTest, StudyCommand, StudyDetail } from './golden-search.types';
+
+/** A fit the final test will run, as the server names it, with its development evidence. */
+export interface LockFit extends FitToTest {
+  readonly candidate: EvidenceCandidate;
+}
 
 /**
  * The final-test lock (#2696, #2930), before the held-back interval is
@@ -26,8 +30,8 @@ import type { StudyCommand, StudyDetail } from './golden-search.types';
 })
 export class GoldenSearchLockboxComponent {
   readonly study = input.required<StudyDetail>();
-  /** The fits that will run: one row per distinct settings other than the current ones. */
-  readonly fits = input.required<readonly CandidateRow[]>();
+  /** The fits that will run, as the server lists them. */
+  readonly fits = input.required<readonly LockFit[]>();
   readonly busy = input(false);
   readonly studyCommand = output<StudyCommand>();
   readonly goTo = output<StudyStep>();
@@ -40,7 +44,7 @@ export class GoldenSearchLockboxComponent {
   protected readonly exposure = computed(() => exposurePreview(this.study()));
   protected readonly canOpen = computed(() => this.study().permitted_actions.includes('open_exam'));
   protected readonly refusal = computed(() => (this.canOpen() ? null : (this.study().action_refusals.open_exam ?? null)));
-  protected readonly names = computed(() => this.fits().map((fit) => fit.candidate.label).join(', '));
+  protected readonly names = computed(() => this.fits().map((fit) => fit.label).join(', '));
   protected readonly warned = computed(() => this.fits().filter((fit) => fit.candidate.flags.length > 0));
 
   protected onAcknowledge(event: Event): void {

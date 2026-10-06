@@ -54,6 +54,8 @@ export class GoldenSearchExamResultComponent {
     ),
     resultRow('incumbent', 'Frozen incumbent', this.exam().incumbent_metrics, false, null),
   ]);
+  /** What follows the selection: the approval too, unless the study ended without one. */
+  protected readonly follows = computed(() => (this.study().state === 'retained' || this.study().state === 'closed' ? 'its checks and its charts' : 'its checks, its charts, its settings and the approval'));
   protected readonly evidence = computed(() => evidenceRows(this.study().state, this.exam(), this.fit()));
   protected readonly retention = computed(() => {
     const retention = this.fit().retention;

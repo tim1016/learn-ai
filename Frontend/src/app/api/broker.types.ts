@@ -14407,6 +14407,11 @@ export interface components {
         GoldenSearchEvidenceView: {
             /** Candidates */
             candidates: components["schemas"]["GoldenSearchEvidenceCandidate"][];
+            /**
+             * Fits To Test
+             * @description What opening the final test will run beside the current settings; empty when every fit returned them.
+             */
+            fits_to_test: components["schemas"]["GoldenSearchFitToTest"][];
             /** Incomplete */
             incomplete: boolean;
             /** Pair Maps */
@@ -14583,6 +14588,21 @@ export interface components {
             code: string;
             /** Text */
             text: string;
+        };
+        /**
+         * GoldenSearchFitToTest
+         * @description One set of fitted settings the final test runs, under the candidates that chose it.
+         */
+        GoldenSearchFitToTest: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "incumbent" | "all_period" | "recent";
+            /** Label */
+            label: string;
+            /** Same As */
+            same_as: ("incumbent" | "all_period" | "recent")[];
         };
         /** GoldenSearchFixedControl */
         GoldenSearchFixedControl: {
@@ -16015,7 +16035,7 @@ export interface components {
             exam_outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
             /** Exposure Claim */
             exposure_claim: ("confirmatory" | "exploratory") | null;
-            /** @description What opening the final test would record, while a candidate is chosen; null otherwise. */
+            /** @description What opening the final test would record, while the candidates are compared; null otherwise. */
             exposure_preview: components["schemas"]["GoldenSearchExposure"] | null;
             /** Failure Reason */
             failure_reason: string | null;

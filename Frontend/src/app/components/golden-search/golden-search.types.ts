@@ -173,6 +173,8 @@ export type EvidenceScope = Schemas['GoldenSearchEvidenceScope'];
 export type EvidenceCandidate = Omit<Schemas['GoldenSearchEvidenceCandidate'], 'point'> & { point: Point };
 /** `incomplete` when the budget stopped the stage before every candidate's evidence ran. */
 export type EvidenceView = Omit<Schemas['GoldenSearchEvidenceView'], 'candidates'> & { candidates: EvidenceCandidate[] };
+/** One set of fitted settings the final test runs, as the server names it. */
+export type FitToTest = Schemas['GoldenSearchFitToTest'];
 
 export type ExamCheck = Schemas['GoldenSearchExamCheck'];
 /**
