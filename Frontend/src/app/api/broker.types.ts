@@ -5261,6 +5261,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/golden-search/studies/{study_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runs
+         * @description Every run of the study, grouped by what asked for it (#2930).
+         */
+        get: operations["list_runs_api_research_golden_search_studies__study_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies/{study_id}/runs/curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Curves
+         * @description The named runs' daily curves: cumulative return and fall from peak at each session close (#2930).
+         */
+        get: operations["get_run_curves_api_research_golden_search_studies__study_id__runs_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/golden-validations": {
         parameters: {
             query?: never;
@@ -12080,6 +12120,11 @@ export interface components {
             data_policy?: components["schemas"]["_EngineDataPolicyModel"] | null;
             /** Equity Curve */
             equity_curve?: Record<string, never>[];
+            /**
+             * Equity Day Ends
+             * @description The last equity sample of each America/New_York date the run scored, oldest first, as {timestamp (int64 ms UTC), equity}. Filled on every run, a summary_only run included.
+             */
+            equity_day_ends?: Record<string, never>[];
             /** Error */
             error?: string | null;
             evaluation_window?: components["schemas"]["EngineEvaluationWindowResponse"] | null;
@@ -14270,6 +14315,11 @@ export interface components {
             evaluation_key: string;
             /** Fold Index */
             fold_index: number | null;
+            /**
+             * Has Curve
+             * @description Whether the run kept its daily equity; a run recorded before runs kept it has none.
+             */
+            has_curve: boolean;
             /** Max Drawdown Pct */
             max_drawdown_pct: number | null;
             /** Net Profit */
@@ -15548,6 +15598,94 @@ export interface components {
             /** Trades */
             trades: number;
         };
+        /**
+         * GoldenSearchRun
+         * @description One engine run of a study, under the step that first asked for it (#2930).
+         */
+        GoldenSearchRun: {
+            /** Error */
+            error: string | null;
+            /** Evaluation Key */
+            evaluation_key: string;
+            /** Fold Index */
+            fold_index: number | null;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final";
+            /** Group Label */
+            group_label: string;
+            /** Has Curve */
+            has_curve: boolean;
+            /**
+             * Label
+             * @description What asked for the run, its cost scenario when stressed, and the names the study gives its settings.
+             */
+            label: string;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /**
+             * Names
+             * @description Current settings, a fit, or the fold's winner, when the run's settings are one of them.
+             */
+            names: string[];
+            /** Net Profit */
+            net_profit: number | null;
+            /** Params Sentence */
+            params_sentence: string;
+            /** Point */
+            point: Record<string, never>;
+            /** Scenario */
+            scenario: string;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "completed" | "failed";
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number | null;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
+        };
+        /**
+         * GoldenSearchRunCurve
+         * @description One run's daily curve, as parallel lists over its session closes.
+         */
+        GoldenSearchRunCurve: {
+            /** Close Ms */
+            close_ms: number[];
+            /**
+             * Cumulative Return
+             * @description Equity over the study's starting capital, less 1, at each session close.
+             */
+            cumulative_return: number[];
+            /**
+             * Drawdown
+             * @description Equity over its running peak, less 1; null when the peak never rose above 0.
+             */
+            drawdown: number[] | null;
+            /** Evaluation Key */
+            evaluation_key: string;
+        };
+        /** GoldenSearchRunCurves */
+        GoldenSearchRunCurves: {
+            /** Capital */
+            capital: number;
+            /** Curves */
+            curves: components["schemas"]["GoldenSearchRunCurve"][];
+            /**
+             * Not Recorded
+             * @description The runs asked for that kept no daily equity; never drawn as a flat line.
+             */
+            not_recorded: string[];
+        };
         /** GoldenSearchRunDetail */
         GoldenSearchRunDetail: {
             /**
@@ -15573,6 +15711,23 @@ export interface components {
             trade_charts: (components["schemas"]["GoldenSearchTradeChartsMeasured"] | components["schemas"]["GoldenSearchTradeChartsMissing"]) | null;
             window: components["schemas"]["GoldenSearchWindow"];
         };
+        /** GoldenSearchRunGroup */
+        GoldenSearchRunGroup: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final";
+            /** Label */
+            label: string;
+            /** Runs */
+            runs: number;
+            /**
+             * With Curve
+             * @description How many of the group's runs kept their daily equity.
+             */
+            with_curve: number;
+        };
         /** GoldenSearchRunUp */
         GoldenSearchRunUp: {
             /** Data Start Ms */
@@ -15581,6 +15736,25 @@ export interface components {
             required_samples: number;
             /** Run Up Sessions */
             run_up_sessions: number;
+        };
+        /** GoldenSearchRunsPage */
+        GoldenSearchRunsPage: {
+            /**
+             * Groups
+             * @description Every group the study has runs in, whatever the filter.
+             */
+            groups: components["schemas"]["GoldenSearchRunGroup"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Rows */
+            rows: components["schemas"]["GoldenSearchRun"][];
+            /**
+             * Total
+             * @description Runs matching the group and fold asked for.
+             */
+            total: number;
         };
         /** GoldenSearchScope */
         GoldenSearchScope: {
@@ -35333,6 +35507,156 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenSearchEvaluationPage"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    list_runs_api_research_golden_search_studies__study_id__runs_get: {
+        parameters: {
+            query?: {
+                /** @description What asked for the runs, e.g. search, fold_test or final. */
+                group?: string | null;
+                fold_index?: number | null;
+                /** @description recorded, or the measure to order by. */
+                sort?: string;
+                descending?: boolean;
+                page?: number;
+                page_size?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRunsPage"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_run_curves_api_research_golden_search_studies__study_id__runs_curves_get: {
+        parameters: {
+            query: {
+                /** @description The evaluation key of each run to draw. */
+                key: string[];
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRunCurves"];
                 };
             };
             /** @description Bad Request */

@@ -35,6 +35,7 @@ from app.research.golden_search.protocol import (
     SelectionPolicy,
     ZoomSettings,
 )
+from app.research.golden_search.run_curves import RunGroup
 from app.research.golden_search.zoom import StopReason
 from app.research.sweep.identity import TreeState
 from app.research.sweep.ranking import RankingMeasure
@@ -1152,6 +1153,7 @@ class GoldenSearchEvaluationRow(_Wire):
     error: str | None
     created_at_ms: InstantMs
     completed_at_ms: InstantMs | None
+    has_curve: bool = Field(description="Whether the run kept its daily equity; a run recorded before runs kept it has none.")
 
 
 class GoldenSearchEvaluationPage(_Wire):
@@ -1159,6 +1161,60 @@ class GoldenSearchEvaluationPage(_Wire):
     page: int
     page_size: int
     rows: list[GoldenSearchEvaluationRow]
+
+
+class GoldenSearchRunGroup(_Wire):
+    key: RunGroup
+    label: str
+    runs: int
+    with_curve: int = Field(description="How many of the group's runs kept their daily equity.")
+
+
+class GoldenSearchRun(_Wire):
+    """One engine run of a study, under the step that first asked for it (#2930)."""
+
+    evaluation_key: str
+    group: RunGroup
+    group_label: str
+    fold_index: int | None
+    label: str = Field(description="What asked for the run, its cost scenario when stressed, and the names the study gives its settings.")
+    names: list[str] = Field(description="Current settings, a fit, or the fold's winner, when the run's settings are one of them.")
+    point: dict[str, Any]
+    params_sentence: str
+    window_start_ms: InstantMs
+    window_end_ms: InstantMs
+    scenario: str
+    status: Literal["pending", "completed", "failed"]
+    total_trades: int | None
+    net_profit: float | None
+    total_return_pct: float | None
+    sharpe_ratio: float | None
+    max_drawdown_pct: float | None
+    error: str | None
+    has_curve: bool
+
+
+class GoldenSearchRunsPage(_Wire):
+    total: int = Field(description="Runs matching the group and fold asked for.")
+    page: int
+    page_size: int
+    groups: list[GoldenSearchRunGroup] = Field(description="Every group the study has runs in, whatever the filter.")
+    rows: list[GoldenSearchRun]
+
+
+class GoldenSearchRunCurve(_Wire):
+    """One run's daily curve, as parallel lists over its session closes."""
+
+    evaluation_key: str
+    close_ms: list[InstantMs]
+    cumulative_return: list[float] = Field(description="Equity over the study's starting capital, less 1, at each session close.")
+    drawdown: list[float] | None = Field(description="Equity over its running peak, less 1; null when the peak never rose above 0.")
+
+
+class GoldenSearchRunCurves(_Wire):
+    capital: float
+    curves: list[GoldenSearchRunCurve]
+    not_recorded: list[str] = Field(description="The runs asked for that kept no daily equity; never drawn as a flat line.")
 
 
 class GoldenSearchCumulativeReturnPoint(_Wire):

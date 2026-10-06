@@ -16,7 +16,8 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Callable, Mapping
+from bisect import bisect_left
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -33,7 +34,7 @@ from app.engine.data.availability import check_availability
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult
+from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult, EquitySnapshot
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_mode_names import ENGINE_BACKTEST_ALIASES, UnknownFillModeError
@@ -88,7 +89,7 @@ from app.services.parity_companion import (
 )
 from app.services.run_verdict_service import compute_run_verdict
 from app.services.strategy_view_replay import record_staged_decisions
-from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
@@ -999,6 +1000,31 @@ def _validation_analytics(
     return validation_analytics
 
 
+def equity_day_ends(curve: Sequence[EquitySnapshot]) -> list[dict[str, Any]]:
+    """The last equity sample of each ET date the curve covers, oldest first.
+
+    One point a day is enough to draw a run, and small enough for a caller that
+    keeps thousands of runs, so this is built on a summary run too. The samples
+    arrive in time order; each day's last one is found by bisecting on the next
+    ET midnight (resolved through the NY zone), so the cost is one pass over the
+    timestamps however long the run.
+    """
+    if not curve:
+        return []
+    stamps = [sample.timestamp_ms for sample in curve]
+    ends: list[dict[str, Any]] = []
+    day, last_day = et_date_at_ms(stamps[0]), et_date_at_ms(stamps[-1])
+    start = 0
+    while day <= last_day:
+        stop = bisect_left(stamps, et_day_end_ms(day), start)
+        if stop > start:
+            sample = curve[stop - 1]
+            ends.append({"timestamp": sample.timestamp_ms, "equity": float(sample.equity)})
+        start = stop
+        day += timedelta(days=1)
+    return ends
+
+
 @dataclass(frozen=True)
 class _PerBarArtifacts:
     """The response's per-bar evidence — everything a summary run omits (#1941).
@@ -1230,6 +1256,7 @@ def _aggregate_backtest_response(
         trades=formatted,
         log_lines=result.log_lines,
         equity_curve=artifacts.equity_curve,
+        equity_day_ends=equity_day_ends(result.equity_curve),
         bars_consumed=len(result.equity_curve),
         chart_bars=artifacts.chart_bars,
         insights=artifacts.insights,

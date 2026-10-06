@@ -901,6 +901,66 @@ async def test_a_retried_approval_must_name_the_fit_it_started_with(driver: Driv
     assert (row.state, row.candidate_key) == ("approved", "all_period")
 
 
+# ── Every run keeps its curve ────────────────────────────────────────────
+
+
+async def test_every_run_keeps_its_daily_curve_and_the_runs_read_groups_them(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await _two_fits_to_review(driver, symbol)
+
+    recorded = await conn.fetchrow(
+        "SELECT COUNT(*) AS runs, COUNT(equity_close_ms) AS curves FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'completed'",
+        row.id,
+    )
+    assert recorded["runs"] == recorded["curves"] > 0  # whatever step asked for it
+    page = await service.runs(row.id, page_size=500)
+    groups = {group["key"]: group for group in page["groups"]}
+    assert set(groups) == {"search", "pair_audit", "recent", "fold_training", "fold_test", "candidate", "neighbor", "stress", "final"}
+    assert all(group["runs"] == group["with_curve"] for group in groups.values())
+    assert page["total"] == sum(group["runs"] for group in groups.values()) == recorded["runs"] == len(page["rows"])
+
+    final = (await service.runs(row.id, group="final", sort="sharpe_ratio", descending=True))["rows"]
+    assert [run["label"] for run in final] == ["Final test · Recent fit", "Final test · All-period fit", "Final test · Current settings"]
+    tests = (await service.runs(row.id, group="fold_test", fold_index=0))["rows"]
+    # The fold's winner is the settings the all-period search also chose, so its run carries both names.
+    assert sorted(run["label"] for run in tests) == ["Fold 1 test · All-period fit · Fold winner", "Fold 1 test · Current settings"]
+    stressed = (await service.runs(row.id, group="stress"))["rows"]
+    assert {run["scenario"] for run in stressed} == {"slippage_1c", "commission_1"} and "Extra $1 per order" in stressed[-1]["label"]
+
+    # The stored curve is the one the candidate's detail read draws.
+    recent = final[0]
+    curves = await service.run_curves(row.id, [recent["evaluation_key"]])
+    (curve,) = curves["curves"]
+    detail = (await service.candidate(row.id, "recent"))["exam"]
+    assert curve["close_ms"] == [point["ms"] for point in detail["cumulative_return"]]
+    assert curve["cumulative_return"] == pytest.approx([point["value"] for point in detail["cumulative_return"]], abs=1e-12, rel=0)
+    assert curve["drawdown"] == pytest.approx([point["drawdown"] for point in detail["drawdown"]], abs=1e-12, rel=0)
+    assert (curves["capital"], curves["not_recorded"]) == (row.protocol["execution"]["initial_cash"], [])
+
+
+async def test_a_run_recorded_before_runs_kept_their_curve_reads_not_recorded(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.lock(symbol), "continue")
+    first, second = (await service.runs(row.id, group="search"))["rows"][:2]
+    await conn.execute(
+        "UPDATE research_golden_search_evaluations SET equity_close_ms = NULL, equity_values = NULL WHERE study_id = $1 AND evaluation_key = $2",
+        row.id,
+        first["evaluation_key"],
+    )
+
+    curves = await service.run_curves(row.id, [first["evaluation_key"], second["evaluation_key"]])
+
+    assert curves["not_recorded"] == [first["evaluation_key"]]
+    assert [curve["evaluation_key"] for curve in curves["curves"]] == [second["evaluation_key"]]
+    listed = {run["evaluation_key"]: run["has_curve"] for run in (await service.runs(row.id, group="search"))["rows"]}
+    assert (listed[first["evaluation_key"]], listed[second["evaluation_key"]]) == (False, True)
+    for query, field in (({"group": "everything"}, "group"), ({"sort": "luck"}, "sort")):
+        with pytest.raises(GoldenSearchRefusal) as refused:
+            await service.runs(row.id, **query)
+        assert (refused.value.code, refused.value.field) == ("RUNS_QUERY_INVALID", field)
+    with pytest.raises(GoldenSearchRefusal) as none_named:
+        await service.run_curves(row.id, [])
+    assert none_named.value.code == "RUNS_QUERY_INVALID"
+
+
 async def test_fits_that_return_the_current_settings_leave_nothing_to_test(driver: Driver, symbol: str) -> None:
     def current_settings_win(point: dict, window: tuple[int, int], scenario: str) -> float:
         return 2.0 - 8.0 * (float(point.get("gap", 0.2)) - 0.2) ** 2 - ((float(point.get("hold_bars", 5)) - 5.0) / 4.0) ** 2

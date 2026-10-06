@@ -397,6 +397,17 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     study = await _advance(client, harness, study, "open_exam", {"acknowledge_final_test": True})
     assert study["state"] == "awaiting_review" and [fit["outcome"] for fit in study["results"]["exam"]["fits"]] == ["meets_rules"]
     assert (await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")).json()["exam"] is not None
+    # Every run is listed under the step that asked for it, and its daily curve is read by key.
+    final = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "final", "sort": "sharpe_ratio", "descending": True})
+    assert final.status_code == 200, final.text
+    assert final.json()["total"] == 2 and all(run["has_curve"] for run in final.json()["rows"])
+    keys = [run["evaluation_key"] for run in final.json()["rows"]]
+    curves = await client.get(f"{BASE}/studies/{study['id']}/runs/curves", params=[("key", keys[0]), ("key", "no-such-run")])
+    assert curves.status_code == 200, curves.text
+    assert len(curves.json()["curves"][0]["close_ms"]) == len(curves.json()["curves"][0]["cumulative_return"]) > 0
+    assert curves.json()["not_recorded"] == ["no-such-run"]
+    refused = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "everything"})
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (400, "RUNS_QUERY_INVALID")
 
     study = await _advance(client, harness, study, "approve", APPROVE)
     assert study["state"] == "approved" and study["guidance"]["headline"] == "Golden configuration ready in Deploy"

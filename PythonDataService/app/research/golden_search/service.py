@@ -73,6 +73,7 @@ from app.research.golden_search.planning import (
     study_id_for,
     study_range_at,
 )
+from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.protocol import (
     DEFAULT_IMPORTANCE,
     IMPORTANCE_HIGH,
@@ -80,6 +81,7 @@ from app.research.golden_search.protocol import (
     GoldenSearchProtocol,
     IncumbentRef,
 )
+from app.research.golden_search.run_curves import MAX_CURVES, RUN_GROUPS, RUN_SORTS, curves_view, runs_page
 from app.research.golden_search.search_charts import procedure_windows, search_charts
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
@@ -627,6 +629,53 @@ async def search_step_charts(study_id: str) -> dict[str, Any]:
 async def test_over_time_charts(study_id: str) -> dict[str, Any]:
     """The Test over time step's charts, from the stored folds or, before they ran, the receipt's plan."""
     return fold_charts(await get_row(study_id))
+
+
+async def runs(
+    study_id: str,
+    *,
+    group: str | None = None,
+    fold_index: int | None = None,
+    sort: str = "recorded",
+    descending: bool = False,
+    page: int = 1,
+    page_size: int = 100,
+) -> dict[str, Any]:
+    """Every run of the study, by what asked for it: one sorted page, beside each group's counts (#2930)."""
+    row = await get_row(study_id)
+    declaration = declaration_for(row.strategy_key)
+    if declaration is None:
+        raise GoldenSearchRefusal(f"{row.strategy_key} no longer declares its search knobs, so its runs cannot be described.", code="STRATEGY_UNAVAILABLE", kind="unavailable")
+    if group is not None and group not in RUN_GROUPS:
+        raise GoldenSearchRefusal(f"Choose one of {', '.join(RUN_GROUPS)}.", code="RUNS_QUERY_INVALID", field="group")
+    if sort not in RUN_SORTS:
+        raise GoldenSearchRefusal(f"Sort by one of {', '.join(RUN_SORTS)}.", code="RUNS_QUERY_INVALID", field="sort")
+    records = await with_connection(repo.list_runs, study_id)
+    try:
+        return runs_page(
+            row,
+            records,
+            folds=[FoldWindow(**fold) for fold in row.receipt["folds"]],
+            declaration=declaration,
+            group=group,  # type: ignore[arg-type]
+            fold_index=fold_index,
+            sort=sort,  # type: ignore[arg-type]
+            descending=descending,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise GoldenSearchRefusal(str(exc), code="RUNS_QUERY_INVALID") from exc
+
+
+async def run_curves(study_id: str, evaluation_keys: Sequence[str]) -> dict[str, Any]:
+    """The named runs' daily curves, and which of them kept none (#2930)."""
+    row = await get_row(study_id)
+    keys = list(dict.fromkeys(evaluation_keys))
+    if not 1 <= len(keys) <= MAX_CURVES:
+        raise GoldenSearchRefusal(f"Name between 1 and {MAX_CURVES} runs.", code="RUNS_QUERY_INVALID", field="key")
+    stored = await with_connection(repo.evaluation_curves, study_id, keys)
+    return curves_view(keys, stored, float(row.protocol["execution"]["initial_cash"]))
 
 
 async def evaluations(study_id: str, *, stage: str | None = None, fold_index: int | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:

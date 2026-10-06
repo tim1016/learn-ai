@@ -191,6 +191,8 @@ class EvaluationRecord:
     detail_json: dict[str, Any] | None
     created_at_ms: int
     completed_at_ms: int | None
+    # Whether the run's daily equity was kept (#2930); a run recorded before it was has none.
+    has_curve: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         """The evaluations page row (``detail_json`` is read through the candidate view, not here)."""
@@ -216,6 +218,7 @@ class EvaluationRecord:
             "error": self.error,
             "created_at_ms": self.created_at_ms,
             "completed_at_ms": self.completed_at_ms,
+            "has_curve": self.has_curve,
         }
 
 

@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -810,6 +810,21 @@ DDL_V14: tuple[str, ...] = (
     """,
 )
 
+# Every run keeps its daily equity (#2930): the session-close instants and the equity at each, as two
+# parallel arrays. Rows recorded before this stay null and read "curve not recorded".
+DDL_V15: tuple[str, ...] = (
+    """
+    ALTER TABLE research_golden_search_evaluations
+        ADD COLUMN IF NOT EXISTS equity_close_ms BIGINT[] NULL,
+        ADD COLUMN IF NOT EXISTS equity_values DOUBLE PRECISION[] NULL
+    """,
+    """
+    ALTER TABLE research_golden_search_evaluations
+        ADD CONSTRAINT ck_research_golden_search_evaluations_equity_arrays
+        CHECK (cardinality(equity_close_ms) IS NOT DISTINCT FROM cardinality(equity_values))
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -825,6 +840,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (12, DDL_V12),
     (13, DDL_V13),
     (14, DDL_V14),
+    (15, DDL_V15),
 )
 
 

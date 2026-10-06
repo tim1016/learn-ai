@@ -48,7 +48,7 @@ _EVALUATION_COLUMNS = """
     study_id, evaluation_key, point_hash, point_json::text AS point_json, window_start_ms, window_end_ms,
     scenario, detail, stage, fold_index, status, attempt, retries, total_trades, net_profit, total_return_pct,
     sharpe_ratio, max_drawdown_pct, win_rate, error, detail_json::text AS detail_json, created_at_ms,
-    completed_at_ms
+    completed_at_ms, equity_close_ms IS NOT NULL AS has_curve
 """
 # Plain columns a transition may set; JSON columns are handled by name below.
 _UPDATABLE_COLUMNS = frozenset(
@@ -132,6 +132,7 @@ def _evaluation(row: asyncpg.Record) -> EvaluationRecord:
         detail_json=json.loads(row["detail_json"]) if row["detail_json"] is not None else None,
         created_at_ms=row["created_at_ms"],
         completed_at_ms=row["completed_at_ms"],
+        has_curve=row["has_curve"],
     )
 
 
@@ -803,15 +804,17 @@ async def complete_evaluation(
     *,
     metrics: Metrics,
     detail: Mapping[str, Any] | None,
+    curve: Sequence[tuple[int, float]] | None = None,
 ) -> None:
-    """Record a pending evaluation's result under the attempt fence, with its trial."""
+    """Record a pending evaluation's result under the attempt fence, with its trial and its daily equity when the run kept one."""
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
         row = await conn.fetchrow(
             """
             UPDATE research_golden_search_evaluations
                SET status = $4, total_trades = $5, net_profit = $6, total_return_pct = $7, sharpe_ratio = $8,
-                   max_drawdown_pct = $9, win_rate = $10, error = $11, detail_json = $12::jsonb, completed_at_ms = $13
+                   max_drawdown_pct = $9, win_rate = $10, error = $11, detail_json = $12::jsonb, completed_at_ms = $13,
+                   equity_close_ms = $14::bigint[], equity_values = $15::float8[]
              WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3
             RETURNING point_hash, stage, fold_index, scenario, detail
             """,
@@ -828,6 +831,8 @@ async def complete_evaluation(
             metrics.error,
             _dumps(dict(detail)) if detail is not None else None,
             now_ms_utc(),
+            None if curve is None else [ms for ms, _ in curve],
+            None if curve is None else [equity for _, equity in curve],
         )
         if row is None:
             raise fence.StaleAttemptError(f"evaluation {evaluation_key} is not pending under attempt {attempt}")
@@ -940,6 +945,32 @@ async def find_detail_evaluation(
         window_end_ms,
     )
     return _evaluation(row) if row is not None else None
+
+
+# A run as the runs list reads it: every column but the detail payload, which a list of thousands never opens.
+_RUN_COLUMNS = _EVALUATION_COLUMNS.replace("detail_json::text AS detail_json", "NULL::text AS detail_json")
+
+
+async def list_runs(conn: asyncpg.Connection, study_id: str) -> list[EvaluationRecord]:
+    """Every evaluation of a study, in the order they were first asked for, without its detail payload."""
+    rows = await conn.fetch(
+        f"SELECT {_RUN_COLUMNS} FROM research_golden_search_evaluations WHERE study_id = $1 ORDER BY created_at_ms, evaluation_key",
+        study_id,
+    )
+    return [_evaluation(row) for row in rows]
+
+
+async def evaluation_curves(conn: asyncpg.Connection, study_id: str, evaluation_keys: Sequence[str]) -> dict[str, list[tuple[int, float]]]:
+    """The stored daily equity ``(session close ms, equity)`` of each named run that kept one."""
+    rows = await conn.fetch(
+        """
+        SELECT evaluation_key, equity_close_ms, equity_values FROM research_golden_search_evaluations
+         WHERE study_id = $1 AND evaluation_key = ANY($2::text[]) AND equity_close_ms IS NOT NULL
+        """,
+        study_id,
+        list(evaluation_keys),
+    )
+    return {row["evaluation_key"]: list(zip(row["equity_close_ms"], row["equity_values"], strict=True)) for row in rows}
 
 
 async def window_evaluations(conn: asyncpg.Connection, study_id: str, *, window_start_ms: int, window_end_ms: int) -> list[EvaluationRecord]:

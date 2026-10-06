@@ -147,6 +147,8 @@ def _response(**overrides: object) -> EngineBacktestResponse:
         final_equity=100_750.0, net_profit=750.0, total_fees=0.0, total_trades=2, winning_trades=1, losing_trades=1, win_rate=0.5,
         statistics={"net_profit": 750.0, "net_profit_pct": 0.0075, "sharpe_ratio": 1.25, "max_drawdown_pct": 0.004, "win_rate": 0.5},
         trades=trades, equity_curve=curve,
+        # The engine keeps each ET date's last sample on every run, a summary run included.
+        equity_day_ends=[{"timestamp": point["timestamp"], "equity": point["equity"]} for point in curve[1::2]],
     )
     return EngineBacktestResponse(**{**base, **overrides})  # type: ignore[arg-type]
 
@@ -177,6 +179,24 @@ def test_a_summary_run_has_no_detail_and_an_undefined_statistic_reads_none() -> 
     assert result.detail is None and result.metrics.sharpe_ratio is None
 
 
+def test_a_summary_run_keeps_the_daily_curve_a_detail_run_of_the_same_point_holds() -> None:
+    summary = project_response(_request(), _response(equity_curve=[]), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
+    detail = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
+
+    assert summary.detail is None and detail.detail is not None
+    assert summary.curve == detail.curve == [tuple(point) for point in detail.detail["daily_equity"]]
+
+
+def test_a_day_end_the_calendar_refuses_costs_the_run_its_curve_and_never_its_result() -> None:
+    saturday = et_midnight_ms(date(2025, 1, 11)) + 12 * 60 * 60 * 1000
+    result = project_response(
+        _request(), _response(equity_curve=[], equity_day_ends=[{"timestamp": saturday, "equity": 100_000.0}]), strategy_key="ema_crossover_signal", initial_cash=100_000.0
+    )
+
+    assert result.curve is None
+    assert (result.metrics.status, result.metrics.net_profit) == ("completed", 750.0)
+
+
 def test_a_failed_engine_run_is_a_failed_evaluation_with_its_reason() -> None:
     result = project_response(_request(detail=True), _response(success=False, error="no bars"), strategy_key="ema_crossover_signal", initial_cash=1.0)
-    assert (result.metrics.status, result.metrics.error, result.detail) == ("failed", "no bars", None)
+    assert (result.metrics.status, result.metrics.error, result.detail, result.curve) == ("failed", "no bars", None, None)

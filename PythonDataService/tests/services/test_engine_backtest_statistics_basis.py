@@ -128,6 +128,14 @@ def _aggregate(request: EngineBacktestRequest) -> Any:
     )
 
 
+def test_a_summary_run_keeps_one_equity_point_a_day_and_no_per_bar_curve() -> None:
+    """#2930: the daily curve survives a summary run, so a study can draw every run it scored."""
+    response = _aggregate(_request())
+
+    assert response.equity_curve == []
+    assert response.equity_day_ends == [{"timestamp": _NOW_MS + 45 * 60_000, "equity": 9_900.0}]
+
+
 def test_a_compatibility_pair_grades_the_marked_equity_curve() -> None:
     """#2447: an all-in trade with a 50% mid-trade drawdown used to report ~1%
     max drawdown in paired mode (the closed-trade ledger's own -1%); the
