@@ -23,6 +23,7 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
     seal_bot_program,
 )
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services.bot_binding_repository import (
     NON_IDENTITY_EVIDENCE_FIELDS,
     BotBindingRepository,
@@ -285,6 +286,56 @@ def test_evidence_override_is_durable_immutable_configuration(tmp_path: Path) ->
 
 def test_absent_override_preserves_pre_override_configuration_hash_shape() -> None:
     assert "evidence_override" not in immutable_configuration_payload(_binding())
+
+
+# The owner's written acceptance of an untested traded asset (#2912).
+_ACCEPTANCE = UntestedTradedAssetAcknowledgement(
+    acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+    reason="QQQ has followed SPY closely enough to try this.",
+)
+# ``configuration_hash(_binding())`` on the commit before the field existed.
+_CONFIGURATION_HASH_BEFORE_THE_ACCEPTANCE = "d92ca75fb761f40fd200f9b10718f78fa300fd8af0c023e76b89fee2cd741115"
+
+
+def _listens_to_spy_trades_qqq(**changes: object) -> BrokerBotBinding:
+    return _binding(**changes).model_copy(update={
+        "action_plan": alpaca_v1_action_plan("QQQ"), "traded_asset_acknowledgement": _ACCEPTANCE,
+    })
+
+
+def test_an_untested_asset_acceptance_is_kept_with_the_bot_for_good(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    binding = _listens_to_spy_trades_qqq()
+
+    repository.record_launch(binding, launch_reason="deploy")
+
+    assert repository.read(_SID) == binding
+    stored = json.loads((tmp_path / "live_state" / _SID / "strategy_instance.json").read_text())
+    assert stored["traded_asset_acknowledgement"] == _ACCEPTANCE.model_dump()
+    assert configuration_hash(binding) != configuration_hash(
+        binding.model_copy(update={"traded_asset_acknowledgement": None})
+    ), "the acceptance is under the bot's configuration hash"
+
+    another_reason = _ACCEPTANCE.model_copy(update={"reason": "A reason the owner never gave."})
+    with pytest.raises(StrategyInstanceConfigurationConflictError):
+        repository.record_launch(
+            _listens_to_spy_trades_qqq(run_id="run-002", created_at_ms=2_000).model_copy(
+                update={"traded_asset_acknowledgement": another_reason}
+            ),
+            launch_reason="resume",
+        )
+
+
+def test_a_bot_with_no_acceptance_is_hashed_and_stored_as_before_the_field_existed(tmp_path: Path) -> None:
+    """The stored record refuses unknown fields: a ``null`` written here could not be read by the build before this one."""
+    repository = _repository(tmp_path)
+
+    repository.record_launch(_binding(), launch_reason="deploy")
+
+    assert configuration_hash(_binding()) == _CONFIGURATION_HASH_BEFORE_THE_ACCEPTANCE
+    stored = json.loads((tmp_path / "live_state" / _SID / "strategy_instance.json").read_text())
+    assert "traded_asset_acknowledgement" not in stored
+    assert stored["configuration_hash"] == _CONFIGURATION_HASH_BEFORE_THE_ACCEPTANCE
 
 
 def test_absent_strategy_params_preserves_pre_feature_configuration_hash_shape() -> None:

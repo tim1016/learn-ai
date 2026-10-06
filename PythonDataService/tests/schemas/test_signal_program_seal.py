@@ -23,6 +23,7 @@ from app.schemas.signal_program_seal import (
     semantic_payload_hash,
     strip_absent_qualification,
 )
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 
 _TRACE_ROOT = "a" * 64
 _SNAPSHOT_SHA = "b" * 64
@@ -80,9 +81,10 @@ def _configured_signal() -> ConfiguredSignalProgramSeal:
     )
 
 
-def _sealed_bot_program(*, action_plan: ActionPlan | dict[str, object]) -> SealedBotProgram:
+def _sealed_bot_program(*, action_plan: ActionPlan | dict[str, object], **more: object) -> SealedBotProgram:
     configured = _configured_signal()
     return seal_bot_program(
+        **more,
         strategy_instance_id="sealed-test-1",
         configured_signal=configured,
         configured_signal_hash=configured.semantic_hash(),
@@ -338,4 +340,45 @@ def test_a_seal_whose_pinned_qualification_was_edited_fails_its_hash() -> None:
     persisted["configured_signal"]["qualification_id"] = "gq-other"
 
     with pytest.raises(ValueError, match="configured signal hash"):
+        SealedBotProgram.model_validate(persisted)
+
+
+# The owner's written acceptance of an untested traded asset (#2912).
+
+
+def _acceptance(reason: str = "QQQ has followed SPY closely enough to try this.") -> UntestedTradedAssetAcknowledgement:
+    return UntestedTradedAssetAcknowledgement(acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK", reason=reason)
+
+
+def test_a_seal_given_no_acceptance_is_hashed_and_written_as_before_the_field_existed() -> None:
+    """Admission always names the field, so a ``None`` must seal exactly as no field at all."""
+    sealed = _sealed_bot_program(action_plan=_action_plan(), traded_asset_acknowledgement=None)
+
+    assert sealed.bot_configuration_hash == _PRE_QUALIFICATION_BOT_HASH
+    assert "traded_asset_acknowledgement" not in sealed.model_dump(mode="json")
+    assert SealedBotProgram.model_validate_json(sealed.model_dump_json()) == sealed
+
+
+def test_an_acceptance_is_sealed_with_the_bot_and_leaves_the_signal_untouched() -> None:
+    first = _sealed_bot_program(action_plan=_action_plan(), traded_asset_acknowledgement=_acceptance())
+    second = _sealed_bot_program(
+        action_plan=_action_plan(), traded_asset_acknowledgement=_acceptance("I want to see it trade QQQ.")
+    )
+
+    assert first.bot_configuration_hash not in {_PRE_QUALIFICATION_BOT_HASH, second.bot_configuration_hash}
+    assert first.configured_signal_hash == _PRE_QUALIFICATION_CONFIGURED_HASH
+    assert SealedBotProgram.model_validate_json(first.model_dump_json()) == first
+
+
+@pytest.mark.parametrize("damage", ["edited", "removed"])
+def test_a_seal_whose_acceptance_was_edited_or_removed_fails_its_hash(damage: str) -> None:
+    persisted = _sealed_bot_program(
+        action_plan=_action_plan(), traded_asset_acknowledgement=_acceptance()
+    ).model_dump(mode="json")
+    if damage == "edited":
+        persisted["traded_asset_acknowledgement"]["reason"] = "A reason the owner never gave."
+    else:
+        del persisted["traded_asset_acknowledgement"]
+
+    with pytest.raises(ValueError, match="bot configuration hash"):
         SealedBotProgram.model_validate(persisted)

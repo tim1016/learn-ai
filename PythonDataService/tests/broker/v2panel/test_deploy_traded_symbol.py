@@ -2,9 +2,9 @@
 
 A Deploy that names no traded asset must be exactly the Deploy it was before
 the field existed: same fingerprint, same plan, no question asked of Alpaca.
-One that names another asset trades it, is priced from it, and until the
-owner's written acceptance can be recorded with the Deploy, runs as a Dry Run
-only.
+One that names another asset trades it and is priced from it. The strategy is
+untested trading it, so a Paper, Live Shadow or Live bot needs the owner's
+written acceptance at Deploy; a Dry Run is warned and asked for nothing.
 """
 
 from __future__ import annotations
@@ -23,10 +23,13 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerAsset
 from app.broker.contract.registry import get_broker_registry
-from app.schemas.broker_bots import AlpacaPaperDeployRequest
+from app.schemas.broker_bots import AlpacaDeploySubmission, AlpacaPaperDeployRequest
+from app.schemas.deployment_budget import DeploymentBudgetInput, DeploymentBudgetPreview
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services import market_liveness
 from app.services.bot_binding_repository import alpaca_v1_action_plan
-from app.services.broker_v2_panel import budget_deploy, sqlite_roster_status
+from app.services.broker_v2_panel import budget_deploy, panel_deploy, sqlite_roster_status
+from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS
 from tests.broker.v2panel.fixtures import ACCT
 from tests.broker.v2panel.test_budget_deploy import (
@@ -37,6 +40,9 @@ from tests.broker.v2panel.test_budget_deploy import (
     _request,
     authority,  # noqa: F401 -- pytest fixture, used by name
 )
+from tests.broker.v2panel.test_panel_deploy_live import _live_view
+from tests.broker.v2panel.test_panel_deploy_shadow import _paper_view, _shadow_view
+from tests.broker.v2panel.test_panel_deploy_shadow import _request as _mode_request
 
 _BOTS = f"/api/brokers/alpaca/accounts/{ACCT}/bots"
 
@@ -133,15 +139,155 @@ async def test_a_dry_run_that_names_another_asset_trades_it(deploy_app, alpaca: 
     assert alpaca.asked == ["QQQ"]
 
 
-async def test_a_bot_that_contacts_a_broker_cannot_trade_another_asset_yet(deploy_app, alpaca: _Alpaca) -> None:
-    """The strategy is untested trading it, and Deploy cannot yet record that being accepted."""
+# ── the owner's written acceptance ──────────────────────────────────────
+
+_ACCEPTANCE = {
+    "acknowledgement": "I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+    "reason": "QQQ has followed SPY closely enough to try this.",
+}
+
+
+async def test_a_paper_bot_that_trades_another_asset_is_refused_until_the_owner_accepts(
+    deploy_app, alpaca: _Alpaca
+) -> None:
     app, registry = deploy_app
 
     response = await _deploy(app, execution_mode="paper", traded_symbol="QQQ")
 
     assert response.status_code == 409
-    assert "listens to SPY and trades QQQ" in response.text and "Dry Run" in response.text
+    refusal = response.json()["detail"]
+    assert refusal["message"] == "Accept that this strategy is untested trading QQQ before deploying."
+    assert "Tested trading SPY. Untested trading QQQ." in response.text
+    assert refusal["submission_settled"] is True, "nothing started, so the form may send again"
     assert registry.deploy_calls == []
+
+
+async def test_a_paper_bot_the_owner_accepted_is_deployed_with_the_acceptance(deploy_app, alpaca: _Alpaca) -> None:
+    app, registry = deploy_app
+
+    response = await _deploy(
+        app, execution_mode="paper", traded_symbol="QQQ", traded_asset_acknowledgement=_ACCEPTANCE
+    )
+
+    assert response.status_code == 201, response.text
+    [call] = registry.deploy_calls
+    assert (call["symbol"], call["traded_symbol"]) == ("SPY", "QQQ")
+    assert call["traded_asset_acknowledgement"].model_dump() == _ACCEPTANCE
+
+
+@pytest.mark.parametrize("execution_mode", ["paper", "dry_run"])
+@pytest.mark.parametrize("traded_symbol", [None, "SPY"], ids=["names-no-asset", "names-its-own-symbol"])
+async def test_an_acceptance_is_refused_when_the_bot_trades_the_symbol_it_listens_to(
+    deploy_app, alpaca: _Alpaca, execution_mode: str, traded_symbol: str | None
+) -> None:
+    """Nothing is untested there, and the record would be kept with the bot for good."""
+    app, registry = deploy_app
+    named = {} if traded_symbol is None else {"traded_symbol": traded_symbol}
+
+    response = await _deploy(app, execution_mode=execution_mode, traded_asset_acknowledgement=_ACCEPTANCE, **named)
+
+    assert response.status_code == 409
+    assert "no untested asset to accept" in response.json()["detail"]["message"]
+    assert registry.deploy_calls == []
+
+
+async def test_an_acceptance_needs_a_reason_of_its_own(deploy_app, alpaca: _Alpaca) -> None:
+    app, registry = deploy_app
+
+    response = await _deploy(
+        app, execution_mode="paper", traded_symbol="QQQ",
+        traded_asset_acknowledgement={**_ACCEPTANCE, "reason": "   ok   "},
+    )
+
+    assert response.status_code == 422
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.parametrize(
+    ("view_of", "execution_mode"),
+    [(_paper_view, "paper"), (_shadow_view, "shadow"), (_live_view, "live")],
+    ids=["paper", "live-shadow", "live"],
+)
+def test_every_mode_that_contacts_a_broker_needs_the_acceptance_and_nothing_more(
+    monkeypatch: pytest.MonkeyPatch, view_of: Callable, execution_mode: str
+) -> None:
+    """The acceptance is the one condition a different asset adds: no Paper run, no Shadow result, no test."""
+    view = view_of(monkeypatch)
+    unaccepted = _mode_request(execution_mode).model_copy(update={"traded_symbol": "QQQ"})
+    accepted = unaccepted.model_copy(update={
+        "traded_asset_acknowledgement": UntestedTradedAssetAcknowledgement.model_validate(_ACCEPTANCE),
+    })
+
+    # A review comes before the owner accepts, so the shared checks ask for nothing.
+    assert panel_deploy._require_alpaca_deploy_request(view, unaccepted) is not None
+    with pytest.raises(PanelRunnerError, match="untested trading QQQ") as refused:
+        panel_deploy._require_untested_asset_acceptance(unaccepted)
+    assert refused.value.http_status == 409
+
+    assert panel_deploy._require_alpaca_deploy_request(view, accepted) is not None
+    panel_deploy._require_untested_asset_acceptance(accepted)
+
+
+def test_a_dry_run_needs_no_acceptance() -> None:
+    panel_deploy._require_untested_asset_acceptance(
+        _mode_request("dry_run").model_copy(update={"traded_symbol": "QQQ"})
+    )
+
+
+def test_a_review_made_before_the_owner_accepts_still_stands_at_deploy(authority: tuple) -> None:  # noqa: F811
+    """The owner accepts last, above the Deploy button: the review token binds what the bot trades, not the acceptance."""
+    _publish_book(("SPY", 500), ("QQQ", 40))
+    request = _request("SPY", traded_symbol="QQQ", budget=DeploymentBudgetInput(amount_usd="500", risk_revision=1))
+    review = budget_deploy.preview_budget("BUDGET-PAPER", request, resolved_parameters={})
+    assert review.review_token is not None
+
+    accepted = request.model_copy(update={
+        "traded_asset_acknowledgement": UntestedTradedAssetAcknowledgement.model_validate(_ACCEPTANCE),
+        "budget": request.budget.model_copy(update={"review_token": review.review_token}),
+    })
+
+    assert budget_deploy.resolve_consent("BUDGET-PAPER", accepted, resolved_parameters={}).committed_cents == 50_000
+
+
+def test_a_key_resent_with_another_reason_is_another_deploy() -> None:
+    """The acceptance is kept with the bot for good, so one key names one acceptance."""
+    def submitted(reason: str) -> AlpacaDeploySubmission:
+        return AlpacaDeploySubmission.model_validate({
+            **_BODY, "traded_symbol": "QQQ", "traded_asset_acknowledgement": {**_ACCEPTANCE, "reason": reason},
+        })
+
+    first = panel_deploy._submission_fingerprint(ACCT, submitted("QQQ has followed SPY closely enough."))
+
+    assert first == panel_deploy._submission_fingerprint(ACCT, submitted("QQQ has followed SPY closely enough."))
+    assert first != panel_deploy._submission_fingerprint(ACCT, submitted("I want to see it trade QQQ."))
+
+
+@pytest.mark.parametrize(
+    ("execution_mode", "asks_the_owner_to_accept"), [("paper", True), ("dry_run", False)],
+)
+async def test_the_review_carries_the_warning_and_asks_only_a_broker_bot_to_accept_it(
+    deploy_app, alpaca: _Alpaca, monkeypatch: pytest.MonkeyPatch, execution_mode: str, asks_the_owner_to_accept: bool
+) -> None:
+    """The review is read before the owner accepts, so it is never refused for want of the acceptance."""
+    app, _registry = deploy_app
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
+    monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"{_BOTS}/budget-preview", json={**_SETTINGS, "execution_mode": execution_mode, "traded_symbol": "QQQ"},
+        )
+        own_symbol = await client.post(f"{_BOTS}/budget-preview", json={**_SETTINGS, "execution_mode": execution_mode})
+
+    assert response.status_code == 200, response.text
+    warning = response.json()["traded_asset_warning"]
+    assert warning["headline"] == "Tested trading SPY. Untested trading QQQ."
+    assert "inverse or leveraged fund" in warning["detail"] and "profitable" in warning["detail"]
+    assert warning["acceptance_label"] == (
+        "I accept that this strategy is untested trading QQQ." if asks_the_owner_to_accept else None
+    )
+    assert own_symbol.json()["traded_asset_warning"] is None
 
 
 @pytest.mark.parametrize(

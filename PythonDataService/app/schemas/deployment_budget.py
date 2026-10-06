@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.account_money import FULL_BAR_BPS, SegmentKind
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
 from app.schemas.account_authority import AuthorityKind
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetWarning
 
 
 class DeploymentBudgetInput(BaseModel):
@@ -225,6 +226,9 @@ class DeploymentBudgetPreview(BaseModel):
     # bots in this account that already trade the chosen symbol. ``None``
     # when there are none, and for Dry Run, which never trades the account.
     same_symbol_note: str | None = None
+    # What the strategy's evidence does not cover, when the bot trades another
+    # asset than it listens to (#2912). ``None`` when it trades its own symbol.
+    traded_asset_warning: UntestedTradedAssetWarning | None = None
     # The previewed amount as Python normalizes it: what Deploy sets aside.
     budget_usd: str | None = None
     observed_at_ms: EpochMs | None = None

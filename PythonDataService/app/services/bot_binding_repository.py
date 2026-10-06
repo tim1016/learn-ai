@@ -16,7 +16,15 @@ from pathlib import Path
 from stat import S_ISREG
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 from app.engine.live.durable_append_log import (
     create_atomic_exclusive_durable_file,
@@ -38,6 +46,10 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
+from app.schemas.traded_asset_acknowledgement import (
+    UntestedTradedAssetAcknowledgement,
+    strip_absent_traded_asset_acknowledgement,
+)
 from app.services.bot_carryover import configuration_hash
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -112,6 +124,10 @@ class BrokerBotBinding(BaseModel):
     quantity: int = 1
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
+    # The owner's written acceptance of an untested traded asset (#2912).
+    # ``None`` for every bot that trades the symbol it listens to; the
+    # configuration hash leaves an absent one out (``exclude_none``).
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     action_plan: ActionPlan
     # The strategy's fully-resolved deploy-time parameter set (registered
     # defaults merged with the deploy request's overrides). `None`, not `{}`,
@@ -150,12 +166,23 @@ class StrategyInstanceRecord(BaseModel):
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None = None
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     action_plan: ActionPlan
     strategy_params: dict[str, Any] | None = None
     exit_terms: ExitTerms | None = Field(default=None, exclude=True)
     sealed_account_id: str | None = None
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at_ms: int
+
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_acceptance(self, handler: SerializerFunctionWrapHandler):
+        """A bot with no acceptance is written exactly as it was before the field existed.
+
+        This record refuses unknown fields, so the build that wrote a
+        ``null`` here could not be rolled back past: the earlier build would
+        refuse to read every bot deployed since.
+        """
+        return strip_absent_traded_asset_acknowledgement(handler(self))
 
     @classmethod
     def from_binding(cls, binding: BrokerBotBinding) -> StrategyInstanceRecord:
@@ -169,6 +196,7 @@ class StrategyInstanceRecord(BaseModel):
             quantity=binding.quantity,
             carryover_policy=binding.carryover_policy,
             evidence_override=binding.evidence_override,
+            traded_asset_acknowledgement=binding.traded_asset_acknowledgement,
             action_plan=binding.action_plan,
             strategy_params=binding.strategy_params,
             sealed_account_id=binding.sealed_account_id,
@@ -726,6 +754,7 @@ class BotBindingRepository:
             quantity=instance.quantity,
             carryover_policy=instance.carryover_policy,
             evidence_override=instance.evidence_override,
+            traded_asset_acknowledgement=instance.traded_asset_acknowledgement,
             action_plan=instance.action_plan,
             strategy_params=instance.strategy_params,
             strategy_param_origins=parameter_origins,

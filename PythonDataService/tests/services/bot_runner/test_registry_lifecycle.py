@@ -34,6 +34,7 @@ from app.marketdata.feed import (
 from app.schemas.action_plan import traded_instrument
 from app.schemas.broker_bots import BotProcessFact
 from app.schemas.exit_terms import ExitTermsInput
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services import bot_runner as bot_runner_module
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
@@ -473,6 +474,33 @@ async def test_a_bot_is_bound_to_the_asset_its_deploy_names_as_traded(tmp_path: 
     assert binding.symbol == "SPY"
     assert traded_instrument(binding.action_plan).underlying == "QQQ"
     assert _strategy_instance_json(tmp_path)["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "QQQ"
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_the_owners_acceptance_of_an_untested_asset_is_sealed_with_the_bot(tmp_path: Path) -> None:
+    """#2912: a bot that listens to SPY and trades QQQ keeps what the owner accepted, in its record and under its seal."""
+    acceptance = UntestedTradedAssetAcknowledgement(
+        acknowledgement="I_ACCEPT_UNTESTED_TRADED_ASSET_RISK",
+        reason="QQQ has followed SPY closely enough to try this.",
+    )
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    await registry.deploy_with_admission(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        traded_symbol="QQQ",
+        traded_asset_acknowledgement=acceptance,
+    )
+
+    binding = registry.binding_for_control("alpaca", _SID)
+    assert binding.traded_asset_acknowledgement == acceptance
+    assert binding.sealed_program is not None
+    assert binding.sealed_program.traded_asset_acknowledgement == acceptance
+    assert _strategy_instance_json(tmp_path)["traded_asset_acknowledgement"] == acceptance.model_dump()
+    stored_seal = json.loads((tmp_path / "live_state" / _SID / "sealed_program_v2.json").read_text())
+    assert stored_seal["traded_asset_acknowledgement"] == acceptance.model_dump()
     await registry.stop("alpaca", _SID)
 
 

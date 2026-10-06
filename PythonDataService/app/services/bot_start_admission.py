@@ -36,6 +36,7 @@ from app.schemas.run_admission import (
     StartRuntimeAdmissionFact,
 )
 from app.schemas.signal_program_seal import ParameterOrigin
+from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.deploy_window import deploy_window
@@ -123,6 +124,8 @@ class StartRequest:
     # narrower field here was already silently out of sync with its own
     # producer, not a deliberate invariant.
     strategy_param_origins: dict[str, ParameterOrigin] | None = None
+    # The owner's written acceptance of an untested traded asset (#2912).
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     budget_consent: DeployBudgetConsent | None = None
     # The owner's end for this deployment (#2607): recorded in the bot's
     # desired state at activation, never in the binding, so it enters no
@@ -250,6 +253,7 @@ def make_start_request(
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
     budget_consent: DeployBudgetConsent | None = None,
     end: BotEnd | None = None,
+    traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -268,6 +272,7 @@ def make_start_request(
         strategy_param_origins=strategy_param_origins,
         budget_consent=budget_consent,
         end=end,
+        traded_asset_acknowledgement=traded_asset_acknowledgement,
     )
 
 
@@ -516,6 +521,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         quantity=request.quantity,
         carryover_policy=request.carryover_policy,
         evidence_override=request.evidence_override,
+        traded_asset_acknowledgement=request.traded_asset_acknowledgement,
         action_plan=request.action_plan,
         strategy_params=request.strategy_params,
         exit_terms=request.exit_terms,
