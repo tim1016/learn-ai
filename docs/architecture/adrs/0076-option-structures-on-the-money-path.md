@@ -40,7 +40,7 @@ The requirement sums every leg's exercise payoff as a function of the underlying
 - A loss that grows without limit above the highest strike is refused. That reason is given first, ahead of any about expiries.
 - Alpaca's page says to find the price with the lowest payoff. Reading it at zero and from the slope above the top strike is this repo's way of finding it.
 - A requirement plus premium of zero or less is refused. Such a result means the prices do not belong together.
-- A structure bought for less than it must be worth at expiry is admitted, with a loss estimate of zero. Those prices do not belong together either; whether to refuse them too is the owner's to say.
+- A structure priced under what it must be worth at expiry is admitted, with a loss estimate of zero. For one made of bought legs only, such as a 440 call and a 460 put bought for less than $20, those prices do not belong together either, and whether to refuse them is the owner's to say. It is not always a fault: a box of four legs is worth the same at every price and properly costs a little less, by the interest to expiry.
 - A bounded payoff does not prove Alpaca will take the structure as one order. Cover is a separate check.
 
 ### 4. Mixed expiries
@@ -58,11 +58,11 @@ The owner chose on 2026-10-06 to keep mixed expiries on these terms. The recomme
 A per-leg limit on the bid-ask gap does not bound what a structure costs to trade. Two legs with mids of $5.00 and $4.90, each four cents wide, cost $0.14 to open against each other and return $0.06 closed at once.
 
 - The **round-trip cost** is the sum over the legs of ask minus bid, times ratio and multiplier. It is always worked out.
-- An entry is refused when it is more than the **structure cost limit**: a percent of the entry commitment, 10 by default. The owner chose this on 2026-10-06. The commitment is the measure because it is always above zero; a percent of the structure's mid value breaks down when that value is near zero.
+- An entry is to be refused when it is more than the **structure cost limit**: a percent of the entry commitment, 10 by default, set at Deploy. The owner chose this on 2026-10-06. The comparison is built; the setting arrives with Deploy. The commitment is the measure because it is always above zero; a percent of the structure's mid value breaks down when that value is near zero.
 
 ## Where it lives
 
-`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure), `requirement.py` (decisions 2 to 5). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
+`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
 
 Nothing on the money path calls these yet.
 

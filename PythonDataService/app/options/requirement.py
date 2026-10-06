@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from app.options.exact import whole_units
+from app.options.exact import exact_sum, require_everyday, whole_units
 from app.options.structure import ResolvedLeg, ResolvedStructure
 
 # A strike is in thousandths of a dollar; ten of them make a cent.
@@ -120,8 +120,8 @@ def _payoff_thousandths(structure: ResolvedStructure, price_thousandths: int) ->
     return total
 
 
-def _lowest_payoff_cents(structure: ResolvedStructure, size: EntrySize) -> int:
-    """The lowest point of the entry's exercise payoff over every underlying price from zero up, in cents.
+def _lowest_payoff_thousandths(structure: ResolvedStructure) -> int:
+    """The lowest point of one structure's exercise payoff per share over every underlying price from zero up.
 
     Read at zero, at every strike, and from the slope above the highest
     strike. The strikes alone are not enough: a put structure can be at its
@@ -140,12 +140,16 @@ def _lowest_payoff_cents(structure: ResolvedStructure, size: EntrySize) -> int:
             "the broker's requirement for that is not known, so it cannot be set aside.",
         )
     turning_points = {0, *(leg.contract.strike_thousandths for leg in structure.legs)}
-    lowest_per_share = min(_payoff_thousandths(structure, price) for price in turning_points)
-    cents, remainder = divmod(lowest_per_share * size.multiplier, _THOUSANDTHS_PER_CENT)
+    return min(_payoff_thousandths(structure, price) for price in turning_points)
+
+
+def _payoff_cents(per_share_thousandths: int, size: EntrySize) -> int:
+    """A per-share payoff in thousandths of a dollar, for the whole entry, in cents."""
+    cents, remainder = divmod(per_share_thousandths * size.multiplier, _THOUSANDTHS_PER_CENT)
     if remainder:
         raise ValueError(
-            f"a payoff of {lowest_per_share} thousandths of a dollar a share at {size.multiplier} shares a contract "
-            "is not a whole number of cents"
+            f"a payoff of {per_share_thousandths} thousandths of a dollar a share at {size.multiplier} shares "
+            "a contract is not a whole number of cents"
         )
     return size.units * cents
 
@@ -169,7 +173,19 @@ def broker_requirement(structure: ResolvedStructure, size: EntrySize) -> int:
     expiries and a sold leg is refused rather than guessed at. With bought
     legs only the answer is zero under either reading.
     """
-    return max(0, -_lowest_payoff_cents(structure, size))
+    return _payoff_cents(max(0, -_lowest_payoff_thousandths(structure)), size)
+
+
+def _markets(structure: ResolvedStructure, quotes: Mapping[str, LegQuote]) -> dict[str, LegQuote]:
+    """Each leg's quote, once it is a market that can be crossed: a bid of zero or more, under an ask above zero."""
+    _require_one_entry_per_leg(structure, quotes)
+    for leg in structure.legs:
+        quote = quotes[leg.leg_id]
+        bid = require_everyday(quote.bid, what=f"the bid of leg {leg.leg_id!r}")
+        ask = require_everyday(quote.ask, what=f"the ask of leg {leg.leg_id!r}")
+        if bid < 0 or ask <= 0 or bid > ask:
+            raise ValueError(f"leg {leg.leg_id!r} has no market to cross: bid {quote.bid}, ask {quote.ask}")
+    return dict(quotes)
 
 
 def natural_net_price(structure: ResolvedStructure, quotes: Mapping[str, LegQuote]) -> Decimal:
@@ -178,26 +194,24 @@ def natural_net_price(structure: ResolvedStructure, quotes: Mapping[str, LegQuot
     The ask for each bought leg less the bid for each sold one, by ratio. This
     is the sign a multi-leg limit price carries at Alpaca.
     """
-    _require_one_entry_per_leg(structure, quotes)
-    return sum(
+    markets = _markets(structure, quotes)
+    return exact_sum(
         (
-            _sign(leg) * leg.ratio * (quotes[leg.leg_id].ask if leg.position == "long" else quotes[leg.leg_id].bid)
-            for leg in structure.legs
-        ),
-        start=Decimal(0),
+            _sign(leg) * leg.ratio,
+            markets[leg.leg_id].ask if leg.position == "long" else markets[leg.leg_id].bid,
+        )
+        for leg in structure.legs
     )
 
 
 def round_trip_cost(structure: ResolvedStructure, quotes: Mapping[str, LegQuote], size: EntrySize) -> int:
     """What opening the entry and closing it at once would cost, in cents: every leg's bid-ask gap, by its ratio."""
-    _require_one_entry_per_leg(structure, quotes)
+    markets = _markets(structure, quotes)
     total = 0
     for leg in structure.legs:
-        quote = quotes[leg.leg_id]
+        quote = markets[leg.leg_id]
         bid = _contract_cents(quote.bid, size, what=f"the bid of leg {leg.leg_id!r}")
         ask = _contract_cents(quote.ask, size, what=f"the ask of leg {leg.leg_id!r}")
-        if bid < 0 or bid > ask:
-            raise ValueError(f"leg {leg.leg_id!r} has no market to cross: bid {quote.bid}, ask {quote.ask}")
         total += leg.ratio * (ask - bid)
     return size.units * total
 
@@ -218,8 +232,8 @@ def entry_money(
     """
     if isinstance(fee_provision_cents, bool) or not isinstance(fee_provision_cents, int) or fee_provision_cents < 0:
         raise ValueError(f"a fee provision is a whole number of cents, zero or more; got {fee_provision_cents!r}")
-    lowest_payoff = _lowest_payoff_cents(structure, size)
-    requirement = max(0, -lowest_payoff)
+    lowest_per_share = _lowest_payoff_thousandths(structure)
+    requirement = _payoff_cents(max(0, -lowest_per_share), size)
     premium = size.units * _contract_cents(net_price, size, what="a net price")
     before_fees = requirement + premium
     if before_fees <= 0:
@@ -232,12 +246,17 @@ def entry_money(
         net_entry_premium_cents=premium,
         broker_requirement_cents=requirement,
         entry_commitment_cents=before_fees + fee_provision_cents,
-        loss_at_expiry_cents=max(0, premium - lowest_payoff) if structure.has_one_expiry else None,
+        loss_at_expiry_cents=(
+            max(0, premium - _payoff_cents(lowest_per_share, size)) if structure.has_one_expiry else None
+        ),
     )
 
 
 def round_trip_cost_is_over_limit(*, cost_cents: int, commitment_cents: int, limit_percent: Decimal) -> bool:
     """Whether a round-trip cost is more than ``limit_percent`` of an entry commitment, compared exactly."""
+    for name, cents in (("a round-trip cost", cost_cents), ("an entry commitment", commitment_cents)):
+        if isinstance(cents, bool) or not isinstance(cents, int):
+            raise ValueError(f"{name} is a whole number of cents; got {cents!r}")
     if cost_cents < 0:
         raise ValueError(f"a round-trip cost is zero or more; got {cost_cents}")
     if commitment_cents <= 0:

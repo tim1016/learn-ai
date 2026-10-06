@@ -13,9 +13,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.options.contract import OptionContract
-from app.schemas.action_plan import MAX_OPTION_LEGS
 
 LegPosition = Literal["long", "short"]
+
+# The most option legs one order carries at the broker.
+MAX_OPTION_LEGS = 4
 
 
 class ResolvedLeg(BaseModel):
