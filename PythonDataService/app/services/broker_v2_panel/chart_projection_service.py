@@ -217,28 +217,6 @@ def markers_in_window(
     ]
 
 
-def position_pane(
-    chart: ChartLiveResponse | ChartHistoryResponse,
-    traded_chart: ChartLiveResponse | ChartHistoryResponse,
-) -> ChartPositionPane:
-    """The traded asset's price on the bars of the chart of the symbol a bot listens to (#2915).
-
-    ``traded_chart`` is the same window and bar size read for the traded
-    asset. Each of ``chart``'s bars gets the close of the traded bar that
-    starts at the same instant; a bar with none is a missing point. A point is
-    never carried over from an earlier bar, so a quiet minute stays visible.
-    """
-    closes = {bar.start_ms: bar.close for bar in traded_chart.bars}
-    return ChartPositionPane(
-        kind="price",
-        symbol=traded_chart.symbol,
-        heading=f"{traded_chart.symbol} · what it trades",
-        points=[ChartPositionPoint(start_ms=bar.start_ms, value=closes.get(bar.start_ms)) for bar in chart.bars],
-        fill_markers=traded_chart.fill_markers,
-        overlay_notices=list(traded_chart.overlay_notices),
-    )
-
-
 def live_window(now_ms: int) -> tuple[int, int]:
     """Return the (open_ms, close_ms) window for today's LIVE pane.
 
@@ -345,6 +323,76 @@ def chart_feed_view(feed: ChartFeedStatus) -> ChartFeedView:
         attention_required=policy.attention_required,
         last_bar_at_ms=feed.last_bar_ms,
         last_error=feed.last_error,
+    )
+
+
+# What the same states say about the traded asset's own line, which the
+# position pane draws (#2915). Whether a state speaks, and what to do about
+# it, are the chart line's: ``_CHART_FEED_POLICY``.
+_POSITION_FEED_COPY: dict[ChartFeedState, tuple[str, str]] = {
+    "LIVE": (
+        "{symbol} price live",
+        "The IBKR bar line for {symbol} is delivering bars within its expected cadence.",
+    ),
+    "NOT_EXPECTED": (
+        "No live {symbol} bar expected",
+        "This pane draws regular-session IBKR bars; none is due now.",
+    ),
+    "STARTING": (
+        "{symbol} price starting",
+        "The IBKR bar line for {symbol} is waiting for its first bar of the session.",
+    ),
+    "STALLED": (
+        "{symbol} price stalled",
+        "The IBKR bar line for {symbol} has not delivered a bar within its expected "
+        "cadence, so its price line has stopped at its last bar. It is a separate "
+        "line from the chart's and from the bot's feed.",
+    ),
+    "ERRORED": (
+        "{symbol} price interrupted",
+        "The IBKR bar line for {symbol} failed and is being retried, so its price "
+        "line has stopped at its last bar. It is a separate line from the chart's "
+        "and from the bot's feed.",
+    ),
+    "RECOVERING": (
+        "{symbol} price recovering",
+        "The IBKR bar line for {symbol} is being resubscribed after a broker "
+        "reconnect; bars missed meanwhile are not backfilled.",
+    ),
+}
+
+
+def _position_feed_view(symbol: str, feed: ChartFeedView) -> ChartFeedView:
+    """The traded asset's own bar line, in words about that asset (#2915)."""
+    headline, explanation = _POSITION_FEED_COPY[feed.state]
+    return feed.model_copy(
+        update={"headline": headline.format(symbol=symbol), "explanation": explanation.format(symbol=symbol)}
+    )
+
+
+def position_pane(
+    chart: ChartLiveResponse | ChartHistoryResponse,
+    traded_chart: ChartLiveResponse | ChartHistoryResponse,
+) -> ChartPositionPane:
+    """The traded asset's price on the bars of the chart of the symbol a bot listens to (#2915).
+
+    ``traded_chart`` is the same window and bar size read for the traded
+    asset. Each of ``chart``'s bars gets the close of the traded bar that
+    starts at the same instant; a bar with none is a missing point. A point is
+    never carried over from an earlier bar, so a quiet minute stays visible.
+    A live chart's pane carries the traded asset's own bar line too, so a
+    line that stopped says so.
+    """
+    closes = {bar.start_ms: bar.close for bar in traded_chart.bars}
+    symbol = traded_chart.symbol
+    return ChartPositionPane(
+        kind="price",
+        symbol=symbol,
+        heading="What it trades",
+        points=[ChartPositionPoint(start_ms=bar.start_ms, value=closes.get(bar.start_ms)) for bar in chart.bars],
+        fill_markers=traded_chart.fill_markers,
+        overlay_notices=list(traded_chart.overlay_notices),
+        feed=_position_feed_view(symbol, traded_chart.feed) if isinstance(traded_chart, ChartLiveResponse) else None,
     )
 
 

@@ -8744,8 +8744,18 @@
         "type": "object"
       },
       "ChartPositionPane": {
-        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\n``points`` has one entry per bar of the chart it comes with, in the same\norder, so the pane shares the chart's time axis exactly. ``kind`` says\nwhat a value is: ``price`` is the traded stock's or ETF's own bar close.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off.",
+        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\n``points`` has one entry per bar of the chart it comes with, in the same\norder, so the pane shares the chart's time axis exactly. ``kind`` says\nwhat a value is: ``price`` is the traded stock's or ETF's own bar close.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
         "properties": {
+          "feed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartFeedView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "fill_markers": {
             "items": {
               "$ref": "#/components/schemas/ChartFillMarker"
@@ -8794,6 +8804,8 @@
         "description": "What the position pane draws on one of the chart's own bars.",
         "properties": {
           "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Start Ms",
             "type": "integer"
           },
@@ -45798,6 +45810,10 @@
             "title": "Events",
             "type": "array"
           },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -45805,6 +45821,7 @@
         },
         "required": [
           "title",
+          "symbol",
           "events"
         ],
         "title": "TradedFeedLaneView",

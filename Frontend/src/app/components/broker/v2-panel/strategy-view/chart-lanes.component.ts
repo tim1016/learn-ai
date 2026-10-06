@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import type { PlacedLane } from './chart-lanes';
 
 /**
@@ -11,6 +12,7 @@ import type { PlacedLane } from './chart-lanes';
 @Component({
   selector: 'app-chart-lanes',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AssetIdentityComponent],
   templateUrl: './chart-lanes.component.html',
   styleUrl: './chart-lanes.component.scss',
 })

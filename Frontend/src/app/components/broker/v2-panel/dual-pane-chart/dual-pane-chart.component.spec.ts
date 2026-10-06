@@ -11,7 +11,7 @@ import {
   countPlottedFills,
   toSeriesMarkers,
 } from './dual-pane-chart.component';
-import type { ChartBar } from '../lib/broker-v2-panel.types';
+import type { ChartBar, ChartFillMarker, ChartPositionPane } from '../lib/broker-v2-panel.types';
 import type { ChartLane, LaneClock } from '../strategy-view/chart-lanes';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
@@ -321,6 +321,20 @@ describe('DualPaneChartComponent', () => {
       expect(within(decisions).getByRole('listitem', { name: 'Enter (local)' }).style.left).toBe('110px');
     });
 
+    it('names the asset of a lane about another one through the shared symbol renderer (#2915)', async () => {
+      await renderTape({
+        liveBars: [],
+        histBars: [minuteBar(0)],
+        historyDataTimeframe: '1m',
+        initialPane: 'polygon',
+        lanes: (): ChartLane[] => [{ key: 'traded', title: 'Market data', symbol: 'QQQ', marks: [] }],
+      });
+
+      const traded = within(screen.getByRole('group', { name: 'The run’s events on the chart’s clock' }))
+        .getByRole('list', { name: 'Market data QQQ' });
+      expect(traded.querySelector('app-asset-identity')?.textContent).toContain('QQQ');
+    });
+
     it('labels the lanes on the clock the tape is switched to', async () => {
       const { fixture } = await renderTape({
         liveBars: [],
@@ -376,37 +390,77 @@ describe('DualPaneChartComponent', () => {
     const MINUTE = 60_000;
     const bars = [0, 1, 2].map((index) => liveBar(1_700_060_400_000 + index * MINUTE, 1_700_060_400_000 + (index + 1) * MINUTE));
     const paneLines = () => chartMocks.addSeries.mock.calls.filter(([type, , pane]) => type === 'LineSeries' && pane === 1);
+    /** QQQ's pane: a price on the first and last bar, none on the one between. */
+    const pane = (overrides: Partial<ChartPositionPane> = {}): ChartPositionPane => ({
+      kind: 'price',
+      symbol: 'QQQ',
+      heading: 'What it trades',
+      points: [
+        { start_ms: bars[0].start_ms, value: '512.40' },
+        { start_ms: bars[1].start_ms, value: null },
+        { start_ms: bars[2].start_ms, value: '512.90' },
+      ],
+      fill_markers: [],
+      overlay_notices: [],
+      feed: null,
+      ...overrides,
+    });
+    const fillAt = (atMs: number, key: string): ChartFillMarker => ({
+      filled_at_ms: atMs, side: 'buy', quantity: 1, price: 512.4, order_ref: key, event_key: key,
+    });
+    const renderTrading = (livePosition: ChartPositionPane) =>
+      render(DualPaneChartComponent, { inputs: { symbol: 'SPY', liveBars: bars, histBars: [], livePosition } });
 
     it('draws the traded asset under the candles, a bar with no price as a gap, and says what it is', async () => {
-      await render(DualPaneChartComponent, {
-        inputs: {
-          symbol: 'SPY',
-          liveBars: bars,
-          histBars: [],
-          livePosition: {
-            kind: 'price',
-            symbol: 'QQQ',
-            heading: 'QQQ · what it trades',
-            points: [
-              { start_ms: bars[0].start_ms, value: '512.40' },
-              { start_ms: bars[1].start_ms, value: null },
-              { start_ms: bars[2].start_ms, value: '512.90' },
-            ],
-            fill_markers: [],
-            overlay_notices: [],
-          },
-        },
-      });
+      const { container } = await renderTrading(pane());
 
-      expect(screen.getByText('QQQ · what it trades')).toBeTruthy();
+      const caption = container.querySelector('.chart-position-caption');
+      expect(caption?.querySelector('app-asset-identity')?.textContent).toContain('QQQ');
+      expect(caption?.textContent).toContain('What it trades');
       // One line either side of the bar with no price: nothing joins them.
       expect(paneLines()).toHaveLength(2);
     });
 
-    it('draws no such pane for a bot that trades what it listens to', async () => {
-      await render(DualPaneChartComponent, { inputs: { symbol: 'SPY', liveBars: bars, histBars: [] } });
+    it('keeps the pane when the traded asset has no price at all, so its caption labels no other pane', async () => {
+      await renderTrading(pane({ points: bars.map((bar) => ({ start_ms: bar.start_ms, value: null })) }));
 
-      expect(screen.queryByText(/what it trades/)).toBeNull();
+      expect(paneLines()).toHaveLength(1);
+    });
+
+    it('counts the fills drawn on the pane, and the ones on a bar with no price as not plotted', async () => {
+      const { container, fixture } = await renderTrading(pane({ fill_markers: [fillAt(bars[0].start_ms + 1, 'on-a-price')] }));
+      const readout = () => container.querySelector('.tape-readout')?.textContent ?? '';
+      expect(readout()).toContain('1 fill');
+
+      fixture.componentRef.setInput('livePosition', pane({
+        fill_markers: [fillAt(bars[0].start_ms + 1, 'on-a-price'), fillAt(bars[1].start_ms + 1, 'on-no-price')],
+      }));
+      fixture.detectChanges();
+
+      expect(readout()).toContain('1 plotted / 2 fills');
+    });
+
+    it('says when the traded asset’s own bar line has stopped, which the chart’s line does not show', async () => {
+      await renderTrading(pane({
+        feed: fakeChartFeed({
+          state: 'STALLED', headline: 'QQQ price stalled', explanation: 'Its line has stopped at its last bar.',
+          show_notice: true, attention_required: true,
+        }),
+      }));
+
+      expect(screen.getByRole('alert', { name: 'QQQ price stalled' }).textContent).toContain('Its line has stopped');
+    });
+
+    it('says nothing about a traded line that is delivering', async () => {
+      await renderTrading(pane({ feed: fakeChartFeed() }));
+
+      expect(screen.queryByTestId('position-feed-notice')).toBeNull();
+    });
+
+    it('draws no such pane for a bot that trades what it listens to', async () => {
+      const { container } = await render(DualPaneChartComponent, { inputs: { symbol: 'SPY', liveBars: bars, histBars: [] } });
+
+      expect(container.querySelector('.chart-position-caption')).toBeNull();
       expect(paneLines()).toHaveLength(0);
     });
   });

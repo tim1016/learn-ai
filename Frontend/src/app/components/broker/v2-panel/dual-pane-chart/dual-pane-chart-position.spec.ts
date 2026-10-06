@@ -15,7 +15,7 @@ function pane(values: readonly (string | null)[]): ChartPositionPane {
   return {
     kind: 'price',
     symbol: 'QQQ',
-    heading: 'QQQ · what it trades',
+    heading: 'What it trades',
     points: values.map((value, index) => ({ start_ms: FIRST + index * MINUTE, value })),
     fill_markers: [],
     overlay_notices: [],

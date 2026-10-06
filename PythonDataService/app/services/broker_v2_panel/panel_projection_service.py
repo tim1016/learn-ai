@@ -286,7 +286,8 @@ def traded_feed_lane(
     if traded is None:
         return None
     return TradedFeedLaneView(
-        title=f"Market data · {traded.symbol}",
+        title="Market data",
+        symbol=traded.symbol,
         events=[
             TradedFeedLaneEvent(
                 at_ms=decision.decision_bar_close_ms or decision.recorded_at_ms,

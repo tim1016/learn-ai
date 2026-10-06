@@ -538,7 +538,9 @@ class TradedFeedLaneView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    # ``title`` says what the lane is; the asset is ``symbol``, kept apart.
     title: str
+    symbol: str
     events: list[TradedFeedLaneEvent]
 
 
@@ -1138,39 +1140,6 @@ class ChartOverlayNoticeView(BaseModel):
     source: Literal["polygon"]
 
 
-class ChartPositionPoint(BaseModel):
-    """What the position pane draws on one of the chart's own bars."""
-
-    model_config = ConfigDict(frozen=True)
-
-    start_ms: int
-    # ``None`` is a bar with no price for the traded asset. It is sent as
-    # missing and drawn as a gap, never bridged from a neighbouring bar.
-    value: str | None
-
-
-class ChartPositionPane(BaseModel):
-    """The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
-
-    ``points`` has one entry per bar of the chart it comes with, in the same
-    order, so the pane shares the chart's time axis exactly. ``kind`` says
-    what a value is: ``price`` is the traded stock's or ETF's own bar close.
-    ``fill_markers`` are the bot's fills in the traded asset, which the
-    chart of the symbol it listens to leaves off.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["price"]
-    symbol: str
-    heading: str
-    points: list[ChartPositionPoint]
-    fill_markers: list[ChartFillMarker]
-    # Why the traded asset's bars could not be read, when they could not: the
-    # pane then has no line, and says so rather than looking like a quiet day.
-    overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
-
-
 class ChartFeedView(BaseModel):
     """The LIVE pane's own IBKR bar line, with backend-authored copy (#2355).
 
@@ -1196,6 +1165,44 @@ class ChartFeedView(BaseModel):
     attention_required: bool
     last_bar_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     last_error: str | None
+
+
+class ChartPositionPoint(BaseModel):
+    """What the position pane draws on one of the chart's own bars."""
+
+    model_config = ConfigDict(frozen=True)
+
+    start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # ``None`` is a bar with no price for the traded asset. It is sent as
+    # missing and drawn as a gap, never bridged from a neighbouring bar.
+    value: str | None
+
+
+class ChartPositionPane(BaseModel):
+    """The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
+
+    ``points`` has one entry per bar of the chart it comes with, in the same
+    order, so the pane shares the chart's time axis exactly. ``kind`` says
+    what a value is: ``price`` is the traded stock's or ETF's own bar close.
+    ``fill_markers`` are the bot's fills in the traded asset, which the
+    chart of the symbol it listens to leaves off. ``heading`` says what the
+    pane is and leaves the asset to ``symbol``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["price"]
+    symbol: str
+    heading: str
+    points: list[ChartPositionPoint]
+    fill_markers: list[ChartFillMarker]
+    # Why the traded asset's bars could not be read, when they could not: the
+    # pane then has no line, and says so rather than looking like a quiet day.
+    overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
+    # The traded asset's own IBKR bar line on the LIVE pane, which is not the
+    # line of the symbol the bot listens to: one can stall while the other
+    # draws. ``None`` on HISTORY, which has no live line.
+    feed: ChartFeedView | None = None
 
 
 class ChartLiveResponse(BaseModel):

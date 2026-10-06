@@ -9623,9 +9623,11 @@ export interface components {
          *     order, so the pane shares the chart's time axis exactly. ``kind`` says
          *     what a value is: ``price`` is the traded stock's or ETF's own bar close.
          *     ``fill_markers`` are the bot's fills in the traded asset, which the
-         *     chart of the symbol it listens to leaves off.
+         *     chart of the symbol it listens to leaves off. ``heading`` says what the
+         *     pane is and leaves the asset to ``symbol``.
          */
         ChartPositionPane: {
+            feed?: components["schemas"]["ChartFeedView"] | null;
             /** Fill Markers */
             fill_markers: components["schemas"]["ChartFillMarker"][];
             /** Heading */
@@ -24224,6 +24226,8 @@ export interface components {
         TradedFeedLaneView: {
             /** Events */
             events: components["schemas"]["TradedFeedLaneEvent"][];
+            /** Symbol */
+            symbol: string;
             /** Title */
             title: string;
         };

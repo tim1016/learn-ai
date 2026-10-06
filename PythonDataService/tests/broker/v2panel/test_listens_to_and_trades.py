@@ -374,7 +374,7 @@ def test_the_traded_assets_lane_holds_the_entries_its_price_feed_refused(monkeyp
 
     lane = traded_feed_lane(TradedInstrumentView(kind="stock", symbol="QQQ"), decisions)
 
-    assert lane is not None and "QQQ" in lane.title
+    assert lane is not None and lane.symbol == "QQQ"
     assert sorted((event.state, event.sentence) for event in lane.events) == [
         ("late", None),
         ("no_trade", _NO_TRADE),
@@ -460,7 +460,7 @@ async def test_the_bot_page_of_a_bot_that_trades_another_asset(
     assert "SPY" in page["traded_asset_warning"]["headline"] and "QQQ" in page["traded_asset_warning"]["headline"]
     assert page["traded_market_pulse"] is not None
     assert page["market_pulse"] is not None
-    assert "QQQ" in page["traded_feed_lane"]["title"]
+    assert page["traded_feed_lane"]["symbol"] == "QQQ"
     assert clerk_card_symbols == ["QQQ"], "the Clerk's submission gate reads the feed of the asset its orders are in"
 
 

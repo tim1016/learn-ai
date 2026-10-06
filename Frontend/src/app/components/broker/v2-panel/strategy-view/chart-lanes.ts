@@ -53,6 +53,8 @@ export interface LaneMark {
 export interface ChartLane {
   readonly key: LaneKey;
   readonly title: string;
+  /** The asset the lane is about, when it is not the chart's own (#2915). */
+  readonly symbol?: string;
   readonly marks: readonly LaneMark[];
 }
 
@@ -153,7 +155,7 @@ function tradedLane(feed: TradedFeedLaneView, clock: LaneClock): ChartLane {
     ...TRADED_FEED_MARKS[event.state],
     label: `${minuteOf(event.at_ms, clock)} · ${event.sentence ?? formatReceiptLabel(event.reason_code)}`,
   }));
-  return { key: 'traded', title: feed.title, marks };
+  return { key: 'traded', title: feed.title, symbol: feed.symbol, marks };
 }
 
 function botLane(view: StrategyViewResponse, context: StrategyRunContext, clock: LaneClock): ChartLane {

@@ -6,6 +6,7 @@ It receives only S2 ``FillRecord`` values from the activated SQLite authority.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from typing import Literal
 
@@ -283,8 +284,10 @@ async def get_history_chart(
 
     if asset == "trades":
         return await chart_of(order_symbol(status.symbol, status.traded))
-    chart = await chart_of(status.symbol)
     traded_symbol = _position_pane_symbol(status.traded)
     if traded_symbol is None:
-        return chart
-    return chart.model_copy(update={"position": position_pane(chart, await chart_of(traded_symbol))})
+        return await chart_of(status.symbol)
+    # Read together: each read may take the history batch's whole inner
+    # timeout, and one after the other they would outlast the outer one.
+    chart, traded_chart = await asyncio.gather(chart_of(status.symbol), chart_of(traded_symbol))
+    return chart.model_copy(update={"position": position_pane(chart, traded_chart)})

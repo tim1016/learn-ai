@@ -43,7 +43,8 @@ describe('chartLanes (#2794)', () => {
   it('adds a lane for the asset a bot trades, where each kind of refusal looks different (#2915)', () => {
     const lanes = chartLanes(fakeStrategyView(), context({
       tradedFeed: {
-        title: 'Market data · QQQ',
+        title: 'Market data',
+        symbol: 'QQQ',
         events: [
           { at_ms: barCloseMs(2), state: 'no_trade', reason_code: 'PRICING_BAR_NO_TRADE', sentence: 'QQQ had no trade in this minute.' },
           { at_ms: barCloseMs(3), state: 'late', reason_code: 'PRICING_BAR_LATE', sentence: null },
@@ -54,7 +55,7 @@ describe('chartLanes (#2794)', () => {
 
     expect(lanes.map(({ key }) => key)).toEqual(['decisions', 'orders', 'market', 'traded', 'bot']);
     const traded = lane(lanes, 'traded');
-    expect(traded.title).toBe('Market data · QQQ');
+    expect(traded.symbol).toBe('QQQ');
     expect(traded.marks.map(({ atMs }) => atMs)).toEqual([barCloseMs(2), barCloseMs(3), barCloseMs(3) + STRATEGY_BAR_MS]);
     expect(new Set(traded.marks.map(({ glyph, tone }) => `${glyph}/${tone}`)).size).toBe(3);
     expect(traded.marks[0].label).toContain('QQQ had no trade in this minute.');

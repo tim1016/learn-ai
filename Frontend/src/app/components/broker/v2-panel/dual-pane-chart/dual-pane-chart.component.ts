@@ -42,6 +42,7 @@ import type {
   ChartSource,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
@@ -60,7 +61,7 @@ import { ChartLanesComponent } from '../strategy-view/chart-lanes.component';
 import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-overlay';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import { chartIndicatorCatalog } from './chart-indicator-catalog';
-import { positionRuns } from './dual-pane-chart-position';
+import { positionRuns, type PositionRun } from './dual-pane-chart-position';
 import {
   type SelectedChartIndicator,
   resultBelongsToIndicator,
@@ -264,6 +265,7 @@ function barCoordinateScale(timeScale: ITimeScaleApi<Time>, bars: readonly Chart
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AssetIdentityComponent,
     ChartIndicatorRailComponent,
     ChartLanesComponent,
     PanelInstrumentQuoteComponent,
@@ -353,6 +355,12 @@ export class DualPaneChartComponent implements AfterViewInit {
     return feed?.show_notice ? feed : null;
   });
   protected readonly liveFeedDown = computed(() => this.liveFeed()?.attention_required === true);
+  /** The traded asset's own bar line (#2915): it can stop while the chart's line draws. */
+  protected readonly positionFeedNotice = computed<ChartFeedView | null>(() => {
+    if (this.activePane() !== 'live') return null;
+    const feed = this.livePosition()?.feed;
+    return feed?.show_notice ? feed : null;
+  });
 
   protected readonly liveSource = computed<ChartSource | null>(() => {
     const bars = this.liveBars();
@@ -384,9 +392,18 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly activeLoading = computed(() =>
     this.activePane() === 'live' ? this.liveLoading() : this.historyLoading(),
   );
-  protected readonly visibleFillCount = computed(() =>
-    countPlottedFills(this.activeMarkers(), this.activeBars()),
+  /** Fills on the candles and on the position pane, which draws the traded asset's (#2915). */
+  protected readonly fillCount = computed(
+    () => this.activeMarkers().length + (this.activePosition()?.fill_markers.length ?? 0),
   );
+  protected readonly visibleFillCount = computed(() => {
+    const bars = this.activeBars();
+    const position = this.activePosition();
+    const onPosition = position === null
+      ? 0
+      : positionRuns(position, bars).reduce((sum, run) => sum + countPlottedFills(position.fill_markers, run.bars), 0);
+    return countPlottedFills(this.activeMarkers(), bars) + onPosition;
+  });
   protected readonly activeIndicatorKeys = computed(() =>
     this.selectedIndicators().map((indicator) => indicator.name),
   );
@@ -734,20 +751,23 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (position !== null) this.renderPosition(position, bars, paneIndices.size + 1);
   }
 
-  /** One line per unbroken stretch of the traded asset's price, so a bar with no price stays a gap. */
+  /**
+   * One line per unbroken stretch of the traded asset's price, so a bar with
+   * no price stays a gap. With no price at all one empty line still holds the
+   * pane, so its caption never sits over another pane.
+   */
   private renderPosition(position: ChartPositionPane, bars: readonly ChartBar[], paneIndex: number): void {
     const chart = this.chart;
     if (!chart) return;
     const runs = positionRuns(position, bars);
-    runs.forEach((run, index) => {
-      const last = index === runs.length - 1;
+    const stretches: readonly PositionRun[] = runs.length > 0 ? runs : [{ points: [], bars: [] }];
+    stretches.forEach((run, index) => {
       const line = chart.addSeries(LineSeries, {
         color: POSITION_LINE_COLOR,
         lineWidth: 2,
         priceLineVisible: false,
-        lastValueVisible: last,
+        lastValueVisible: index === stretches.length - 1,
         crosshairMarkerVisible: false,
-        title: last ? position.symbol : '',
       }, paneIndex);
       line.setData([...run.points]);
       createSeriesMarkers(line, toSeriesMarkers(position.fill_markers, run.bars));

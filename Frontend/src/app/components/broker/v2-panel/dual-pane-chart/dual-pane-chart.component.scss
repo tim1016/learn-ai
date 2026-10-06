@@ -365,6 +365,7 @@
   display: flex;
   max-width: calc(100% - var(--space-4));
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1) var(--space-3);
   margin: 0;
   color: var(--text-secondary);

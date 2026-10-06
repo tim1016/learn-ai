@@ -7,6 +7,7 @@ cap is not widened.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
@@ -941,10 +942,19 @@ def _spy_bot(traded: TradedInstrumentView | None) -> BotStatusView:
 
 
 async def _history_chart_of(
-    monkeypatch: pytest.MonkeyPatch, status: BotStatusView, bars: dict[str, list[ChartBar]], fills: tuple = ()
+    monkeypatch: pytest.MonkeyPatch,
+    status: BotStatusView,
+    bars: dict[str, list[ChartBar]],
+    fills: tuple = (),
+    *,
+    reads_in_flight: int = 1,
 ):
-    """The bot's history chart, read from a vendor that holds ``bars`` for each symbol."""
+    """The bot's history chart, read from a vendor that holds ``bars`` for each symbol.
+
+    The vendor answers no read until ``reads_in_flight`` of them have been asked for.
+    """
     asked_for: list[str] = []
+    in_flight = asyncio.Event()
 
     async def validate_account(_broker: str, account_id: str) -> str:
         return account_id
@@ -954,6 +964,9 @@ async def _history_chart_of(
 
     async def batch_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
         asked_for.append(query.symbol)
+        if len(asked_for) >= reads_in_flight:
+            in_flight.set()
+        await asyncio.wait_for(in_flight.wait(), timeout=1)
         return HistoryBatchResponse(
             bars=bars[query.symbol], source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms
         )
@@ -987,7 +1000,7 @@ async def test_a_bot_that_trades_another_asset_gets_its_price_on_the_charts_own_
 
     pane = chart.position
     assert pane is not None and (pane.kind, pane.symbol) == ("price", "QQQ")
-    assert "QQQ" in pane.heading
+    assert pane.feed is None, "history has no live line to report on"
     assert [(point.start_ms, point.value) for point in pane.points] == [
         (first, "512.40"),
         (first + 60_000, None),
@@ -995,6 +1008,21 @@ async def test_a_bot_that_trades_another_asset_gets_its_price_on_the_charts_own_
     ]
     assert [marker.event_key for marker in pane.fill_markers] == ["qqq-fill"]
     assert chart.fill_markers == [], "a QQQ fill is never drawn on SPY's candles"
+
+
+async def test_the_two_history_reads_are_in_flight_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each read may take the history batch's whole inner timeout; one after the other they outlast the outer one."""
+    bar = _minute_bar(_NOW - 60_000, "450.00")
+
+    chart, asked_for = await _history_chart_of(
+        monkeypatch,
+        _spy_bot(TradedInstrumentView(kind="stock", symbol="QQQ")),
+        {"SPY": [bar], "QQQ": [bar]},
+        reads_in_flight=2,
+    )
+
+    assert sorted(asked_for) == ["QQQ", "SPY"]
+    assert chart.position is not None
 
 
 async def test_a_bot_that_trades_what_it_listens_to_has_no_position_pane(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1027,11 +1055,13 @@ async def test_the_live_chart_carries_the_traded_assets_price_too(monkeypatch: p
         panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"))
         return panel, [], ()
 
+    line_of = {"SPY": ChartFeedStatus(state="LIVE"), "QQQ": ChartFeedStatus(state="STALLED", last_bar_ms=first)}
+
     async def live_chart_of(sid: str, symbol: str, _fills: object, *, resolution: str, now_ms: int):
         return ChartLiveResponse(
             strategy_instance_id=sid, symbol=symbol, trading_date_open_ms=first, trading_date_close_ms=now_ms,
             resolution=resolution, bars=live_bars[symbol], fill_markers=[], overlay_notices=[],
-            feed=chart_feed_view(CHART_FEED_NOT_EXPECTED), as_of_ms=now_ms,
+            feed=chart_feed_view(line_of[symbol]), as_of_ms=now_ms,
         )
 
     monkeypatch.setattr(panel_chart_data_source, "get_panel_with_chart_fills", panel_with_entries)
@@ -1047,6 +1077,12 @@ async def test_the_live_chart_carries_the_traded_assets_price_too(monkeypatch: p
         (first, None),
         (first + 60_000, "512.90"),
     ]
+    # QQQ's bar line is its own: it has stalled while SPY's draws, and the pane says so about QQQ.
+    stalled = chart.position.feed
+    assert chart.feed.state == "LIVE"
+    assert stalled is not None and (stalled.state, stalled.last_bar_at_ms) == ("STALLED", first)
+    assert stalled.show_notice and stalled.attention_required
+    assert "QQQ" in stalled.headline and "QQQ" in stalled.explanation
 
 
 async def test_get_history_chart_under_clerk_agent_never_reaches_polygon_directly(
