@@ -1,6 +1,6 @@
 # ADR 0075 — One shared date picker; the host states what its run can read
 
-**Status:** Accepted 2026-10-03
+**Status:** Accepted 2026-10-03; section 5 amended 2026-10-05 (5Y)
 **Provenance:** Owner decisions in [#2858](https://github.com/tim1016/learn-ai/issues/2858), grilled on 2026-10-03, and the corrections posted there while it was built.
 **Related:** ADR 0022 (the calendar is the authority; time on the wire is `int64 ms UTC`), ADR 0066 (the shared symbol picker).
 
@@ -51,7 +51,8 @@ Only the host knows what its run reads, so it hands the picker its bounds (`Date
 - A range ends on the last day the page's run can read and is exactly its label, both ends included: 1Y ending 2026-09-18 starts 2025-09-19. It is therefore a whole number of months, which the fold planners require.
 - Where dates must be sessions, the start moves forward to the next session.
 - A range the data cannot serve stays in place, greyed, and says why.
-- A range is shown as active only when the dates equal exactly what its click would set.
+- **5Y starts on the first day when it falls up to a week short of it** (owner, 2026-10-05: "date picker should support the 5Y date range in backfill and engine lab and in the places possible"). The provider's plan is five years, and its first day is kept two days inside that; a range ends on the last completed session, which is a day or more behind today. An exact five years therefore always starts a few days before anything the provider serves or the lake could have fetched, so 5Y was greyed on every page. It now starts on the page's first day, and its tooltip says which day and why. More than a week short, it stays greyed. The week, and keeping this to 5Y, are the builder's calls: 1Y and 2Y stay exact, because the fold planners need whole months.
+- A range is shown as active only when the dates equal exactly what its click would set. Two ranges can be the same dates, as 5Y and Max are on a page bounded by the provider; both are then shown active.
 - A host whose ranges are resolved on the server (Data Lab's end on the session still forming) hands them to the picker, which shows them under the shared labels.
 
 ### 6. The calendar comes from the data plane

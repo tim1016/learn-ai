@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { etMidnightMs } from '../date/et-midnight';
 import { UNBOUNDED, heldBounds } from './date-bounds';
-import { QUICK_RANGES, activeQuickRange, offerQuickRanges, type QuickRangeKey } from './quick-ranges';
+import { QUICK_RANGES, activeQuickRanges, offerQuickRanges, type QuickRangeKey } from './quick-ranges';
 import { fakeSessions } from './testing/fake-trading-calendar';
 
 const HOLIDAYS = { '2024-09-02': 'Labor Day', '2026-01-01': "New Year's Day" };
@@ -59,8 +59,42 @@ describe('offerQuickRanges', () => {
     const fetched = { ...UNBOUNDED, min: '2021-10-05', minReason: 'The provider serves bars from 2021-10-05.' };
     expect(offer('1D', fetched).range).toEqual({ from: '2026-10-01', to: '2026-10-01' });
     expect(offer('Max', fetched).range).toEqual({ from: '2021-10-05', to: '2026-10-01' });
-    // Five years ending 2026-10-01 start on Saturday 2021-10-02; the next session, the 4th, is before the floor.
-    expect(offer('5Y', fetched).unavailable).toBe('The provider serves bars from 2021-10-05.');
+  });
+
+  describe('5Y against a first day a few days inside five years', () => {
+    const servedFrom = (min: string) => ({ ...UNBOUNDED, min, minReason: `The provider serves bars from ${min}.` });
+
+    it('starts on the first day and says so, where the exact start is a day short', () => {
+      // Five years ending 2026-10-01 start on Saturday 2021-10-02; the next session, the 4th, is before the floor.
+      expect(offer('5Y', servedFrom('2021-10-05'))).toEqual({
+        key: '5Y',
+        range: { from: '2021-10-05', to: '2026-10-01' },
+        unavailable: null,
+        note: 'Starts on 2021-10-05. The provider serves bars from 2021-10-05.',
+      });
+    });
+
+    it('starts on the first session on or after a first day that is closed', () => {
+      // The floor is a Saturday; the range must still start on a session.
+      expect(offer('5Y', servedFrom('2021-10-09')).range).toEqual({ from: '2021-10-11', to: '2026-10-01' });
+    });
+
+    it('is refused once it falls more than a week short', () => {
+      const anyDay = (min: string) => offerQuickRanges(['5Y'], servedFrom(min), SESSIONS, LAST_COMPLETED, false)[0];
+
+      // The exact start is 2021-10-02: seven days short is served, eight is not.
+      expect(anyDay('2021-10-09').range).toEqual({ from: '2021-10-09', to: '2026-10-01' });
+      expect(anyDay('2021-10-10')).toEqual({ key: '5Y', range: null, unavailable: 'The provider serves bars from 2021-10-10.' });
+    });
+
+    it('carries no note when the page reads all five years', () => {
+      expect(offer('5Y', servedFrom('2021-10-01'))).toEqual({ key: '5Y', range: { from: '2021-10-04', to: '2026-10-01' }, unavailable: null });
+    });
+  });
+
+  it('gives no other range that leeway: a day short is refused', () => {
+    // Two years ending 2026-09-18 start on 2024-09-19.
+    expect(offer('2Y', heldBounds('QQQ', '2024-09-20', '2026-09-18'))).toEqual({ key: '2Y', range: null, unavailable: 'QQQ is held from 2024-09-20.' });
   });
 
   it('offers nothing while the span or the calendar is unknown, and says why', () => {
@@ -72,12 +106,20 @@ describe('offerQuickRanges', () => {
   });
 });
 
-describe('activeQuickRange', () => {
+describe('activeQuickRanges', () => {
   it('names a range only when the dates are exactly what its click would set', () => {
     const offers = offerQuickRanges(QUICK_RANGES, QQQ, SESSIONS, LAST_COMPLETED);
 
-    expect(activeQuickRange(offers, '2026-08-19', '2026-09-18')).toBe('1M');
-    expect(activeQuickRange(offers, '2026-08-20', '2026-09-18')).toBeNull();
-    expect(activeQuickRange(offers, '', '')).toBeNull();
+    expect([...activeQuickRanges(offers, '2026-08-19', '2026-09-18')]).toEqual(['1M']);
+    expect([...activeQuickRanges(offers, '2026-08-20', '2026-09-18')]).toEqual([]);
+    expect([...activeQuickRanges(offers, '', '')]).toEqual([]);
+  });
+
+  it('names every range whose click would set those dates', () => {
+    // On a page bounded by the provider, 5Y and Max are the same dates.
+    const fetched = { ...UNBOUNDED, min: '2021-10-05', minReason: 'The provider serves bars from 2021-10-05.' };
+    const offers = offerQuickRanges(QUICK_RANGES, fetched, SESSIONS, LAST_COMPLETED);
+
+    expect([...activeQuickRanges(offers, '2021-10-05', '2026-10-01')]).toEqual(['5Y', 'Max']);
   });
 });

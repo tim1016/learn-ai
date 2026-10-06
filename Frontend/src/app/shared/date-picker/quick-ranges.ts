@@ -18,7 +18,20 @@ export interface QuickRangeOffer {
   readonly range: DateRange | null;
   /** Why the range cannot be served; null when it can. */
   readonly unavailable: string | null;
+  /** What a click sets that the label does not say; absent when the range is exactly its label. */
+  readonly note?: string;
 }
+
+/**
+ * How many days short of five years 5Y may start and still be offered.
+ *
+ * The provider's plan is five years, and its first day is kept two days
+ * inside that. A range ends on the last completed session, which is a day
+ * behind today and more after a long weekend. So an exact five years always
+ * starts a few days before anything the provider serves, and before anything
+ * the lake could have fetched from it.
+ */
+const FIVE_YEAR_LEEWAY_DAYS = 7;
 
 /** The day ``months`` whole calendar months before the day after ``end``: the first day of a range of exactly that many months. */
 function monthsBefore(end: IsoDate, months: number): IsoDate {
@@ -63,7 +76,8 @@ function calendarStart(key: QuickRangeKey, end: IsoDate): IsoDate | null {
  * 2026-04-30, a day more than six months); a planner refuses such a range in
  * its own words. With ``sessionsOnly`` the start then moves forward to the
  * next session, so a range never reaches past its label. A range whose start falls before ``bounds.min`` is refused with the
- * bound's own reason.
+ * bound's own reason. 5Y is the exception: up to ``FIVE_YEAR_LEEWAY_DAYS``
+ * short, it starts on ``bounds.min`` and carries a note saying so.
  */
 export function offerQuickRanges(
   keys: readonly QuickRangeKey[],
@@ -86,12 +100,16 @@ export function offerQuickRanges(
     if (!sessions.covers(start)) return refuse(`The trading calendar starts at ${sessions.from}.`);
     const from = sessionsOnly ? sessions.onOrAfter(start) : start;
     if (from === null || from > end) return refuse(`No trading session between ${start} and ${end}.`);
-    if (bounds.min !== null && from < bounds.min) return refuse(bounds.minReason ?? `The first day is ${bounds.min}.`);
-    return { key, range: { from, to: end }, unavailable: null };
+    if (bounds.min === null || from >= bounds.min) return { key, range: { from, to: end }, unavailable: null };
+    const reason = bounds.minReason ?? `The first day is ${bounds.min}.`;
+    if (key !== '5Y' || from < addDays(bounds.min, -FIVE_YEAR_LEEWAY_DAYS)) return refuse(reason);
+    const first = sessionsOnly ? sessions.onOrAfter(bounds.min) : bounds.min;
+    if (first === null || first > end) return refuse(reason);
+    return { key, range: { from: first, to: end }, unavailable: null, note: `Starts on ${first}. ${reason}` };
   });
 }
 
-/** The quick range whose click would set exactly ``from`` to ``to``; null when the dates match none. */
-export function activeQuickRange(offers: readonly QuickRangeOffer[], from: string, to: string): QuickRangeKey | null {
-  return offers.find((offer) => offer.range !== null && offer.range.from === from && offer.range.to === to)?.key ?? null;
+/** Every quick range whose click would set exactly ``from`` to ``to``: 5Y and Max are the same dates where a page reads just short of five years. */
+export function activeQuickRanges(offers: readonly QuickRangeOffer[], from: string, to: string): ReadonlySet<QuickRangeKey> {
+  return new Set(offers.filter((offer) => offer.range !== null && offer.range.from === from && offer.range.to === to).map((offer) => offer.key));
 }

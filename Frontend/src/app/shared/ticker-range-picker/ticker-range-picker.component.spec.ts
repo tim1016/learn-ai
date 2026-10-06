@@ -108,7 +108,8 @@ describe('TickerRangePickerComponent (flags)', () => {
   it("bounds the dates by the provider's history when the host's run fetches its own bars", async () => {
     await fixture.whenStable();
 
-    expect(fiveYears()).toBe('5Y, unavailable: The provider serves bars from 2021-09-21.');
+    // Five years ending Friday 2026-09-18 start a day before the provider's first day, so 5Y starts on it.
+    expect(fiveYears()).toBe('5Y. Starts on 2021-09-21. The provider serves bars from 2021-09-21.');
   });
 
   it("takes a host's own bound, and any day when the host's dates need not be sessions", async () => {
