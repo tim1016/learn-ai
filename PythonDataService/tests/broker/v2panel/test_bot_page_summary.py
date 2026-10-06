@@ -208,8 +208,31 @@ def test_a_sale_at_an_older_price_carries_that_prices_age() -> None:
     assert duration_label(three_minutes) in listed.simulated.sentence
 
 
-def test_only_the_older_price_claims_an_age() -> None:
-    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": _priced_by()})
+def test_a_run_end_close_carries_the_age_of_the_last_price_its_run_saw() -> None:
+    """The close is stamped when it sells, overnight if need be; its record keeps when that price last traded."""
+    overnight = 9 * 60 * _MINUTE_MS
+    restated = _priced_by(provider=RUN_END_CLOSE_PROVIDER).model_copy(update={"restated_bar_end_ms": _START - overnight})
+
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": restated})
+
+    assert listed.simulated is not None
+    assert (listed.simulated.kind, listed.simulated.price_age_ms) == ("run_end_close", overnight)
+    assert duration_label(overnight) in listed.simulated.label
+
+
+def test_a_price_dated_after_its_fill_by_another_clock_has_no_age_and_never_a_negative_one() -> None:
+    """The price's time is the feed's and the fill's is this process's clock, which can run behind."""
+    ahead = _priced_by(provider=RUN_END_CLOSE_PROVIDER).model_copy(update={"restated_bar_end_ms": _START + 5_000})
+
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": ahead})
+
+    assert listed.simulated is not None and listed.simulated.price_age_ms == 0
+
+
+@pytest.mark.parametrize("anchor", [_priced_by(), _priced_by(provider=RUN_END_CLOSE_PROVIDER)])
+def test_a_fill_claims_an_age_only_when_its_record_holds_one(anchor: SynthesizedAnchor) -> None:
+    """A price of its own minute has none, and a run-end close recorded before the time was kept does not guess one."""
+    [listed] = run_fill_views([_sale()], {"alpaca/exit-1": anchor})
 
     assert listed.simulated is not None and listed.simulated.price_age_ms is None
 
