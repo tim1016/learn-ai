@@ -42,6 +42,9 @@ export class RecentDecisionsListComponent {
   readonly strategyView = input<StrategyViewResponse | null>(null);
   /** The selected decision bar, by its close; shared with the strategy chart. */
   readonly selectedBarCloseMs = model<number | null>(null);
+  /** Show a refused decision's recorded sentence under its row. Off for a bot
+   * that trades what it listens to, whose page is to stay as it was (#2915). */
+  readonly showRefusalSentences = input(false);
 
   protected readonly idPrefix = `recent-decisions-${nextDecisionsListId++}`;
   protected readonly entries = computed(() => decisionListEntries(this.decisions(), this.strategyView()));

@@ -193,6 +193,7 @@
               <app-recent-decisions-list
                 [decisions]="panelData.recent_decisions"
                 [strategyView]="strategyViewValue()"
+                [showRefusalSentences]="!!panelData.traded"
                 [(selectedBarCloseMs)]="selectedDecisionBarMs"
               />
               @if (panelData.mode === 'log_only') {
@@ -204,6 +205,7 @@
                   [fills]="runFills()"
                   [fillCount]="runFillCount()"
                   [runStartedAtMs]="runStartedAtMs()"
+                  [showAsset]="!!panelData.traded"
                 />
               }
             </div>
@@ -213,6 +215,9 @@
                 <app-bot-health-groups
                   [health]="page.health"
                   [marketPulse]="panelData.market_pulse"
+                  [tradedMarketPulse]="panelData.traded_market_pulse ?? null"
+                  [listensTo]="panelData.symbol"
+                  [trades]="panelData.traded?.symbol ?? null"
                   [startupJoin]="panelData.startup_join ?? null"
                   [dutyOutcome]="stranded() ? null : (panelData.health.duty_outcome ?? null)"
                   [clerkGuidance]="panelData.mission_verdict.state === 'blocked' ? panelData.mission_verdict : null"

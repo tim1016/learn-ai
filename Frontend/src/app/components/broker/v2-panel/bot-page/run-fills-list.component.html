@@ -12,7 +12,7 @@
   </header>
 
   @if (hasFills()) {
-    <app-fill-table [fills]="inlineFills()" label="Fills this run" />
+    <app-fill-table [fills]="inlineFills()" label="Fills this run" [showAsset]="showAsset()" />
 
     @if (hasMoreFills()) {
       <button type="button" class="view-all-fills" (click)="openAllFills()">
@@ -45,6 +45,6 @@
     @if (fillCount() > fills().length) {
       <p class="fills-drawer__note">The newest {{ fills().length }} of this run's {{ fillCount() }} fills.</p>
     }
-    <app-fill-table [fills]="fills()" label="All fills this run" />
+    <app-fill-table [fills]="fills()" label="All fills this run" [showAsset]="showAsset()" />
   }
 </p-drawer>

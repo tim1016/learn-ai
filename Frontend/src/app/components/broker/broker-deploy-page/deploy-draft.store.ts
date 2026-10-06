@@ -8,14 +8,19 @@ import type { DeployBotStrategy, DeploySizingOption } from '../v2-panel/lib/brok
  *
  * The bot's name is not here — the backend authors it (#2551) — and neither
  * is anything that proves a click: no review token, no typed Live phrase, no
- * evidence-only acknowledgement.
+ * evidence-only acknowledgement and no acknowledgement of an untested traded
+ * asset.
  */
 export interface DeployTicketSettings {
   exitAllowanceBps: number | null;
   bandMultiple: number | null;
   spreadCapBps: number | null;
   strategyKey: DeployBotStrategy['strategy_key'] | '';
+  /** What the bot listens to. */
   symbol: string;
+  /** What it trades when the owner picked another stock or ETF (#2912);
+   * `null` trades the symbol it listens to. */
+  tradedSymbol: string | null;
   sizingPreset: DeploySizingOption['preset'];
   quantity: number;
   // Spelled out, not `Extract<DeployExecutionMode['mode'], ...>`: the backend
@@ -67,6 +72,7 @@ export const EMPTY_DEPLOY_SETTINGS: DeployTicketSettings = {
   spreadCapBps: null,
   strategyKey: '',
   symbol: '',
+  tradedSymbol: null,
   sizingPreset: 'safe_canary',
   quantity: 1,
   executionMode: null,

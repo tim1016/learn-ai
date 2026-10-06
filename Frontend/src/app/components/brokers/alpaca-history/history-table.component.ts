@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { accountWorkspaceBotRoute } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneConfirmedAccount } from '../../../fleet/fleet-directory.types';
-import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { BotInstrumentComponent } from '../../../shared/bot-instrument/bot-instrument.component';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -29,8 +29,8 @@ import { historyAccountName, historyWorldChip, type FleetBotHistoryRow } from '.
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaLaneModeChipComponent,
-    AssetIdentityComponent,
     AuthoredUsdPipe,
+    BotInstrumentComponent,
     ReceiptLabelPipe,
     RouterLink,
     TimestampDisplayComponent,

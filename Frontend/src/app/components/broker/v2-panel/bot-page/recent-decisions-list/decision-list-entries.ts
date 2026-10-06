@@ -31,6 +31,8 @@ export interface DecisionRowView {
   readonly explanation: StrategyViewCandle['explanation'] | null;
   /** The explanation's checks, those that could act on the bar first. */
   readonly checks: readonly ExplainedCheckView[];
+  /** Why a refused decision sent no order, in the backend's sentence (#2912). */
+  readonly refusalReason: string | null;
 }
 
 export type DecisionListEntry =
@@ -52,6 +54,7 @@ function decisionRow(decision: RecentDecisionView): DecisionRowView {
     reasonCode: decision.reason_code.toUpperCase() === decision.outcome.toUpperCase() ? null : decision.reason_code,
     explanation: decision.explanation ?? null,
     checks: orderedChecks(decision.explanation?.checks ?? []),
+    refusalReason: decision.refusal_reason ?? null,
   };
 }
 
@@ -67,6 +70,7 @@ function beforeStartRow(candle: StrategyViewCandle): DecisionRowView {
     reasonCode: candle.reason_code ?? null,
     explanation: candle.explanation,
     checks: orderedChecks(candle.explanation.checks),
+    refusalReason: null,
   };
 }
 

@@ -10,7 +10,7 @@
   <span class="home-tile__chip">{{ groupWords() }}</span>
 </header>
 <p class="home-tile__meta">
-  <app-asset-identity class="home-tile__symbol" [symbol]="bot.symbol" size="xs" />
+  <app-bot-instrument class="home-tile__symbol" [symbol]="bot.symbol" [traded]="bot.traded" />
   · {{ bot.strategy_label }} · {{ bot.world_label }}
 </p>
 @if (bot.needs_attention) {

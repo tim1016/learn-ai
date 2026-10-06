@@ -1,0 +1,34 @@
+<section class="traded-acknowledgement" aria-labelledby="traded-acknowledgement-title">
+  <div class="traded-acknowledgement__heading">
+    <span aria-hidden="true">!</span>
+    <div>
+      <h3 id="traded-acknowledgement-title">Untested traded asset</h3>
+      <p>{{ warning().headline }}</p>
+    </div>
+  </div>
+
+  @if (warning().acceptance_label; as label) {
+    <label class="traded-acknowledgement__tick">
+      <input type="checkbox" [checked]="acknowledged()" (change)="changeAcknowledgement($event)" />
+      <span>{{ label }}</span>
+    </label>
+
+    <div class="traded-acknowledgement__reason">
+      <label for="traded-acknowledgement-reason">Your reason</label>
+      <textarea
+        id="traded-acknowledgement-reason"
+        rows="2"
+        maxlength="500"
+        [value]="reason()"
+        [attr.aria-invalid]="reasonError() !== null"
+        aria-describedby="traded-acknowledgement-help"
+        (input)="changeReason($event)"
+        (blur)="reasonBlur.emit()"
+      ></textarea>
+      <small id="traded-acknowledgement-help">Kept with this bot for good.</small>
+      @if (reasonError(); as error) {
+        <em role="alert">{{ error }}</em>
+      }
+    </div>
+  }
+</section>

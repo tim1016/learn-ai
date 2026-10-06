@@ -50,6 +50,9 @@
             } @else {
               <p class="decision__unrecorded">values not recorded</p>
             }
+            @if (showRefusalSentences() && row.refusalReason; as why) {
+              <p class="decision__sentence">{{ why }}</p>
+            }
           </li>
         }
       }

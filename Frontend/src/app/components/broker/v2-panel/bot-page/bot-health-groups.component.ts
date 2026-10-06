@@ -34,6 +34,12 @@ export class BotHealthGroupsComponent {
   readonly health = input.required<BotHealthGroupsView>();
   /** The market for this bot's symbol right now, as the backend words it. */
   readonly marketPulse = input<MarketPulseView | null>(null);
+  /** The same read for the asset the bot trades, when that is something
+   * other than the symbol it listens to (#2912): the run depends on both. */
+  readonly tradedMarketPulse = input<MarketPulseView | null>(null);
+  /** The two symbols, to head each read when there are two. */
+  readonly listensTo = input<string | null>(null);
+  readonly trades = input<string | null>(null);
   /** How the run is joining its warmup to the live stream (#2410), while it says. */
   readonly startupJoin = input<StartupJoinView | null>(null);
   /** How the run ended, and what it left at the broker, as the runner recorded it. */

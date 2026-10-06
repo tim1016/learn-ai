@@ -26,7 +26,7 @@
             <span class="history-table__sid-text">{{ bot.strategy_instance_id }}</span>
           }
           <span class="history-table__meta">
-            {{ bot.strategy_label }} · <app-asset-identity [symbol]="bot.symbol" size="xs" />
+            {{ bot.strategy_label }} · <app-bot-instrument [symbol]="bot.symbol" [traded]="bot.traded" />
           </span>
           @if (bot.page_unavailable_reason; as why) {
             <span class="history-table__meta">{{ why }}</span>

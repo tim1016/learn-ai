@@ -1,0 +1,16 @@
+:host {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  min-width: 0;
+}
+
+.bot-instrument__arrow,
+.bot-instrument__separator {
+  color: var(--text-muted, currentColor);
+}
+
+.bot-instrument__word {
+  color: var(--text-muted, currentColor);
+  white-space: nowrap;
+}

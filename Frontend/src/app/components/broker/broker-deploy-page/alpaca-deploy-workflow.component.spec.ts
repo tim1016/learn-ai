@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ChangeDetectionStrategy, Component, signal, type Provider } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router, type ParamMap } from '@angular/router';
@@ -47,6 +48,7 @@ import {
   pickSymbol,
   symbolPicker,
 } from '../../../shared/symbol-picker/testing/fake-picker-world';
+import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 
 const DEPLOY_TARGET = resourceTarget('alpaca', 'clrk_spec', {
   accountId: 'PA9',
@@ -171,6 +173,18 @@ function previewFor(view: DeployBotView, body: DeployBotBody): DeploymentBudgetP
     review_token: amount === null ? null : `review-${amount}`,
     budget_usd: amount,
     confirmation_text: amount !== null && world === 'real_live' ? `DEPLOY ${view.account_id} $${amount}` : null,
+    trades_summary: body.traded_symbol && body.traded_symbol !== body.symbol
+      ? `listens to ${body.symbol} · trades ${body.traded_symbol} · ${body.sizing?.quantity ?? 1} share`
+      : `${body.symbol} · ${body.sizing?.quantity ?? 1} share`,
+    // As the backend does: a warning only when the bot trades something else,
+    // with a sentence to accept only when it trades the account's money.
+    traded_asset_warning: body.traded_symbol && body.traded_symbol !== body.symbol
+      ? {
+        headline: `Tested trading ${body.symbol}. Untested trading ${body.traded_symbol}.`,
+        detail: 'Its results on this asset have not been tested.',
+        acceptance_label: dryRun ? null : `I accept that this strategy is untested trading ${body.traded_symbol}.`,
+      }
+      : null,
   };
 }
 
@@ -186,6 +200,19 @@ function mockService(view: DeployBotView = DEPLOY_VIEW, result: BudgetDeployRece
       error: { detail: 'No Deploy was committed for this submission. Nothing was set aside and nothing started.' },
     })),
     getDeployPrefill: vi.fn<(target: unknown, sid: string) => Promise<BotDeployPrefill>>(),
+    // As the backend answers a picked traded asset: XYZ is one Alpaca cannot trade.
+    getDeployTradedAsset: vi.fn().mockImplementation(async (_target, symbol: string, tradedSymbol: string) => (
+      tradedSymbol === 'XYZ'
+        ? { refusal: 'Alpaca cannot trade XYZ. Choose another asset.', warning: null }
+        : {
+          refusal: null,
+          warning: {
+            headline: `Tested trading ${symbol}. Untested trading ${tradedSymbol}.`,
+            detail: 'Its results on this asset have not been tested.',
+            acceptance_label: null,
+          },
+        }
+    )),
     deployBudgetBot: result instanceof HttpErrorResponse
       ? vi.fn().mockRejectedValue(result)
       : vi.fn().mockResolvedValue({ ...result, account_id: view.account_id }),
@@ -1333,6 +1360,24 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
       parameters: { gap: 0.4 }, exit_terms: PREFILL.exit_terms });
   });
 
+  it('starts from what the earlier bot traded, and never from what its owner accepted (#2912)', async () => {
+    const service = mockService();
+    service.getDeployPrefill.mockResolvedValue({ ...PREFILL, symbol: 'SPY', traded_symbol: 'QQQ' });
+    const { fixture } = await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    await screen.findByText(/Prefilled from/);
+    await fixture.whenStable();
+    await openStep('What');
+
+    const what = stepRegion('What');
+    await vi.waitFor(() => expect(within(what).getByRole<HTMLInputElement>('radio', { name: 'Another stock or ETF' }).checked).toBe(true));
+    await chooseMoney();
+    expect(service.previewBudget.mock.calls.at(-1)?.[1]).toMatchObject({ symbol: 'SPY', traded_symbol: 'QQQ' });
+    // The acknowledgement is asked for again: it is consent, and consent is never copied.
+    const tick = within(stepRegion('Confirm')).getByRole<HTMLInputElement>('checkbox', { name: /untested trading QQQ/ });
+    expect(tick.checked).toBe(false);
+    expect(deployButton().disabled).toBe(true);
+  });
+
   it('names the replaced bot on the receipt', async () => {
     const service = mockService(DEPLOY_VIEW, { ...RECEIPT, replaces_strategy_instance_id: 'spy-ema-20260925-1402' });
     service.getDeployPrefill.mockResolvedValue(PREFILL);
@@ -2268,5 +2313,202 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
     expect(screen.getByText(/no known binding when the action was opened/i)).toBeTruthy();
     expect(deployButton().disabled).toBe(true);
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — a traded asset the strategy was never tested on (#2912)', () => {
+  const REASON = 'QQQ has followed SPY closely enough to try this.';
+
+  /** Open the "What it trades" line, choose another stock or ETF and pick it. */
+  async function tradeAnotherAsset(fixture: ComponentFixture<unknown>, symbol = 'QQQ'): Promise<void> {
+    await openStep('What');
+    const what = stepRegion('What');
+    fireEvent.click(within(what).getByRole('button', { name: 'Trades SPY shares, the symbol it listens to' }));
+    fireEvent.click(within(what).getByRole('radio', { name: 'Another stock or ETF' }));
+    fixture.detectChanges();
+    const pickers = fixture.debugElement.queryAll(By.directive(SymbolPickerComponent));
+    (pickers[1].componentInstance as SymbolPickerComponent).symbol.set(symbol);
+    fixture.detectChanges();
+  }
+
+  function sentBody(service: ServiceDouble): DeploySubmissionBody {
+    return service.deployBudgetBot.mock.calls[0][1] as DeploySubmissionBody;
+  }
+
+  /** Pick what the bot listens to, in the What step's first picker. */
+  function listenTo(fixture: ComponentFixture<unknown>, symbol: string): void {
+    const pickers = fixture.debugElement.queryAll(By.directive(SymbolPickerComponent));
+    (pickers[0].componentInstance as SymbolPickerComponent).symbol.set(symbol);
+    fixture.detectChanges();
+  }
+
+  /** Tick the acceptance and give the reason, at Confirm. */
+  async function acceptAtConfirm(): Promise<void> {
+    const confirm = stepRegion('Confirm');
+    fireEvent.click(within(confirm).getByRole('checkbox', { name: /untested trading QQQ/ }));
+    fireEvent.input(within(confirm).getByRole('textbox', { name: 'Your reason' }), { target: { value: REASON } });
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+  }
+
+  function acceptance(): { ticked: boolean; reason: string } {
+    const confirm = stepRegion('Confirm');
+    return {
+      ticked: within(confirm).getByRole<HTMLInputElement>('checkbox', { name: /untested trading QQQ/ }).checked,
+      reason: within(confirm).getByRole<HTMLTextAreaElement>('textbox', { name: 'Your reason' }).value,
+    };
+  }
+
+  it('trades the symbol it listens to unless the owner opens the line and picks something else', async () => {
+    const service = mockService();
+    await renderWorkflow(service);
+    await openStep('What');
+    const what = stepRegion('What');
+
+    expect(within(what).getByRole('combobox', { name: 'Listens to' })).toBeTruthy();
+    const line = within(what).getByRole('button', { name: 'Trades SPY shares, the symbol it listens to' });
+    expect(line.getAttribute('aria-expanded')).toBe('false');
+    expect(within(what).queryByRole('radiogroup', { name: 'What it trades' })).toBeNull();
+
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(sentBody(service).traded_symbol).toBeUndefined();
+    expect(sentBody(service).traded_asset_acknowledgement).toBeUndefined();
+    expect(screen.queryByText('Untested traded asset')).toBeNull();
+  });
+
+  it('prices the traded asset at every review and deploys a Paper bot only once the owner accepts in writing', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+
+    expect(service.previewBudget.mock.calls.at(-1)?.[1].traded_symbol).toBe('QQQ');
+    const confirm = stepRegion('Confirm');
+    within(confirm).getByText('Tested trading SPY. Untested trading QQQ.');
+    expect(deployButton().disabled).toBe(true);
+
+    fireEvent.click(within(confirm).getByRole('checkbox', { name: 'I accept that this strategy is untested trading QQQ.' }));
+    fireEvent.input(within(confirm).getByRole('textbox', { name: 'Your reason' }), { target: { value: REASON } });
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    fireEvent.click(deployButton());
+
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(sentBody(service).traded_symbol).toBe('QQQ');
+    expect(sentBody(service).traded_asset_acknowledgement).toEqual({
+      acknowledgement: 'I_ACCEPT_UNTESTED_TRADED_ASSET_RISK', reason: REASON,
+    });
+    // The owner accepts after the review, so no review was asked to bind it:
+    // typing the reason never sends the money back for another look.
+    expect(service.previewBudget.mock.calls.every(([, body]) => body.traded_asset_acknowledgement === undefined)).toBe(true);
+  });
+
+  it('warns the moment another asset is picked, before any money is reviewed', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture);
+
+    await within(stepRegion('What')).findByText('Tested trading SPY. Untested trading QQQ.');
+    expect(service.getDeployTradedAsset.mock.calls.at(-1)?.slice(1)).toEqual(['SPY', 'QQQ']);
+    expect(service.previewBudget.mock.calls.some(([, body]) => body.budget)).toBe(false);
+  });
+
+  it('says at once when Alpaca cannot trade the picked asset, and will not deploy it', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture, 'XYZ');
+
+    const refusal = await within(stepRegion('What')).findByText('Alpaca cannot trade XYZ. Choose another asset.');
+    expect(refusal.getAttribute('role')).toBe('alert');
+    await chooseMoney();
+    expect(deployButton().disabled).toBe(true);
+  });
+
+  it('shows the backend’s own Trades line at Confirm once the money is reviewed', async () => {
+    const { fixture } = await renderWorkflow();
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+
+    expect(within(stepRegion('Confirm')).getByText(/listens to SPY · trades QQQ · 1 share/)).toBeTruthy();
+  });
+
+  it('shows a Dry Run the warning with nothing to tick, and sends no acknowledgement', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await openStep('How');
+    fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Dry Run/ }));
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+
+    const confirm = stepRegion('Confirm');
+    within(confirm).getByText('Tested trading SPY. Untested trading QQQ.');
+    expect(within(confirm).queryByRole('checkbox', { name: /untested trading/ })).toBeNull();
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    fireEvent.click(deployButton());
+
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(sentBody(service).traded_symbol).toBe('QQQ');
+    expect(sentBody(service).traded_asset_acknowledgement).toBeUndefined();
+  });
+
+  it('forgets what the owner accepted when they go back to the symbol the bot listens to', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+    fireEvent.click(within(stepRegion('Confirm')).getByRole('checkbox', { name: /untested trading QQQ/ }));
+
+    await openStep('What');
+    fireEvent.click(within(stepRegion('What')).getByRole('radio', { name: 'Same as signal' }));
+    await chooseMoney('1200.00');
+
+    expect(screen.queryByText('Untested traded asset')).toBeNull();
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(sentBody(service).traded_symbol).toBeUndefined();
+    expect(sentBody(service).traded_asset_acknowledgement).toBeUndefined();
+  });
+
+  it('asks the owner to accept again once the bot listens to another symbol', async () => {
+    const { fixture } = await renderWorkflow();
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+    await acceptAtConfirm();
+
+    await openStep('What');
+    listenTo(fixture, 'IWM');
+    await chooseMoney('1200.00');
+
+    await within(stepRegion('Confirm')).findByText('Tested trading IWM. Untested trading QQQ.');
+    expect(acceptance()).toEqual({ ticked: false, reason: '' });
+  });
+
+  it('asks the owner to accept again once the bot runs another strategy', async () => {
+    const { fixture } = await renderWorkflow();
+    await tradeAnotherAsset(fixture);
+    await chooseMoney();
+    await acceptAtConfirm();
+
+    await openStep('What');
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), { target: { value: 'ema_crossover_signal' } });
+    await chooseMoney('1200.00');
+
+    expect(acceptance()).toEqual({ ticked: false, reason: '' });
+  });
+
+  it('drops a traded pick once the bot listens to that same symbol, so a later signal does not bring it back', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture);
+
+    listenTo(fixture, 'QQQ');
+    expect(within(stepRegion('What')).getByRole<HTMLInputElement>('radio', { name: 'Same as signal' }).checked).toBe(true);
+    listenTo(fixture, 'IWM');
+    await chooseMoney();
+
+    expect(service.previewBudget.mock.calls.at(-1)?.[1]).toMatchObject({ symbol: 'IWM' });
+    expect(service.previewBudget.mock.calls.at(-1)?.[1].traded_symbol).toBeUndefined();
+    expect(screen.queryByText('Untested traded asset')).toBeNull();
   });
 });

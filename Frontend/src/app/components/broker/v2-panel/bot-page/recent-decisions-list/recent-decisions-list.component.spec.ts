@@ -32,10 +32,11 @@ async function renderList(
   decisions: readonly RecentDecisionView[],
   strategyView: StrategyViewResponse | null = null,
   selectedBarCloseMs: number | null = null,
+  showRefusalSentences = false,
 ) {
   const selections = vi.fn();
   const rendered = await render(RecentDecisionsListComponent, {
-    inputs: { decisions, strategyView, selectedBarCloseMs },
+    inputs: { decisions, strategyView, selectedBarCloseMs, showRefusalSentences },
     on: { selectedBarCloseMs: selections },
   });
   return { ...rendered, selections };
@@ -51,6 +52,25 @@ describe('RecentDecisionsListComponent', () => {
     await renderList([{ ...SYNTHETIC_DECISION, outcome: 'no_action', reason_code: 'NO_ACTION' }]);
 
     expect(screen.getAllByText('No Action')).toHaveLength(1);
+  });
+
+  const WHY = 'QQQ had no trade in this minute, so there was no price to buy at. No order was sent.';
+  const REFUSED: RecentDecisionView = {
+    ...SYNTHETIC_DECISION, seq: 6, outcome: 'blocked', reason_code: 'PRICING_BAR_NO_TRADE', refusal_reason: WHY,
+  };
+
+  it('says in the backend’s sentence why a refused entry sent no order, for a bot that trades something else (#2912)', async () => {
+    await renderList([REFUSED, SYNTHETIC_DECISION], null, null, true);
+
+    const [entered, refused] = rows();
+    expect(within(refused).getByText(WHY)).toBeTruthy();
+    expect(entered.querySelector('.decision__sentence')).toBeNull();
+  });
+
+  it('leaves an ordinary bot’s decisions as they were, with no sentence under a refusal (#2915)', async () => {
+    await renderList([REFUSED]);
+
+    expect(screen.queryByText(WHY)).toBeNull();
   });
 
   it('renders each decision’s outcome and reason, leaving the account’s world to the page', async () => {

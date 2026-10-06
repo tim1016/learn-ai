@@ -107,12 +107,19 @@
             <app-symbol-picker
               id="deploy-symbol"
               appearance="field"
-              label="Trading symbol"
+              label="Listens to"
               [symbol]="ticket().symbol"
               (symbolChange)="setSymbol($event)"
             />
             @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }
           </div>
+          <app-deploy-traded-asset
+            [tradedSymbol]="ticket().tradedSymbol"
+            [summary]="view.action_plan_explanation"
+            [warning]="tradedWarningAtWhat()"
+            [refusal]="tradedRefusal()"
+            (tradedSymbolChange)="setTradedSymbol($event)"
+          />
           <app-deploy-parameters-section
             [qualifiedConfiguration]="selectedStrategy()?.qualified_configuration ?? null"
             [paramsSchema]="paramsSchema()"
@@ -250,6 +257,17 @@
                 (acknowledgedChange)="setOverrideAcknowledged($event)"
                 (reasonChange)="setOverrideReason($event)"
                 (reasonBlur)="touchOverrideReason()"
+              />
+            }
+            @if (tradedWarning(); as untested) {
+              <app-deploy-traded-acknowledgement
+                [warning]="untested"
+                [acknowledged]="ticket().tradedAcknowledged"
+                [reason]="ticket().tradedReason"
+                [reasonError]="tradedReasonError()"
+                (acknowledgedChange)="setTradedAcknowledged($event)"
+                (reasonChange)="setTradedReason($event)"
+                (reasonBlur)="touchTradedReason()"
               />
             }
           </app-deploy-confirm-step>

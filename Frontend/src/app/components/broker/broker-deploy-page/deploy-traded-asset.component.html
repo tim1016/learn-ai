@@ -1,0 +1,48 @@
+<section class="traded-asset" aria-labelledby="traded-asset-toggle">
+  <button
+    id="traded-asset-toggle"
+    type="button"
+    class="traded-asset__toggle"
+    [attr.aria-expanded]="open()"
+    aria-controls="traded-asset-body"
+    (click)="toggle()"
+  >
+    <span aria-hidden="true">{{ open() ? '▾' : '▸' }}</span>
+    <span>{{ open() ? 'What it trades' : (summary() ?? 'What it trades') }}</span>
+  </button>
+
+  @if (open()) {
+    <div id="traded-asset-body" class="traded-asset__body">
+      <div class="traded-asset__choices" role="radiogroup" aria-label="What it trades">
+        <label>
+          <input type="radio" name="traded-asset-choice" [checked]="choice() === 'same'" (change)="choose('same')" />
+          <span>Same as signal</span>
+        </label>
+        <label>
+          <input type="radio" name="traded-asset-choice" [checked]="choice() === 'stock'" (change)="choose('stock')" />
+          <span>Another stock or ETF</span>
+        </label>
+      </div>
+
+      @if (choice() === 'stock') {
+        <app-symbol-picker
+          id="deploy-traded-symbol"
+          appearance="field"
+          label="Trades"
+          [symbol]="tradedSymbol() ?? ''"
+          (symbolChange)="pick($event)"
+        />
+        @if (refusal(); as why) { <em role="alert">{{ why }}</em> }
+        @if (warning(); as told) {
+          <div class="traded-asset__warning" role="note">
+            <span aria-hidden="true">!</span>
+            <div>
+              <strong>{{ told.headline }}</strong>
+              <p>{{ told.detail }}</p>
+            </div>
+          </div>
+        }
+      }
+    </div>
+  }
+</section>

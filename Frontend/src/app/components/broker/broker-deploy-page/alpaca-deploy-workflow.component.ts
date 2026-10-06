@@ -92,6 +92,8 @@ import {
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
+import { DeployTradedAcknowledgementComponent } from './deploy-traded-acknowledgement.component';
+import { DeployTradedAssetComponent } from './deploy-traded-asset.component';
 import { DeployEndSectionComponent } from './deploy-end-section.component';
 import { DeployStepComponent, type DeployStepStatus } from './deploy-step.component';
 import { DEPLOY_WORLDS } from './deploy-world';
@@ -189,15 +191,43 @@ function sameParameterValues(
     && leftKeys.every((key) => Object.hasOwn(right, key) && Object.is(left[key], right[key]));
 }
 
-/** The form's model: the draftable settings plus the evidence-only
- * acknowledgement, which is consent and so never kept in a draft. */
+/** The form's model: the draftable settings plus the two acknowledgements
+ * (an evidence-only strategy, an untested traded asset), which are consent
+ * and so never kept in a draft. */
 interface AlpacaDeployTicket extends DeployTicketSettings {
   overrideAcknowledged: boolean;
   overrideReason: string;
+  tradedAcknowledged: boolean;
+  tradedReason: string;
 }
 
 function ticketOf(settings: DeployTicketSettings): AlpacaDeployTicket {
-  return { ...settings, overrideAcknowledged: false, overrideReason: '' };
+  return { ...settings, overrideAcknowledged: false, overrideReason: '', tradedAcknowledged: false, tradedReason: '' };
+}
+
+/** The ticket on another strategy, at that strategy's validation case. Both
+ * acknowledgements were given for the strategy the owner was looking at, so
+ * neither carries over. */
+function onStrategy(ticket: AlpacaDeployTicket, strategy: DeployBotStrategy): AlpacaDeployTicket {
+  return ticketOf({
+    ...settingsOf(ticket),
+    strategyKey: strategy.strategy_key,
+    parameters: { ...strategy.validation_case_parameters },
+  });
+}
+
+/** The ticket listening to another symbol. What the owner accepted about the
+ * traded asset was said of the old pair, so it is asked again; and a traded
+ * pick the signal has caught up with is no longer a pick. */
+function listeningTo(ticket: AlpacaDeployTicket, symbol: string): AlpacaDeployTicket {
+  if (ticket.symbol === symbol) return ticket;
+  return {
+    ...ticket,
+    symbol,
+    tradedSymbol: ticket.tradedSymbol === symbol ? null : ticket.tradedSymbol,
+    tradedAcknowledged: false,
+    tradedReason: '',
+  };
 }
 
 type ExitTermSettings = Pick<DeployTicketSettings, 'exitAllowanceBps' | 'bandMultiple' | 'spreadCapBps'>;
@@ -219,6 +249,7 @@ function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
     spreadCapBps: ticket.spreadCapBps,
     strategyKey: ticket.strategyKey,
     symbol: ticket.symbol,
+    tradedSymbol: ticket.tradedSymbol,
     sizingPreset: ticket.sizingPreset,
     quantity: ticket.quantity,
     executionMode: ticket.executionMode,
@@ -303,6 +334,8 @@ type EndCheckAnswer =
     DeployConfirmStepComponent,
     DeployEndSectionComponent,
     DeployEvidenceOverrideComponent,
+    DeployTradedAcknowledgementComponent,
+    DeployTradedAssetComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployMoneyStepComponent,
@@ -489,6 +522,7 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly liveConsent = signal('');
 
   private readonly overrideReasonTouched = signal(false);
+  private readonly tradedReasonTouched = signal(false);
   private lastValidationScope: ValidationScopeSeed | null = null;
   private lastRequestedStrategyKey: string | null = null;
 
@@ -605,6 +639,47 @@ export class AlpacaDeployWorkflowComponent {
       && this.brokerModeSelected(),
   );
 
+  // ── A traded asset the strategy was never tested on (#2912) ───────────────
+
+  /** The backend's warning for these exact settings, once Money has reviewed
+   * them. It is there only when the bot trades something else. */
+  protected readonly tradedWarning = computed(() => this.currentMoneyReview()?.preview.traded_asset_warning ?? null);
+
+  /**
+   * What the backend says about the asset the owner picked, read the moment
+   * it is picked and before any money is reviewed: whether Alpaca can trade
+   * it, and the warning. No read while the bot trades the symbol it listens
+   * to, or while either symbol is half typed.
+   */
+  protected readonly pickedTradedAsset = resource({
+    params: () => {
+      const { symbol, tradedSymbol } = this.ticket();
+      const account = this.accountId().trim();
+      return tradedSymbol !== null && SYMBOL_RE.test(symbol) && SYMBOL_RE.test(tradedSymbol) && account !== ''
+        ? { account, symbol, tradedSymbol }
+        : undefined;
+    },
+    loader: ({ params }) =>
+      this.panelService.getDeployTradedAsset(this.deployTarget(params.account), params.symbol, params.tradedSymbol),
+  });
+  private readonly pickedTradedAssetView = computed(() =>
+    this.pickedTradedAsset.hasValue() ? this.pickedTradedAsset.value() ?? null : null);
+  /** Why the picked asset cannot be traded, in the backend's words. */
+  protected readonly tradedRefusal = computed(() => this.pickedTradedAssetView()?.refusal ?? null);
+  /** The warning the What step shows: the picked asset's own, or the reviewed settings' once Money has them. */
+  protected readonly tradedWarningAtWhat = computed(() => this.pickedTradedAssetView()?.warning ?? this.tradedWarning());
+
+  /** The backend asks for the acknowledgement by giving the sentence to tick:
+   * a Paper, Live Shadow or Live bot gets one, a Dry Run does not. */
+  protected readonly tradedAcknowledgementRequired = computed(() => !!this.tradedWarning()?.acceptance_label);
+
+  protected readonly tradedReasonError = computed(() => {
+    if (!this.tradedAcknowledgementRequired() || !this.tradedReasonTouched()) return null;
+    return this.ticket().tradedReason.trim().length >= OVERRIDE_REASON_MIN_LENGTH
+      ? null
+      : 'Give at least 10 characters saying why you accept this.';
+  });
+
   protected readonly overrideReasonError = computed(() => {
     if (!this.overrideRequired() || !this.overrideReasonTouched()) return null;
     return this.ticket().overrideReason.trim().length >= OVERRIDE_REASON_MIN_LENGTH
@@ -645,7 +720,11 @@ export class AlpacaDeployWorkflowComponent {
     return `${quantity} ${quantity === 1 ? 'share' : 'shares'}`;
   });
 
-  protected readonly tradesSummary = computed(() => `${this.ticket().symbol || 'No symbol yet'} · ${this.quantityLabel()}`);
+  /** Confirm's "Trades" line: the backend's own once Money has reviewed these
+   * settings; until then, the symbol and size on screen. */
+  protected readonly tradesSummary = computed(() =>
+    this.currentMoneyReview()?.preview.trades_summary
+    ?? `${this.ticket().symbol || 'No symbol yet'} · ${this.quantityLabel()}`);
 
   protected readonly exitsSummary = computed(() => {
     const terms = this.exitTerms();
@@ -1006,6 +1085,17 @@ export class AlpacaDeployWorkflowComponent {
         };
       }
     }
+    if (this.tradedRefusal() !== null) {
+      return { canSubmit: false, guidance: 'Choose another asset to trade in What.' };
+    }
+    if (this.tradedAcknowledgementRequired()) {
+      if (!this.ticket().tradedAcknowledged) {
+        return { canSubmit: false, guidance: 'Tick the untested traded asset acknowledgement before deploying.' };
+      }
+      if (this.ticket().tradedReason.trim().length < OVERRIDE_REASON_MIN_LENGTH) {
+        return { canSubmit: false, guidance: 'Give your reason for trading an untested asset.' };
+      }
+    }
     if (!this.ticketForm().valid()) {
       return { canSubmit: false, guidance: 'Complete the highlighted Deploy fields.' };
     }
@@ -1276,13 +1366,8 @@ export class AlpacaDeployWorkflowComponent {
         // evidence-only acknowledgement must never carry into the new one.
         this.clearAdmission();
         this.overrideReasonTouched.set(false);
-        this.ticket.update((ticket) => ({
-          ...ticket,
-          strategyKey,
-          parameters: { ...strategy.validation_case_parameters },
-          overrideAcknowledged: false,
-          overrideReason: '',
-        }));
+        this.tradedReasonTouched.set(false);
+        this.ticket.update((ticket) => onStrategy(ticket, strategy));
       } else if (scopeChanged && priorParametersRemainIntact) {
         this.ticket.update((ticket) => ({
           ...ticket,
@@ -1395,6 +1480,7 @@ export class AlpacaDeployWorkflowComponent {
     this.moneyReview.set(null);
     this.liveConsent.set('');
     this.overrideReasonTouched.set(false);
+    this.tradedReasonTouched.set(false);
     this.termsSeeded = draft.settings.exitAllowanceBps !== null;
     this.lastValidationScope = null;
     if (draft.settings.symbol) this.scheduleSymbolScope(draft.settings.symbol);
@@ -1437,6 +1523,8 @@ export class AlpacaDeployWorkflowComponent {
         ...EMPTY_DEPLOY_SETTINGS,
         strategyKey: prefill.strategy_key,
         symbol: prefill.symbol.trim().toUpperCase(),
+        // What the earlier bot traded comes back; what its owner accepted never does.
+        tradedSymbol: prefill.traded_symbol?.trim().toUpperCase() || null,
         sizingPreset: prefill.sizing.preset ?? 'safe_canary',
         quantity: prefill.sizing.quantity ?? 1,
         parameters: { ...prefill.parameters },
@@ -1562,16 +1650,34 @@ export class AlpacaDeployWorkflowComponent {
     const symbol = current.symbol && current.symbol !== previous?.validation_case_symbol
       ? current.symbol
       : strategy.validation_case_symbol;
-    this.ticket.update((ticket) => ({
-      ...ticket,
-      strategyKey: strategy.strategy_key,
-      parameters: { ...strategy.validation_case_parameters },
-      overrideAcknowledged: false,
-      overrideReason: '',
-    }));
+    this.ticket.update((ticket) => onStrategy(ticket, strategy));
     this.lastValidationScope = validationScopeSeed(strategy);
     this.applySymbol(symbol);
     this.overrideReasonTouched.set(false);
+    this.tradedReasonTouched.set(false);
+  }
+
+  /** The owner picked what the bot trades, or went back to the symbol it
+   * listens to (`null`). Either way what they accepted before no longer
+   * describes the bot. */
+  protected setTradedSymbol(value: string | null): void {
+    this.clearAdmission();
+    this.tradedReasonTouched.set(false);
+    this.ticket.update((current) => ({ ...current, tradedSymbol: value, tradedAcknowledged: false, tradedReason: '' }));
+  }
+
+  protected setTradedAcknowledged(checked: boolean): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, tradedAcknowledged: checked }));
+  }
+
+  protected setTradedReason(value: string): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, tradedReason: value }));
+  }
+
+  protected touchTradedReason(): void {
+    this.tradedReasonTouched.set(true);
   }
 
   protected setOverrideAcknowledged(checked: boolean): void {
@@ -1604,8 +1710,8 @@ export class AlpacaDeployWorkflowComponent {
       && this.invalidParameterFields().size === 0) return;
     this.clearAdmission();
     this.invalidParameterFields.set(new Set());
-    this.ticket.update(ticket => ({ ...ticket, symbol: configuration.symbol, parameters: { ...configuration.parameters } }));
-    this.scheduleSymbolScope(configuration.symbol);
+    this.ticket.update(ticket => ({ ...ticket, parameters: { ...configuration.parameters } }));
+    this.applySymbol(configuration.symbol);
   }
 
   protected setInvalidParameterFields(fields: ReadonlySet<string>): void {
@@ -1634,9 +1740,12 @@ export class AlpacaDeployWorkflowComponent {
    * re-seeds.
    */
   private applySymbol(symbol: string): void {
-    this.ticket.update((current) =>
-      current.symbol === symbol ? current : { ...current, symbol },
-    );
+    const current = untracked(this.ticket);
+    const moved = listeningTo(current, symbol);
+    if (moved !== current) {
+      this.tradedReasonTouched.set(false);
+      this.ticket.set(moved);
+    }
     this.scheduleSymbolScope(symbol);
   }
 
@@ -1904,6 +2013,10 @@ export class AlpacaDeployWorkflowComponent {
         reason: ticket.overrideReason.trim(),
       };
     }
+    // What the bot trades is a setting the money review prices and consent
+    // binds, so it rides every request. Naming the symbol it listens to is
+    // naming nothing: the backend reads the two as one choice.
+    if (ticket.tradedSymbol) body.traded_symbol = ticket.tradedSymbol;
     return body;
   }
 
@@ -1979,7 +2092,17 @@ export class AlpacaDeployWorkflowComponent {
     const end = this.deployEnd();
     const budget = this.validBudget();
     if (strategy === null || mode === null || end === null || budget === null) return null;
-    return { ...this.deployBody(this.ticket(), strategy, mode), end, budget };
+    const settings: DeploySettings = { ...this.deployBody(this.ticket(), strategy, mode), end, budget };
+    // Like the end, the acknowledgement rides the Deploy and never the
+    // review: the owner gives it last, after the money is reviewed, and the
+    // backend asks for it at Deploy alone.
+    if (this.tradedAcknowledgementRequired() && this.ticket().tradedAcknowledged) {
+      settings.traded_asset_acknowledgement = {
+        acknowledgement: 'I_ACCEPT_UNTESTED_TRADED_ASSET_RISK',
+        reason: this.ticket().tradedReason.trim(),
+      };
+    }
+    return settings;
   }
 
   /** The settings, end and reviewed budget on screen are still the ones sent. */
