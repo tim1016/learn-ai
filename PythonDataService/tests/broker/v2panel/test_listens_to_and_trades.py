@@ -12,13 +12,20 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
 
+from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.engine.live.desired_state import DesiredState
+from app.routers.broker_v2_panel import router
 from app.schemas.action_plan import TradedInstrumentView, order_symbol
 from app.schemas.bot_history import BotHistoryOrders, FleetBotHistoryRow
 from app.schemas.traded_asset_acknowledgement import (
@@ -27,16 +34,27 @@ from app.schemas.traded_asset_acknowledgement import (
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_registry_projection import project_bot_status
-from app.services.broker_v2_panel import cohort_flatten, sqlite_panel_source, sqlite_roster_status
+from app.services.bot_runner import set_bot_task_registry
+from app.services.broker_v2_panel import (
+    cohort_flatten,
+    panel_data_source,
+    sqlite_panel_source,
+    sqlite_roster_status,
+)
+from app.services.broker_v2_panel.action_execution_service import reset_idempotency_store_for_testing
 from app.services.broker_v2_panel.bot_page_projection import _manual_order_entry
 from app.services.broker_v2_panel.catalog_projection_service import SqliteCatalogProjectionUnavailable
 from app.services.broker_v2_panel.panel_projection_service import _recent_decision_views
 from app.services.broker_v2_panel.sqlite_panel_adapter import _working_order_view
 from app.services.broker_v2_panel.sqlite_panel_source import _uncleanly_ended, home_roster
 from app.services.fleet_bot_history import BotHistoryFilters, _symbols_of
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
+from tests.broker.v2panel.fixtures import ACCT
 from tests.broker.v2panel.test_bot_history import _receipt
 from tests.broker.v2panel.test_panel_projection import _clerk_status, _status
 from tests.broker.v2panel.test_panel_projection import _panel as _panel_view
+from tests.broker.v2panel.test_panel_router import _clock_seq, _FakeBrokerPort, _FakeRegistry
 
 _QQQ = TradedInstrumentView(kind="stock", symbol="QQQ")
 
@@ -274,3 +292,88 @@ def test_a_refused_entrys_recorded_sentence_reaches_its_row_on_the_bot_page(monk
         ("PRICING_BAR_NO_TRADE", _NO_TRADE),
         ("NO_SIGNAL", None),
     ]
+
+
+# ── the bot page, read whole ────────────────────────────────────────────
+
+_PAGE_RTH_MS = 1_700_060_400_000  # 2023-11-15 10:00 ET, a Wednesday
+
+
+@pytest.fixture
+async def bot_pages(tmp_path: Path):
+    """One Paper account with two bots: ``spy-qqq`` listens to SPY and trades QQQ; ``spy`` trades what it listens to."""
+    reset_broker_registry_for_testing()
+    reset_idempotency_store_for_testing()
+    set_active_clerk_runtime(None)
+    set_bot_task_registry(_FakeRegistry(tmp_path, sids=("spy-qqq", "spy")))  # type: ignore[arg-type]
+    get_broker_registry().register(_FakeBrokerPort())  # type: ignore[arg-type]
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCT, artifacts_root=tmp_path, clock=_clock_seq(start=_PAGE_RTH_MS)
+    )
+    for sid, registered_under, config_json in (
+        ("spy-qqq", "QQQ", _config()),
+        ("spy", "SPY", _config(trades="SPY")),
+    ):
+        repo.register_strategy_instance(
+            exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=sid, symbol=registered_under, config_hash="config-1",
+            strategy_key="deployment_validation", display_name="Deployment Validation", config_json=config_json,
+        )
+        submit_start_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+    facade = SqliteAlpacaClerkFacade(
+        account_mode="paper", repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),  # type: ignore[arg-type]
+    )
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        yield app
+    finally:
+        set_active_clerk_runtime(None)
+        set_bot_task_registry(None)
+        repo.close()
+        reset_broker_registry_for_testing()
+        reset_idempotency_store_for_testing()
+
+
+async def _page(app: FastAPI, sid: str) -> dict:
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{sid}/panel")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
+def clerk_card_symbols(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """The symbol each bot page asks the Clerk's channel health for."""
+    asked: list[str | None] = []
+    real = panel_data_source.clerk_status
+
+    async def recording(*, symbol: str | None = None, **kwargs: object):
+        asked.append(symbol)
+        return await real(symbol=symbol, **kwargs)
+
+    monkeypatch.setattr(panel_data_source, "clerk_status", recording)
+    return asked
+
+
+async def test_the_bot_page_of_a_bot_that_trades_another_asset(
+    bot_pages: FastAPI, clerk_card_symbols: list[str | None]
+) -> None:
+    """It listens to SPY and trades QQQ: both are named, and the traded asset has a market read of its own."""
+    page = await _page(bot_pages, "spy-qqq")
+
+    assert (page["symbol"], page["traded"]) == ("SPY", {"kind": "stock", "symbol": "QQQ"})
+    assert "SPY" in page["traded_asset_warning"]["headline"] and "QQQ" in page["traded_asset_warning"]["headline"]
+    assert page["traded_market_pulse"] is not None
+    assert page["market_pulse"] is not None
+    assert clerk_card_symbols == ["QQQ"], "the Clerk's submission gate reads the feed of the asset its orders are in"
+
+
+async def test_the_bot_page_of_a_bot_that_trades_what_it_listens_to_is_unchanged(
+    bot_pages: FastAPI, clerk_card_symbols: list[str | None]
+) -> None:
+    page = await _page(bot_pages, "spy")
+
+    assert page["symbol"] == "SPY"
+    assert (page["traded"], page["traded_asset_warning"], page["traded_market_pulse"]) == (None, None, None)
+    assert clerk_card_symbols == ["SPY"]

@@ -701,6 +701,10 @@ class BotPanelView(BaseModel):
     updated_at_ms: int
     revision: int
     market_pulse: MarketPulseView
+    # The same read for the asset the bot trades, when that is something else
+    # (#2912): its halt state and its feed's recency. ``market_pulse`` is the
+    # symbol the bot listens to; the run depends on both.
+    traded_market_pulse: MarketPulseView | None = None
     feed_continuity: FeedContinuityView
     # ``None`` for a fresh run, a run whose ledger is unreadable, or a run
     # that has not reached warmup yet.

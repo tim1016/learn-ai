@@ -5602,6 +5602,16 @@
               }
             ]
           },
+          "traded_market_pulse": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketPulseView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at_ms": {
             "title": "Updated At Ms",
             "type": "integer"

@@ -681,6 +681,7 @@ def build_panel(
     authority_account_id: str | None = None,
     account_mode: Literal["paper", "live"],
     market_pulse: MarketPulseView,
+    traded_market_pulse: MarketPulseView | None = None,
     bot_status: BotHistoryStatus,
     feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
     feed_continuity_run_id: str | None = None,
@@ -813,6 +814,7 @@ def build_panel(
         updated_at_ms=now_ms,
         revision=revision,
         market_pulse=market_pulse,
+        traded_market_pulse=traded_market_pulse,
         feed_continuity=build_feed_continuity(
             feed_continuity_events,
             run_id=(

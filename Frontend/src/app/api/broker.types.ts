@@ -8307,6 +8307,7 @@ export interface components {
             traded?: components["schemas"]["TradedInstrumentView"] | null;
             traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             traded_asset_warning?: components["schemas"]["UntestedTradedAssetWarning"] | null;
+            traded_market_pulse?: components["schemas"]["MarketPulseView"] | null;
             /** Updated At Ms */
             updated_at_ms: number;
             warmup_join?: components["schemas"]["WarmupJoinView"] | null;
