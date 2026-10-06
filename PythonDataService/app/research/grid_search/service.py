@@ -137,6 +137,13 @@ def current_code_identity() -> CodeIdentity:
         ) from exc
 
 
+def _fetchable_missing(report: AvailabilityReport) -> tuple[list[date], date, date]:
+    """The missing sessions a backfill can fetch, and what the provider serves: its history's floor through today."""
+    today = et_date_at_ms(now_ms_utc())
+    floor = polygon_history_floor(today)
+    return [day for day in report.missing_days if floor <= day <= today], floor, today
+
+
 def _rebuild_remedy(report: AvailabilityReport, mode: str) -> str:
     """What repairs a window's unreadable files, when a backfill does.
 
@@ -146,7 +153,8 @@ def _rebuild_remedy(report: AvailabilityReport, mode: str) -> str:
     """
     if not all(file.needs_rebuild for file in report.unreadable_files):
         return ""
-    floor = polygon_history_floor(et_date_at_ms(now_ms_utc()))
+    fetchable, floor, today = _fetchable_missing(report)
+    all_fetchable = len(fetchable) == len(report.missing_days)
     served = [day >= floor for day in report.unreadable_days]
     backfill = f"backfill {report.symbol} in {mode} mode to rebuild the unreadable files"
     too_old = "older than the provider's history"
@@ -156,11 +164,10 @@ def _rebuild_remedy(report: AvailabilityReport, mode: str) -> str:
         remedy = f"{backfill} from {floor.isoformat()} on; the earlier ones are {too_old}, so no backfill can rebuild them"
     else:
         remedy = f"the unreadable files are {too_old}, which starts {floor.isoformat()}, so no backfill can rebuild them"
-    fetchable = [day >= floor for day in report.missing_days]
-    if any(fetchable):
-        missing = "the missing sessions" if all(fetchable) else f"the missing sessions from {floor.isoformat()} on"
+    if fetchable:
+        missing = "the missing sessions" if all_fetchable else f"the missing sessions from {floor.isoformat()} through {today.isoformat()}"
         remedy += f"; {missing} need a backfill over their own dates"
-    return f"; {remedy}, then launch again" if all(served) and all(fetchable) else f"; {remedy}"
+    return f"; {remedy}, then launch again" if all(served) and all_fetchable else f"; {remedy}"
 
 
 def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
@@ -176,9 +183,7 @@ def data_missing_refusal(missing: MissingSessionsError) -> GridSearchRefusal:
     read = f"{missing} (read from the {mode} lake)"
     if report.unreadable_files:
         return GridSearchRefusal(f"{read}{_rebuild_remedy(report, mode)}", code="DATA_UNREADABLE")
-    today = et_date_at_ms(now_ms_utc())
-    floor = polygon_history_floor(today)
-    fetchable = [day for day in report.missing_days if floor <= day <= today]
+    fetchable, floor, today = _fetchable_missing(report)
     serves = f"the provider serves {floor.isoformat()} through {today.isoformat()}"
     if not fetchable:
         return GridSearchRefusal(f"{read}; no backfill can fetch these sessions: {serves}", code="DATA_MISSING")
