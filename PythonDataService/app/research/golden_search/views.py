@@ -36,6 +36,7 @@ from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
 from app.research.golden_search.final_measures import final_comparison
+from app.research.golden_search.final_test import fit_for, pick_of, recorded_fits, summary_outcome
 from app.research.golden_search.guidance import (
     candidate_flags,
     candidate_guidance,
@@ -44,6 +45,7 @@ from app.research.golden_search.guidance import (
     fixed_sentence,
     knob_stop_explanation,
     params_sentence,
+    selection_note,
     study_guidance,
     validation_explanation,
     weakness_items,
@@ -63,6 +65,12 @@ def _stage_incomplete(results: Mapping[str, Any]) -> bool:
         bool((results.get(key) or {}).get("incomplete")) or bool((results.get(key) or {}).get("pair_maps_incomplete"))
         for key in ("search", "recent", "validation", "evidence")
     )
+
+
+def _exam_outcome(row: StudyRow) -> str | None:
+    """The final test in one word: the approved fit's outcome, else the strongest one recorded."""
+    exam = row.results.get("exam")
+    return None if exam is None else summary_outcome(exam, row.candidate_key)
 
 
 def study_summary(row: StudyRow, *, presented: str) -> dict[str, Any]:
@@ -89,7 +97,7 @@ def study_summary(row: StudyRow, *, presented: str) -> dict[str, Any]:
         "hidden": row.hidden,
         "run_to_compare": row.run_to_compare,
         "exposure_claim": exam.get("claim"),
-        "exam_outcome": exam.get("outcome"),
+        "exam_outcome": _exam_outcome(row),
         "qualification_id": qualification.get("qualification_id") if qualification.get("status") == "ready" else None,
     }
 
@@ -122,7 +130,7 @@ def study_detail(
         "guidance": study_guidance(
             state=row.state,
             presented_status=presented,
-            exam_outcome=exam.get("outcome"),
+            exam_outcome=_exam_outcome(row),
             claim=exam.get("claim"),
             exposure_state=exam.get("exposure_state"),
             exam_locked=row.exam_locked,
@@ -190,7 +198,7 @@ def results_view(row: StudyRow, protocol: GoldenSearchProtocol, declaration: Sea
         "evidence": None
         if "evidence" not in results or declaration is None
         else evidence_view(results["evidence"], protocol, declaration, pair_maps=pair_maps, receipt=row.receipt),
-        "exam": None if "exam" not in results else exam_view(results["exam"]),
+        "exam": None if "exam" not in results else exam_view(results["exam"], chosen_key=row.candidate_key),
         "qualification": qualification_view(row),
     }
 
@@ -402,19 +410,39 @@ def evidence_view(
 # ── Exam and qualification ───────────────────────────────────────────────
 
 
-def exam_view(stored: Mapping[str, Any]) -> dict[str, Any]:
+def fit_label(fit: Mapping[str, Any]) -> str:
+    """``All-period fit``, ``Recent fit``, or ``All-period and recent fit`` when both chose the same settings."""
+    names = [CANDIDATE_LABELS[key] for key in (fit["key"], *fit["same_as"])]
+    return " and ".join([names[0].removesuffix(" fit"), *(name.lower() for name in names[1:])]) if len(names) > 1 else names[0]
+
+
+def exam_view(stored: Mapping[str, Any], *, chosen_key: str | None) -> dict[str, Any]:
+    """The final test as recorded: each fit with its own outcome, and the fit the owner named, if any."""
+    fits = recorded_fits(stored)
+    chosen = fit_for(stored, chosen_key)
+    pick = pick_of(stored)
     return {
-        "candidate_key": stored["candidate_key"],
-        "candidate_point": dict(stored["candidate_point"]),
         "window": dict(stored["window"]),
         "claim": stored["claim"],
         "exposure_state": stored["exposure_state"],
-        "outcome": stored["outcome"],
-        "checks": list(stored["checks"]),
-        "retention": stored["retention"],
-        "candidate_metrics": stored["candidate_metrics"],
+        "fits": [
+            {
+                "key": fit["key"],
+                "same_as": list(fit["same_as"]),
+                "label": fit_label(fit),
+                "point": dict(fit["point"]),
+                "outcome": fit["outcome"],
+                "checks": list(fit["checks"]),
+                "retention": fit["retention"],
+                "metrics": fit["metrics"],
+                "weakness": weakness_items(stored, fit),
+            }
+            for fit in fits
+        ],
         "incumbent_metrics": stored["incumbent_metrics"],
-        "weakness": weakness_items(stored),
+        "pick": pick,
+        "chosen_key": None if chosen is None else chosen["key"],
+        "selection_note": selection_note(fits_tested=len(fits), picked_after_test=pick == "after_test", chosen=chosen is not None),
     }
 
 
@@ -426,7 +454,9 @@ def qualification_view(row: StudyRow) -> dict[str, Any] | None:
         return None
     deploy = None
     if stored["status"] == "ready":
-        point = row.results["exam"]["candidate_point"]
+        approved = fit_for(row.results["exam"], row.candidate_key)
+        assert approved is not None  # a ready qualification was published for the fit the approval named
+        point = approved["point"]
         deploy = {
             "program_key": row.strategy_key,
             "symbol": row.symbol,

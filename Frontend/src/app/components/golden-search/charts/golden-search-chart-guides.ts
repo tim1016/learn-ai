@@ -391,27 +391,27 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Each block is one measure on its own scale: annualized return, Sharpe, worst fall, trades a year.', target: null },
       { text: 'The teal bar is the development period: the data the study chose from.', target: { kind: 'series', group: 'development' } },
       { text: 'The blue bar is the final test: data no step chose on.', target: { kind: 'series', group: 'final' } },
-      { text: 'Compare the candidate’s change with the current settings’: a drop both share is the market; a drop only the candidate shows is the fit.', target: null },
+      { text: 'Compare each fit’s change with the current settings’: a drop they share is the market; a drop only a fit shows comes from the fitting.', target: null },
     ],
   },
   'final-equity': {
     title: 'Final-test equity',
-    question: 'How did the candidate and the current settings do through the final test?',
+    question: 'How did each fit and the current settings do through the final test?',
     steps: [
       { text: 'Read the labels at the right edge: where each run ended the final test.', target: { kind: 'point', group: 'equity', at: 'last' } },
       { text: 'Follow each line: a steady climb is more convincing than one jump.', target: { kind: 'series', group: 'equity' } },
       { text: 'Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.', target: { kind: 'point', group: 'fall', at: 'lowest' } },
-      { text: 'The amber dashed line labelled “limit” is the worst-fall limit. The final test reads the candidate’s fall bar by bar, which can be deeper than its line here.', target: null },
+      { text: 'The amber dashed line labelled “limit” is the worst-fall limit. The final test reads each fit’s fall bar by bar, which can be deeper than its line here.', target: null },
     ],
   },
   'final-months': {
     title: 'Final-test months',
     question: 'Was the final result spread out, or carried by one month?',
     steps: [
-      { text: 'Each pair of bars is one month of the final test: the candidate and the current settings.', target: { kind: 'series', group: 'months' } },
+      { text: 'Each group of bars is one month of the final test: each fit and the current settings.', target: { kind: 'series', group: 'months' } },
       { text: 'Look for one month far taller than the rest: a final result carried by a single month is fragile.', target: null },
       { text: 'Count the months each run won. Winning most months is steadier than winning one big one.', target: null },
-      { text: 'Hover a month for both returns.', target: null },
+      { text: 'Hover a month for every run’s return.', target: null },
     ],
   },
 };

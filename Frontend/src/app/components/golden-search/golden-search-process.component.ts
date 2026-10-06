@@ -20,7 +20,6 @@ const STAGE_OF_STATE: Readonly<Record<StudyState, ResearchStage>> = {
   awaiting_validation: 'research',
   validation_running: 'research',
   awaiting_candidate: 'compare',
-  candidate_locked: 'final',
   exam_running: 'final',
   awaiting_review: 'decision',
   qualification_pending: 'decision',

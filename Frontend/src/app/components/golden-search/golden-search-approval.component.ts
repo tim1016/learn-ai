@@ -5,14 +5,15 @@ import { ButtonModule } from 'primeng/button';
 import { GOLDEN_DEPLOY_HANDOFF_ROUTE, GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../fleet/account-workspace';
 import { expectedDefault, factualNote } from './golden-search-decision';
 import { GoldenSearchRetainComponent, RETAIN_KINDS, type RetainDecision } from './golden-search-retain.component';
-import { isLive, type ExamView, type RetainKind, type StudyCommand, type StudyDetail } from './golden-search.types';
+import { isLive, type ExamFit, type ExamView, type RetainKind, type StudyCommand, type StudyDetail } from './golden-search.types';
 
 /**
- * The decision panel (#2696): a written reason, the acknowledgement that
- * independent engine agreement is missing (unchecked; it names the program
- * version), and — only when the server names a weakness of the final test
- * — a separate acknowledgement in the server's words. "Approve golden configuration" stays
- * disabled until all three hold. Keeping the current settings (or waiting,
+ * The decision panel (#2696, #2930) for the fit the page is about: a written
+ * reason, the acknowledgement that independent engine agreement is missing
+ * (unchecked; it names the program version), and — only when the server
+ * names a weakness of that fit's final test — a separate acknowledgement in
+ * the server's words. The approve button names the fit and stays disabled
+ * until all three hold. Keeping the current settings (or waiting,
  * or retaining as exploration) is always a complete decision, also when an
  * approval stopped before it published, whenever the server permits it.
  * Once approved, the recorded reason and "Use in Deploy".
@@ -27,6 +28,8 @@ import { isLive, type ExamView, type RetainKind, type StudyCommand, type StudyDe
 export class GoldenSearchApprovalComponent {
   readonly study = input.required<StudyDetail>();
   readonly exam = input.required<ExamView>();
+  /** The fit this approval names. */
+  readonly fit = input.required<ExamFit>();
   readonly busy = input(false);
   readonly studyCommand = output<StudyCommand>();
 
@@ -43,8 +46,9 @@ export class GoldenSearchApprovalComponent {
   protected readonly retry = computed(() => this.study().state === 'qualification_failed');
   protected readonly canApproveState = computed(() => this.study().permitted_actions.includes('approve'));
   protected readonly canRetain = computed(() => this.study().permitted_actions.includes('retain'));
-  protected readonly weak = computed(() => this.exam().weakness.length > 0);
-  protected readonly weaknessText = computed(() => this.exam().weakness.map((item) => item.text).join(' and '));
+  protected readonly weak = computed(() => this.fit().weakness.length > 0);
+  protected readonly weaknessText = computed(() => this.fit().weakness.map((item) => item.text).join(' and '));
+  protected readonly approveLabel = computed(() => (this.retry() ? 'Retry qualification' : `Approve the ${this.fit().label} as golden`));
   protected readonly programVersion = computed(() => this.study().results.qualification?.deploy?.program_version ?? this.study().receipt.program_version ?? 'unversioned');
   protected readonly qualificationId = computed(() => this.study().results.qualification?.qualification_id ?? this.study().qualification_id);
   protected readonly deployQuery = computed(() => ({ [GOLDEN_QUALIFICATION_QUERY_PARAM]: this.qualificationId() }));
@@ -60,17 +64,19 @@ export class GoldenSearchApprovalComponent {
     return null;
   });
 
-  /** The study the form was prepared for; a poll of the same study keeps what the owner typed. */
+  /** The study and fit the form was prepared for; a poll of the same study keeps what the owner typed. */
   private preparedFor: string | null = null;
 
   constructor() {
     effect(() => {
       const study = this.study();
       const exam = this.exam();
-      if (study.id === this.preparedFor || exam.outcome === null) return;
-      this.preparedFor = study.id;
+      const fit = this.fit();
+      const subject = `${study.id}:${fit.key}`;
+      if (subject === this.preparedFor || fit.outcome === null) return;
+      this.preparedFor = subject;
       untracked(() => {
-        this.note.set(factualNote(exam));
+        this.note.set(factualNote(exam, fit));
         this.parityAcknowledged.set(false);
         this.weaknessAcknowledged.set(false);
       });
@@ -94,6 +100,7 @@ export class GoldenSearchApprovalComponent {
     this.studyCommand.emit({
       command: 'approve',
       payload: {
+        candidate_key: this.fit().key,
         note: this.note().trim(),
         acknowledge_missing_parity: true,
         acknowledge_research_weakness: this.weak() && this.weaknessAcknowledged(),

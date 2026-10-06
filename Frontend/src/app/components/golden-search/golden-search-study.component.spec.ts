@@ -177,7 +177,7 @@ describe('GoldenSearchStudyComponent', () => {
     await renderStudy(service);
 
     expect(currentStep()).toMatch(/Compare/);
-    expect(screen.getAllByText(/pick one candidate for the final test/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/open the final test for every fit/i).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: /compare candidates/i })).toBeNull();
 
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Research steps' })).getByRole('button', { name: /test over time/i }));
@@ -386,43 +386,30 @@ describe('GoldenSearchStudyComponent', () => {
     expect(service.hide).toHaveBeenCalledWith('study-0001-aaaa');
   });
 
-  it('Compare: locking a candidate sends the pick against the revision on screen and opens its final-test lock', async () => {
+  it('Compare leads to the final-test lock, which names every fit and sends nothing until it is opened', async () => {
     const service = fakeService(studyDetail('awaiting_candidate'));
-    service.command.mockResolvedValueOnce({ study: studyDetail('candidate_locked', { revision: 4 }), jobId: null });
     await renderStudy(service);
 
-    fireEvent.click(screen.getByRole('button', { name: /^recent fit/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
 
     await screen.findByRole('heading', { name: /is still sealed/i });
     expect(currentStep()).toMatch(/Final decision/);
-    expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'select_candidate', expected_revision: 3, payload: { candidate_key: 'recent' } });
+    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toContain('All-period fit and Recent fit and the frozen incumbent will be evaluated.');
+    expect(service.command).not.toHaveBeenCalled();
   });
 
-  it('a changed pick on a study already locked to a candidate still moves on to the lock once the server accepts it', async () => {
-    const locked = studyDetail('candidate_locked');
-    const service = fakeService(locked);
-    service.command.mockResolvedValueOnce({ study: { ...locked, revision: 4, candidate_key: 'recent' }, jobId: null });
-    await renderStudy(service);
-    expect(currentStep()).toMatch(/Final decision/);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Return to candidates' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^recent fit/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
-
-    await waitFor(() => expect(currentStep()).toMatch(/Final decision/));
-    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toContain('Only Recent fit and the frozen incumbent');
-  });
-
-  it('a refused pick stays on Compare and shows why', async () => {
+  it('a refused final test stays on its lock and shows why', async () => {
     const service = fakeService(studyDetail('awaiting_candidate'));
-    service.command.mockRejectedValueOnce(new GoldenSearchRefusedError({ code: 'INCUMBENT_NOT_EXAMINABLE', message: 'Use Keep current settings to finish without consuming the test.' }));
+    service.command.mockRejectedValueOnce(new GoldenSearchRefusedError({ code: 'COMMAND_NOT_PERMITTED', message: 'Another study is opening this interval.' }));
     await renderStudy(service);
 
     fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /consumes this test interval/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open final test' }));
 
-    expect(await screen.findByText(/use keep current settings to finish without consuming the test/i)).not.toBeNull();
-    expect(currentStep()).toMatch(/Compare/);
+    expect(await screen.findByText(/another study is opening this interval/i)).not.toBeNull();
+    expect(currentStep()).toMatch(/Final decision/);
+    expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'open_exam', expected_revision: 3 });
   });
 
   it('Final decision: approval dispatches the qualification and the page follows it to the golden configuration', async () => {
@@ -431,10 +418,10 @@ describe('GoldenSearchStudyComponent', () => {
     await renderStudy(service);
 
     fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Approve golden configuration' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve the All-period fit as golden' }));
 
     await screen.findByText(/building the proof and publishing the version\. the current default/i);
-    expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'approve', expected_revision: 3, payload: { acknowledge_missing_parity: true } });
+    expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'approve', expected_revision: 3, payload: { candidate_key: 'all_period', acknowledge_missing_parity: true } });
   });
 
   it('announces the new state once the server moves the study on, and says nothing on the first load', async () => {
@@ -445,7 +432,7 @@ describe('GoldenSearchStudyComponent', () => {
     expect(live?.textContent?.trim()).toBe('');
 
     fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Approve golden configuration' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve the All-period fit as golden' }));
 
     await waitFor(() => expect(live?.textContent?.trim()).toBe('Building the proof. Qualification is running.'));
   });

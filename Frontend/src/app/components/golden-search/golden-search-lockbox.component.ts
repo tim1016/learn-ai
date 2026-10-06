@@ -3,17 +3,19 @@ import { ButtonModule } from 'primeng/button';
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
+import type { CandidateRow } from './golden-search-compare';
 import { exposurePreview, percentInputValue, studyTradeFloor } from './golden-search-display';
 import type { StudyStep } from './golden-search-steps';
-import type { EvidenceCandidate, StudyCommand, StudyDetail } from './golden-search.types';
+import type { StudyCommand, StudyDetail } from './golden-search.types';
 
 /**
- * The final-test lock (#2696), before the held-back interval is opened: what
- * the one look will consume (the interval, the locked candidate and the
- * frozen incumbent, nothing else), the frozen rules it will be judged by,
- * the exposure the server's ledger says opening would record, and an explicit
- * acknowledgement before "Open final test". Opening is irreversible; the
- * server records the exposure when it opens.
+ * The final-test lock (#2696, #2930), before the held-back interval is
+ * opened: what the one look will consume (the interval, every fit that
+ * differs from the current settings and the frozen incumbent, nothing else),
+ * the frozen rules each fit will be judged by, the exposure the server's
+ * ledger says opening would record, and an explicit acknowledgement before
+ * "Open final test". Opening is irreversible; the server records the
+ * exposure when it opens. Which fit to approve is chosen afterwards.
  */
 @Component({
   selector: 'app-golden-search-lockbox',
@@ -24,7 +26,8 @@ import type { EvidenceCandidate, StudyCommand, StudyDetail } from './golden-sear
 })
 export class GoldenSearchLockboxComponent {
   readonly study = input.required<StudyDetail>();
-  readonly candidate = input.required<EvidenceCandidate | null>();
+  /** The fits that will run: one row per distinct settings other than the current ones. */
+  readonly fits = input.required<readonly CandidateRow[]>();
   readonly busy = input(false);
   readonly studyCommand = output<StudyCommand>();
   readonly goTo = output<StudyStep>();
@@ -37,6 +40,8 @@ export class GoldenSearchLockboxComponent {
   protected readonly exposure = computed(() => exposurePreview(this.study()));
   protected readonly canOpen = computed(() => this.study().permitted_actions.includes('open_exam'));
   protected readonly refusal = computed(() => (this.canOpen() ? null : (this.study().action_refusals.open_exam ?? null)));
+  protected readonly names = computed(() => this.fits().map((fit) => fit.candidate.label).join(' and '));
+  protected readonly warned = computed(() => this.fits().filter((fit) => fit.candidate.flags.length > 0));
 
   protected onAcknowledge(event: Event): void {
     if (event.target instanceof HTMLInputElement) this.acknowledged.set(event.target.checked);

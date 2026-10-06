@@ -34,13 +34,9 @@ _STATE_GUIDANCE: dict[str, tuple[str, str]] = {
         "A better fit is only the beginning",
         "Compare the return with the losses you had to sit through. Then look for fragile settings.",
     ),
-    "candidate_locked": (
-        "One candidate. One final look.",
-        "The choice becomes fixed when you open the test. Changing your mind afterwards needs fresh evidence.",
-    ),
     "exam_running": (
         "Running the final test once",
-        "Only the locked candidate and the frozen incumbent run on the held-back interval.",
+        "Every fit and the frozen incumbent run on the held-back interval. You choose which fit to approve when they finish.",
     ),
     "qualification_pending": (
         "Building the proof and publishing the version",
@@ -144,7 +140,7 @@ def _review_headline(exam_outcome: str | None, claim: str | None, exposure_state
 def _review_detail(exam_outcome: str | None, claim: str | None) -> str:
     if exam_outcome == "meets_rules" and claim == "confirmatory":
         return (
-            "The candidate meets your research rules. Approval builds the proof and makes the qualified settings "
+            "A tested fit meets your research rules. Approval builds the proof and makes the qualified settings "
             "available in Deploy."
         )
     return WEAK_EVIDENCE_DETAIL
@@ -171,19 +167,30 @@ _WEAKNESS_COPY: dict[str, str] = {
 }
 
 
-def weakness_items(exam: Mapping[str, Any]) -> list[dict[str, str]]:
-    """Each weakness an approval must acknowledge, in the words the acknowledgement names; empty before an outcome."""
-    if exam.get("outcome") is None:
+def weakness_items(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Each weakness approving ``fit`` must acknowledge, in the words the acknowledgement names; empty before an outcome."""
+    if fit.get("outcome") is None:
         return []
-    failed = [str(check["label"]).lower() for check in exam.get("checks", []) if check.get("status") == "fail"]
+    failed = [str(check["label"]).lower() for check in fit.get("checks", []) if check.get("status") == "fail"]
     items: list[dict[str, str]] = []
-    for code in research_weakness(exam["outcome"], exam.get("claim"), exam.get("exposure_state")):
+    for code in research_weakness(fit["outcome"], exam.get("claim"), exam.get("exposure_state")):
         if code == "EXAM_DOES_NOT_MEET_RULES":
             text = f"failing the stated rules ({', '.join(failed)})" if failed else "failing the stated rules"
         else:
             text = _WEAKNESS_COPY[code]
         items.append({"code": code, "text": text})
     return items
+
+
+# ── The final test's fits ────────────────────────────────────────────────
+
+def selection_note(*, fits_tested: int, picked_after_test: bool, chosen: bool) -> str | None:
+    """What the record says about a pick made with two final-test results in view; ``None`` when there was one fit or a blind pick."""
+    if not picked_after_test or fits_tested < 2:
+        return None
+    if not chosen:
+        return f"{fits_tested} fits ran on the final test. The one you approve is recorded as chosen after the final test, from {fits_tested} fits."
+    return f"Chosen after the final test, from {fits_tested} fits."
 
 
 # ── Stop explanations ────────────────────────────────────────────────────

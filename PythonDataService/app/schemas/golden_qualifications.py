@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 from pydantic.alias_generators import to_camel
 
+from app.research.golden_search.guidance import selection_note
 from app.research.golden_search.qualification_service import (
     JudgedDefault,
     JudgedQualification,
@@ -53,6 +54,9 @@ class GoldenQualificationResearch(BaseModel):
     validation_verdict_label: str | None = None
     research_override: bool = False
     weakness: list[str] = Field(default_factory=list)
+    selection_note: str | None = Field(
+        default=None, description="Set when the approved fit was chosen with two final-test results in view (#2930); null otherwise."
+    )
 
     @classmethod
     def from_research(cls, research: Mapping[str, Any]) -> GoldenQualificationResearch:
@@ -61,7 +65,13 @@ class GoldenQualificationResearch(BaseModel):
             return value if isinstance(value, str) else None
 
         weakness = research.get("weakness")
+        fits_tested = research.get("fits_tested")
         return cls(
+            selection_note=selection_note(
+                fits_tested=fits_tested if isinstance(fits_tested, int) else 1,
+                picked_after_test=research.get("pick") == "after_test",
+                chosen=True,
+            ),
             exam_outcome=text("exam_outcome"),
             claim=text("claim"),
             exposure_state=text("exposure_state"),

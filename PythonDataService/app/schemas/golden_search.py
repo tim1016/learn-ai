@@ -1033,20 +1033,31 @@ class GoldenSearchExamCheck(_Wire):
     detail: str
 
 
-class GoldenSearchExamView(_Wire):
-    candidate_key: CandidateKey
-    candidate_point: dict[str, Any]
-    window: GoldenSearchWindow
-    claim: Claim
-    exposure_state: ExposureState
+class GoldenSearchExamFit(_Wire):
+    """One fit that sat the final test, judged on its own under the frozen rules."""
+
+    key: CandidateKey
+    same_as: list[CandidateKey] = Field(description="Other fits that chose exactly these settings and so share this result.")
+    label: str
+    point: dict[str, Any]
     outcome: ExamOutcome | None
     checks: list[GoldenSearchExamCheck]
     retention: float | None = Field(description="Descriptive only, never a check.")
-    candidate_metrics: GoldenSearchMetrics | None
-    incumbent_metrics: GoldenSearchMetrics | None
+    metrics: GoldenSearchMetrics | None
     weakness: list[GoldenSearchFinding] = Field(
-        description="What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules."
+        description="What approving this fit needs the owner to acknowledge as weak; empty when its evidence meets the rules."
     )
+
+
+class GoldenSearchExamView(_Wire):
+    window: GoldenSearchWindow
+    claim: Claim
+    exposure_state: ExposureState
+    fits: list[GoldenSearchExamFit] = Field(description="Every fit that ran on the final interval; one for a final test recorded with a locked candidate.")
+    incumbent_metrics: GoldenSearchMetrics | None
+    pick: Literal["before_test", "after_test"] = Field(description="Whether the owner named the fit before the test opened or after its outcomes.")
+    chosen_key: CandidateKey | None = Field(description="The fit the owner named; null until an approval names one.")
+    selection_note: str | None = Field(description="What the record says about a pick made with two final-test results in view; null otherwise.")
 
 
 class GoldenSearchDeployHandoff(_Wire):

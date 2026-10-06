@@ -7,13 +7,22 @@
       <thead role="rowgroup">
         <tr role="row">
           <th role="columnheader" scope="col"><app-timestamp-display [value]="e.window.start_ms" mode="date-et" /> – <app-timestamp-display [value]="e.window.end_ms - 1" mode="date-et" /></th>
+          <th role="columnheader" scope="col">Outcome</th>
           <th role="columnheader" scope="col" class="num">Net return</th><th role="columnheader" scope="col" class="num">Worst fall</th><th role="columnheader" scope="col" class="num">Trades</th><th role="columnheader" scope="col" class="num">Sharpe</th>
         </tr>
       </thead>
       <tbody role="rowgroup">
         @for (row of rows(); track row.key) {
           <tr role="row" [class.selected]="row.selected">
-            <th role="rowheader" scope="row">{{ row.label }}@if (row.failure) { <small class="bad">{{ row.failure }}</small> }</th>
+            <th role="rowheader" scope="row">
+              @if (choosable() && row.outcome) {
+                <label class="choice"><input type="radio" name="gs-final-fit" [checked]="row.selected" (change)="choose.emit(row.key)" /><span>{{ row.label }}</span></label>
+              } @else {
+                {{ row.label }}
+              }
+              @if (row.failure) { <small class="bad">{{ row.failure }}</small> }
+            </th>
+            <td role="cell" data-label="Outcome">@if (row.outcome; as outcome) { <span class="chip" [attr.data-tone]="outcome.tone">{{ outcome.text }}</span> } @else { <span class="muted">Benchmark</span> }</td>
             <td role="cell" class="num" data-label="Net return">{{ row.netReturn }}</td><td role="cell" class="num" data-label="Worst fall">{{ row.worstFall }}</td>
             <td role="cell" class="num" data-label="Trades">{{ row.trades }}</td><td role="cell" class="num" data-label="Sharpe">{{ row.sharpe }}</td>
           </tr>
@@ -21,9 +30,11 @@
       </tbody>
     </table>
   </div>
+  @if (e.selection_note; as note) { <p class="caption" role="note"><strong>{{ note }}</strong></p> }
+  @if (choosable()) { <p class="caption">Everything below is about the fit you select here: its checks, its charts, its settings and the approval.</p> }
   <p class="caption">${{ s.scope.capital | number: '1.0-0' }} frozen starting capital · {{ s.scope.costs_sentence }}</p>
   @if (retention(); as kept) {
-    <p class="caption">Retention of the development {{ s.protocol.policy.objective | receiptLabel }}: {{ kept }} — descriptive only, never a check.</p>
+    <p class="caption">{{ fit().label }} kept {{ kept }} of its development {{ s.protocol.policy.objective | receiptLabel }} — descriptive only, never a check.</p>
   }
 </section>
 

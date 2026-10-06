@@ -592,28 +592,29 @@ async def finish_exam(
     *,
     changes: Mapping[str, Any],
     results_patch: Mapping[str, Any],
-    exposure: Mapping[str, Any],
+    exposures: Sequence[Mapping[str, Any]],
 ) -> StudyRow:
-    """The exam's outcome joins the exposure ledger and the study in one fenced transaction; a replay appends no second result."""
+    """Each fit's outcome joins the exposure ledger with the study in one fenced transaction; a replay appends no second result."""
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
         recorded = await conn.fetchval(
             "SELECT 1 FROM research_golden_search_exposures WHERE study_id = $1 AND kind = 'result'", study_id
         )
         if recorded is None:
-            await insert_exposure(
-                conn,
-                symbol=exposure["symbol"],
-                start_ms=exposure["start_ms"],
-                end_ms=exposure["end_ms"],
-                study_id=study_id,
-                strategy_key=exposure["strategy_key"],
-                kind="result",
-                state_at_reservation=exposure["state_at_reservation"],
-                claim=exposure["claim"],
-                candidate_point_hash=exposure["candidate_point_hash"],
-                payload=exposure["payload"],
-            )
+            for exposure in exposures:
+                await insert_exposure(
+                    conn,
+                    symbol=exposure["symbol"],
+                    start_ms=exposure["start_ms"],
+                    end_ms=exposure["end_ms"],
+                    study_id=study_id,
+                    strategy_key=exposure["strategy_key"],
+                    kind="result",
+                    state_at_reservation=exposure["state_at_reservation"],
+                    claim=exposure["claim"],
+                    candidate_point_hash=exposure["candidate_point_hash"],
+                    payload=exposure["payload"],
+                )
         return await update_study(conn, study_id, changes=changes, results_patch=results_patch)
 
 

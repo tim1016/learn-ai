@@ -1,14 +1,14 @@
 /**
- * The Final decision step's closed operator copy (#2696). The exam outcome,
- * checks, claim, exposure and weakness are the server's; this module only
- * names them. Approval needs a written reason and the missing-parity
- * acknowledgement always, and a separate weak-evidence acknowledgement
- * whenever the server names a weakness (`exam.weakness`) — a missing outcome
- * is never read as a pass.
+ * The Final decision step's closed operator copy (#2696). Each fit's outcome,
+ * checks and weakness, and the test's claim and exposure, are the server's;
+ * this module only names them. Approval needs a written reason and the
+ * missing-parity acknowledgement always, and a separate weak-evidence
+ * acknowledgement whenever the server names a weakness of the fit being
+ * approved (`fit.weakness`) — a missing outcome is never read as a pass.
  */
 
 import { EXPOSURE_LABELS } from './golden-search-display';
-import type { ExamOutcome, ExamView, StudyDetail, StudyState } from './golden-search.types';
+import type { CandidateKey, ExamFit, ExamOutcome, ExamView, StudyDetail, StudyState } from './golden-search.types';
 
 export const OUTCOME_LABELS: Readonly<Record<ExamOutcome, string>> = {
   meets_rules: 'Meets the stated rules',
@@ -26,29 +26,43 @@ export interface EvidenceRow {
   readonly detail: string;
 }
 
-/** The server's word that the evidence meets the rules: a judged outcome, and no weakness named. */
-function meetsRules(exam: ExamView): boolean {
-  return exam.outcome !== null && exam.weakness.length === 0;
+/** The final test has a result: every fit that ran has its outcome. */
+export function examScored(exam: ExamView | null): exam is ExamView {
+  return exam !== null && exam.fits.length > 0 && exam.fits.every((fit) => fit.outcome !== null);
 }
 
-/** The reason prefilled only when the server names no weakness in a judged final test — a fact, not an opinion. */
-export function factualNote(exam: ExamView): string {
-  return meetsRules(exam)
-    ? 'The candidate meets the stated rules on a confirmatory final test. The evidence is Python-only; independent engine agreement is not available.'
-    : '';
+/** The fit a key names, by its own key or as a fit with the same settings. */
+export function fitFor(exam: ExamView, key: CandidateKey | null): ExamFit | null {
+  return key === null ? null : (exam.fits.find((fit) => fit.key === key || fit.same_as.includes(key)) ?? null);
 }
 
-/** The research row: the outcome, the exposure claim when it is exploratory, and why. */
-export function researchRow(exam: ExamView): EvidenceRow {
-  const outcome = exam.outcome === null ? 'No outcome recorded' : OUTCOME_LABELS[exam.outcome];
+/** A fit's outcome in words; a fit not yet scored says so. */
+export function outcomeLabel(fit: ExamFit): string {
+  return fit.outcome === null ? 'No outcome recorded' : OUTCOME_LABELS[fit.outcome];
+}
+
+/** The server's word that the fit's evidence meets the rules: a judged outcome, and no weakness named. */
+export function meetsRules(fit: ExamFit): boolean {
+  return fit.outcome !== null && fit.weakness.length === 0;
+}
+
+/** The reason prefilled only when the server names no weakness in the fit's judged final test — a fact, not an opinion. */
+export function factualNote(exam: ExamView, fit: ExamFit): string {
+  if (!meetsRules(fit)) return '';
+  const chosen = exam.fits.length > 1 ? ` It was chosen after the final test, from ${exam.fits.length} fits.` : '';
+  return `The ${fit.label} meets the stated rules on a confirmatory final test.${chosen} The evidence is Python-only; independent engine agreement is not available.`;
+}
+
+/** The research row: the fit's outcome, the exposure claim when it is exploratory, and why. */
+export function researchRow(exam: ExamView, fit: ExamFit): EvidenceRow {
   const exploratory = exam.claim === 'confirmatory' ? '' : ` · ${EXPOSURE_LABELS[exam.exposure_state]}, exploratory`;
-  const failing = exam.checks.filter((check) => check.status !== 'pass').map((check) => check.detail);
-  const detail = exam.outcome === 'meets_rules' && failing.length === 0 ? 'Observed advantage on this interval; no promise of future profit.' : failing.join(' ') || 'The final test did not produce a judged result.';
-  return { title: 'Research evidence', chip: `${outcome}${exploratory}`, tone: meetsRules(exam) ? 'good' : 'warn', detail };
+  const failing = fit.checks.filter((check) => check.status !== 'pass').map((check) => check.detail);
+  const detail = fit.outcome === 'meets_rules' && failing.length === 0 ? 'Observed advantage on this interval; no promise of future profit.' : failing.join(' ') || 'The final test did not produce a judged result.';
+  return { title: 'Research evidence', chip: `${outcomeLabel(fit)}${exploratory}`, tone: meetsRules(fit) ? 'good' : 'warn', detail };
 }
 
-/** The four separate evidence rows of the decision panel, by study state (closed copy). */
-export function evidenceRows(state: StudyState, exam: ExamView): EvidenceRow[] {
+/** The four separate evidence rows of the decision panel for one fit, by study state (closed copy). */
+export function evidenceRows(state: StudyState, exam: ExamView, fit: ExamFit): EvidenceRow[] {
   const approved = state === 'approved';
   const repeatability: EvidenceRow =
     state === 'approved'
@@ -59,7 +73,7 @@ export function evidenceRows(state: StudyState, exam: ExamView): EvidenceRow[] {
           ? { title: 'Repeatability and coverage', chip: 'Building the proof', tone: 'warn', detail: 'The immutable replay and required coverage must match this exact version.' }
           : { title: 'Repeatability and coverage', chip: 'Built during approval', tone: 'neutral', detail: 'The immutable replay and required coverage must match this exact version.' };
   return [
-    researchRow(exam),
+    researchRow(exam, fit),
     repeatability,
     {
       title: 'Independent engine agreement',

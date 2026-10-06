@@ -7,17 +7,17 @@ import { GoldenSearchGridComponent } from './charts/golden-search-grid.component
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { comparisonHeight, finalComparisonSpec, finalEquitySpec, finalMonthsSpec, type FinalRun } from './golden-search-final-charts';
 import { GoldenSearchService } from './golden-search.service';
-import type { CandidateKey, ExamCheck, ExamView, StudyDetail } from './golden-search.types';
+import type { CandidateKey, ExamCheck, ExamFit, ExamView, StudyDetail } from './golden-search.types';
 
 const CHECK_WORDS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'Pass', fail: 'Fail', not_available: 'Not available' };
 const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-check-circle', fail: 'pi-times-circle', not_available: 'pi-minus-circle' };
 
 /**
- * The final test's charts (#2821): its rule checks as a status list (V35),
- * each measure on the development period beside the final test (V33), and
- * the candidate's and the current settings' returns through the final test
- * (V34) and by month (V36), read from both runs' detail reads once the
- * final test has a result.
+ * The final test's charts (#2821, #2930): the selected fit's rule checks as
+ * a status list (V35), each measure on the development period beside the
+ * final test (V33), and every fit's and the current settings' returns
+ * through the final test (V34) and by month (V36), read from the runs'
+ * detail reads once the final test has a result.
  */
 @Component({
   selector: 'app-golden-search-final-charts',
@@ -26,9 +26,9 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
   template: `
     <app-golden-search-grid>
       <app-golden-search-panel chart="final-checks" data-span="6">
-        @if (exam().checks.length > 0) {
-          <ul class="checks" aria-label="Final-test checks">
-            @for (check of exam().checks; track check.code) {
+        @if (fit().checks.length > 0) {
+          <ul class="checks" [attr.aria-label]="'Final-test checks for ' + fit().label">
+            @for (check of fit().checks; track check.code) {
               <li [attr.data-status]="check.status">
                 <i class="pi" [class]="icons[check.status]" aria-hidden="true"></i>
                 <span><strong>{{ words[check.status] }}</strong> · {{ check.label }} — {{ check.detail }}</span>
@@ -38,7 +38,7 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
         } @else {
           <p class="muted">No check was recorded for this final test.</p>
         }
-        <p caption class="caption">Each rule the final test is judged by, in words. Retention is described beside the result, never checked.</p>
+        <p caption class="caption">Each rule {{ fit().label }} is judged by on the final test, in words. Retention is described beside the result, never checked.</p>
       </app-golden-search-panel>
       @if (error(); as message) {
         <div data-span="6" role="alert" class="failed">
@@ -47,7 +47,7 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
         </div>
       } @else if (comparison(); as spec) {
         @if (missing(); as names) {
-          <p class="missing" data-span="12" role="status">No final-test run is recorded for {{ names }}, so these charts show the other run only.</p>
+          <p class="missing" data-span="12" role="status">No final-test run is recorded for {{ names }}, so these charts show the other runs only.</p>
         }
         <app-golden-search-panel chart="final-comparison" data-span="6">
           <app-golden-search-chart [spec]="spec" [height]="height()" />
@@ -90,18 +90,16 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
 export class GoldenSearchFinalChartsComponent {
   readonly study = input.required<StudyDetail>();
   readonly exam = input.required<ExamView>();
-  readonly candidateLabel = input.required<string>();
+  /** The fit the page is about: its checks are listed and its line is featured. */
+  readonly fit = input.required<ExamFit>();
 
   private readonly service = inject(GoldenSearchService);
   protected readonly words = CHECK_WORDS;
   protected readonly icons = CHECK_ICONS;
 
-  /** The final test's two runs: the candidate's, then the current settings' (one when they are the same). Its runs never change, so a poll never reads them again. */
+  /** The final test's runs: each fit's, then the current settings'. Its runs never change, so a poll never reads them again. */
   private readonly request = computed(
-    () => {
-      const candidate = this.exam().candidate_key;
-      return { studyId: this.study().id, keys: candidate === 'incumbent' ? (['incumbent'] as CandidateKey[]) : [candidate, 'incumbent' as CandidateKey] };
-    },
+    () => ({ studyId: this.study().id, keys: [...this.exam().fits.map((fit) => fit.key), 'incumbent'] as CandidateKey[] }),
     { equal: (a, b) => a.studyId === b.studyId && a.keys.join() === b.keys.join() },
   );
   protected readonly runs = resource({
@@ -120,7 +118,7 @@ export class GoldenSearchFinalChartsComponent {
         : [{ key, label: this.labelOf(key), comparison: detail.exam.comparison ?? [], returns: detail.exam.cumulative_return, falls: detail.exam.drawdown, monthly: detail.exam.monthly }],
     );
   });
-  /** The run of the pair whose final-test record is missing, by name; null when both are recorded. */
+  /** The runs whose final-test record is missing, by name; null when all are recorded. */
   protected readonly missing = computed(() => {
     if (!this.runs.hasValue()) return null;
     const names = this.runs.value().filter(({ detail }) => detail.exam === null).map(({ key }) => this.labelOf(key));
@@ -132,15 +130,15 @@ export class GoldenSearchFinalChartsComponent {
   }, { equal: sameChart });
   protected readonly equity = computed(() => {
     const runs = this.finalRuns();
-    return runs === null || runs.every((run) => run.returns.length === 0) ? null : finalEquitySpec(runs, this.study().protocol.policy.max_drawdown_ceiling);
+    return runs === null || runs.every((run) => run.returns.length === 0) ? null : finalEquitySpec(runs, this.fit().key, this.study().protocol.policy.max_drawdown_ceiling);
   }, { equal: sameChart });
   protected readonly months = computed(() => {
     const runs = this.finalRuns();
     return runs === null || runs.every((run) => run.monthly.length === 0) ? null : finalMonthsSpec(runs);
   }, { equal: sameChart });
-  protected readonly height = computed(() => comparisonHeight(this.finalRuns()?.[0]?.comparison.length ?? 0));
+  protected readonly height = computed(() => comparisonHeight(this.finalRuns()?.[0]?.comparison.length ?? 0, this.finalRuns()?.length ?? 0));
 
   private labelOf(key: CandidateKey): string {
-    return key === 'incumbent' ? 'Current settings' : this.candidateLabel();
+    return key === 'incumbent' ? 'Current settings' : (this.exam().fits.find((fit) => fit.key === key)?.label ?? key);
   }
 }

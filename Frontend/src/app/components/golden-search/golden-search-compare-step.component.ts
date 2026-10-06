@@ -20,18 +20,13 @@ import { STUDY_STEPS, type StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateDetail, CandidateKey, StrategyCapability, StudyCommand, StudyDetail, SummaryLink } from './golden-search.types';
 
-/** The one forward action Compare offers for the selected candidate. */
-type CompareAction =
-  | { readonly kind: 'select'; readonly key: CandidateKey; readonly label: string }
-  | { readonly kind: 'step'; readonly label: string }
-  | { readonly kind: 'none'; readonly label: string; readonly reason: string };
+/** The one forward action Compare offers: on to the final test, or why not. */
+type CompareAction = { readonly kind: 'step'; readonly label: string } | { readonly kind: 'none'; readonly label: string; readonly reason: string };
 
 interface DetailRequest {
   readonly studyId: string;
   readonly keys: readonly CandidateKey[];
 }
-
-const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep current settings” to finish without consuming the test.';
 
 /**
  * The Compare step (#2696): the server's recommendation first, then a card
@@ -40,8 +35,8 @@ const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep cur
  * what choosing the selected one implies; the candidates side by side, the
  * selected one's neighbors and cost stresses (#2821); its evidence (the
  * parameter landscape, months, trades); and the two ways forward: keep the
- * current settings, or lock the candidate for its one final test. Picking a
- * card is a local choice until "Review final-test lock" sends it.
+ * current settings, or go on to the final test, which runs every fit
+ * (#2930). Picking a card only chooses which candidate this page shows.
  */
 @Component({
   selector: 'app-golden-search-compare-step',
@@ -70,7 +65,7 @@ export class GoldenSearchCompareStepComponent {
   readonly studyCommand = output<StudyCommand>();
   readonly goTo = output<StudyStep>();
 
-  /** The row the trader clicked, for the study it was clicked in; otherwise the study's own pick shows. */
+  /** The row the trader clicked, for the study it was clicked in; otherwise the fit an approval named shows, else the all-period fit. */
   private readonly picked = signal<{ readonly studyId: string; readonly key: CandidateKey } | null>(null);
 
   protected readonly evidence = computed(() => this.study().results.evidence);
@@ -78,7 +73,6 @@ export class GoldenSearchCompareStepComponent {
   protected readonly selectedKey = computed<CandidateKey | null>(() => {
     const rows = this.rows();
     const study = this.study();
-    if (study.exam_locked) return rowKeyFor(rows, study.candidate_key);
     const picked = this.picked();
     return rowKeyFor(rows, picked?.studyId === study.id ? picked.key : null) ?? initialRowKey(rows, study.candidate_key);
   });
@@ -155,14 +149,9 @@ export class GoldenSearchCompareStepComponent {
 
   protected readonly action = computed<CompareAction>(() => {
     const study = this.study();
-    const row = this.selectedRow();
     if (study.exam_locked) return { kind: 'step', label: 'Review final decision' };
-    if (row === null) return { kind: 'none', label: 'Review final-test lock', reason: 'Choose a candidate first.' };
-    if (!row.candidate.exam_eligible) return { kind: 'none', label: 'Review final-test lock', reason: INCUMBENT_CAPTION };
-    // The locked pick may be folded into this row (a recent fit that is the all-period settings).
-    if (study.state === 'candidate_locked' && study.candidate_key !== null && row.members.includes(study.candidate_key)) return { kind: 'step', label: 'Review final-test lock' };
-    if (study.permitted_actions.includes('select_candidate')) return { kind: 'select', key: row.key, label: 'Review final-test lock' };
-    return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.select_candidate ?? 'This study cannot lock a candidate now.' };
+    if (study.permitted_actions.includes('open_exam')) return { kind: 'step', label: 'Review final-test lock' };
+    return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.open_exam ?? 'This study cannot open its final test now.' };
   });
 
   /** A summary row's evidence: one of this step's tabs or charts (in its own grid or inside a tab), or the study step that holds it. */
@@ -188,9 +177,7 @@ export class GoldenSearchCompareStepComponent {
   }
 
   protected forward(): void {
-    const action = this.action();
-    if (action.kind === 'select') this.studyCommand.emit({ command: 'select_candidate', payload: { candidate_key: action.key } });
-    else if (action.kind === 'step') this.goTo.emit('decision');
+    if (this.action().kind === 'step') this.goTo.emit('decision');
   }
 
   protected retain(decision: RetainDecision): void {

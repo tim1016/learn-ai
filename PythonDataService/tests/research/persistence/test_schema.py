@@ -31,6 +31,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     11: "f7c290d147980eb7",
     12: "82be8428a0c3936a",
     13: "d55e48c00bddb801",
+    14: "c640fe2ce26a70e1",
 }
 
 
@@ -216,3 +217,37 @@ async def test_version_5_nulls_every_recency_study_reference(scratch_db: asyncpg
 
     assert await scratch_db.fetchval('SELECT count(*) FROM "RecencyRuns" WHERE "StudyId" IS NOT NULL') == 0
     assert await scratch_db.fetchval("SELECT to_regclass('research_backtest_runs')") is not None
+
+
+async def test_version_14_returns_a_study_waiting_with_a_locked_candidate_to_compare(scratch_db: asyncpg.Connection) -> None:
+    """Both fits sit the final test (#2930), so the state a pick used to leave a study in is gone."""
+    await ensure_schema(scratch_db)
+    # Stage a database that recorded version 13: its state rule still admits the locked-candidate state.
+    await scratch_db.execute("ALTER TABLE research_golden_search_studies DROP CONSTRAINT ck_research_golden_search_studies_state")
+    await scratch_db.execute(
+        """
+        ALTER TABLE research_golden_search_studies ADD CONSTRAINT ck_research_golden_search_studies_state
+            CHECK (state IN ('candidate_locked', 'awaiting_candidate', 'awaiting_review'))
+        """
+    )
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version = 14")
+    for study_id, state, key in (("locked-pick", "candidate_locked", "recent"), ("reviewed", "awaiting_review", "all_period")):
+        await scratch_db.execute(
+            """
+            INSERT INTO research_golden_search_studies (
+                id, strategy_key, symbol, state, created_at_ms, updated_at_ms, protocol_json, protocol_hash,
+                receipt_json, candidate_key, budget_cap
+            ) VALUES ($1, 'ema_crossover_signal', 'SPY', $2, 1, 1, '{}'::jsonb, 'h', '{}'::jsonb, $3, 5000)
+            """,
+            study_id,
+            state,
+            key,
+        )
+
+    await ensure_schema(scratch_db)
+
+    rows = await scratch_db.fetch("SELECT id, state, candidate_key FROM research_golden_search_studies ORDER BY id")
+    # The pick made before the test is void; a study already past its final test keeps the candidate it tested.
+    assert [tuple(row) for row in rows] == [("locked-pick", "awaiting_candidate", None), ("reviewed", "awaiting_review", "all_period")]
+    with pytest.raises(asyncpg.CheckViolationError):
+        await scratch_db.execute("UPDATE research_golden_search_studies SET state = 'candidate_locked' WHERE id = 'reviewed'")

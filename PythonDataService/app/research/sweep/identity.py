@@ -82,6 +82,7 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
             "evidence",
             "exam_rules",
             "exposure_rules",
+            "final_test",
             "grid_procedure",
             "planning",
             "procedure_history",

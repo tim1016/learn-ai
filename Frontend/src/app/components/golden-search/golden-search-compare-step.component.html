@@ -15,7 +15,7 @@
     }
 
     <app-golden-search-grid>
-      <app-golden-search-candidate-cards [rows]="rows()" [selected]="selectedKey()" [fixed]="s.exam_locked" [capital]="e.scope.capital" [floor]="floor()"
+      <app-golden-search-candidate-cards [rows]="rows()" [selected]="selectedKey()" [capital]="e.scope.capital" [floor]="floor()"
         [details]="detailMap()" (pick)="pick($event)" />
 
       @if (selectedRow(); as row) {
@@ -68,7 +68,7 @@
 
     <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i>
       <span>The walk-forward result belongs to the search procedure.
-        {{ s.exam_locked ? 'The selected candidate’s final test is recorded separately. Its development results remain in-sample.' : 'Neither candidate has yet earned an independent final-test result.' }}</span>
+        {{ s.exam_locked ? 'Each fit’s final test is recorded separately. These development results remain in-sample.' : 'No fit has yet earned an independent final-test result; the final test runs every fit.' }}</span>
     </p>
 
     @let a = action();

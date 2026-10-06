@@ -26,11 +26,12 @@ def test_estimate_pins_each_stage_bound_and_their_sum() -> None:
         ("validation", 3 * (73 + 2)),
         # 3 detail runs + 2 candidates · 2 neighbors · 2 knobs + 3 candidates · 2 stress.
         ("evidence", 3 + 8 + 6),
-        ("exam", 2),
+        # The incumbent and both fits.
+        ("exam", 3),
         ("proof", 3),
     ]
-    assert result.total_max == sum(stage.max_evaluations for stage in result.stages) == 418
-    assert result.reserved_for_exam_and_proof == 5
+    assert result.total_max == sum(stage.max_evaluations for stage in result.stages) == 419
+    assert result.reserved_for_exam_and_proof == 6
 
 
 def test_estimate_serial_seconds_use_each_stage_window_length() -> None:
@@ -43,10 +44,10 @@ def test_estimate_serial_seconds_use_each_stage_window_length() -> None:
     #   recent      73 x (1.4 + 0.3 x 184/30.4)              =  234.7526315789
     #   validation  3 x (73 x (1.4 + 0.3 x 6) + 2 x (1.4 + 0.3 x 2)) =  712.8
     #   evidence    17 x (1.4 + 0.3 x 366/30.4)              =   85.2013157895
-    #   exam+proof  5 x (1.4 + 0.3 x 90/30.4)                =   11.4407894737
-    #   total                                                = 1410.0592105263; 60% = 846.0355263158
-    assert result.serial_seconds_high == 1410.1
-    assert result.serial_seconds_low == 846.0
+    #   exam+proof  6 x (1.4 + 0.3 x 90/30.4)                =   13.7289473684
+    #   total                                                = 1412.3473684211; 60% = 847.4084210526
+    assert result.serial_seconds_high == 1412.3
+    assert result.serial_seconds_low == 847.4
 
 
 def test_estimate_omits_the_recent_stage_and_audits_that_are_switched_off() -> None:
@@ -56,6 +57,8 @@ def test_estimate_omits_the_recent_stage_and_audits_that_are_switched_off() -> N
 
     assert [stage.stage for stage in result.stages] == ["search", "validation", "evidence", "exam", "proof"]
     assert result.stages[2].max_evaluations == 3
+    # Without a recent fit the final test runs the incumbent and the all-period fit.
+    assert result.stages[3].max_evaluations == 2 and result.reserved_for_exam_and_proof == 5
 
 
 def test_procedure_bound_for_grid_is_the_grid_product() -> None:

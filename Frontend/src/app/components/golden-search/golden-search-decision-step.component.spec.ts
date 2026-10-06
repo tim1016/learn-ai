@@ -6,9 +6,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
-import type { CandidateDetail, CandidateKey, ExamView, StudyCommand, StudyDetail } from './golden-search.types';
+import type { CandidateDetail, CandidateKey, ExamFit, ExamView, StudyCommand, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { candidateDetail, emaCapability, examView, exposure, finalRun, frequencyProtocol, protocol, studyDetail, tradeActivity } from './testing/fixtures';
+import { candidateDetail, CHOSEN_NOTE, emaCapability, examFit, examView, exposure, finalRun, frequencyProtocol, protocol, studyDetail, tradeActivity, UNDECIDED_NOTE } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail, exam: (key: CandidateKey) => CandidateDetail['exam'] = finalRun) {
   const service = { candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key, { exam: exam(key) })) };
@@ -23,13 +23,14 @@ async function renderStep(study: StudyDetail, exam: (key: CandidateKey) => Candi
   return { view, commands, steps, service };
 }
 
-function reviewWith(exam: Partial<ExamView>, overrides: Partial<StudyDetail> = {}): StudyDetail {
+/** A study at review whose final test is `exam`, with `allPeriod` overriding the all-period fit. */
+function reviewWith(exam: Partial<ExamView>, allPeriod: Partial<ExamFit> = {}, overrides: Partial<StudyDetail> = {}): StudyDetail {
   const base = studyDetail('awaiting_review');
-  return { ...base, results: { ...base.results, exam: examView(exam) }, ...overrides };
+  return { ...base, results: { ...base.results, exam: examView(exam, allPeriod) }, ...overrides };
 }
 
 function approveButton(): HTMLButtonElement {
-  return screen.getByRole('button', { name: /approve golden configuration|retry qualification/i }) as HTMLButtonElement;
+  return screen.getByRole('button', { name: /approve the .* as golden|retry qualification/i }) as HTMLButtonElement;
 }
 
 function reason(): HTMLTextAreaElement {
@@ -42,25 +43,25 @@ async function noAxeViolations(container: Element): Promise<void> {
 }
 
 describe('GoldenSearchDecisionStepComponent — final-test charts', () => {
-  it('sets each measure beside development and draws both runs through the final test, every value in a table', async () => {
+  it('sets each measure beside development and draws every run through the final test, every value in a table', async () => {
     await renderStep(studyDetail('awaiting_review'));
 
     const comparison = await screen.findByRole('region', { name: 'Development against final' });
     expect((await within(comparison).findByRole('img')).getAttribute('aria-label')).toContain('Annualized return, Sharpe, Worst fall, Trades a trading year');
     fireEvent.click(within(comparison).getByRole('button', { name: 'Show as table' }));
     expect(within(comparison).getAllByRole('row')[1].textContent).toMatch(/Annualized return\s*\+4\.2%\s*\+7\.5%\s*\+3\.3%/);
-    expect(within(screen.getByRole('region', { name: 'Final-test equity' })).getByRole('img').getAttribute('aria-label')).toContain('All-period fit +1.8%, Current settings +0.9%');
+    expect(within(screen.getByRole('region', { name: 'Final-test equity' })).getByRole('img').getAttribute('aria-label')).toContain('All-period fit +1.8%, Recent fit +1.2%, Current settings +0.9%');
     const months = screen.getByRole('region', { name: 'Final-test months' });
     fireEvent.click(within(months).getByRole('button', { name: 'Show as table' }));
-    expect(within(months).getAllByRole('row')[1].textContent).toMatch(/Jan 2026\s*\+0\.7%\s*\+0\.4%/);
+    expect(within(months).getAllByRole('row')[1].textContent).toMatch(/Jan 2026\s*\+0\.7%\s*\+0\.5%\s*\+0\.4%/);
   });
 
-  it('says which run of the pair has no final-test record instead of dropping it', async () => {
+  it('says which run has no final-test record instead of dropping it', async () => {
     const { service } = await renderStep(studyDetail('awaiting_review'), (key) => (key === 'incumbent' ? null : finalRun(key)));
     await screen.findByRole('region', { name: 'Development against final' });
 
-    expect(service.candidate).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/No final-test run is recorded for Current settings, so these charts show the other run only\./)).toBeTruthy();
+    expect(service.candidate).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(/No final-test run is recorded for Current settings, so these charts show the other runs only\./)).toBeTruthy();
   });
 
   it('reads the final-test runs once; a poll keeps them drawn', async () => {
@@ -70,31 +71,33 @@ describe('GoldenSearchDecisionStepComponent — final-test charts', () => {
     view.fixture.componentRef.setInput('study', studyDetail('awaiting_review', { revision: 4 }));
     await view.fixture.whenStable();
 
-    expect(service.candidate).toHaveBeenCalledTimes(2);
+    expect(service.candidate).toHaveBeenCalledTimes(3);
     expect(screen.getByRole('region', { name: 'Development against final' })).toBeTruthy();
   });
 });
 
 describe('GoldenSearchDecisionStepComponent — before the final test', () => {
   it('judges a frequency plan by the floor its receipt froze for the final interval', async () => {
-    await renderStep(studyDetail('candidate_locked', { protocol: frequencyProtocol(), activity: tradeActivity() }));
+    await renderStep(studyDetail('awaiting_candidate', { protocol: frequencyProtocol(), activity: tradeActivity() }));
 
     expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toMatch(/Worst drawdown \/ activity\s*≤ 20% \/ ≥ 13 trades/);
   });
 
   it('shows what one look consumes and the rules it is judged by, and opens only after the acknowledgement', async () => {
-    const { commands, steps, view } = await renderStep(studyDetail('candidate_locked'));
+    const { commands, steps, view } = await renderStep(studyDetail('awaiting_candidate'));
 
     expect(screen.getByRole('heading', { name: '2026-01-01 – 2026-03-31 is still sealed' })).not.toBeNull();
     const lock = screen.getByRole('region', { name: /is still sealed/i });
-    expect(lock.textContent).toContain('Only All-period fit and the frozen incumbent will be evaluated.');
+    expect(lock.textContent).toContain('All-period fit and Recent fit and the frozen incumbent will be evaluated.');
+    expect(lock.textContent).toContain('You choose which fit to approve after you see the results.');
+    expect(lock.textContent).toMatch(/Recent fit\s*Gap \$0\.10 · RSI 45–70 · EMA 5\/10 · hold 3 bars/);
     expect(lock.textContent).toMatch(/Development\s*2024-01-01\s*–\s*2025-12-31\s*· used to choose/);
     expect(lock.textContent).toMatch(/Worst drawdown \/ activity\s*≤ 20% \/ ≥ 30 trades/);
     expect(lock.textContent).toMatch(/Incumbent comparison\s*At least the incumbent's Sharpe Ratio/);
     const open = screen.getByRole('button', { name: 'Open final test' }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this locks my candidate and consumes this test interval.' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I understand this consumes this test interval for this study.' }));
     expect(open.disabled).toBe(false);
     fireEvent.click(open);
     fireEvent.click(screen.getByRole('button', { name: 'Return to candidates' }));
@@ -109,7 +112,7 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
     ['previously_used', 'Previously used · exploratory only'],
     ['history_unknown', 'History unknown · exploratory only'],
   ] as const)('states the exposure opening would record (%s) with the server explanation', async (state, label) => {
-    await renderStep(studyDetail('candidate_locked', { exposure_preview: exposure({ state, explanation: `Ledger says ${state}.` }) }));
+    await renderStep(studyDetail('awaiting_candidate', { exposure_preview: exposure({ state, explanation: `Ledger says ${state}.` }) }));
 
     const lock = screen.getByRole('region', { name: /is still sealed/i });
     expect(lock.textContent).toMatch(new RegExp(`Recorded exposure\\s*${label}`));
@@ -119,35 +122,31 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
   });
 
   it('without an exposure preview says it is checked when the test opens', async () => {
-    await renderStep(studyDetail('candidate_locked', { exposure_preview: null }));
+    await renderStep(studyDetail('awaiting_candidate', { exposure_preview: null }));
 
     expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toMatch(/Recorded exposure\s*Checked when you open the test/);
   });
 
   it('a lock the server will not open stays disabled and says why', async () => {
-    await renderStep(studyDetail('candidate_locked', { permitted_actions: ['select_candidate'], action_refusals: { open_exam: 'Another study is opening this interval.' } }));
+    await renderStep(studyDetail('awaiting_candidate', { permitted_actions: ['retain'], action_refusals: { open_exam: 'Another study is opening this interval.' } }));
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /locks my candidate/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /consumes this test interval/i }));
 
     expect((screen.getByRole('button', { name: 'Open final test' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Another study is opening this interval.')).not.toBeNull();
   });
 
-  it('before a candidate is locked shows the final interval’s recorded exposure, the evidence Compare links to', async () => {
-    await renderStep(studyDetail('awaiting_candidate'));
+  it('before the candidates are ready it points back to Compare', async () => {
+    const { steps } = await renderStep(studyDetail('awaiting_validation'));
 
-    expect(screen.getByText(/Recorded exposure:/).closest('p')?.textContent).toMatch(/Recorded exposure: Not opened in recorded research\.\s+\S/);
-  });
-
-  it('without a locked candidate points back to Compare', async () => {
-    const { steps } = await renderStep(studyDetail('awaiting_candidate'));
+    expect(screen.getByRole('status').textContent).toContain('The final decision follows Compare');
     fireEvent.click(screen.getByRole('button', { name: 'Return to candidates' }));
     expect(steps).toEqual(['compare']);
   });
 
   it('while the test runs it says what is running, on which dates', async () => {
     await renderStep(studyDetail('exam_running'));
-    expect(screen.getByRole('region', { name: 'Final test running' }).textContent).toMatch(/Only All-period fit and the frozen incumbent run on\s*2026-01-01\s*–\s*2026-03-31/);
+    expect(screen.getByRole('region', { name: 'Final test running' }).textContent).toMatch(/Every fit and the frozen incumbent run on\s*2026-01-01\s*–\s*2026-03-31/);
   });
 });
 
@@ -165,18 +164,20 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(tuple.textContent).toMatch(/Replaces the default: Gap \$0\.20 · RSI 50–70 · EMA 5\/10 · hold 5 bars; fixed values unchanged\.\s*No bot starts on approval\./);
   });
 
-  it('reads the final test against the frozen incumbent, with each check and the four separate evidence rows', async () => {
+  it('reads every fit against the frozen incumbent, each with its own outcome, then the selected fit’s checks and the four evidence rows', async () => {
     await renderStep(studyDetail('awaiting_review'));
 
     const result = screen.getByRole('region', { name: 'Final test result' });
     const rows = within(result).getAllByRole('row');
     expect(rows[0].textContent).toMatch(/2026-01-01\s*–\s*2026-03-31/);
-    expect(rows[1].textContent).toMatch(/All-period fit\s*\+1\.8%\s*3\.1%\s*36\s*0\.91/);
-    expect(rows[2].textContent).toMatch(/Frozen incumbent\s*\+0\.9%\s*4\.2%\s*39\s*0\.54/);
-    expect(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks' }).textContent).toContain(
+    expect(rows[1].textContent).toMatch(/All-period fit\s*Meets the stated rules\s*\+1\.8%\s*3\.1%\s*36\s*0\.91/);
+    expect(rows[2].textContent).toMatch(/Recent fit\s*Meets the stated rules\s*\+1\.2%\s*5\.2%\s*33\s*0\.66/);
+    expect(rows[3].textContent).toMatch(/Frozen incumbent\s*Benchmark\s*\+0\.9%\s*4\.2%\s*39\s*0\.54/);
+    expect(result.textContent).toContain(UNDECIDED_NOTE);
+    expect(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks for All-period fit' }).textContent).toContain(
       'Pass · At least the incumbent — Sharpe 0.91 against 0.54.',
     );
-    expect(result.textContent).toContain('61.0% — descriptive only, never a check');
+    expect(result.textContent).toContain('All-period fit kept 61.0% of its development Sharpe Ratio — descriptive only, never a check');
     expect(screen.getByRole('region', { name: 'Research evidence' }).textContent).toContain('Meets the stated rules');
     expect(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent).toContain('Built during approval');
     expect(screen.getByRole('region', { name: 'Independent engine agreement' }).textContent).toContain('Missing · Python-only');
@@ -201,7 +202,7 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     fireEvent.click(approveButton());
 
     expect(commands).toEqual([
-      { command: 'approve', payload: { note: 'Better Sharpe on an untouched quarter.', acknowledge_missing_parity: true, acknowledge_research_weakness: false, expected_default_qualification_id: null } },
+      { command: 'approve', payload: { candidate_key: 'all_period', note: 'Better Sharpe on an untouched quarter.', acknowledge_missing_parity: true, acknowledge_research_weakness: false, expected_default_qualification_id: null } },
     ]);
     await noAxeViolations(view.container);
   });
@@ -209,7 +210,8 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
   it('weak evidence needs its own acknowledgement naming the weakness, and nothing is prefilled', async () => {
     const qualified = protocol({ incumbent: { source: 'qualification', qualification_id: 'gq-prev-0001', params: { gap: 0.2, symbol: 'SPY' } } });
     const study = reviewWith(
-      { outcome: 'not_enough_evidence', claim: 'exploratory', exposure_state: 'previously_used', checks: [{ code: 'SAMPLE_FLOOR', label: 'Enough trades', status: 'fail', detail: '12 trades against 30.' }] },
+      { claim: 'exploratory', exposure_state: 'previously_used' },
+      { outcome: 'not_enough_evidence', checks: [{ code: 'SAMPLE_FLOOR', label: 'Enough trades', status: 'fail', detail: '12 trades against 30.' }] },
       { protocol: qualified },
     );
     const { commands } = await renderStep(study);
@@ -225,12 +227,12 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     fireEvent.click(approveButton());
 
     expect(commands).toEqual([
-      { command: 'approve', payload: { note: 'Owner accepts the thin sample.', acknowledge_missing_parity: true, acknowledge_research_weakness: true, expected_default_qualification_id: 'gq-prev-0001' } },
+      { command: 'approve', payload: { candidate_key: 'all_period', note: 'Owner accepts the thin sample.', acknowledge_missing_parity: true, acknowledge_research_weakness: true, expected_default_qualification_id: 'gq-prev-0001' } },
     ]);
   });
 
   it('asks for the weakness the server names, in its words, even when the outcome alone reads as a pass', async () => {
-    const { commands } = await renderStep(reviewWith({ weakness: [{ code: 'EXPOSURE_HISTORY_UNKNOWN', text: 'the unknown history of this test interval' }] }));
+    const { commands } = await renderStep(reviewWith({}, { weakness: [{ code: 'EXPOSURE_HISTORY_UNKNOWN', text: 'the unknown history of this test interval' }] }));
 
     expect(reason().value).toBe('');
     fireEvent.input(reason(), { target: { value: 'Owner accepts the unknown history.' } });
@@ -240,13 +242,13 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     fireEvent.click(approveButton());
 
     expect(commands).toEqual([
-      { command: 'approve', payload: { note: 'Owner accepts the unknown history.', acknowledge_missing_parity: true, acknowledge_research_weakness: true, expected_default_qualification_id: null } },
+      { command: 'approve', payload: { candidate_key: 'all_period', note: 'Owner accepts the unknown history.', acknowledge_missing_parity: true, acknowledge_research_weakness: true, expected_default_qualification_id: null } },
     ]);
   });
 
   it('approval the server does not offer stays disabled even with every acknowledgement, and says why', async () => {
     const { commands } = await renderStep(
-      reviewWith({}, { permitted_actions: ['retain', 'revise'], action_refusals: { approve: 'Approval follows the final test.' } }),
+      reviewWith({}, {}, { permitted_actions: ['retain', 'revise'], action_refusals: { approve: 'Approval follows the final test.' } }),
     );
 
     fireEvent.input(reason(), { target: { value: 'Ready to approve.' } });
@@ -258,9 +260,54 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(commands).toEqual([]);
   });
 
+  it('choosing the other fit turns the whole page to it: its checks, its settings, and the approval that names it', async () => {
+    const { commands, service } = await renderStep(studyDetail('awaiting_review'));
+    expect(approveButton().textContent).toContain('Approve the All-period fit as golden');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Recent fit' }));
+
+    expect(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks for Recent fit' }).textContent).toContain('Sharpe 0.66 against 0.54.');
+    expect(screen.getByRole('region', { name: 'The exact settings you are approving' }).textContent).toContain('Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars');
+    // The form starts again for the newly chosen fit, so an acknowledgement given for one never carries to the other.
+    expect(reason().value).toContain('The Recent fit meets the stated rules');
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve the Recent fit as golden' }));
+
+    expect(commands.map((command) => (command.command === 'approve' ? command.payload.candidate_key : null))).toEqual(['recent']);
+    // The runs were read once; choosing a fit redraws from them.
+    expect(service.candidate).toHaveBeenCalledTimes(3);
+  });
+
+  it('a fit that failed asks for its own acknowledgement while the fit that met the rules does not', async () => {
+    const exam = examView({ fits: [examFit('all_period'), examFit('recent', { outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] })] });
+    await renderStep(reviewWith(exam));
+
+    expect(screen.queryByRole('checkbox', { name: /i approve despite/i })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'Recent fit' }));
+
+    expect(screen.getByRole('checkbox', { name: /i approve despite failing the stated rules \(profit after stated costs\)/i })).not.toBeNull();
+    expect(within(screen.getByRole('region', { name: 'Final test result' })).getAllByRole('row')[2].textContent).toContain('Does not meet the rules');
+  });
+
+  it('one result for both fits offers no choice and notes none', async () => {
+    const twins = examFit('all_period', { same_as: ['recent'], label: 'All-period and recent fit' });
+    await renderStep(reviewWith({ fits: [twins] }));
+
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Final test result' }).textContent).not.toContain('chosen after the final test');
+    expect(approveButton().textContent).toContain('Approve the All-period and recent fit as golden');
+  });
+
+  it('once an approval names a fit the page stays on it and records how it was chosen', async () => {
+    await renderStep(studyDetail('qualification_failed'));
+
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Final test result' }).textContent).toContain(CHOSEN_NOTE);
+  });
+
   it('a failed rule names what failed in the acknowledgement', async () => {
     await renderStep(
-      reviewWith({ outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] }),
+      reviewWith({}, { outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] }),
     );
 
     expect(screen.getByRole('checkbox', { name: /i approve despite failing the stated rules \(profit after stated costs\)/i })).not.toBeNull();
@@ -296,7 +343,7 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
 
     expect(screen.getByRole('status').textContent).toContain('Building the proof and publishing the version');
     expect(screen.getByRole('progressbar', { name: 'Approval progress' })).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /approve golden configuration/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve the/i })).toBeNull();
     expect(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent).toContain('Building the proof');
     expect(screen.queryByRole('button', { name: 'Keep current settings' })).toBeNull();
   });
@@ -319,7 +366,7 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     fireEvent.click(within(choices).getByRole('button', { name: 'Record decision' }));
 
     expect(commands).toEqual([{ command: 'retain', payload: { kind: 'retain_exploration', note: 'Proof kept failing on the lake.' } }]);
-    expect(screen.queryByRole('button', { name: /approve golden configuration/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve the/i })).toBeNull();
   });
 
   it('a stopped approval the server does not let you retain offers no retain choice', async () => {
