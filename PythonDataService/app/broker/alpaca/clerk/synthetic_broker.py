@@ -280,8 +280,9 @@ class SyntheticBroker:
         it works overnight (owner decision 2026-09-29). Re-stating it at now
         keeps the fill after the EXIT that caused it. The order's record
         keeps when that price last traded, which the re-stated bar no longer
-        shows, so the price's age is not lost (#2912). ``False`` (no bar was
-        ever delivered for ``symbol``) leaves the close unsent.
+        shows, so the price's age is not lost (#2912); it keeps none when no
+        trade this run retained made that price. ``False`` (no bar was ever
+        delivered for ``symbol``) leaves the close unsent.
         """
         if self._ledger is None or self._source_bars is None:
             return False
@@ -289,11 +290,15 @@ class SyntheticBroker:
         if last_seen is None:
             return False
         # The feed delivers a bar for a minute nothing traded in, repeating
-        # the last trade's price: that price is as old as the trade.
+        # the last trade's price: that price is as old as the trade. When the
+        # last trade this run kept made another price, or it kept none, when
+        # this price traded is not known, and no time is recorded.
         last_traded = self._source_bars.latest_for_symbol(
             symbol, market_only=True, traded_only=True, at_or_before_ms=last_seen.end_ms
         )
-        price_traded_at_ms = (last_traded or last_seen).end_ms
+        price_traded_at_ms = (
+            last_traded.end_ms if last_traded is not None and last_traded.close == last_seen.close else None
+        )
         now_ms = self._clock()
         session = order_session_state_at_ms(now_ms=now_ms, extended_window=SYNTHETIC_CAPABILITIES.extended_hours_window)
         price = last_seen.close

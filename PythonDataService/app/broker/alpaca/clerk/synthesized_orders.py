@@ -81,8 +81,8 @@ class SynthesizedAnchor(BaseModel):
     Run's run-end close does (ADR 0045): the close of the market bar that
     price last traded in. The re-stated bar's own times are the sale's, so
     this is the only place the price's age survives. It is left out of a
-    record that re-states nothing, so a build from before the field existed
-    still reads every other row.
+    record that has none, so a ledger with no such record still reads on a
+    build from before the field existed.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

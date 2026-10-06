@@ -15,6 +15,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import GuardedBrokerTradePort
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
@@ -148,6 +150,27 @@ async def test_a_run_end_close_after_quiet_minutes_is_as_old_as_the_last_trade(t
 
     assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 600.0, OVERNIGHT)
     assert broker.synthesized_fill_anchors()["bot:ema:close"].restated_bar_end_ms == NOON
+
+
+@pytest.mark.parametrize(
+    "last_trade_close",
+    [pytest.param("600.00", id="last-trade-at-another-price"), pytest.param(None, id="no-trade-retained")],
+)
+async def test_a_run_end_close_keeps_no_time_for_a_price_no_retained_trade_made(
+    tmp_path: Path, last_trade_close: str | None
+) -> None:
+    """A quiet minute's price that no retained trade made: when it traded is not known, so no time is recorded."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
+    if last_trade_close is not None:
+        _retain(ledger, end_ms=NOON, close=last_trade_close)
+    _retain(ledger, end_ms=NOON + 60_000, close="601.00", volume=0)
+    broker = _broker(ledger, now_ms=OVERNIGHT, quote=None)
+
+    assert broker.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is True
+    order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:close")
+
+    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 601.0, OVERNIGHT)
+    assert broker.synthesized_fill_anchors()["bot:ema:close"].restated_bar_end_ms is None
 
 
 async def test_a_run_end_close_still_sells_when_this_clock_runs_behind_the_feed(tmp_path: Path) -> None:

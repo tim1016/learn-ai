@@ -712,7 +712,7 @@ def simulated_fill_view(anchor: SynthesizedAnchor, fill: FillRecord) -> Simulate
         )
     if anchor.provider == RUN_END_CLOSE_PROVIDER:
         if anchor.restated_bar_end_ms is None:
-            # A close recorded before its price's own time was kept: its age is not guessed.
+            # No record of when this price last traded: its age is not guessed.
             return SimulatedFillView(
                 kind="run_end_close",
                 label="Simulated · last price seen",
