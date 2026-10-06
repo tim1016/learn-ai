@@ -707,7 +707,6 @@ class BotStartAdmission:
                         None
                         if traded_symbol is None
                         else TradedAssetAdmissionFacts(
-                            symbol=traded_symbol,
                             market_data=market_data(traded_symbol),
                             market_liveness=self._market_liveness(traded_symbol, observed_at_ms),
                         )

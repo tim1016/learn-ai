@@ -310,13 +310,22 @@ class TradedAssetAdmissionFacts(BaseModel):
     Built only when that asset is not the symbol the bot listens to: an ENTER
     needs both live, so a Start that asked only about the Signal stream
     admitted a bot that could then never enter.
+
+    ``market_liveness`` is the proof: it needs a live quote or trade receipt
+    for this symbol and carries its halt. ``market_data`` proves much less
+    before the run: with no bar stream on the symbol yet it says only that
+    the feed is connected, and it refuses on its own when a stream another
+    bot already holds on the symbol has stalled.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    symbol: str
     market_data: MarketDataAdmissionFact
     market_liveness: MarketLivenessFact
+
+    @property
+    def symbol(self) -> str:
+        return self.market_liveness.symbol
 
 
 class StartRunFacts(BaseModel):

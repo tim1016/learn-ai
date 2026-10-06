@@ -39,8 +39,13 @@ class _MarketSide:
     #: symbol, and a refusal about it needs no name.
     named: str | None
 
-    def say(self, sentence: str) -> str:
-        return sentence if self.named is None else f"{self.named}: {sentence}"
+    def say(self, sentence: str, *, true_of_every_symbol: bool) -> str:
+        """``sentence`` under this symbol's name, unless it is as true of the bot's other symbol.
+
+        A closed market or a lost connection refuses both symbols for one
+        cause, and naming one of them would blame it.
+        """
+        return sentence if self.named is None or true_of_every_symbol else f"{self.named}: {sentence}"
 
 
 def _market_sides(bot: RunAdmissionFacts) -> tuple[_MarketSide, ...]:
@@ -292,7 +297,10 @@ def evaluate_run_admission(
             return decide(
                 allowed=False,
                 reason_code=reason_codes[side.market_data.state],
-                explanation=side.say("The required market-data feed is not proven ready for this run."),
+                explanation=side.say(
+                    "The required market-data feed is not proven ready for this run.",
+                    true_of_every_symbol=all(other.market_data.state == side.market_data.state for other in sides),
+                ),
                 next_step=f"Restore fresh market data before {bot.operation.title()}.",
             )
     # One rule, no mode carve-out: whatever the Clerk will refuse per decision,
@@ -335,7 +343,12 @@ def evaluate_run_admission(
                 return decide(
                     allowed=False,
                     reason_code=reason_codes["HALTED" if symbol_halted else liveness.state],
-                    explanation=side.say(liveness.reason),
+                    explanation=side.say(
+                        liveness.reason,
+                        true_of_every_symbol=all(
+                            other.market_liveness.reason_code == liveness.reason_code for other in sides
+                        ),
+                    ),
                     next_step=(
                         f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."
                     ),

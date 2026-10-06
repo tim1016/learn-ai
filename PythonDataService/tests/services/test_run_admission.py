@@ -24,6 +24,7 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    StartWindowFact,
     StrategyValidationAdmissionFact,
     TradedAssetAdmissionFacts,
 )
@@ -199,7 +200,6 @@ def _trading_qqq(
     return bot.model_copy(
         update={
             "traded_asset": TradedAssetAdmissionFacts(
-                symbol="QQQ",
                 market_data=MarketDataAdmissionFact(state=market_state, feed_id="ibkr", observed_at_ms=observed_at_ms),
                 market_liveness=_liveness(liveness_state, observed_at_ms=observed_at_ms, symbol="QQQ"),
             )
@@ -973,3 +973,25 @@ def test_start_is_refused_when_only_the_traded_assets_facts_are_out_of_date(
 
     assert decision.allowed is False
     assert decision.reason_code == reason_code
+
+
+
+def test_a_cause_both_symbols_share_is_not_blamed_on_one_of_them() -> None:
+    """A closed market refuses SPY and QQQ alike; the refusal names neither."""
+    bot = _trading_qqq(_bot(liveness_state="CLOSED"), liveness_state="CLOSED")
+
+    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
+    assert "SPY" not in decision.explanation
+    assert "QQQ" not in decision.explanation
+
+
+def test_a_bot_with_two_symbols_starts_before_the_open_like_any_other() -> None:
+    """Before the open the broker clock reads closed for every symbol, and a
+    regular-session bot may start then: the traded asset is held to the same rule."""
+    bot = _trading_qqq(_bot(liveness_state="CLOSED"), liveness_state="CLOSED").model_copy(
+        update={"start_window": StartWindowFact(state="PREMARKET", next_open_ms=_NOW + 60_000)}
+    )
+
+    assert evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW).allowed is True
