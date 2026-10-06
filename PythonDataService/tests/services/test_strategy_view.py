@@ -270,6 +270,17 @@ def test_saved_settings_that_no_longer_validate_mean_no_view() -> None:
         ResolvedStrategyView.for_settings("ema_crossover_signal", {"rsi_min": "not a number"}, symbol="SPY")
 
 
+def test_a_bots_saved_settings_lose_only_what_the_strategy_no_longer_declares() -> None:
+    saved = {"rsi_min": 55.0, "retired_setting": 7}
+
+    view = ResolvedStrategyView.for_saved_settings("ema_crossover_signal", saved, symbol="SPY")
+
+    assert view.settings["rsi_min"] == 55.0
+    # A request naming a setting the strategy does not have is still a mistake.
+    with pytest.raises(StrategyViewUnavailableError):
+        ResolvedStrategyView.for_settings("ema_crossover_signal", saved, symbol="SPY")
+
+
 def test_the_normalized_gap_floor_is_reported_and_applied_when_set() -> None:
     strategy = EmaCrossoverSignalAlgorithm(symbol="SPY", gap=Decimal("0.10"), gap_bps=Decimal("40"))
     strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))

@@ -359,9 +359,9 @@ class StrategyRegistration:
     # ticker / strategy combination. Each entry is one short paragraph
     # or bullet; render as a list on the frontend.
     gotchas: list[str] = dc_field(default_factory=list)
-    # Fields accepted only by non-Engine-Lab construction paths. They remain in
-    # ``param_schema`` so the live runner can validate its internal injection,
-    # but are hidden from ``GET /strategies`` and rejected by normal backtests.
+    # Fields of ``param_schema`` no caller may set: hidden from
+    # ``GET /strategies`` and refused by a backtest, a chart and a Deploy. No
+    # registered strategy declares one today.
     hidden_params: set[str] = dc_field(default_factory=set)
     # Compatibility registrations remain runnable for existing ledgers but
     # must not appear as duplicate choices in the Engine Lab strategy picker.

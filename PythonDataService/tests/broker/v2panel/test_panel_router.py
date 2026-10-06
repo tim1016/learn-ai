@@ -1835,7 +1835,8 @@ async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
     binding_for_control = registry.binding_for_control  # type: ignore[union-attr]
 
     def stale_binding(broker: str, sid: str) -> SimpleNamespace:
-        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "strategy_params": {"retired_setting": 7}})
+        # Longer than any symbol the strategy's schema accepts.
+        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "symbol": "S" * 21})
 
     monkeypatch.setattr(registry, "binding_for_control", stale_binding)
 
@@ -1846,6 +1847,29 @@ async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
     assert panel.status_code == 200, panel.text
     assert panel.json()["recent_decisions"][0]["explanation"] is None
     assert view.status_code == 503, view.text
+
+
+async def test_a_setting_the_strategy_has_since_retired_keeps_the_bots_explanations_and_view(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2912: a bot deployed while deployment-validation still had its ``trade_symbol`` setting."""
+    app, repo = api
+    _append_no_action(repo, _T0 + 60_000, explanation=_dv_explanation(_T0 + 60_000))
+    registry = get_bot_task_registry()
+    binding_for_control = registry.binding_for_control  # type: ignore[union-attr]
+
+    def earlier_binding(broker: str, sid: str) -> SimpleNamespace:
+        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "strategy_params": {"trade_symbol": "SPY"}})
+
+    monkeypatch.setattr(registry, "binding_for_control", earlier_binding)
+
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        view = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/strategy-view")
+
+    assert panel.status_code == 200, panel.text
+    assert panel.json()["recent_decisions"][0]["explanation"] is not None
+    assert view.status_code == 200, view.text
 
 
 # ── The bot page's lead (#2794) ──────────────────────────────────────────────
