@@ -1293,6 +1293,31 @@ def note_expired_option_position(
     )
 
 
+class ExpiredContractNotice(NamedTuple):
+    """What a notice of a held option contract says once the contract has expired."""
+
+    headline: str
+    explanation: str
+    operator_impact: str
+    next_step: str
+
+
+def expired_contract_notice(expired: LegRefusal) -> ExpiredContractNotice:
+    """The one wording of a held contract that has expired (ADR 0076), wherever it is said.
+
+    On the notice an EXIT raises when it meets the expiry, on the notices
+    the Clerk's pass rewrites (:func:`say_the_contract_expired`), and on
+    the bot's page, which reads an open notice in these words from the
+    moment of expiry without waiting for a pass (``projections``).
+    """
+    return ExpiredContractNotice(
+        headline=_EXPIRED_CONTRACT_HEADLINE,
+        explanation=expired.explanation,
+        operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
+        next_step=expired.next_step,
+    )
+
+
 def say_the_contract_expired(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, expired: LegRefusal
 ) -> bool:
@@ -1304,7 +1329,8 @@ def say_the_contract_expired(
     makes no later EXIT that would say so. So the Clerk's own pass says it
     (``exit_watchdog.commit_recovery_evaluations``), on the
     ``EXIT_NOT_FLAT`` notice and on the ``EXIT_STUCK`` one beside it, in the
-    words an EXIT ended by :func:`_fold_expired_option_close` raises.
+    words an EXIT ended by :func:`_fold_expired_option_close` raises
+    (:func:`expired_contract_notice`).
 
     Each notice keeps what it names and its evidence: the watchdog still
     reads the episode's orders from them. The words do not change with the
@@ -1323,10 +1349,7 @@ def say_the_contract_expired(
             repo,
             strategy_instance_id=strategy_instance_id,
             reason_code=reason_code,
-            headline=_EXPIRED_CONTRACT_HEADLINE,
-            explanation=expired.explanation,
-            operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
-            next_step=expired.next_step,
+            **expired_contract_notice(expired)._asdict(),
             evidence_refs=tuple(recorded.evidence_refs),
             cause_facts=recorded.cause_facts,
             severity=recorded.severity,

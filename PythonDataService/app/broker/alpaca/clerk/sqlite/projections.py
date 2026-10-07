@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     attested_absent_order_ref,
     recovery_stopped_because,
 )
-from app.broker.alpaca.clerk.sqlite.exit_resolution import expired_option_close
+from app.broker.alpaca.clerk.sqlite.exit_resolution import expired_contract_notice, expired_option_close
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
@@ -214,11 +214,15 @@ def _projected_uncertainty(
     ``stuck`` is the open ``EXIT_STUCK`` episode beside an ``EXIT_NOT_FLAT``
     one, under which the Clerk sends nothing for the position by itself.
 
-    An expired option contract wins over both (ADR 0076). The next step of
-    an EXIT notice that names one is the expired one, and its recovery
-    status the expired hold: a flatten, a retry and "stuck" each point at
-    something that can no longer happen.
+    An expired option contract wins over both (ADR 0076). An EXIT notice
+    that names one is read in the expired words, and its recovery status
+    is the expired hold: a flatten, a retry and "stuck" each point at
+    something that can no longer happen. The notice's own row may still
+    say what was true when it was written. The Clerk's next pass rewrites
+    it, but a Dry Run's Clerk makes no pass on a timer, so the reading
+    does not wait for one.
     """
+    headline, explanation, operator_impact = row["headline"], row["explanation"], row["operator_impact"]
     next_step = row["next_step"]
     if stuck is not None and attested_absent_order_ref(stuck) is None:
         next_step = f"{_REDRIVES_STOPPED} {stuck['next_step']}"
@@ -231,7 +235,7 @@ def _projected_uncertainty(
         symbol = _cause_symbol(cause_facts)
         expired = _expired_contract(row["reason_code"], symbol, now_ms)
         if expired is not None:
-            next_step = expired.next_step
+            headline, explanation, operator_impact, next_step = expired_contract_notice(expired)
         if row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE:
             recovery_status = (
                 RecoveryStatus("unknown", "RECOVERY_NOT_CHECKED", "Recovery status has not been checked.", None, None)
@@ -257,9 +261,9 @@ def _projected_uncertainty(
         custody_owner=row["custody_owner"],
         strategy_instance_id=row["strategy_instance_id"],
         reason_code=row["reason_code"],
-        headline=row["headline"],
-        explanation=row["explanation"],
-        operator_impact=row["operator_impact"],
+        headline=headline,
+        explanation=explanation,
+        operator_impact=operator_impact,
         next_step=next_step,
         observed_at_ms=row["observed_at_ms"],
         evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),

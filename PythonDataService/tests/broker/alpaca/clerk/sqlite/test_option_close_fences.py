@@ -1081,29 +1081,39 @@ async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_
     await _expired_and_unsold(dry_run)
 
 
-async def test_the_page_says_a_contract_expired_from_the_moment_it_did_before_the_clerk_has_made_a_pass(
-    dry_run: _DryRun,  # noqa: F811
+@pytest.mark.parametrize(
+    ("passes_on_thursday", "open_notices"),
+    [
+        pytest.param(0, {"EXIT_NOT_FLAT"}, id="stopped on Thursday and never passed over again"),
+        pytest.param(50, {"EXIT_NOT_FLAT", "EXIT_STUCK"}, id="the Clerk had given up on Thursday"),
+    ],
+)
+async def test_the_page_says_a_contract_expired_from_the_moment_it_did_without_waiting_for_a_pass(
+    dry_run: _DryRun, passes_on_thursday: int, open_notices: set[str]  # noqa: F811
 ) -> None:
-    """The Clerk was down from Thursday evening. On Monday the page is read before its first pass.
+    """A stopped Dry Run's Clerk makes no pass on a timer. On Monday the page is read with none made since.
 
-    The notices' own rows are still Thursday's. What the page says to do
-    next is already the truth, for both notices: nothing can be sent. The
-    recovery status is the expired hold, not "stuck", and neither a Flatten
-    nor a write-off is offered.
+    The notices' own rows are still Thursday's: a close not taken, a retry
+    promised or a flatten to press. The page reads each in the expired
+    words, the recovery status is the expired hold and not "stuck", and
+    neither a Flatten nor a write-off is offered.
     """
     await _stopped_on_thursday_with_nothing_bid(dry_run)
-    await _passes(dry_run, 50)
-    assert open_exit_stuck(dry_run.repo, SID) is not None
+    await _passes(dry_run, passes_on_thursday)
+    written = _transitions(dry_run)
     _wait_until(dry_run, MONDAY_NOON)
 
     notices = await _page_notices(dry_run)
 
-    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK"}
+    assert set(notices) == open_notices
     for notice in notices.values():
-        assert "expired" in _sends_the_owner_to_nothing_that_cannot_be_done(notice.next_step)
+        _says_only_what_is_true_of_an_expired_contract(
+            notice.headline, notice.explanation, notice.operator_impact, notice.next_step
+        )
     status = notices["EXIT_NOT_FLAT"].recovery_status
     assert status is not None and (status.kind, status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
     await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    assert _transitions(dry_run) == written, "reading the page wrote to the books"
 
 
 async def test_a_notice_raised_after_the_expiry_already_says_so_and_no_pass_rewrites_it(
