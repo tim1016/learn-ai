@@ -412,3 +412,46 @@ async def test_a_pass_does_not_put_a_bots_outside_order_back_on_the_accounts_hol
     assert _account_hold(paper.repo) is None
     assert option_holds(paper.repo).keys() == {("a", "OPTION_ORDER_NOT_OURS")}
     assert _bot_may_sell(paper.repo, "a", SYMBOL, 1)
+
+
+def test_a_sale_that_has_filled_in_part_and_is_still_working_is_booked_only_once_it_has_ended(tmp_path: Path) -> None:
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=2)
+    try:
+        observe_external_order(
+            repo, order=_outside("alpaca-sells-1", status="partially_filled", quantity=2, filled=1, price=0.40)
+        )
+        book_option_events(repo, None)
+        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 2.0}
+
+        observe_external_order(repo, order=_outside("alpaca-sells-1", status="filled", quantity=2, filled=2, price=0.45))
+        book_option_events(repo, None)
+
+        assert held(repo, "bot-a") == {} and len(bookings(repo)) == 1
+        assert fifo(repo, "bot-a").exact_realized_pnl == (45 - 194) * 2
+    finally:
+        repo.close()
+
+
+async def test_a_pass_that_sees_a_contracts_position_differ_reads_at_once_and_not_at_the_next_cadence(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The last read was whole and left nothing pending, so the next is five minutes off. A minute later the
+    broker's position is gone: the pass does not wait the other four."""
+    await _holding_one_call(paper)
+    await paper.pass_()
+    assert len(paper.account.option_events.reads) == 1 and option_holds(paper.repo) == {}
+    paper.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
+    await paper.pass_()
+    assert len(paper.account.option_events.reads) == 1, "nothing differs, so nothing is read before the cadence"
+
+    _on_saturday(paper)
+    paper.account.settled.add(SYMBOL)
+    paper.account.option_events.rows = [_expiry_row()]
+    # The clock is set to a minute after the last read, not five: only the difference asks for this read.
+    paper.clock.value = SATURDAY_NOON
+    state = option_events._poll_state(paper.repo)
+    state.read_at_ms = SATURDAY_NOON - option_events.OPTION_EVENT_POLL_RETRY_MS
+    await paper.pass_()
+
+    assert len(paper.account.option_events.reads) == 2 and paper.held() == {}
