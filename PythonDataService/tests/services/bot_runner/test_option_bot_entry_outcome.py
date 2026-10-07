@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.held_option_quotes import reset_held_option_quotes_
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
+from app.broker.alpaca.clerk.simulated_option_orders import SimulatedOptionOrders
 from app.broker.alpaca.clerk.sqlite import decision_receipts as decision_receipts_module
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
@@ -49,7 +50,6 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import CONTRACT_REFERENCE_READ_BOUND_MS, SqliteAlpacaClerkFacade
-from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.ibkr.bars import REALTIME_BAR_STALL_TIMEOUT_S
 from app.broker.ibkr.config import reset_settings_for_testing
@@ -1518,7 +1518,7 @@ async def test_a_simulated_entry_that_buys_nothing_is_dropped_writes_no_journal_
     """A simulation that prices its fill above the order's limit ends the order unfilled on the spot. That is
     an ordinary ending, not a broken simulation: the decision is dropped, the journal lists no fill, and the
     next green bar is an ENTER again, which fills."""
-    price = SyntheticBroker._simulated_option_fill
+    price = SimulatedOptionOrders._simulated_option_fill
     priced: list[Any] = []
 
     def above_the_limit_the_first_time(self: Any, order: Any, bound: Any, *, at_ms: int) -> Any:
@@ -1526,7 +1526,7 @@ async def test_a_simulated_entry_that_buys_nothing_is_dropped_writes_no_journal_
         priced.append(order)
         return fill._replace(price=fill.price + Decimal("0.05")) if len(priced) == 1 else fill
 
-    monkeypatch.setattr(SyntheticBroker, "_simulated_option_fill", above_the_limit_the_first_time)
+    monkeypatch.setattr(SimulatedOptionOrders, "_simulated_option_fill", above_the_limit_the_first_time)
 
     ran = await dry_run.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
 
