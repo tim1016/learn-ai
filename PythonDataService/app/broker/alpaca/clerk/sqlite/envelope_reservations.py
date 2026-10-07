@@ -26,6 +26,11 @@ already took at the fill's own price. Only quantity no recorded fill names
 prices at the reservation's ``reference_price`` (the decision price the
 ENTER was admitted against), which is an estimate, never the fill's cost.
 
+An order bound to an option contract counts contracts, at a premium per
+share: both parts are then taken by the contract's recorded multiplier, as
+its position's cost is (ADR 0076 decision 13). A stock order is bound to no
+contract and prices as it always has.
+
 Its fee is the provision the entry requirement recorded at admission
 (``budgets.entry_requirement``), never a re-quote from the fee model (#2553):
 a later rate change cannot move a past claim. While any of the order is
@@ -54,13 +59,9 @@ recorded provision (#2553). Its fills still price as above, but while it has
 an unfilled remainder its fee is unknown: reading that claim refuses with
 ``EntryFeeProvisionUnrecorded`` rather than pricing the fee at zero.
 
-An entry in an option contract (ADR 0076) reserves contracts at a premium a
-share. Its claim is counted with the contract's own multiplier, read through
-the order (``contract_terms``): contracts x premium x multiplier, for the
-unfilled remainder and for a fill the observation has not seen alike. An
-order in shares joins to no contract and is priced as it always was. A sold
-leg's requirement is not held here yet; only a bought option, whose
-requirement is zero, is reserved whole.
+An option ENTER writes its row with contracts and its limit price, a premium
+per share (ADR 0076). A sold leg's requirement is not held here yet; only a
+bought option, whose requirement is zero, is reserved whole.
 """
 
 from __future__ import annotations
@@ -71,12 +72,8 @@ from decimal import Decimal
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED, EnvelopeReservation
-from app.broker.alpaca.clerk.money import ZERO, contract_multiplier, money_context, normalize_money
-from app.broker.alpaca.clerk.sqlite.contract_terms import (
-    ORDER_CONTRACT_JOINS_SQL,
-    ORDER_CONTRACT_MULTIPLIER_SQL,
-    keeps_option_contracts,
-)
+from app.broker.alpaca.clerk.money import ZERO, contract_multiplier, money_context, normalize_money, notional
+from app.broker.alpaca.clerk.sqlite.contract_terms import ORDER_CONTRACT_JOINS_SQL, ORDER_CONTRACT_MULTIPLIER_SQL
 from app.broker.alpaca.clerk.sqlite.order_projection import ORDER_ENDED_SQL
 
 
@@ -145,7 +142,8 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     actual cost (price × quantity plus reported fee); a live order reserves
     its unseen recorded fills at their actual cost plus its unrecorded
     remainder at the reservation's reference price and the whole
-    recorded fee provision. Nothing is pruned on
+    recorded fee provision. An order bound to an option contract has both
+    taken by the contract's multiplier. Nothing is pruned on
     ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill
     without touching ``orders``, and the websocket's acknowledgement is
     skipped when the snapshot has not moved, so a dead order's
@@ -153,6 +151,18 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     fills. Only a fill's own ``recorded_at_ms`` can say what an observation
     could have seen — and for a corrected execution that is the *root's*
     ``recorded_at_ms``, which ``roots`` supplies.
+
+    Formula: per entry order, unseen = Σ (qty × price × m + reported fee) over
+      its effective fills recorded at or after ``seen_before_ms``; unfilled =
+      max(0, reserved qty − filled qty) × reference price × m, and zero once
+      the order has ended. m is the bound contract's multiplier; an order in
+      shares has none and nothing is multiplied by one.
+    Reference: ADR 0059 D4 and #2442 (each part at what it costs); ADR 0076
+      decision 13 (the multiplier).
+    Canonical implementation: this function; ``clerk.money.notional`` owns a
+      fill's product.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_envelope_reservations.py
+      (shares) and test_option_custody.py (contracts), both exact.
     """
     # Imported here, not at module scope: ``repository`` imports this module,
     # and ``economic_projection`` imports ``repository``. The canonical CTE
@@ -161,8 +171,6 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
         EFFECTIVE_FILL_LINEAGE_CTE,
     )
 
-    # A custody file from before the contract tables holds no option order.
-    with_contracts = keeps_option_contracts(conn)
     rows = conn.execute(
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
         # A recorded row carries its exact price; an earlier build's float
@@ -171,12 +179,13 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
         "r.exact_reference_price IS NOT NULL AS provision_recorded, r.fee_provision_cents, "
         "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
         f"{ORDER_ENDED_SQL} AS ended, "
-        f"{ORDER_CONTRACT_MULTIPLIER_SQL if with_contracts else 'NULL'} AS multiplier, "
+        # NULL for an order in shares, which is every order bound to no contract.
+        f"{ORDER_CONTRACT_MULTIPLIER_SQL} AS contract_multiplier, "
         "COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
         "JOIN effect_operations e ON e.effect_operation_id = r.effect_operation_id "
-        f"{ORDER_CONTRACT_JOINS_SQL.format(order='o') if with_contracts else ''} "
+        f"{ORDER_CONTRACT_JOINS_SQL.format(order='o')} "
         "LEFT JOIN fills f ON f.order_ref = o.order_ref "
         "  AND NOT EXISTS (SELECT 1 FROM fills s "
         "                  WHERE s.superseded_execution_ref = f.execution_id) "
@@ -190,8 +199,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     with money_context():
         for order_ref, fills in by_order.items():
             first = fills[0]
-            # Shares one unit of quantity stands for: the contract's multiplier, or one for shares.
-            per_unit = 1 if first["multiplier"] is None else contract_multiplier(first["multiplier"])
+            multiplier = first["contract_multiplier"]
             filled = unseen_cost = ZERO
             for fill in fills:
                 if fill["fill_id"] is None:
@@ -200,16 +208,22 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 filled += qty
                 if fill["execution_recorded_at_ms"] >= seen_before_ms:
                     fee = ZERO if fill["fee"] is None else normalize_money(fill["fee"])
-                    unseen_cost += qty * normalize_money(fill["price"]) * per_unit + fee
+                    unseen_cost += notional(qty, fill["price"], multiplier=multiplier) + fee
             quantity = normalize_money(first["quantity"])
             remaining_quantity = ZERO if first["ended"] else max(ZERO, quantity - filled)
             fee: Decimal | None = ZERO
             if remaining_quantity > ZERO:
                 fee = Decimal(first["fee_provision_cents"]) / 100 if first["provision_recorded"] else None
+            unfilled_cost = remaining_quantity * normalize_money(first["reference_price"])
+            if multiplier is not None:
+                # The reference price is read as a premium per share, as a
+                # fill's price is, so the claim before a fill is the position's
+                # cost after one at that price (ADR 0076 decision 13). An
+                # option ENTER's fold writes the row with its limit price.
+                unfilled_cost *= contract_multiplier(multiplier)
             claims.append(EntryCashClaim(
                 strategy_instance_id=first["strategy_instance_id"], order_ref=order_ref,
-                unfilled_cost=remaining_quantity * normalize_money(first["reference_price"]) * per_unit,
-                unseen_fill_cost=unseen_cost, _fee=fee,
+                unfilled_cost=unfilled_cost, unseen_fill_cost=unseen_cost, _fee=fee,
             ))
     return tuple(claims)
 

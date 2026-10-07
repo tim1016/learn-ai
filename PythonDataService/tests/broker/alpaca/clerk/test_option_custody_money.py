@@ -177,6 +177,30 @@ def test_an_open_sold_contract_gains_as_its_price_falls() -> None:
     assert result.open_lots[0].side is OrderSide.SELL
 
 
+def test_a_sale_of_more_contracts_than_are_held_opens_a_sold_position_in_contracts() -> None:
+    """Bought 1 at $1.00, then sold 3 at $1.50.
+
+    The 1 held closes: (1.50 − 1.00) × 1 × 100 = $50.00. The other 2 are a
+    sold position of 2 contracts at $1.50: 2 × 1.50 × 100 = $300.00 received,
+    and at a mark of $1.20 it is up (1.50 − 1.20) × 2 × 100 = $60.00.
+    Bought back at $1.20 it keeps that $60.00.
+    """
+    through_zero = [
+        _fill(side=OrderSide.BUY, qty=1, price=1.00, ts_ms=1_000),
+        _fill(side=OrderSide.SELL, qty=3, price=1.50, ts_ms=2_000),
+    ]
+    reversed_position = compute_fifo_pnl(through_zero, mark_prices={_CALL: 1.20})
+    assert reversed_position.exact_realized_pnl == Decimal(50)
+    (sold,) = reversed_position.open_lots
+    assert (sold.side, sold.exact_qty, sold.multiplier) == (OrderSide.SELL, Decimal(2), 100)
+    assert sold.exact_cost_basis == Decimal(300)
+    assert reversed_position.exact_open_pnl == Decimal(60)
+
+    bought_back = compute_fifo_pnl([*through_zero, _fill(side=OrderSide.BUY, qty=2, price=1.20, ts_ms=3_000)])
+    assert bought_back.exact_realized_pnl == Decimal(110)
+    assert bought_back.open_lots == []
+
+
 def test_option_lots_match_an_exact_fraction_oracle() -> None:
     """Prices that are not exact in binary: the answer is the exact rational, by the multiplier."""
     result = compute_fifo_pnl(

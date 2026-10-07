@@ -1,4 +1,4 @@
-"""Alpaca option regulatory and clearing pass-through fees: the prediction (ADR 0076, ADR 0059 D6).
+"""Alpaca option regulatory and clearing pass-through fees: the prediction (ADR 0076 decision 13, ADR 0059 D6).
 
 Formula:
     premium value = contracts × premium × multiplier
@@ -22,7 +22,8 @@ Reference:
     34-106409) for the pause from 2026-10-01 through 2026-12-31. CAT: SEC Release 34-105449
     (SR-FINRA-2026-010), a listed option counts its multiplier in executed-equivalent shares.
     Row-by-row citations are in the golden fixture's attribution.
-Canonical implementation: this file.
+Canonical implementation: this file, over the date lookup, cent rounding and day settlement of
+    ``regulatory_fees``, which the stock model uses too.
 Validated against:
     tests/broker/alpaca/test_option_fees.py;
     tests/fixtures/test_alpaca_option_fees_fixture.py (golden FEE-002).
@@ -38,6 +39,10 @@ gives is an estimate until Alpaca posts the day's fees:
 - Only standard stock and ETF options are modelled. Index options, and the commission Alpaca
   charges a customer it classes as a professional options trader, are not.
 
+Every product, sum and conversion to cents is taken in the Clerk's exact money context
+(``clerk.money.money_context``), so no figure depends on the caller's decimal context. The one
+step that drops digits is the rule's own: each fee type's day total, rounded up to the cent.
+
 Nothing on the money path calls this yet. The fee attribution
 (``app/services/alpaca_fee_attribution.py``) settles fees per fee type across an account's whole
 day, stock and option fills together, which is where these accruals belong once Alpaca's own fee
@@ -49,10 +54,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_CEILING, Decimal
+from decimal import Decimal, Inexact
 from typing import Literal
 
-from app.broker.alpaca.clerk.money import MoneyInputError, contract_multiplier
+from app.broker.alpaca.clerk.money import MoneyInputError, contract_multiplier, money_context, normalize_money
+from app.broker.alpaca.regulatory_fees import (
+    RateNotPinnedError,
+    in_force,
+    settle_components,
+    unpinned_components,
+)
 from app.broker.alpaca.regulatory_fees import rates_for as stock_rates_for
 from app.broker.contract.models import OrderSide
 
@@ -86,12 +97,10 @@ _CAT_PER_EQUIVALENT_SHARE: tuple[tuple[date, Decimal], ...] = (
 )
 
 
-class OptionRateNotPinnedError(ValueError):
+class OptionRateNotPinnedError(RateNotPinnedError):
     """A day holds an option fill with no pinned rate for some fee type."""
 
-    def __init__(self, components: Sequence[OptionFeeComponent]) -> None:
-        self.components: tuple[OptionFeeComponent, ...] = tuple(components)
-        super().__init__(f"no pinned option fee rate for: {', '.join(self.components)}")
+    rate_kind = "option fee rate"
 
 
 @dataclass(frozen=True)
@@ -117,7 +126,7 @@ class OptionFillFees:
 
     @property
     def unpinned(self) -> tuple[OptionFeeComponent, ...]:
-        return tuple(name for name in _COMPONENTS if getattr(self, name) is None)
+        return unpinned_components(self, _COMPONENTS)
 
 
 @dataclass(frozen=True)
@@ -132,16 +141,8 @@ class OptionSessionFees:
 
     @property
     def total(self) -> Decimal:
-        return self.sec + self.taf + self.cat + self.orf + self.occ
-
-
-def _in_force(table: Sequence[tuple[date, Decimal]], trade_date: date) -> Decimal | None:
-    """Value of the latest row effective on or before ``trade_date``, else ``None``."""
-    latest: Decimal | None = None
-    for effective_from, value in table:
-        if effective_from <= trade_date:
-            latest = value
-    return latest
+        with money_context():
+            return self.sec + self.taf + self.cat + self.orf + self.occ
 
 
 def option_rates_for(trade_date: date) -> OptionRates:
@@ -151,10 +152,10 @@ def option_rates_for(trade_date: date) -> OptionRates:
     """
     return OptionRates(
         sec_per_dollar=stock_rates_for(trade_date).sec_per_dollar,
-        taf_per_contract=_in_force(_TAF_PER_CONTRACT, trade_date),
-        cat_per_equivalent_share=_in_force(_CAT_PER_EQUIVALENT_SHARE, trade_date),
-        orf_per_contract=_in_force(_ORF_PER_CONTRACT, trade_date),
-        occ_per_contract=_in_force(_OCC_PER_CONTRACT, trade_date),
+        taf_per_contract=in_force(_TAF_PER_CONTRACT, trade_date),
+        cat_per_equivalent_share=in_force(_CAT_PER_EQUIVALENT_SHARE, trade_date),
+        orf_per_contract=in_force(_ORF_PER_CONTRACT, trade_date),
+        occ_per_contract=in_force(_OCC_PER_CONTRACT, trade_date),
     )
 
 
@@ -169,13 +170,22 @@ def fees_for_option_fill(
     """Accrue one option fill's fees at full precision; rounding happens at settlement.
 
     ``premium`` is dollars per share and ``multiplier`` the contract's own
-    recorded multiplier; it is never assumed.
+    recorded multiplier; it is never assumed. A count or a premium that is
+    not a finite number, or is of a size the Clerk's exact money arithmetic
+    does not hold, is refused as any other bad fill is.
     """
+    refused = ValueError(
+        f"an option fill is a whole number of contracts at a price above zero, both finite and of a "
+        f"supported size; got contracts={contracts} premium={premium}"
+    )
+    try:
+        # First: an infinity passes every test below, and a NaN cannot be compared at all.
+        normalize_money(contracts)
+        normalize_money(premium)
+    except MoneyInputError as exc:
+        raise refused from exc
     if contracts <= 0 or premium <= 0 or contracts != contracts.to_integral_value():
-        raise ValueError(
-            f"an option fill is a whole number of contracts at a price above zero; "
-            f"got contracts={contracts} premium={premium}"
-        )
+        raise refused
     try:
         shares_per_contract = contract_multiplier(multiplier)
     except MoneyInputError as exc:
@@ -185,20 +195,21 @@ def fees_for_option_fill(
     def per_contract(rate: Decimal | None) -> Decimal | None:
         return None if rate is None else contracts * rate
 
-    cat = (
-        None
-        if rates.cat_per_equivalent_share is None
-        else contracts * shares_per_contract * rates.cat_per_equivalent_share
-    )
-    orf, occ = per_contract(rates.orf_per_contract), per_contract(rates.occ_per_contract)
-    if side != OrderSide.SELL:
-        return OptionFillFees(sec=_ZERO, taf=_ZERO, cat=cat, orf=orf, occ=occ)
-    sec = None if rates.sec_per_dollar is None else contracts * premium * shares_per_contract * rates.sec_per_dollar
-    return OptionFillFees(sec=sec, taf=per_contract(rates.taf_per_contract), cat=cat, orf=orf, occ=occ)
-
-
-def _ceil_cents(amount: Decimal) -> Decimal:
-    return amount.quantize(_CENT, rounding=ROUND_CEILING)
+    with money_context():
+        cat = (
+            None
+            if rates.cat_per_equivalent_share is None
+            else contracts * shares_per_contract * rates.cat_per_equivalent_share
+        )
+        orf, occ = per_contract(rates.orf_per_contract), per_contract(rates.occ_per_contract)
+        if side != OrderSide.SELL:
+            return OptionFillFees(sec=_ZERO, taf=_ZERO, cat=cat, orf=orf, occ=occ)
+        sec = (
+            None
+            if rates.sec_per_dollar is None
+            else contracts * premium * shares_per_contract * rates.sec_per_dollar
+        )
+        return OptionFillFees(sec=sec, taf=per_contract(rates.taf_per_contract), cat=cat, orf=orf, occ=occ)
 
 
 def settle_option_session(fills: Sequence[OptionFillFees]) -> OptionSessionFees:
@@ -211,12 +222,10 @@ def settle_option_session(fills: Sequence[OptionFillFees]) -> OptionSessionFees:
     Raises ``OptionRateNotPinnedError`` if any fill has an unpinned fee type: a
     day containing an unknown cannot settle to a number.
     """
-    unpinned = tuple(name for name in _COMPONENTS if any(name in fill.unpinned for fill in fills))
-    if unpinned:
-        raise OptionRateNotPinnedError(unpinned)
-    return OptionSessionFees(
-        **{name: _ceil_cents(sum((getattr(fill, name) for fill in fills), _ZERO)) for name in _COMPONENTS}
-    )
+    with money_context() as exact:
+        # Rounding up to the cent is the one step that drops digits, and it is the rule.
+        exact.traps[Inexact] = False
+        return OptionSessionFees(**settle_components(fills, _COMPONENTS, not_pinned=OptionRateNotPinnedError))
 
 
 def option_fee_provision_cents(fills: Sequence[OptionFillFees]) -> int:
@@ -227,4 +236,5 @@ def option_fee_provision_cents(fills: Sequence[OptionFillFees]) -> int:
     differ from this by up to a cent per fee type, either way. It is the one
     figure of an entry's money that rounds (ADR 0076 decision 2).
     """
-    return int(settle_option_session(fills).total / _CENT)
+    with money_context():
+        return int(settle_option_session(fills).total / _CENT)

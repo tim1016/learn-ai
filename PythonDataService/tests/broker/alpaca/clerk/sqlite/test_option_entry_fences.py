@@ -528,6 +528,19 @@ def test_the_order_line_an_option_entry_writes_has_exactly_the_keys_of_a_leg_in_
     assert (line["symbol"], line["quantity"], line["limit_price"]) == (SYMBOL, 1.0, 1.94)
 
 
+def test_the_fold_that_makes_a_reducing_orders_row_reads_its_symbol_and_nothing_else() -> None:
+    """It binds an option close to its contract, and needs only the symbol for that. A fact that carries a
+    key this build does not know, as one replayed from another build may, is read all the same."""
+    from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
+
+    written_by_this_build = ExitReducingOrderCreatedFacts(symbol=SYMBOL, side="SELL", quantity=1.0).to_facts_json()
+    from_another_build = '{"a_key_this_build_does_not_know":1,"quantity":1.0,"side":"SELL","symbol":"spy"}'
+
+    assert ExitReducingOrderCreatedFacts.reduced_symbol(written_by_this_build) == SYMBOL
+    assert ExitReducingOrderCreatedFacts.reduced_symbol(from_another_build) == "SPY"
+    assert ExitReducingOrderCreatedFacts.reduced_symbol('{"side":"SELL","quantity":1.0}') is None
+
+
 # ── the session, asked again just before the order is sent ───────────────
 
 

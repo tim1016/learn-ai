@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.contract_terms import require_fill_in_its_orders_contract
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     PRICE_ATOL,
     QTY_ATOL,
@@ -338,7 +339,13 @@ def _insert_coverage_superseded_exact_fill(
     recorded_at_ms: int,
     recorded_transition_sequence: int,
 ) -> None:
-    """Restore one exact effective row with its immutable source clocks."""
+    """Restore one exact effective row with its immutable source clocks.
+
+    The row was held outside the books until now, so it meets its order's
+    contract here. A supersession moves no position, and a chain total hands
+    the position write only its net change (ADR 0076 decision 13).
+    """
+    require_fill_in_its_orders_contract(conn, order_ref=order_ref, symbol=exact.symbol, quantity=exact.slice_qty)
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
         "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "

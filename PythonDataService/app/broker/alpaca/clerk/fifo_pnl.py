@@ -15,7 +15,7 @@ Formula:
     Open P&L:
         open_pnl = Σ_remaining_lots (mark_price - lot.cost) × lot.qty   [long]
                    Σ_remaining_lots (lot.cost - mark_price) × lot.qty   [short]
-    Option contracts (ADR 0076): a fill that carries a contract ``multiplier``
+    Option contracts (ADR 0076 decision 13): a fill that carries a contract ``multiplier``
         m counts contracts, at a premium per share.  Every product above is
         then taken over ``qty × m`` shares:
         realized_pnl_lot = signed_delta × closed_qty × m

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 
 import pytest
 
@@ -14,7 +14,7 @@ from app.broker.alpaca.option_fees import (
     option_rates_for,
     settle_option_session,
 )
-from app.broker.alpaca.regulatory_fees import fees_for_fill, rates_for
+from app.broker.alpaca.regulatory_fees import RateNotPinnedError, fees_for_fill, rates_for
 from app.broker.contract.models import OrderSide
 
 _TODAY = date(2026, 10, 5)
@@ -59,6 +59,71 @@ def test_a_fill_is_whole_contracts_at_a_price_above_zero(contracts: str, premium
         _fees(OrderSide.BUY, contracts=contracts, premium=premium)
 
 
+@pytest.mark.parametrize(
+    ("contracts", "premium"),
+    [
+        ("Infinity", "1"),
+        ("-Infinity", "1"),
+        ("1", "Infinity"),
+        ("NaN", "1"),
+        ("1", "NaN"),
+        ("sNaN", "1"),
+        ("1E+999999", "1"),  # finite, and past anything the arithmetic can hold
+        ("1", "1E-400"),
+    ],
+)
+def test_a_fill_that_is_no_finite_number_of_a_supported_size_is_refused_as_any_other_bad_fill_is(
+    contracts: str, premium: str
+) -> None:
+    """An infinity is above zero and "whole", so it used to be priced: an infinite fee. A NaN cannot be compared.
+
+    Each is refused as a bad fill, and none gets out as an arithmetic error.
+    """
+    for side in (OrderSide.BUY, OrderSide.SELL):
+        with pytest.raises(ValueError, match="whole number of contracts"):
+            _fees(side, contracts=contracts, premium=premium)
+
+
+def test_a_fee_is_the_same_whatever_decimal_context_the_caller_works_in() -> None:
+    """137 contracts sold at $2.10, twice in a day, worked out by a caller whose context keeps two digits.
+
+    ORF is 137 × 0.015 = $2.055 a sale; two digits would make it 2.1. The day:
+    SEC 2 × 0.592662 → $1.19, CAT 2 × 0.0411 → $0.09, ORF $4.11, OCC 2 × 3.425 = $6.85, the TAF
+    paused: $12.24, which two digits would make 12.
+    """
+
+    def priced() -> tuple[object, ...]:
+        sale = _fees(OrderSide.SELL, contracts="137", premium="2.10")
+        day = settle_option_session([sale, sale])
+        return sale, day, day.total, option_fee_provision_cents([sale, sale])
+
+    with localcontext(Context(prec=2)):
+        in_two_digits = priced()
+
+    assert in_two_digits == priced()
+    sale, day, total, cents = in_two_digits
+    assert (sale.sec, sale.cat, sale.orf, sale.occ) == (
+        Decimal("0.592662"), Decimal("0.0411"), Decimal("2.055"), Decimal("3.425"),
+    )
+    assert (day.sec, day.taf, day.cat, day.orf, day.occ) == (
+        Decimal("1.19"), Decimal("0.00"), Decimal("0.09"), Decimal("4.11"), Decimal("6.85"),
+    )
+    assert (total, cents) == (Decimal("12.24"), 1224)
+
+
+def test_a_premium_with_more_digits_than_the_callers_context_keeps_still_settles_to_the_right_cent() -> None:
+    """One contract sold at $500 and 1e-40 of a dollar, in the default context of 28 digits.
+
+    At $500 exactly the SEC fee is 500 × 100 × 0.0000206 = $1.03 to the cent. The 1e-40 puts it a hair
+    over, and a fee type rounds up: $1.04. Dropping the premium's digits past the 28th charges $1.03.
+    With CAT 1¢, ORF 2¢ and OCC 3¢ the entry sets aside $1.10.
+    """
+    sale = _fees(OrderSide.SELL, contracts="1", premium="500.0000000000000000000000000000000000000001")
+    assert sale.sec > Decimal("1.03")
+    assert settle_option_session([sale]).sec == Decimal("1.04")
+    assert option_fee_provision_cents([sale]) == 110
+
+
 def test_the_taf_is_paused_for_the_last_quarter_of_2026_and_resumes() -> None:
     def taf(on: date) -> Decimal | None:
         return option_rates_for(on).taf_per_contract
@@ -69,6 +134,10 @@ def test_the_taf_is_paused_for_the_last_quarter_of_2026_and_resumes() -> None:
     assert taf(date(2027, 1, 1)) == Decimal("0.00329")
     assert taf(date(2028, 12, 31)) == Decimal("0.00329")
     assert taf(date(2029, 1, 1)) == Decimal("0.00390")
+    # SR-FINRA-2026-020 (91 FR 60427), the 2030 column.
+    assert taf(date(2029, 12, 31)) == Decimal("0.00390")
+    assert taf(date(2030, 1, 1)) == Decimal("0.00404")
+    assert taf(date(2030, 12, 31)) == Decimal("0.00404")
     assert taf(date(2031, 6, 1)) == Decimal("0.00420")
 
 
@@ -99,6 +168,44 @@ def test_a_rate_that_is_not_pinned_is_unknown_and_a_day_holding_one_does_not_set
     assert refused.value.components == ("cat", "orf", "occ")
     with pytest.raises(OptionRateNotPinnedError):
         option_fee_provision_cents([fees])
+
+
+def test_a_sale_before_the_taf_ladder_starts_owes_an_unknown_taf_not_a_free_one() -> None:
+    """The per-contract TAF ladder here starts on 2026-01-01. The day before, a sale's TAF is unknown.
+
+    Its SEC fee is a pinned zero that day (advisory 2025-2), so only the TAF
+    and Alpaca's three undated figures are unknown.
+    """
+    last_day_without = _fees(OrderSide.SELL, on=date(2025, 12, 31))
+    assert last_day_without.taf is None
+    assert last_day_without.sec == Decimal(0)
+    assert last_day_without.unpinned == ("taf", "cat", "orf", "occ")
+    assert _fees(OrderSide.SELL, on=date(2026, 1, 1)).taf == Decimal("0.00658")
+    # A purchase owes no TAF on any date, pinned or not.
+    assert _fees(OrderSide.BUY, on=date(2025, 12, 31)).taf == Decimal(0)
+
+
+def test_a_sale_before_the_first_pinned_sec_rate_owes_an_unknown_sec_fee_not_a_free_one() -> None:
+    """The SEC table starts on 2024-05-22 (advisory 2024-2, $27.80 per million). The day before, the fee is unknown.
+
+    On the day: 2 × 2.10 × 100 = $420.00 of premium × 0.0000278 = $0.011676.
+    """
+    day_before = _fees(OrderSide.SELL, on=date(2024, 5, 21))
+    assert day_before.sec is None
+    assert "sec" in day_before.unpinned
+    assert _fees(OrderSide.SELL, on=date(2024, 5, 22)).sec == Decimal("0.011676")
+    # A purchase owes no SEC fee on any date, pinned or not.
+    assert _fees(OrderSide.BUY, on=date(2024, 5, 21)).sec == Decimal(0)
+    with pytest.raises(OptionRateNotPinnedError) as refused:
+        settle_option_session([day_before])
+    assert refused.value.components == ("sec", "taf", "cat", "orf", "occ")
+
+
+def test_an_unpinned_option_rate_is_refused_wherever_an_unpinned_stock_rate_is() -> None:
+    """One kind of error: a reader that takes an unpinned stock rate as an unknown takes an option's the same way."""
+    with pytest.raises(RateNotPinnedError) as refused:
+        settle_option_session([_fees(OrderSide.BUY, on=date(2026, 1, 15))])
+    assert refused.value.components == ("cat", "orf", "occ")
 
 
 def test_each_fee_type_is_summed_over_the_day_and_then_rounded_up_to_the_cent() -> None:

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.alpaca.clerk.option_effects import OptionExitEvidence, RecordedQuote
-from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms, keeps_option_contracts, order_contract_terms
+from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms, order_contract_terms
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, ExitAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.contract.models import OrderType
@@ -269,8 +269,7 @@ def option_entry_of_order(repo: ClerkSqliteRepository, entry_order_ref: str) -> 
 def order_contract(repo: ClerkSqliteRepository, order_ref: str) -> ContractTerms | None:
     """The option contract an order trades, or ``None`` for an order in shares."""
     with repo._write_lock:
-        # A custody file from before the contract tables holds no option order.
-        return order_contract_terms(repo._conn, order_ref) if keeps_option_contracts(repo._conn) else None
+        return order_contract_terms(repo._conn, order_ref)
 
 
 def option_entry_contracts(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:

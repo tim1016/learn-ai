@@ -1,4 +1,4 @@
-"""Which option contract an order trades, and the multiplier its money is counted with (ADR 0076).
+"""Which option contract an order trades, and the multiplier its money is counted with (ADR 0076 decision 13).
 
 A contract's multiplier is a fact of its listing: how many shares one
 contract's per-share price stands for. It is recorded once, when the contract
@@ -16,7 +16,8 @@ thing only, to refuse an option fill the books cannot count.
 The two writers are fold helpers. They run on the connection of the fold that
 creates the order, inside that fold's transaction, so an option order never
 exists without its contract, and a rebuild from the mirror rebuilds both
-tables. Neither is called by any fold yet: the option order path writes them.
+tables. Two folds call them: an option ENTER's, and a reducing order's when
+what it reduces is a contract the books have recorded.
 """
 
 from __future__ import annotations
@@ -60,18 +61,6 @@ ORDER_CONTRACT_JOINS_SQL = (
 )
 ORDER_CONTRACT_SYMBOL_SQL = "order_contract.symbol"
 ORDER_CONTRACT_MULTIPLIER_SQL = "option_contract.multiplier"
-
-
-def keeps_option_contracts(conn: sqlite3.Connection) -> bool:
-    """Whether this custody file has the two tables at all.
-
-    A file no Clerk has opened since v23 is still read by offline readers. It
-    has no option contract, so its fills are read exactly as before, with no
-    join.
-    """
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'order_contracts'"
-    ).fetchone() is not None
 
 
 class ContractTermsConflict(ValueError):
@@ -173,13 +162,21 @@ def order_contract_terms(conn: sqlite3.Connection, order_ref: str) -> ContractTe
     return None if row is None else ContractTerms(symbol=row[0], multiplier=row[1])
 
 
-def require_fill_in_its_orders_contract(conn: sqlite3.Connection, *, order_ref: str, symbol: str) -> None:
+def require_fill_in_its_orders_contract(
+    conn: sqlite3.Connection, *, order_ref: str, symbol: str, quantity: float
+) -> None:
     """Refuse a fill the books could not count: one whose symbol and whose order's contract disagree.
 
-    A fill of an order bound to a contract must be in that contract. A fill
-    whose symbol is spelled as an option contract must be of a bound order;
-    without the binding custody would read it as the bot's own symbol, in
-    shares. A fill in shares of an order in shares passes untouched.
+    A fill of an order bound to a contract must be in that contract, and a
+    whole number of contracts: a fraction of one is refused, never rounded. A
+    fill whose symbol is spelled as an option contract must be of a bound
+    order; without the binding custody would read it as the bot's own symbol,
+    in shares. A fill in shares of an order in shares passes untouched,
+    whatever its quantity.
+
+    Every write of a fill is held to this: the write that moves a position,
+    and a coverage replacement, which puts an exact execution into the books
+    without moving one.
     """
     bound = conn.execute("SELECT symbol FROM order_contracts WHERE order_ref = ?", (order_ref,)).fetchone()
     if bound is None:
@@ -191,6 +188,11 @@ def require_fill_in_its_orders_contract(conn: sqlite3.Connection, *, order_ref: 
     elif bound[0] != symbol.upper():
         raise ContractTermsConflict(
             f"a fill in {symbol.upper()} arrived on order {order_ref!r}, which trades {bound[0]}"
+        )
+    elif not float(quantity).is_integer():
+        raise ContractTermsConflict(
+            f"a fill of {quantity!r} arrived on order {order_ref!r}, which trades {bound[0]}: "
+            "an option contract fills in whole contracts"
         )
 
 
@@ -205,7 +207,6 @@ __all__ = [
     "bind_order_contract",
     "contract_terms",
     "is_option_contract_symbol",
-    "keeps_option_contracts",
     "order_contract_terms",
     "record_contract_terms",
     "require_fill_in_its_orders_contract",

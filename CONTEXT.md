@@ -1648,6 +1648,15 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option approval level** — the level, 0 to 3, the broker approved the account for. **Option trading level** is the level in force, which the owner may have set lower. Unknown when the broker does not say; zero is options turned off.
 - **Option buying power** — the broker's account-wide figure for what option orders may still use. It is not what one order costs.
   _Avoid_: reading a change in it as one trade's cost.
+- **Contract multiplier** — the shares one option contract's per-share price stands for. A recorded fact of the contract, kept with the contract in the Clerk's books; never read off the symbol and never assumed to be 100.
+  _Avoid_: lot size, contract size (the shares a contract delivers is a different fact).
+- **Contract terms** — what the books record about an option contract when it first enters them: its symbol and its multiplier.
+- **Premium** — an option's price per share. A fill's cash is contracts × premium × the contract multiplier.
+  _Avoid_: price per contract.
+- **Position (option)** — what a bot holds in one contract, in contracts, signed: bought is positive, sold is negative. One position per contract; never netted with another contract or with the underlying's shares.
+- **Option fees** — the five fees Alpaca passes through on a stock or ETF option trade: the SEC fee and the TAF on sales; the ORF, the OCC clearing fee and the CAT fee on both sides. Alpaca charges no commission on these.
+  _Avoid_: commission.
+- **Option fee provision** — what an option entry sets aside for its own fees, in whole cents: its fills settled as a day of their own. An estimate; the fee activities Alpaca posts are the truth.
 
 ## Market-data readiness (resolved 2026-09-22)
 

@@ -586,6 +586,18 @@ class ExitReducingOrderCreatedFacts:
     def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:
         return cls(**json.loads(facts_json))
 
+    @staticmethod
+    def reduced_symbol(facts_json: str) -> str | None:
+        """What a reducing order reduces, read on its own: its symbol in upper case, or ``None`` when none is named.
+
+        For the fold that creates the order's row, which needs nothing else
+        of these facts (ADR 0076: it binds the order to its option contract).
+        Read without the rest of the shape, so that replaying a fact never
+        fails here over a key this build does not know.
+        """
+        symbol = json.loads(facts_json).get("symbol")
+        return symbol.upper() if isinstance(symbol, str) else None
+
 
 @dataclass(frozen=True)
 class ReconciliationAttemptedFacts:
