@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -161,14 +162,17 @@ class _Floor:
             strikes_each_side=self.desk.reach,
         )
 
-    async def quotes_arrive(self, ask: Callable[[], Any]) -> None:
+    async def quotes_arrive(self, ask: Callable[[], Any], *, right: str = "call") -> None:
         """Ask once so that the lines are opened, quote them, and let a moment pass: the next ask resolves."""
         await ask()
+        await self.lines_are_quoted(right)
+
+    async def lines_are_quoted(self, right: str = "call") -> None:
         await self.desk.settle()
         self.desk.spy()
         await self.desk.settle()
         self.desk.quote_every_line()
-        self.desk.quote("call", 585, "4.08", "4.12")
+        self.desk.quote(right, 585, "4.08", "4.12")
         self.desk.ibkr.now += 400
 
 
@@ -500,7 +504,7 @@ async def _review(app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, **changes
     async def ask() -> httpx.Response:
         return await _post(app, "/budget-preview", **body)
 
-    await floor.quotes_arrive(ask)
+    await floor.quotes_arrive(ask, right=body["trades"]["legs"][0]["right"])
     response = await ask()
     assert response.status_code == 200, response.text
     return response.json(), priced[-1]
@@ -721,3 +725,42 @@ def test_the_structure_is_previewed_under_the_owners_own_size_and_terms_on_one_h
     assert option_deploy.preview_request_for(ACCT, another_budget).preview_key == asked.preview_key
     assert option_deploy.preview_request_for(ACCT, a_put).preview_key != asked.preview_key
     assert option_deploy.preview_request_for("PA-OTHER", request).preview_key != asked.preview_key
+
+
+async def test_a_structure_that_gains_as_the_signals_symbol_falls_is_warned_of_and_not_refused(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bought put on the symbol the bot listens to. The strategy's signal is a buy signal on it."""
+    app, _registry = deploy_app
+    a_put = {**_ONE_CALL, "structure": "long_put", "legs": [{**_LONG_CALL, "leg_id": "long_put", "right": "put"}]}
+
+    seen, price = await _review(app, floor, monkeypatch, trades=a_put)
+
+    review = seen["option_review"]
+    [warned] = [note for note in review["notes"] if note["code"] == option_deploy.LEANS_AGAINST_THE_SIGNAL]
+    assert "falls" in warned["headline"]
+    assert review["blockers"] == [] and price.commitment_cents is not None
+
+
+async def test_at_the_click_a_preview_that_is_only_arriving_is_waited_for_and_a_review_waits_for_nothing(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page asks a review again itself. A click asks until its patience is spent, and here the quotes
+    arrive during its first wait."""
+    request = AlpacaPaperDeployRequest.model_validate({**_SETTINGS, "execution_mode": "dry_run", "trades": _ONE_CALL})
+    slept: list[float] = []
+
+    async def the_quotes_arrive_meanwhile(seconds: float) -> None:
+        slept.append(seconds)
+        if len(slept) == 1:
+            await floor.lines_are_quoted()
+
+    # Only this module's own wait is replaced: the stand-in Gateway settles on the real one.
+    monkeypatch.setattr(option_deploy, "asyncio", SimpleNamespace(sleep=the_quotes_arrive_meanwhile))
+
+    at_a_review = await option_deploy.read_preview("alpaca", ACCT, request)
+    assert at_a_review.state != "resolved" and at_a_review.ask_again_in_ms is not None and slept == []
+
+    at_the_click = await option_deploy.read_preview("alpaca", ACCT, request, patience_ms=3_000)
+
+    assert at_the_click.state == "resolved" and slept and sum(slept) <= 3.0
