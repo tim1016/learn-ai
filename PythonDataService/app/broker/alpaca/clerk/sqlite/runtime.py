@@ -176,6 +176,7 @@ from app.broker.alpaca.clerk.sqlite.option_admission import (
     entry_quote_refusal,
     work_out_option_entry,
 )
+from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill, option_fills_of_decision
 from app.broker.alpaca.clerk.sqlite.option_entry import (
     OptionEntryFacts,
     option_entry_contracts,
@@ -1131,18 +1132,37 @@ class SqliteAlpacaClerkFacade:
         refused = option_contract_refusal(contract, listing)
         return None if refused is None else OptionEntryRefused(refused.reason.value, str(refused))
 
-    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
-        """Hand a Dry Run the newest quote held for each contract a bot holds, by OCC symbol (ADR 0076).
-
-        A simulated close and the simulated account's mark of an open
-        contract are priced from the newest quote kept. Any other account
-        keeps none.
-        """
-        self._trade.keep_option_quotes(quotes)
-
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id."""
         return self._trade.synthesized_option_fills()
+
+    def option_fills_of_decision(self, strategy_instance_id: str, decision_id: str) -> tuple[OptionDecisionFill, ...]:
+        """What the order one decision made has filled in option contracts, oldest first (ADR 0076).
+
+        Asked by the decision's own id, as it was handed to
+        ``execute_for_instance``. The order is the decision's own: an ENTER's
+        opening order, an EXIT's closing order. Empty for a decision the Clerk
+        refused, for an EXIT whose closing order has not been made yet, and
+        for an order that has not filled.
+        """
+        return option_fills_of_decision(
+            self._repo,
+            strategy_instance_id=strategy_instance_id,
+            durable_decision_id=_durable_decision_id(decision_id),
+            how_simulated=self._trade.synthesized_option_fills(),
+        )
+
+    def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
+        """The option contracts one bot holds now, by OCC symbol, its newest entry's first (ADR 0076).
+
+        The books' answer, among the contracts the bot's own entries opened:
+        what its EXIT closes. The plan's rules are not asked.
+        """
+        return tuple(
+            symbol
+            for symbol in option_entry_contracts(self._repo, strategy_instance_id)
+            if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
+        )
 
     async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
         async with self._intake:

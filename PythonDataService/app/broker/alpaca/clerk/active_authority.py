@@ -49,6 +49,8 @@ from app.broker.alpaca.clerk.active_runtime import (
     transient_startup_failure,
     unavailable_runtime,
 )
+from app.broker.alpaca.clerk.held_option_quotes import FollowedBooks, get_held_option_quotes
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.live_authority import select_live_clerk_runtime
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate, LiveEnvelopeValues
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -431,6 +433,7 @@ async def select_synthetic_clerk_runtime(
     sweep: ReconciliationSweep | None = None
     envelope_sync: LiveEnvelopeSync | None = None
     deadline_keeper: DeadlineKeeper | None = None
+    option_books: FollowedBooks | None = None
     try:
         repository = await open_repository_after_lease_expiry(
             repository_opener,
@@ -445,6 +448,13 @@ async def select_synthetic_clerk_runtime(
             or meta.db_identity_token != activation.db_identity_token
         ):
             raise SyntheticActivationInvalid("synthetic activation does not match repository identity")
+        # The option contracts this Dry Run's bots hold are asked for and quoted from its own books,
+        # whether a runner is alive or not (ADR 0076). Reading them writes nothing.
+        option_books = get_held_option_quotes().follow(
+            account_id,
+            books=repository.option_contracts_to_watch,
+            kept=KeptOptionQuotes.of_account(artifacts_root=artifacts_root, account_id=account_id),
+        )
         intake = ReentrantAsyncLock()
         guarded_read, guarded_trade = guard_broker_ports(
             read=ports.read,
@@ -520,6 +530,8 @@ async def select_synthetic_clerk_runtime(
             await deadline_keeper.stop()
         if sweep is not None:
             await sweep.stop()
+        if option_books is not None:
+            option_books.close()
         if repository is not None:
             repository.close()
         if not isinstance(exc, Exception):
@@ -551,6 +563,7 @@ async def select_synthetic_clerk_runtime(
         sweep=sweep,
         envelope_sync=envelope_sync,
         deadline_keeper=deadline_keeper,
+        option_books=option_books,
         _sqlite_repository=repository,
         account_id=account_id,
         account_authority_kind="synthetic",
