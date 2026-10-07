@@ -75,6 +75,14 @@ def require_symbol_expiry(expiry_ms: int) -> int:
     return expiry_ms
 
 
+def symbol_expiry_range_ms() -> tuple[int, int]:
+    """The first and the last expiry a contract symbol can write, each as its anchor."""
+    return (
+        option_expiry_anchor_ms(date(_FIRST_SYMBOL_YEAR, 1, 1)),
+        option_expiry_anchor_ms(date(_LAST_SYMBOL_YEAR, 12, 31)),
+    )
+
+
 class OptionContract(BaseModel):
     """One listed option contract: what an order names and a position holds."""
 

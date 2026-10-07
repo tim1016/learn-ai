@@ -1,5 +1,5 @@
 """What a resolved structure comes to at expiry: the most it gains, where its lowest and highest results
-hold, and the prices it breaks even at.
+hold, the prices it breaks even at, and the line of its results to draw.
 
 Formula: with ``payoff(p)`` the structure's exercise payoff per share at an
   underlying price ``p ≥ 0``, ``c`` the net price per share (positive is
@@ -10,9 +10,14 @@ Formula: with ``payoff(p)`` the structure's exercise payoff per share at an
     the lowest holds   on every p with payoff(p) = min over p ≥ 0 of payoff
     the highest holds  on every p with payoff(p) = max over p ≥ 0 of payoff
     break-even       every p with payoff(p) = c on a stretch where payoff is not level
+    the sketch       result(p) at each strike, and at one price either side of them:
+                     w below the lowest of the strikes and break-evens and w above the
+                     highest, each rounded outward to a whole dollar, where w is a quarter
+                     of the distance between those two and a dollar at least
   payoff is piecewise linear and turns only at zero and at the strikes, so
   each of these is read at those turning points and from the slope above the
-  highest strike.
+  highest strike. Between two neighbouring points of the sketch the result is
+  a straight line, so the points are the whole line across the window.
 Reference: ADR 0076 decision 3 for the payoff and where its lowest point is
   found. The gain, the ranges and the break-evens are this repo's own
   definitions (#2913): the mirror of its loss-at-expiry estimate, under the
@@ -33,6 +38,7 @@ a dollar, because a leg ratio of three puts one where no cent is.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -62,6 +68,14 @@ class PriceRange:
 
 
 @dataclass(frozen=True, slots=True)
+class ResultAt:
+    """What the entry comes to at one underlying price at expiry, in cents: above zero gained, below zero lost."""
+
+    price: Decimal
+    result_cents: int
+
+
+@dataclass(frozen=True, slots=True)
 class AtExpiry:
     """One entry's figures at expiry. Each is an estimate under the module's assumptions."""
 
@@ -73,6 +87,8 @@ class AtExpiry:
     loss_holds: tuple[PriceRange, ...]
     # The underlying prices the entry neither gains nor loses at, in dollars, lowest first.
     break_evens: tuple[Fraction, ...]
+    # The result at each strike and at a price either side of them, lowest price first: the line to draw.
+    sketch: tuple[ResultAt, ...] = ()
 
 
 def _dollars(thousandths: int) -> Decimal:
@@ -114,6 +130,34 @@ def _break_evens(points: Sequence[int], payoffs: Sequence[int], slope_above: int
     return tuple(crossing / _THOUSANDTHS_PER_DOLLAR for crossing in sorted(crossings))
 
 
+def _result_cents(structure: ResolvedStructure, size: EntrySize, net_price: Decimal, price_thousandths: int) -> int:
+    """result(p) = N · m · (payoff(p) - c), in whole cents."""
+    per_share = exact_sum([(exercise_payoff_thousandths(structure, price_thousandths), _ONE_THOUSANDTH), (-1, net_price)])
+    return size.units * whole_units(
+        per_share,
+        units_per_one=size.multiplier * _CENTS_PER_DOLLAR,
+        what=f"a result at expiry at {size.multiplier} shares a contract",
+        unit="cents",
+    )
+
+
+def _sketch(
+    structure: ResolvedStructure, size: EntrySize, net_price: Decimal, break_evens: Sequence[Fraction]
+) -> tuple[ResultAt, ...]:
+    """The results to draw a line through: every strike, and a whole-dollar price either side of the strikes
+    and the break-evens, so that the line shows where the structure turns and where it crosses nothing."""
+    strikes = sorted({leg.contract.strike_thousandths for leg in structure.legs})
+    evens = [even * _THOUSANDTHS_PER_DOLLAR for even in break_evens]
+    lowest, highest = min([*strikes, *evens]), max([*strikes, *evens])
+    margin = max((highest - lowest) / 4, _THOUSANDTHS_PER_DOLLAR)
+    start = max(0, math.floor((lowest - margin) / _THOUSANDTHS_PER_DOLLAR) * _THOUSANDTHS_PER_DOLLAR)
+    end = math.ceil((highest + margin) / _THOUSANDTHS_PER_DOLLAR) * _THOUSANDTHS_PER_DOLLAR
+    return tuple(
+        ResultAt(_dollars(point), _result_cents(structure, size, net_price, point))
+        for point in sorted({start, *strikes, end})
+    )
+
+
 def at_expiry(structure: ResolvedStructure, size: EntrySize, *, net_price: Decimal) -> AtExpiry | None:
     """The figures at expiry of entering ``size`` at ``net_price`` a share for one structure (positive is paid).
 
@@ -150,9 +194,11 @@ def at_expiry(structure: ResolvedStructure, size: EntrySize, *, net_price: Decim
             ),
         )
         gain_holds = _holds(points, payoffs, slope_above, highest)
+    break_evens = _break_evens(points, payoffs, slope_above, net_price)
     return AtExpiry(
         gain_cents=gain_cents,
         gain_holds=gain_holds,
         loss_holds=_holds(points, payoffs, slope_above, min(payoffs)),
-        break_evens=_break_evens(points, payoffs, slope_above, net_price),
+        break_evens=break_evens,
+        sketch=_sketch(structure, size, net_price, break_evens),
     )
