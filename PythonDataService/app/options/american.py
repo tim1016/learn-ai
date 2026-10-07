@@ -46,16 +46,28 @@ apart. It is not the theta a tree gives from its own nodes, and not a yearly
 rate of decay divided by 365. It is the number an owner means by what a day
 costs. It stays a plain number in the last days before expiry, where a rate
 of decay runs away. And each of its two prices is one the reference engine
-computes too, so the difference is proven the way the price is. With no
-dividend that is to 1e-9, down to a later price fifteen minutes from expiry
-(fixture AM-004); with one minute left a day later the gap measured is
-1.7e-9. With cash dividends it is checked against the finite-difference
-engine's difference and agrees to the tree's step error, as the price does:
-within 2e-3 at 2,003 steps and 1e-2 at the default 401 (fixture AM-005). The
-largest gap at 401 steps is a deep call a day before its stock goes ex; the
-fixture's other cases are within 1.3e-3. A contract that expires inside the
+computes too, so the difference is proven the way the price is. The day is
+24 hours by the clock. Over a weekend three such days pass before the next
+session, and this figure is one of them. A contract that expires inside the
 day is worth, a day later, what exercising pays. A stock that goes ex inside
 the day is priced a day later at its price less that dividend.
+
+How close the decay is. With no dividend it matches the reference to 1e-9
+on fixture AM-004's cases, whose later price is fifteen minutes or more
+from expiry. That is true of those cases, not of every contract: outside
+the fixture 1.6e-9 was measured with a later price fifteen minutes from
+expiry, and 1.7e-9 with one minute. With cash dividends it is checked
+against the finite-difference engine's difference and agrees to the tree's
+step error, as the price does. On fixture AM-005's cases the largest gap is
+9.4e-4 at 2,003 steps and 8.1e-3 at the default 401. Those are the
+fixture's own measured gaps, not a bound. The gap is largest where one of
+the two prices is a day before an ex-date: a call in the money whose stock
+goes ex one or two days out. The fixture's cases with no ex-date that near
+are within 8.0e-4 at 401 steps. Outside the fixture a gap of 2e-2, 16% of
+the decay, was measured at the default 401 steps for a call in the money
+with a large dividend going ex two days out at high volatility; at 2,003
+steps that gap was 1e-4. So near an ex-date the figure at the default steps
+is an estimate.
 
 What it does not do. It has no continuous dividend yield: a bot's dividends
 are cash amounts on dates, given explicitly, and there is no default of
@@ -71,11 +83,11 @@ zero, at any time to expiry. The price there moves in steps of up to about
 about 2e-7/√T: 1e-6 at thirty days, 1e-4 at one minute.
 A dividend whose ex-date falls exactly on a tree step is counted before or
 after that step by the last bit of the two times, and the price can move by
-a step's error for it: 5.6e-3 was measured at 401 steps. The default 401 is
-prime, so with under 401 days to expiry no ex-date a whole number of days
-out lands on a step. The daily decay takes a day off each time as a float,
-so there its later price can differ that much from a price worked a day
-later from instants.
+a step's error for it. The move measured is 5.6e-3 to 1.1e-2 at 401 steps.
+An ex-date lands on a step only at isolated instants. Whole days to both
+the expiry and the ex-date never do under 401 days, because 401 is prime.
+The daily decay takes a day off each time as a float, so there its later
+price can differ that much from a price worked a day later from instants.
 """
 
 from __future__ import annotations
@@ -151,10 +163,12 @@ class AmericanValue:
 
 @dataclass(frozen=True, slots=True)
 class AmericanDailyDecay:
-    """What one calendar day takes from an American option's model price, per share, with its working.
+    """What the next 24 hours take from an American option's model price, per share, with its working.
 
     ``decay`` is the later price less the price now: negative for a contract
-    that loses value as time passes.
+    that loses value as time passes. The day is 24 hours by the clock. Over a
+    weekend three such days pass before the next session, and this figure is
+    one of them.
     """
 
     price_now: float
@@ -407,7 +421,13 @@ def american_daily_decay(
 
     The price a day later less the price now, both from ``american_value``,
     with the stock price, the volatility and the rate held and every dividend
-    kept on its date. Negative for a contract that loses value with time.
+    kept on its date. Negative for a contract that loses value with time. Over
+    a weekend three such days pass before the next session, and this figure
+    is one of them.
+
+    Near an ex-date the figure at the default ``steps`` is an estimate: with
+    a dividend going ex two days out it was measured a sixth out, so a caller
+    shows it as an estimate or asks for more steps.
 
     A contract with less than a day and a minute left is worth, a day later,
     what exercising pays at the held stock price: nothing when it is out of
