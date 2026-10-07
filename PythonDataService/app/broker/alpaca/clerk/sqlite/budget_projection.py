@@ -183,7 +183,7 @@ def project_account_money(
         # Net of a reported fee, exactly as an unseen purchase is its cost
         # plus its reported fee; an unreported fee stays an account charge.
         unseen_sales = sum((
-            normalize_money(fill.quantity) * normalize_money(fill.fill_price) - (ZERO if fill.fee is None else normalize_money(fill.fee))
+            fill.exact_notional - (ZERO if fill.fee is None else normalize_money(fill.fee))
             for fill in projected.records
             if fill.side is OrderSide.SELL and fill.recorded_at_ms is not None and fill.recorded_at_ms >= seen_before_ms
         ), ZERO) + sum((
@@ -197,7 +197,7 @@ def project_account_money(
 
 
 def _long_cost(lots: Iterable[OpenLot]) -> Decimal:
-    return sum((lot.exact_qty * lot.exact_cost for lot in lots if lot.side is OrderSide.BUY), ZERO)
+    return sum((lot.exact_cost_basis for lot in lots if lot.side is OrderSide.BUY), ZERO)
 
 
 def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
@@ -242,7 +242,7 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     held: dict[str, Decimal] = {}
     for lot in fifo.open_lots:
         if lot.side is OrderSide.BUY:
-            held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_qty * lot.exact_cost
+            held[lot.symbol] = held.get(lot.symbol, ZERO) + lot.exact_cost_basis
     named = [f"{quantity_text(qty)} shares from outside order {order}" for order, qty in unpriced.items()]
     named += _shorts(fifo.open_lots, holder="outside orders")
     return [Holding(f"external:{symbol}", None, cost, ZERO) for symbol, cost in sorted(held.items())], named
@@ -444,7 +444,7 @@ def _deployment_budget(
         strategy_instance_id=sid, committed_cents=commitment["committed_cents"],
         active=commitment["run_state"] == "ACTIVE" and commitment["released_at_ms"] is None,
         realized_gross=fifo.exact_realized_pnl, fees=fees.total_for(subject_id),
-        position_cost=sum((lot.exact_qty * lot.exact_cost for lot in fifo.open_lots), ZERO),
+        position_cost=sum((lot.exact_cost_basis for lot in fifo.open_lots), ZERO),
         pending_orders=sum((claim.unfilled_cost + claim.unfilled_fee for claim in claims if claim.strategy_instance_id == sid), ZERO),
         release=_recorded_release(commitment),
     )
@@ -538,7 +538,7 @@ def _project(
             if fill.recorded_at_ms is None:
                 raise BudgetUnavailable("A manual fill has no observation boundary. Reconcile account executions.")
             if fill.recorded_at_ms >= seen_before_ms:
-                manual_claim += normalize_money(fill.quantity) * normalize_money(fill.fill_price)
+                manual_claim += fill.exact_notional
                 if fill.fee is not None:
                     manual_claim += normalize_money(fill.fee)
         budgets = [_deployment_budget(commitment, records=records, claims=claims, fees=fees) for commitment in commitments]
