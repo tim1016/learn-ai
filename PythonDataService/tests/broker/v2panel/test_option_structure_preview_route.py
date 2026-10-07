@@ -853,13 +853,23 @@ def _every_range(served: Any, found: list[tuple[str, dict[str, Any]]] | None = N
     return found
 
 
+def _every_text(served: Any) -> list[str]:
+    """Every value in the served catalogue that is text, wherever it sits."""
+    if isinstance(served, dict):
+        return [text for part in served.values() for text in _every_text(part)]
+    if isinstance(served, list):
+        return [text for part in served for text in _every_text(part)]
+    return [served] if isinstance(served, str) else []
+
+
 async def test_a_time_in_the_served_catalogue_is_a_number_of_milliseconds_and_never_text(deploy_app) -> None:
     """The fixed date's range is two moments. They are served as JSON numbers, ``int64 ms UTC``, in fields of
     their own. A number's range is served as exact decimals, in text, and carries no moment. No range is served
     both ways, and none carries a moment in a field that takes text."""
     app, _registry = deploy_app
+    catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
 
-    ranges = _every_range((await _get(app, f"{_BOTS}/option-structures")).json())
+    ranges = _every_range(catalogue)
 
     of_dates = [bounds for name, bounds in ranges if name.endswith(":date")]
     of_numbers = [bounds for name, bounds in ranges if not name.endswith(":date")]
@@ -873,8 +883,8 @@ async def test_a_time_in_the_served_catalogue_is_a_number_of_milliseconds_and_ne
     for bounds in of_numbers:
         assert (bounds["min_ms"], bounds["max_ms"]) == (None, None), bounds
         assert all(end is None or isinstance(end, str) for end in (bounds["min"], bounds["max"], bounds["step"])), bounds
-    # Nothing in the whole catalogue is text that reads as a moment in milliseconds.
-    assert str(dates["min_ms"]) not in (await _get(app, f"{_BOTS}/option-structures")).text.replace(f': {dates["min_ms"]}', "").replace(f':{dates["min_ms"]}', "")
+    # No text anywhere in the catalogue carries either moment.
+    assert not any(str(dates[end]) in text for end in ("min_ms", "max_ms") for text in _every_text(catalogue))
 
 
 async def test_the_range_of_each_order_term_is_the_one_the_terms_own_module_states(deploy_app) -> None:
