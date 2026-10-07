@@ -64,7 +64,7 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationStore,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
-from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper, Nudge
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
@@ -467,8 +467,10 @@ async def select_synthetic_clerk_runtime(
         envelope_sync = LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=envelope,
             simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
         # ADR 0076: a Dry Run has no periodic pass, so only a task of the
-        # Clerk's own can act at a deadline while its run is going.
-        deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade)
+        # Clerk's own can act at a deadline while its run is going. Its nudge
+        # is made first: the facade is built with it, and the keeper with the
+        # facade's pricing.
+        keeper_nudge = Nudge()
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
@@ -480,10 +482,12 @@ async def select_synthetic_clerk_runtime(
             account_mode="paper",
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             entry_reading=envelope_sync.read_for_entry,
-            entry_deadline_nudge=deadline_keeper.nudge,
+            entry_deadline_nudge=keeper_nudge,
         )
         # A scheduled close is an EXIT, driven with the facade's one pricing seam (ADR 0076).
-        deadline_keeper.keep_scheduled_closes(intake=intake, pricing=facade.recovery_pricing)
+        deadline_keeper = DeadlineKeeper(
+            repo=repository, trade=guarded_trade, intake=intake, pricing=facade.recovery_pricing, nudge=keeper_nudge,
+        )
         sweep = ReconciliationSweep(
             repo=repository,
             read=guarded_read,

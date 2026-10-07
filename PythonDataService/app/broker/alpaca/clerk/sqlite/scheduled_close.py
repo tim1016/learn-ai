@@ -120,6 +120,9 @@ MAX_CLOSES_AT_ONCE = 4
 # A close taken more than this long after it was due is told as late: the Clerk was down or held.
 LATE_AFTER_MS = 60_000
 
+# How soon a failed scheduled close is ready to be sent again, while the session it was due in is open.
+SCHEDULED_CLOSE_RETRY_AFTER_MS = 30_000
+
 _MISSED_HEADLINE = "A scheduled close was missed: the position is still open"
 _ENTRIES_HELD = "New entries are on hold for this bot. No other bot is held."
 
@@ -146,6 +149,8 @@ class HeldContract:
     left_to_owner: bool
     # The contract's last session has ended: no order can close it.
     expired: bool
+    # When the bot's newest exit was taken, for an owed close that failed. None for any other.
+    last_exit_taken_at_ms: int | None = None
 
     def to_be_taken(self, now_ms: int) -> bool:
         """Whether the close owed today is due, not yet taken by any EXIT, and the Clerk's to take."""
@@ -157,12 +162,42 @@ class HeldContract:
             and not self.left_to_owner
         )
 
+    @property
+    def again_at_ms(self) -> int | None:
+        """When an owed close that failed is ready to be taken again, or None when none failed.
+
+        Counted from the bot's newest exit, whoever made it: a try is never
+        closer than the retry wait to the exit before it.
+        """
+        if self.owed is None or self.holding is None or self.holding.state != "failed":
+            return None
+        return (self.last_exit_taken_at_ms or self.owed.due_ms) + SCHEDULED_CLOSE_RETRY_AFTER_MS
+
+    def to_be_taken_again(self, now_ms: int) -> bool:
+        """Whether the close owed today failed, is still due, and is ready to be taken again.
+
+        Asked only where nothing else retries a failed close: on an account
+        with no reconciliation pass on a timer.
+        """
+        return (
+            self.again_at_ms is not None
+            and self.owed is not None
+            and self.owed.due(now_ms)
+            and self.again_at_ms <= now_ms
+            and self.unfinished is None
+            and not self.left_to_owner
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class HeldContracts:
     """One read of every option contract held on the account."""
 
+    # Each contract of every bot that can owe a close today or have missed one. A bot whose
+    # contracts are all bought and all expire on a later day is not read and is not here.
     held: tuple[HeldContract, ...] = ()
+    # Every bot holding an option contract, read or not.
+    holders: frozenset[str] = frozenset()
     # Bots holding a contract whose entry could not be read. Nothing is concluded about them.
     unread: frozenset[str] = frozenset()
     # Bots with an open missed-close notice, held or not.
@@ -177,12 +212,15 @@ def decision_prefix(session_open_ms: int) -> str:
 def held_contracts(
     repo: ClerkSqliteRepository, now_ms: int, *, strategy_instance_id: str | None = None
 ) -> HeldContracts:
-    """Every option contract a bot holds, with the close it owes at the Clerk's clock ``now_ms``.
+    """Every option contract that can owe a close, with what it owes at the Clerk's clock ``now_ms``.
 
-    One read of the positions that are not zero, and then, only for a
-    position in a recorded contract, its entry's own facts. Books that never
-    traded an option stop at the first read: an empty table, and no row of
-    the custody log.
+    One read of the positions that are not zero. Books that never traded an
+    option stop there: an empty table, and no row of the custody log.
+
+    Then each bot's positions say, by themselves, whether anything can be
+    owed (:func:`_a_close_can_be_owed`). Only when one can are the entries
+    behind them read. So a bot holding a contract that is not due today
+    costs the same few steps however long its history is.
 
     One bot's unreadable books are logged with their stack and named in
     ``unread``. The others are still read: a pass that raised here would
@@ -191,28 +229,58 @@ def held_contracts(
     with repo.write_fence() as conn:
         positions = reads.held_option_contracts(conn)
         noticed = reads.strategies_under_active_uncertainty(conn, SCHEDULED_CLOSE_MISSED_REASON_CODE)
-    held: list[HeldContract] = []
-    unread: set[str] = set()
+    of_bot: dict[str, list[reads.HeldOptionContract]] = {}
     for position in positions:
         if strategy_instance_id is not None and position.strategy_instance_id != strategy_instance_id:
             continue
-        if not position_quantity_is_nonzero(position.quantity):
+        if position_quantity_is_nonzero(position.quantity):
+            of_bot.setdefault(position.strategy_instance_id, []).append(position)
+    held: list[HeldContract] = []
+    unread: set[str] = set()
+    for own in of_bot.values():
+        if not _a_close_can_be_owed(own, now_ms):
             continue
+        for position in own:
+            try:
+                held.append(_held_contract(repo, position, now_ms))
+            except (LookupError, ValueError, AssertionError):
+                # What an entry's own facts raise when they are missing or cannot be read back.
+                unread.add(position.strategy_instance_id)
+                logger.exception(
+                    "a held option contract's entry could not be read; no close is worked out for it",
+                    extra={
+                        "action": "scheduled_close_holding_unreadable",
+                        "account_id": repo.account_id,
+                        "strategy_instance_id": position.strategy_instance_id,
+                        "symbol": position.symbol,
+                    },
+                )
+    return HeldContracts(
+        held=tuple(held), holders=frozenset(of_bot), unread=frozenset(unread), noticed=tuple(noticed)
+    )
+
+
+def _a_close_can_be_owed(own: Sequence[reads.HeldOptionContract], now_ms: int) -> bool:
+    """Whether what one bot holds can owe a close today or have missed one, told from its positions alone.
+
+    A close is owed on a held contract's expiry day, and every session by a
+    structure with a sold leg. One is missed once a contract is past its
+    last session, or a sold leg was held through a session's close. So a
+    bot whose contracts are all bought and all expire on a later day owes
+    nothing and missed nothing: none of its entries needs reading.
+    """
+    today = et_date_at_ms(now_ms)
+    for position in own:
+        if position.quantity < 0:
+            return True
         try:
-            held.append(_held_contract(repo, position, now_ms))
-        except (LookupError, ValueError, AssertionError):
-            # What an entry's own facts raise when they are missing or cannot be read back.
-            unread.add(position.strategy_instance_id)
-            logger.exception(
-                "a held option contract's entry could not be read; no close is worked out for it",
-                extra={
-                    "action": "scheduled_close_holding_unreadable",
-                    "account_id": repo.account_id,
-                    "strategy_instance_id": position.strategy_instance_id,
-                    "symbol": position.symbol,
-                },
-            )
-    return HeldContracts(held=tuple(held), unread=frozenset(unread), noticed=tuple(noticed))
+            expiry = OptionContract.from_occ_symbol(position.symbol).expiry_date
+        except ValueError:
+            # A symbol that names no contract: the read of its entry says so, with its stack.
+            return True
+        if expiry <= today or past_last_session(expiry, now_ms):
+            return True
+    return False
 
 
 def _held_contract(repo: ClerkSqliteRepository, position: reads.HeldOptionContract, now_ms: int) -> HeldContract:
@@ -227,6 +295,15 @@ def _held_contract(repo: ClerkSqliteRepository, position: reads.HeldOptionContra
     owed = close_owed_at(entry.structure, terms, at_ms=now_ms)
     missed = close_missed_at(entry.structure, terms, held_since_ms=entry.admitted_at_ms, at_ms=now_ms)
     concerns_the_clerk = owed is not None or missed is not None
+    holding = (
+        None if owed is None
+        else holding_of_entry(repo, sid, symbol, target, decision_prefix=decision_prefix(owed.session_open_ms))
+    )
+    newest_exit = (
+        repo.last_strategy_transition(strategy_instance_id=sid, transition_kind="EXIT_ACCEPTED")
+        if holding is not None and holding.state == "failed"
+        else None
+    )
     return HeldContract(
         strategy_instance_id=sid,
         symbol=symbol,
@@ -234,13 +311,11 @@ def _held_contract(repo: ClerkSqliteRepository, position: reads.HeldOptionContra
         entry_order_ref=target.order_ref,
         owed=owed,
         missed=missed,
-        holding=(
-            None if owed is None
-            else holding_of_entry(repo, sid, symbol, target, decision_prefix=decision_prefix(owed.session_open_ms))
-        ),
+        holding=holding,
         unfinished=_unfinished_close(repo, sid) if concerns_the_clerk else None,
         left_to_owner=concerns_the_clerk and automatic_exit_stopped(repo, sid),
         expired=past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms),
+        last_exit_taken_at_ms=None if newest_exit is None else newest_exit["clerk_observed_at_ms"],
     )
 
 
@@ -277,7 +352,7 @@ async def drive_scheduled_closes(
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
-    drive_unfinished: bool = False,
+    no_pass_on_a_timer: bool = False,
 ) -> ScheduledCloseRound:
     """Send every scheduled close that is due, and record each one its session ended on.
 
@@ -287,17 +362,26 @@ async def drive_scheduled_closes(
     contract and no missed-close notice it reads that once, takes no lock
     and writes nothing.
 
-    ``drive_unfinished`` also drives on a close that was taken and has not
-    finished. The pass does not ask for it: its own recovery of operations
-    has driven every unfinished EXIT earlier in the same pass, and a second
-    look would be a second lookup at the broker. The keeper of an account
-    with no pass on a timer does.
+    ``no_pass_on_a_timer`` is said by the keeper of an account nothing else
+    looks at on a timer: a Dry Run's. There the step also does the two
+    things a pass does on a real account. It drives on a close that was
+    taken and has not finished. And it takes a failed close again, once
+    the retry wait has passed since the bot's newest exit, while the
+    close's own session is open. The pass asks for neither: its recovery of
+    operations has driven every unfinished EXIT earlier in the same pass,
+    and its stuck-EXIT watchdog sends a failed close again.
 
     A held operation claim means another owner is driving that EXIT right
     now, and a refused reduction means a hold stands on the account: the
     close is left for the next run. A lost execution lease is no one
     contract's failure and is raised once the closes in flight have come to
     rest.
+
+    A stop can cut the step anywhere. A close cut after it was accepted and
+    before its order was sent stays accepted on the books, and the next
+    start drives it as it drives every unfinished EXIT. One cut inside its
+    send is looked up by the order's own id before anything is sent again.
+    So a stop loses no close and sends none twice.
     """
     run = off_loop if off_loop is not None else run_inline
     now_ms = repo.clock()
@@ -312,9 +396,9 @@ async def drive_scheduled_closes(
     worked: dict[str, HeldContract] = {}
     for item in read.held:
         if item.unfinished is not None:
-            if drive_unfinished:
+            if no_pass_on_a_timer:
                 worked.setdefault(item.unfinished, item)
-        elif item.to_be_taken(now_ms):
+        elif item.to_be_taken(now_ms) or (no_pass_on_a_timer and item.to_be_taken_again(now_ms)):
             worked.setdefault(f"{item.strategy_instance_id}:{item.symbol}", item)
     answers = await asyncio.gather(*(one(item) for item in worked.values()), return_exceptions=True)
     for answer in answers:
@@ -330,20 +414,23 @@ async def drive_scheduled_closes(
         driven=tuple(result.effect_operation_id for result in done if result.driven),
         deferred=tuple(result.effect_operation_id for result in done if not result.driven),
         missed=missed,
-        next_change_ms=_next_change_ms(read.held, now_ms),
+        next_change_ms=_next_change_ms(read.held, now_ms, with_retries=no_pass_on_a_timer),
     )
 
 
-def _next_change_ms(held: Sequence[HeldContract], now_ms: int) -> int | None:
-    """When a close next comes due or the session it is owed in ends: always later than ``now_ms``."""
-    return min(
-        (
-            item.owed.due_ms if now_ms < item.owed.due_ms else item.owed.session_close_ms
-            for item in held
-            if item.owed is not None
-        ),
-        default=None,
-    )
+def _next_change_ms(held: Sequence[HeldContract], now_ms: int, *, with_retries: bool = False) -> int | None:
+    """When a close next comes due or the session it is owed in ends: always later than ``now_ms``.
+
+    ``with_retries`` also counts the instant a failed close is ready to be taken again.
+    """
+    changes: list[int] = []
+    for item in held:
+        if item.owed is None:
+            continue
+        changes.append(item.owed.due_ms if now_ms < item.owed.due_ms else item.owed.session_close_ms)
+        if with_retries and item.again_at_ms is not None and now_ms < item.again_at_ms:
+            changes.append(item.again_at_ms)
+    return min(changes, default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,7 +470,8 @@ async def _take_or_drive(
                     extra={
                         "action": "scheduled_close_taken",
                         "effect_operation_id": effect_operation_id,
-                        "decision_id": item.holding.close.decision_id,
+                        "command_id": accepted.command.command_id,
+                        "again": item.holding.state == "failed",
                         "kind": item.owed.kind.value,
                         "due_ms": item.owed.due_ms,
                         "late_by_ms": max(repo.clock() - item.owed.due_ms, 0),
@@ -429,6 +517,10 @@ def _accept_while_still_owed(repo: ClerkSqliteRepository, item: HeldContract) ->
     bot by itself. A deciding program's EXIT is accepted under the same
     lock, so of two that meet only the first is accepted, and the second
     finds an EXIT working. ``None`` writes nothing.
+
+    A close that failed is taken again as a decision of its own, numbered
+    after the first. It is asked one thing more: has the retry wait passed
+    since the bot's newest exit, as the books show it now?
     """
     assert item.owed is not None and item.holding is not None
     sid = item.strategy_instance_id
@@ -438,16 +530,56 @@ def _accept_while_still_owed(repo: ClerkSqliteRepository, item: HeldContract) ->
         return None
     if automatic_exit_stopped(repo, sid):
         return None
+    decision_id = item.holding.close.decision_id
+    if item.holding.state == "failed":
+        newest = repo.last_strategy_transition(strategy_instance_id=sid, transition_kind="EXIT_ACCEPTED")
+        if newest is not None and repo.clock() < newest["clerk_observed_at_ms"] + SCHEDULED_CLOSE_RETRY_AFTER_MS:
+            return None
+        decision_id = _next_try_of(repo, sid, decision_id)
     return accept_recovery_exit(
         repo,
         account_id=repo.account_id,
         strategy_instance_id=sid,
-        decision_id=item.holding.close.decision_id,
+        decision_id=decision_id,
         entry_order_ref=item.holding.close.entry_order_ref,
         scheduled_close=ScheduledCloseFacts(
             kind=item.owed.kind.value, due_ms=item.owed.due_ms, session_open_ms=item.owed.session_open_ms
         ),
     )
+
+
+def _next_try_of(repo: ClerkSqliteRepository, strategy_instance_id: str, first_decision_id: str) -> str:
+    """The decision a failed close is taken again under: the first one's id and the next number not yet used."""
+    tries = 1
+    while repo.get_command(f"cmd:{strategy_instance_id}:{first_decision_id}-again-{tries}") is not None:
+        tries += 1
+    return f"{first_decision_id}-again-{tries}"
+
+
+def close_being_retried(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, symbol: str, now_ms: int
+) -> ScheduledCloseFacts | None:
+    """The scheduled close of one bot's holding that the Clerk took in the session open at ``now_ms``, or None.
+
+    The one question behind a scheduled close's own retry rule, asked of
+    the books and of nothing else: is the contract still held, does it owe
+    a close in the session that is open now, and did the Clerk accept that
+    close? Which order of the bot failed last does not come into it. So
+    another exit of the bot that fails after the close leaves the rule
+    standing. The answer is the close as its own acceptance recorded it.
+
+    None before that session opens and from its close on, for a holding
+    that owes no close today, for one whose close was never taken, and for
+    one whose entry cannot be read.
+    """
+    for item in held_contracts(repo, now_ms, strategy_instance_id=strategy_instance_id).held:
+        if item.symbol != symbol.upper() or item.owed is None or now_ms < item.owed.session_open_ms:
+            continue
+        first = _first_acceptance(
+            repo, strategy_instance_id, session_open_ms=item.owed.session_open_ms, entry_order_ref=item.entry_order_ref
+        )
+        return None if first is None else ExitAcceptedFacts.from_facts_json(first["facts_json"]).the_scheduled_close
+    return None
 
 
 # ── a close the session ended on ─────────────────────────────────────────
@@ -468,8 +600,21 @@ def _record_missed_closes(repo: ClerkSqliteRepository, read: HeldContracts, now_
         quantity = repo.position(item.strategy_instance_id, item.symbol)
         if position_quantity_is_nonzero(quantity):
             missed.setdefault(item.strategy_instance_id, []).append((item, quantity))
+    stands: list[tuple[str, str]] = []
     for sid, contracts in sorted(missed.items()):
-        outcome = raise_uncertainty(repo, strategy_instance_id=sid, **_missed_notice(repo, contracts, now_ms))
+        try:
+            outcome = raise_uncertainty(repo, strategy_instance_id=sid, **_missed_notice(repo, contracts, now_ms))
+        except ExecutionLeaseLost:
+            raise
+        except Exception:
+            # One bot's notice is its own: the other bots' are still written, and the next run tries this one again.
+            logger.exception(
+                "a missed-close notice could not be written; the other bots' notices go on",
+                extra={"action": "scheduled_close_missed_unwritten", "account_id": repo.account_id,
+                       "strategy_instance_id": sid},
+            )
+            continue
+        stands.extend((sid, item.symbol) for item, _quantity in contracts)
         if outcome != "unchanged":
             logger.error(
                 "a session ended with an option contract still held that the Clerk owed a close of",
@@ -482,13 +627,26 @@ def _record_missed_closes(repo: ClerkSqliteRepository, read: HeldContracts, now_
                 },
             )
     for sid in read.noticed:
-        if sid not in missed and sid not in read.unread and _end_missed_notice(repo, sid):
+        if sid in missed or sid in read.unread:
+            continue
+        try:
+            ended = _end_missed_notice(repo, sid)
+        except ExecutionLeaseLost:
+            raise
+        except Exception:
+            logger.exception(
+                "a missed-close notice could not be ended; the other bots' notices go on",
+                extra={"action": "scheduled_close_missed_unended", "account_id": repo.account_id,
+                       "strategy_instance_id": sid},
+            )
+            continue
+        if ended:
             logger.info(
                 "a missed-close notice ended: its bot holds none of the contracts it named",
                 extra={"action": "scheduled_close_missed_ended", "account_id": repo.account_id,
                        "strategy_instance_id": sid},
             )
-    return tuple((sid, item.symbol) for sid, contracts in sorted(missed.items()) for item, _quantity in contracts)
+    return tuple(stands)
 
 
 def _end_missed_notice(repo: ClerkSqliteRepository, strategy_instance_id: str) -> bool:
@@ -676,7 +834,7 @@ def scheduled_close_state(
     states = tuple(
         _state_of(repo, item, now) for item in read.held if item.owed is not None or item.missed is not None
     )
-    if states or read.held:
+    if states or strategy_instance_id in read.holders:
         return states
     finished = _the_close_that_left_it_flat(repo, strategy_instance_id, now)
     return () if finished is None else (finished,)
@@ -715,14 +873,20 @@ def _state_of(repo: ClerkSqliteRepository, item: HeldContract, now_ms: int) -> S
     )
     taken_at_ms = None if first is None else first["clerk_observed_at_ms"]
     held = f"{quantity_text(abs(item.quantity))} {item.symbol}"
-    simulated = is_synthetic_account_id(repo.account_id)
     if item.missed is not None:
         standing = CloseStanding.MISSED
-        sentence = _missed_words(item, item.quantity, simulated=simulated)
+        sentence = _missed_words(item, item.quantity, simulated=is_synthetic_account_id(repo.account_id))
     else:
         attempt = _newest_attempt(repo, item.strategy_instance_id, close.session_open_ms)
-        standing = CloseStanding.SCHEDULED if attempt is None else _attempt_standing(repo, attempt)
-        sentence = _standing_words(item, close, standing, held=held, now_ms=now_ms, simulated=simulated)
+        if attempt is not None:
+            standing = _attempt_standing(repo, attempt)
+        elif item.holding is not None and item.holding.state == "failed":
+            # The close was sent and did not go through, and the bot's newest exit is another one.
+            standing = CloseStanding.FAILED
+        else:
+            standing = CloseStanding.SCHEDULED
+        another_exit = item.unfinished is None and repo.active_exit_for_strategy(item.strategy_instance_id) is not None
+        sentence = _standing_words(item, close, standing, held=held, now_ms=now_ms, another_exit=another_exit)
     return ScheduledCloseState(
         strategy_instance_id=item.strategy_instance_id,
         contract=item.symbol,
@@ -758,8 +922,10 @@ def _attempt_standing(repo: ClerkSqliteRepository, attempt: dict) -> CloseStandi
 
 
 def _standing_words(
-    item: HeldContract, close: ScheduledClose, standing: CloseStanding, *, held: str, now_ms: int, simulated: bool
+    item: HeldContract, close: ScheduledClose, standing: CloseStanding, *, held: str, now_ms: int, another_exit: bool
 ) -> str:
+    """One sentence for a close its session has not ended on. ``another_exit`` says an exit of the bot that is
+    no scheduled close is working now."""
     due = f"{et_clock_words(close.due_ms)} ET"
     ends = f"{et_clock_words(close.session_close_ms)} ET"
     why = "its contract expires today" if close.kind is CloseKind.EXPIRY_DAY else "a sold option is not held overnight"
@@ -768,13 +934,15 @@ def _standing_words(
     if standing is CloseStanding.PARTLY_CLOSED:
         return f"The close has filled in part. {held} is still held."
     if standing is CloseStanding.FAILED:
-        again = (
-            "A Dry Run's close is not sent again while its bot runs. The bot's own exit or your Flatten can still "
-            "close it."
-            if simulated
-            else f"The Clerk sends it again about every 30 seconds until the session's close at {ends}."
-        )
-        return f"The close did not go through and {held} is still held. {again}"
+        failed = f"The close did not go through and {held} is still held."
+        if item.left_to_owner:
+            return (
+                f"{failed} The Clerk has stopped exiting this bot's position by itself. Close it yourself from "
+                "the bot's page."
+            )
+        if another_exit:
+            return f"{failed} Another exit of this bot is closing it now."
+        return f"{failed} The Clerk tries it again about every 30 seconds until the session's close at {ends}."
     if not close.due(now_ms):
         return f"The Clerk closes {held} at {due}: {why}."
     if item.left_to_owner:

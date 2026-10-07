@@ -24,13 +24,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.sqlite import deadline_keeper as keeper_module
+from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite import scheduled_close as scheduled_close_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
-from app.broker.alpaca.clerk.sqlite.exit_watchdog import EpisodeAttempt, scheduled_close_in_its_session
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
 from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
@@ -75,6 +76,7 @@ from app.services.market_liveness import unknown_market_liveness
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    _covering_read,
     _FakeReadPort,
     documented_option_listing,
 )
@@ -86,6 +88,7 @@ from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     PaperOptions,
     paper,  # noqa: F401 -- pytest fixture, used by name
 )
+from tests.broker.alpaca.clerk.sqlite.test_resting_entries import _the_flatten_offered
 from tests.broker.alpaca.clerk.sqlite.test_resting_entry_facts import _PINNED_OPTION
 
 EXPIRY = CALL.expiry_date
@@ -480,6 +483,16 @@ async def test_before_its_time_the_close_reads_as_scheduled_with_when_it_is_due(
     assert SYMBOL in state.sentence and not state.left_to_owner
 
 
+async def test_one_bots_read_tells_its_own_close_and_not_the_close_of_the_bot_beside_it(paper: PaperOptions) -> None:  # noqa: F811
+    await _holds_one_call(paper, "b")
+    _until(paper, OPEN + 60_000)
+
+    # Bot b holds the call. Bot a holds nothing and has no close to its name.
+    assert scheduled_close_state(paper.repo, "a") == ()
+    [of_b] = scheduled_close_state(paper.repo, "b")
+    assert (of_b.strategy_instance_id, of_b.standing) == ("b", CloseStanding.SCHEDULED)
+
+
 async def test_a_close_sent_and_not_filled_reads_as_sent_then_partly_closed_then_flat(paper: PaperOptions) -> None:  # noqa: F811
     order_ref = await paper.resting("a", units=2)
     await paper.stream_fill(order_ref, contracts=2, filled_in_all=2, price="1.94", execution_id="x-buy")
@@ -505,6 +518,43 @@ async def test_a_close_sent_and_not_filled_reads_as_sent_then_partly_closed_then
     # It is told for the rest of its own day. On Monday the bot has no scheduled close to its name.
     _until(paper, MONDAY_AFTER_THE_OPEN)
     assert scheduled_close_state(paper.repo, "a") == ()
+
+
+async def test_a_close_that_failed_is_not_told_as_the_close_that_left_the_bot_flat(paper: PaperOptions) -> None:  # noqa: F811
+    """The close is refused. The bot is stopped and its position is written off: no exit of the Clerk's proved it flat."""
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    paper.venue.option_submit_error = BrokerOrderRejected("the venue refused the close", broker="alpaca")
+    await paper.round()
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+
+    await discharge_attributed_residue(
+        paper.repo, read=_FakeReadPort(), intake=paper.clerk.intake, strategy_instance_id="a", symbol=SYMBOL,
+        operator_reason="Alpaca sold it",
+    )
+
+    # Nothing is held, and the bot's newest exit is the scheduled close that failed. Flat is not said of it.
+    assert paper.held() == {} and scheduled_close_state(paper.repo, "a") == ()
+
+
+async def test_a_close_that_went_through_on_a_later_try_is_told_as_taken_when_it_was_first_taken(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    paper.venue.option_submit_error = BrokerOrderRejected("the venue refused the close", broker="alpaca")
+    await paper.round()
+    paper.venue.option_submit_error = None
+    for _ in range(2):
+        paper.wait(PASS_MS)
+        await paper.pass_()
+    await _the_close_fills(paper)
+
+    [flat] = scheduled_close_state(paper.repo, "a")
+
+    # The second try sold it, thirty seconds on. The close is still the one taken at its due time, and not late.
+    assert _sent_at(paper) == [DUE, DUE + 30_000] and paper.held() == {}
+    assert (flat.standing, flat.taken_at_ms, flat.late_by_ms, flat.late) == (CloseStanding.FLAT, DUE, 0, False)
 
 
 async def test_a_bot_that_closed_its_own_position_before_the_time_has_no_scheduled_close_to_its_name(
@@ -634,9 +684,9 @@ def _halts(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, halted: set[str
             ),
         })
 
-    # The Clerk's one pricing seam reads the market's status here. The keeper is handed that seam again.
+    # The Clerk's one pricing seam reads the market's status here. The keeper is built again with that seam.
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", status)
-    paper.keeper.keep_scheduled_closes(intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing)
+    paper.keeper = paper.another_keeper()
 
 
 async def test_a_halt_of_the_underlying_holds_the_close_and_the_next_pass_sends_it_when_the_halt_lifts(
@@ -948,7 +998,7 @@ async def test_a_close_another_owner_is_driving_is_left_alone_and_sent_once_it_i
     async def step() -> ScheduledCloseRound:
         return await drive_scheduled_closes(
             paper.repo, trade=paper.venue, intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing,
-            drive_unfinished=True,
+            no_pass_on_a_timer=True,
         )
 
     left = await step()
@@ -961,6 +1011,167 @@ async def test_a_close_another_owner_is_driving_is_left_alone_and_sent_once_it_i
     assert sent.driven == (taken,) and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
 
 
+# ── each step of a round is handled by itself ────────────────────────────
+
+
+async def _a_holds_a_call_and_bs_entry_rests_past_its_wait(paper: PaperOptions) -> str:  # noqa: F811
+    """Bot a holds a call and bot b's entry rests. Nothing looks until a's close is due. Returns b's order reference."""
+    await _holds_one_call(paper, "a")
+    # The account is read again after a's fill, as its own cadence reads it, before b enters.
+    paper.wait(1_000)
+    paper.account.account_observed_at_ms = paper.clock()
+    assert await paper.sync.tick() == "observed"
+    resting = await paper.resting("b")
+    _until(paper, DUE)
+    return resting
+
+
+async def test_an_entry_past_its_wait_and_a_close_that_is_due_are_both_kept_in_one_round(paper: PaperOptions) -> None:  # noqa: F811
+    resting = await _a_holds_a_call_and_bs_entry_rests_past_its_wait(paper)
+
+    done = await paper.round()
+
+    # One round: the entry is cancelled and proven unfilled, and the close is sent.
+    assert done.failed == () and done.entries.ended == (resting,)
+    assert paper.outcome(resting).standing is EntryStanding.UNFILLED
+    assert len(done.closes.taken) == 1 and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
+
+
+async def test_an_entry_step_that_breaks_is_logged_by_name_and_the_close_is_still_sent(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture  # noqa: F811
+) -> None:
+    await _a_holds_a_call_and_bs_entry_rests_past_its_wait(paper)
+
+    def cannot_be_listed(_repo: object) -> object:
+        raise RuntimeError("one entry cannot be listed")
+
+    monkeypatch.setattr(keeper_module, "resting_entries", cannot_be_listed)
+    with caplog.at_level(logging.ERROR, logger=keeper_module.__name__):
+        done = await paper.round()
+
+    assert done.failed == ("resting_entries",) and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
+    assert [record.step for record in caplog.records if record.action == "deadline_keeper_step_failed"] == [
+        "resting_entries"
+    ]
+
+
+async def test_a_close_step_that_breaks_is_logged_by_name_and_the_entry_is_still_cancelled(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture  # noqa: F811
+) -> None:
+    resting = await _a_holds_a_call_and_bs_entry_rests_past_its_wait(paper)
+
+    async def cannot_be_read(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("what is held cannot be read")
+
+    monkeypatch.setattr(keeper_module, "drive_scheduled_closes", cannot_be_read)
+    with caplog.at_level(logging.ERROR, logger=keeper_module.__name__):
+        done = await paper.round()
+
+    assert done.failed == ("scheduled_closes",) and done.entries.ended == (resting,)
+    assert paper.outcome(resting).standing is EntryStanding.UNFILLED and _closes_sent(paper) == []
+    assert [record.step for record in caplog.records if record.action == "deadline_keeper_step_failed"] == [
+        "scheduled_closes"
+    ]
+
+
+async def test_a_lost_hold_on_the_account_in_one_step_ends_the_round_and_is_raised(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _a_holds_a_call_and_bs_entry_rests_past_its_wait(paper)
+
+    async def loses_the_lease(*_args: object, **_kwargs: object) -> object:
+        raise ExecutionLeaseLost("the Clerk's hold on its account was lost", account_id=paper.repo.account_id)
+
+    monkeypatch.setattr(keeper_module, "cancel_resting_entries", loses_the_lease)
+
+    # It is no step's own failure: nothing more can be written, so the round ends and no close is sent.
+    with pytest.raises(ExecutionLeaseLost):
+        await paper.round()
+    assert _closes_sent(paper) == []
+
+
+async def test_a_stop_that_comes_out_of_one_step_as_an_error_ends_the_round_before_the_other_step(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """A stop that lands inside a broker call can surface as another error. It is still a stop, not a step's failure."""
+    await _a_holds_a_call_and_bs_entry_rests_past_its_wait(paper)
+    inside_the_entry_step = asyncio.Event()
+
+    async def turns_a_stop_into_an_error(*_args: object, **_kwargs: object) -> object:
+        inside_the_entry_step.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("the call ended with another error as the keeper was stopped") from None
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(keeper_module, "cancel_resting_entries", turns_a_stop_into_an_error)
+    paper.keeper.start()
+    await asyncio.wait_for(inside_the_entry_step.wait(), timeout=2)
+
+    await asyncio.wait_for(paper.keeper.stop(), timeout=2)
+
+    # The keeper stopped, and a stopped keeper sent no close.
+    assert _closes_sent(paper) == [] and paper.repo.active_exit_for_strategy("a") is None
+
+
+# ── one bot's notice is its own ──────────────────────────────────────────
+
+
+async def test_one_bots_notice_that_cannot_be_written_does_not_keep_the_other_bots_from_being_written(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _two_bots_each_hold_one_call(paper)
+    _until(paper, CLOSE + 60_000)
+    write = scheduled_close_module.raise_uncertainty
+
+    def not_for_bot_a(repo: object, *, strategy_instance_id: str, **notice: object) -> str:
+        if strategy_instance_id == "a":
+            raise RuntimeError("this bot's notice cannot be written")
+        return write(repo, strategy_instance_id=strategy_instance_id, **notice)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as broken:
+        broken.setattr(scheduled_close_module, "raise_uncertainty", not_for_bot_a)
+        done = await paper.round()
+        # The pass runs the same step, and is not ended by it either.
+        await paper.pass_()
+
+    # Bot b's missed close is on record. Bot a's is not told as standing, and the next round writes it.
+    assert done.closes.missed == (("b", SYMBOL),)
+    assert _notice(paper, "a") is None and _notice(paper, "b") is not None
+    again = await paper.round()
+    assert again.closes.missed == (("a", SYMBOL), ("b", SYMBOL)) and _notice(paper, "a") is not None
+
+
+async def test_one_bots_notice_that_cannot_be_ended_does_not_keep_the_other_bots_from_ending(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _two_bots_each_hold_one_call(paper)
+    _until(paper, CLOSE + 60_000)
+    await paper.round()
+    # Each bot is stopped and its position written off, against a broker that holds what is left.
+    for sid, broker_then_shows in (("a", _covering_read(SYMBOL, quantity=1.0)), ("b", _FakeReadPort())):
+        submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+        await discharge_attributed_residue(
+            paper.repo, read=broker_then_shows, intake=paper.clerk.intake, strategy_instance_id=sid, symbol=SYMBOL,
+            operator_reason="expired worthless",
+        )
+    end = scheduled_close_module._end_missed_notice
+
+    def not_for_bot_a(repo: object, strategy_instance_id: str) -> bool:
+        if strategy_instance_id == "a":
+            raise RuntimeError("this bot's notice cannot be ended")
+        return end(repo, strategy_instance_id)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as broken:
+        broken.setattr(scheduled_close_module, "_end_missed_notice", not_for_bot_a)
+        await paper.round()
+
+    assert _notice(paper, "a") is not None and _notice(paper, "b") is None
+    await paper.round()
+    assert _notice(paper, "a") is None
+
+
 # ── a structure with a sold leg: shown at this level only, until the Clerk takes one ──
 
 
@@ -969,14 +1180,28 @@ def _with_its_leg_sold(entry: OptionEntryFacts) -> OptionEntryFacts:
     return entry.model_copy(update={"legs": (entry.the_leg.model_copy(update={"position": "short"}),)})
 
 
+def _its_leg_is_sold(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    """Every holding is read as a sold leg's would be: its entry's leg sold, and its position below zero.
+
+    No entry with a sold leg can be made through the Clerk yet, so both are
+    written by hand over the two reads the close is worked out from. The
+    books still hold the bought call, and that is what a close sells.
+    """
+    as_entered, as_held = scheduled_close_module.option_entry_of_order, reads.held_option_contracts
+    monkeypatch.setattr(
+        scheduled_close_module, "option_entry_of_order", lambda repo, ref: _with_its_leg_sold(as_entered(repo, ref))
+    )
+    monkeypatch.setattr(
+        reads, "held_option_contracts",
+        lambda conn: [position._replace(quantity=-position.quantity) for position in as_held(conn)],
+    )
+
+
 async def test_a_holding_whose_entry_has_a_sold_leg_owes_a_close_ten_minutes_before_every_sessions_close(
     paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
     await _holds_one_call(paper)
-    as_entered = scheduled_close_module.option_entry_of_order
-    monkeypatch.setattr(
-        scheduled_close_module, "option_entry_of_order", lambda repo, ref: _with_its_leg_sold(as_entered(repo, ref))
-    )
+    _its_leg_is_sold(paper, monkeypatch)
 
     def owes_on(day: date, *, closes_at: int) -> ScheduledClose:
         return ScheduledClose(
@@ -998,6 +1223,28 @@ async def test_a_holding_whose_entry_has_a_sold_leg_owes_a_close_ten_minutes_bef
     # An hour after the entry it has missed nothing: the session before it ended before it was held.
     [same_day] = held_contracts(paper.repo, et_minute_of_day_ms(date(2026, 9, 8), 13 * 60)).held
     assert same_day.missed is None and same_day.owed == owes_on(date(2026, 9, 8), closes_at=16)
+
+
+async def test_under_a_missed_close_of_a_contract_that_still_trades_the_owners_flatten_is_offered(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """A sold leg held through a session's close, on a holding whose sold leg is written by hand."""
+    await _holds_one_call(paper)
+    _its_leg_is_sold(paper, monkeypatch)
+    _until(paper, et_minute_of_day_ms(date(2026, 9, 9), 16 * 60) + 60_000)
+    await paper.round()
+    notice = _notice(paper)
+    assert notice is not None and "expired" not in notice["explanation"]
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+
+    _until(paper, et_minute_of_day_ms(date(2026, 9, 10), 10 * 60))
+    flatten = await _the_flatten_offered(paper)
+
+    # The notice is still open, and under it the owner can sell what the bot holds.
+    assert _notice(paper) is not None
+    assert flatten.available, (flatten.unavailable_reason_code, flatten.unavailable_reason)
+    assert flatten.reduction_plan is not None
+    assert [(leg.symbol, leg.quantity) for leg in flatten.reduction_plan.legs] == [(SYMBOL, 1.0)]
 
 
 @pytest.mark.parametrize(
@@ -1155,26 +1402,3 @@ async def test_a_bot_whose_entry_cannot_be_read_keeps_its_notice_and_the_other_b
     assert held_contracts(paper.repo, paper.clock()).unread == frozenset({"a"})
     assert done.closes.missed == (("b", SYMBOL),)
     assert _notice(paper, "a") is not None and paper.repo.last_custody_sequence() == written
-
-
-# ── the watchdog's rule holds for the close's own session only ───────────
-
-
-def test_a_scheduled_closes_own_retry_rule_holds_from_its_sessions_open_to_its_close_and_no_longer() -> None:
-    close = ScheduledCloseFacts(kind="sold_leg_close", due_ms=DUE, session_open_ms=OPEN)
-    its_order = EpisodeAttempt("its-order", True, True, False, None, False, regular_session_only=True, scheduled_close=close)
-    another = EpisodeAttempt("another-exits-order", True, True, False, None, True, regular_session_only=True)
-
-    assert scheduled_close_in_its_session((another, its_order), OPEN) == close
-    assert scheduled_close_in_its_session((another, its_order), CLOSE - 1) == close
-    # Not before its session opens, not from its close on, and not in a later session.
-    assert scheduled_close_in_its_session((another, its_order), OPEN - 1) is None
-    assert scheduled_close_in_its_session((another, its_order), CLOSE) is None
-    assert scheduled_close_in_its_session((another, its_order), MONDAY_AFTER_THE_OPEN) is None
-    # An episode none of whose orders is a scheduled close keeps the ordinary rule at any hour.
-    assert scheduled_close_in_its_session((another,), DUE) is None
-    # Of two sessions' closes, the later session's is the one carried on.
-    monday_open = et_minute_of_day_ms(date(2026, 9, 21), 9 * 60 + 30)
-    mondays = ScheduledCloseFacts(kind="sold_leg_close", due_ms=monday_open + 1, session_open_ms=monday_open)
-    its_next = EpisodeAttempt("mondays", True, True, False, None, False, regular_session_only=True, scheduled_close=mondays)
-    assert scheduled_close_in_its_session((its_order, its_next), MONDAY_AFTER_THE_OPEN) == mondays

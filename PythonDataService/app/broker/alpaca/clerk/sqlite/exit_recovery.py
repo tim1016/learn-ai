@@ -90,9 +90,14 @@ def recovery_with_freshness(
 def record_exit_recovery(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, uncertainty_id: str,
     result: RecoveryResult, evaluated_at_ms: int, pass_started_at_ms: int,
-    interval_ms: int = DEFAULT_RECOVERY_INTERVAL_MS,
+    interval_ms: int = DEFAULT_RECOVERY_INTERVAL_MS, spends_failure_time: bool = True,
 ) -> ExitRecoveryEvaluatedFacts | None:
-    """Commit one result only after the caller proves its complete pass succeeded."""
+    """Commit one result only after the caller proves its complete pass succeeded.
+
+    ``spends_failure_time`` is False for a failure under a rule with a limit
+    of its own: it is recorded as a failure and adds nothing to the time
+    counted toward giving up (ADR 0076).
+    """
     episode = repo.active_uncertainty(
         scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=strategy_instance_id,
@@ -111,7 +116,8 @@ def record_exit_recovery(
         if first_failure is None:
             first_failure = evaluated_at_ms
         if (
-            previous is not None and previous.outcome == "failure"
+            spends_failure_time
+            and previous is not None and previous.outcome == "failure"
             and previous.lease_owner == repo.lease_owner and previous.last_checked_at_ms is not None
             and checkpoint is not None
             and 0 <= pass_started_at_ms - checkpoint["completed_at_ms"] <= 2 * interval_ms

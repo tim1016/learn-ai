@@ -248,6 +248,22 @@ def test_no_close_is_owed_on_a_day_with_no_session(day: date) -> None:
     assert close_owed_at(_structure(*_WITH_A_SOLD_LEG), _TERMS, at_ms=scenes._at(day, 12, 0)) is None
 
 
+def test_the_day_a_close_is_owed_on_is_new_yorks_and_not_the_day_it_already_is_in_utc() -> None:
+    """Between eight in the evening and midnight in New York the UTC date is already the next day's."""
+    expiring_friday = _structure(("bought", "long", _FRIDAY))
+    thursday_at_nine_in_the_evening = scenes._at(_THURSDAY, 21, 0)
+    friday_half_past_midnight = scenes._at(_FRIDAY, 0, 30)
+
+    # Thursday evening it is still Thursday: that session has ended and Friday's close is not owed yet.
+    assert close_owed_at(expiring_friday, _TERMS, at_ms=thursday_at_nine_in_the_evening) is None
+    assert close_owed_at(_structure(*_WITH_A_SOLD_LEG), _TERMS, at_ms=thursday_at_nine_in_the_evening) is None
+    # From midnight in New York it is Friday, and the close of the session to come is the one owed.
+    owed = close_owed_at(expiring_friday, _TERMS, at_ms=friday_half_past_midnight)
+    assert owed is not None and owed.due_ms == scenes._at(_FRIDAY, 15, 15)
+    # Friday evening the session has ended, though in UTC it is already Saturday.
+    assert close_owed_at(expiring_friday, _TERMS, at_ms=scenes._at(_FRIDAY, 20, 30)) is None
+
+
 def test_a_bought_contract_expiring_another_day_owes_no_close_today() -> None:
     assert close_owed_at(_structure(("bought", "long", _NEXT_FRIDAY)), _TERMS, at_ms=scenes._at(_FRIDAY, 15, 30)) is None
 

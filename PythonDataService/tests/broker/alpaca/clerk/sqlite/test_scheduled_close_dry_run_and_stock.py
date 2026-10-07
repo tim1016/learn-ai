@@ -185,6 +185,82 @@ async def test_with_nothing_bid_a_dry_runs_close_fails_and_the_sessions_end_reco
     assert [fill for fill in dry_run.fills() if fill[1] == "sell"] == []
 
 
+async def test_a_running_dry_runs_failed_close_is_taken_again_thirty_seconds_apart_and_sells_once_a_bid_is_kept(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Nothing is bid at the due instant. A minute later a good quote is kept, and the close then sells."""
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+    first = await keeper.tick()
+    assert len(first.closes.taken) == 1 and dry_run.held() == {SYMBOL: 1.0}
+
+    # The keeper looks every five seconds. It takes the close again thirty seconds after the last try, no sooner.
+    taken_again_at: list[int] = []
+    wakes: list[int] = []
+    for _ in range(11):
+        dry_run.wait(5_000)
+        looked = await keeper.tick()
+        wakes.append(looked.wake_in_ms)
+        if looked.closes.taken:
+            taken_again_at.append(dry_run.clock() - DUE)
+    assert taken_again_at == [30_000] and dry_run.held() == {SYMBOL: 1.0}
+    # It sleeps no longer than to the next try: five seconds before one, it is told to wake in five.
+    assert wakes[4] == 5_000 and max(wakes) == IDLE_WAKE_MS
+
+    dry_run.wait(5_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    sold = await keeper.tick()
+
+    # Sold while the run is still the bot's, at the bid just kept. The close's own time is still the due time.
+    assert len(sold.closes.taken) == 1 and dry_run.held() == {} and dry_run.repo.active_run(SID) is not None
+    assert dry_run.fills()[-1] == (SYMBOL, "sell", 1.0, 2.10, 100)
+    [state] = scheduled_close_state(dry_run.repo, SID)
+    assert (state.standing, state.taken_at_ms) == (CloseStanding.FLAT, DUE)
+
+
+async def test_a_dry_runs_failed_close_is_tried_no_sooner_than_thirty_seconds_after_the_bots_own_failed_exit(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+    await keeper.tick()
+    dry_run.wait(20_000)
+    await dry_run.exit()
+    orders_made = dry_run.orders()
+
+    dry_run.wait(10_000)
+    thirty_after_the_close = await keeper.tick()
+    orders_then = dry_run.orders()
+    dry_run.wait(20_000)
+    thirty_after_the_bots_exit = await keeper.tick()
+
+    # Counted from the bot's newest exit, whoever made it: two tries are never closer than the wait.
+    assert thirty_after_the_close.closes.taken == () and orders_then == orders_made
+    assert len(thirty_after_the_bots_exit.closes.taken) == 1 and dry_run.orders() == orders_made + 1
+
+
+async def test_a_dry_runs_failed_close_is_not_taken_again_once_its_session_has_ended(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, CLOSE - 20_000)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+    await keeper.tick()
+
+    _until(dry_run, CLOSE + 10_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    after_the_close = [await keeper.tick() for _ in range(2)]
+
+    # Thirty seconds have passed and a bid is kept, but the session the close was owed in is over.
+    assert [looked.closes.taken for looked in after_the_close] == [(), ()]
+    assert dry_run.held() == {SYMBOL: 1.0} and _notice(dry_run) is not None
+
+
 async def test_a_dry_runs_keeper_drives_on_a_close_it_took_and_could_not_send_since_no_pass_will(
     dry_run: _DryRun,  # noqa: F811
 ) -> None:
@@ -294,8 +370,9 @@ async def test_a_stock_only_accounts_books_are_never_read_for_a_close_however_lo
         try:
             written = repo.last_custody_sequence()
             venue, intake = _FakeTradePort(), ReentrantAsyncLock()
-            keeper = DeadlineKeeper(repo=repo, trade=venue, off_loop=run_inline)
-            keeper.keep_scheduled_closes(intake=intake, pricing=UNPRICEABLE_RECOVERY)
+            keeper = DeadlineKeeper(
+                repo=repo, trade=venue, intake=intake, pricing=UNPRICEABLE_RECOVERY, off_loop=run_inline
+            )
             with _StepsCounted(repo) as the_round:
                 done = await keeper.tick()
             with _StepsCounted(repo) as the_step:
@@ -312,6 +389,72 @@ async def test_a_stock_only_accounts_books_are_never_read_for_a_close_however_lo
     assert costs[0] == costs[3_000]
     # A few dozen steps each: one look at the one position, one at the empty table of contracts, one at the notices.
     assert all(0 < steps < 200 for steps in costs[0]), costs[0]
+
+
+# ── an account that holds a contract ─────────────────────────────────────
+
+
+async def _buys_one_call(paper: PaperOptions, trip: int) -> None:  # noqa: F811
+    bought = await paper.resting("a")
+    await paper.stream_fill(bought, contracts=1, filled_in_all=1, price="1.94", execution_id=f"buy-{trip}")
+
+
+async def _sells_it_again(paper: PaperOptions, trip: int) -> None:  # noqa: F811
+    await paper.exit("a")
+    sold = [order.order_ref for order in paper.repo.orders_for_strategy("a") if order.role == "REDUCING"][-1]
+    await paper.stream_fill(sold, contracts=1, filled_in_all=1, price="2.10", execution_id=f"sell-{trip}")
+    await paper.pass_()
+    assert paper.held() == {}
+    # The account is read again, as its own cadence reads it, before the next entry.
+    paper.wait(1_000)
+    paper.account.account_observed_at_ms = paper.clock()
+    assert await paper.sync.tick() == "observed"
+
+
+async def test_a_bot_holding_a_contract_that_is_not_due_today_costs_the_same_few_steps_however_long_its_history(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Ten days before its expiry a held call owes nothing, and that is told from the position alone.
+
+    Counted in the steps SQLite's machine takes, which grow with every row
+    read. The bot holds one call after one round trip, and again after
+    twelve: the step and the read cost the same both times. The same bot is
+    then counted on its expiry day, when the entries behind its holding are
+    read: that day's cost does grow with its history, and is held under a
+    bound for each past entry.
+    """
+
+    async def step() -> ScheduledCloseRound:
+        return await drive_scheduled_closes(
+            paper.repo, trade=paper.venue, intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing
+        )
+
+    costs: dict[int, tuple[int, int]] = {}
+    for trip in range(13):
+        await _buys_one_call(paper, trip)
+        if trip in (1, 12):
+            with _StepsCounted(paper.repo) as the_step:
+                stepped = await step()
+            with _StepsCounted(paper.repo) as the_read:
+                read = held_contracts(paper.repo, paper.clock())
+            # Held, and passed over without one entry read: nothing is owed and nothing is to change.
+            assert stepped == ScheduledCloseRound()
+            assert (read.held, read.holders, read.unread) == ((), frozenset({"a"}), frozenset())
+            costs[trip] = (the_step.steps, the_read.steps)
+        if trip < 12:
+            await _sells_it_again(paper, trip)
+
+    assert costs[1] == costs[12]
+    assert all(0 < steps < 100 for steps in costs[12]), costs[12]
+
+    paper.clock.value = et_minute_of_day_ms(EXPIRY, 10 * 60)
+    paper.repo.revive_execution_lease()
+    with _StepsCounted(paper.repo) as on_its_day:
+        [due_today] = held_contracts(paper.repo, paper.clock()).held
+
+    # On its expiry day the close is owed, and the entries behind the holding are read to say so.
+    assert due_today.owed is not None and due_today.owed.due_ms == DUE
+    assert costs[12][1] < on_its_day.steps < 400 * 13, on_its_day.steps
 
 
 def _plan(repo: ClerkSqliteRepository, sql: str, params: tuple[object, ...] = ()) -> list[str]:

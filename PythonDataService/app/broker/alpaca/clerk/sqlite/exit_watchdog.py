@@ -72,16 +72,22 @@ notices to say that the contract expired: they were written while a retry or
 a flatten could still close it, and a stopped bot makes no later EXIT that
 would correct them.
 
-ADR 0076: an episode whose newest order is a scheduled close's -- the Clerk's
-own close of an option position on its expiry day, or of a structure with a
-sold leg before a session's close -- is retried on that close's own rule for
-as long as the session it was due in is open. It is ready again 30 seconds
-after it failed, not two minutes, and it is not counted out after three
-tries: the session's end is its limit, and a close its session ended on is
-recorded as missed (``scheduled_close``). Every check a re-drive passes still
-stands, and each re-drive made in that session records the same close on its
-own acceptance, so the next one reads it. From the next session on the
-episode follows the ordinary rule.
+ADR 0076: a holding whose scheduled close the Clerk has taken -- its own
+close of an option position on its expiry day, or of a structure with a sold
+leg before a session's close -- is retried on that close's own rule for as
+long as the session it was due in is open. The episode is ready again 30
+seconds after it failed, not two minutes. It is not counted out after three
+tries and the bot is not given up: the session's end is the limit, and a
+close its session ended on is recorded as missed (``scheduled_close``). The
+rule is read from the books once, in the scan
+(``scheduled_close.close_being_retried``): is the contract still held, does
+it owe a close in the session open now, and was that close accepted? It is
+not read from the orders the open notice names, so another exit of the bot
+that fails after the close leaves the rule standing. Every check a re-drive
+passes still stands. Each re-drive made under the rule records the same
+close on its own acceptance, and neither it nor the time it failed for is
+counted toward giving the bot up. So the next session starts from where the
+ordinary count stood before the close was taken.
 """
 
 from __future__ import annotations
@@ -142,6 +148,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.scheduled_close import SCHEDULED_CLOSE_RETRY_AFTER_MS, close_being_retried
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
@@ -161,15 +168,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
 )
 from app.broker.contract.models import OrderSide
 from app.broker.contract.ports import BrokerTradePort
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.schemas.market_liveness import MarketLivenessFact
-from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
-
-# How soon a failed scheduled close of an option position is ready to be sent again,
-# while the session it was due in is open (ADR 0076).
-SCHEDULED_CLOSE_RETRY_AFTER_MS = 30_000
 
 
 class BrokerSymbolView(NamedTuple):
@@ -210,7 +211,8 @@ class EpisodeAttempt:
     # Its EXIT sells only inside the regular session
     # (``ExitAcceptedFacts.regular_session_only``, #2607).
     regular_session_only: bool = False
-    # The scheduled close its EXIT is, or carries on (``ExitAcceptedFacts.scheduled_close``, ADR 0076).
+    # The scheduled close its EXIT is, or was made under the rule of
+    # (``ExitAcceptedFacts.scheduled_close``, ADR 0076). Such a try is not counted toward giving up.
     scheduled_close: ScheduledCloseFacts | None = None
 
 
@@ -238,10 +240,22 @@ class _StaleExit:
     # Why nothing is sent while ``stopped``, by the open ``EXIT_STUCK``
     # episode's cause (#2854).
     stopped_because: str = RECOVERY_STOPPED_AFTER_FAILURES
+    # The scheduled close the Clerk took of this holding in the session open at the scan, read
+    # from the books (ADR 0076). While it is set the close's own retry rule holds: ready again
+    # sooner, never counted out, never given up, and each re-drive records this same close.
+    scheduled_close: ScheduledCloseFacts | None = None
 
     @property
     def regular_failures(self) -> int:
-        return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
+        """Failed regular-session re-drives that count toward giving up.
+
+        A re-drive made under a scheduled close's own rule is not one of
+        them: that rule has the session's end for its limit (ADR 0076).
+        """
+        return sum(
+            a.redrive and a.submitted and a.failed and not a.extended_hours and a.scheduled_close is None
+            for a in self.attempts
+        )
 
     @property
     def regular_session_only(self) -> bool:
@@ -256,15 +270,6 @@ class _StaleExit:
     def closes_an_option(self) -> bool:
         """The position the episode names is in an option contract, read from the symbol it names."""
         return is_option_contract_symbol(self.cause.symbol.upper())
-
-    def scheduled_close_in_its_session(self, now_ms: int) -> ScheduledCloseFacts | None:
-        """The scheduled close this episode's orders carry on, while the session it was due in is open.
-
-        Read from the acceptances of the episode's own orders, the newest
-        session's when several are named. ``None`` for any other episode,
-        and from that session's close on: the ordinary rule then applies.
-        """
-        return scheduled_close_in_its_session(self.attempts, now_ms)
 
 
 @dataclass(frozen=True)
@@ -312,25 +317,6 @@ def episode_attempts(
     return redrives, tuple(attempts)
 
 
-def scheduled_close_in_its_session(
-    attempts: tuple[EpisodeAttempt, ...], now_ms: int
-) -> ScheduledCloseFacts | None:
-    """The scheduled close among ``attempts`` whose own session is open at ``now_ms``, or ``None``."""
-    scheduled = max(
-        (attempt.scheduled_close for attempt in attempts if attempt.scheduled_close is not None),
-        key=lambda close: close.session_open_ms,
-        default=None,
-    )
-    if scheduled is None:
-        return None
-    try:
-        session_close_ms = session_close_ms_utc(et_date_at_ms(scheduled.session_open_ms))
-    except LookupError:
-        # No session opened at the recorded instant: nothing to retry inside.
-        return None
-    return scheduled if scheduled.session_open_ms <= now_ms < session_close_ms else None
-
-
 def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
     policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
     stale = []
@@ -358,13 +344,21 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
         opposite = opposite_side_after_refusal(
             repo, facts.evidence_refs, symbol=cause.symbol, side=reducing_side(remaining),
         )
-        # A scheduled close is ready again sooner while its own session is open (ADR 0076).
-        its_own_rule = scheduled_close_in_its_session(attempts, repo.clock()) is not None
-        settled = episode["observed_at_ms"] + (SCHEDULED_CLOSE_RETRY_AFTER_MS if its_own_rule else policy.after_ms)
+        # A holding's scheduled close has a retry rule of its own while its session is open
+        # (ADR 0076). Asked of the books, and only for a position in an option contract.
+        scheduled = (
+            close_being_retried(repo, sid, cause.symbol, repo.clock())
+            if is_option_contract_symbol(cause.symbol.upper())
+            else None
+        )
+        settled = episode["observed_at_ms"] + (SCHEDULED_CLOSE_RETRY_AFTER_MS if scheduled is not None else policy.after_ms)
         send_now = opposite == "ended" or replacement_ready(repo, facts.evidence_refs)
         ready = repo.clock() if not stopped and send_now else settled
         because = RECOVERY_STOPPED_AFTER_FAILURES if stuck is None else recovery_stopped_because(stuck)
-        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled, because))
+        stale.append(_StaleExit(
+            sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled, because,
+            scheduled_close=scheduled,
+        ))
     return stale
 
 
@@ -437,7 +431,7 @@ def evaluate_recovery_wait(
         age_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
         # A scheduled close is not counted out while its own session is open: that session's end is its limit.
         counted_out = stale.regular_failures >= age_policy.max_count
-        if counted_out and stale.scheduled_close_in_its_session(now_ms) is None:
+        if counted_out and stale.scheduled_close is None:
             return RecoveryResult("failure", "EXIT_REDRIVES_EXHAUSTED", "Automatic regular-session exit attempts were exhausted.")
     elif stale.opposite_side is None:
         bound = max((a.valid_until_ms for a in stale.attempts if a.submitted and a.extended_hours
@@ -506,7 +500,7 @@ async def _recover_stale_exit(
             symbol=cause.symbol, decision_id=f"{redrive_decision_prefix(stale.episode_token)}{stale.redrives + 1}",
             entry_order_ref=target.order_ref, confirmed_shape=shape,
             regular_session_only=stale.regular_session_only,
-            scheduled_close=stale.scheduled_close_in_its_session(now_ms),
+            scheduled_close=stale.scheduled_close,
         )
         if accepted is None:
             return None
@@ -580,12 +574,14 @@ def commit_recovery_evaluations(
             repo, strategy_instance_id=stale.strategy_instance_id, uncertainty_id=stale.episode["uncertainty_id"],
             result=result, evaluated_at_ms=evaluation.evaluated_at_ms,
             pass_started_at_ms=pass_started_at_ms, interval_ms=interval_ms,
+            # Time a scheduled close fails for under its own rule is not time toward giving up (ADR 0076).
+            spends_failure_time=stale.scheduled_close is None,
         )
         if observation is not None:
             _say_if_the_contract_expired(repo, evaluation)
         if observation is None or result.outcome != "failure":
             continue
-        if stale.scheduled_close_in_its_session(evaluation.evaluated_at_ms) is not None:
+        if stale.scheduled_close is not None:
             # The Clerk does not give up on a scheduled close while its own session is open (ADR 0076).
             continue
         exhausted = stale.regular_failures >= policy.max_count

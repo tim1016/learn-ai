@@ -44,7 +44,7 @@ async def test_a_paper_accounts_clerk_is_composed_with_a_keeper_that_its_facade_
     try:
         keeper = runtime.deadline_keeper
         assert isinstance(keeper, DeadlineKeeper)
-        assert runtime.clerk._entry_deadline_nudge == keeper.nudge
+        assert runtime.clerk._entry_deadline_nudge is keeper._nudge
         # Acts through the Clerk's own guarded trade port, and is not started by the selection.
         assert keeper._trade is runtime.clerk._trade and keeper._task is None
 
@@ -113,7 +113,7 @@ async def test_a_dry_run_store_opened_to_operate_has_its_keeper_running(tmp_path
 async def test_a_paper_accounts_keeper_is_handed_the_scheduled_closes_with_the_clerks_own_lock_and_pricing(
     tmp_path: Path,
 ) -> None:
-    """Without them the keeper keeps entries only, and a close would wait for the pass."""
+    """A close taken under another lock could meet the bot's own exit and make a second closing order."""
     broker = _Broker()
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
 
@@ -124,9 +124,8 @@ async def test_a_paper_accounts_keeper_is_handed_the_scheduled_closes_with_the_c
 
     try:
         keeper = runtime.deadline_keeper
-        assert isinstance(keeper, DeadlineKeeper) and keeper._closes is not None
-        intake, pricing = keeper._closes
-        assert intake is runtime.clerk.intake and pricing == runtime.clerk.recovery_pricing
+        assert isinstance(keeper, DeadlineKeeper)
+        assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
     finally:
         await runtime.close()
 
@@ -144,8 +143,7 @@ async def test_a_dry_runs_keeper_is_handed_the_scheduled_closes_with_the_clerks_
 
     try:
         keeper = runtime.deadline_keeper
-        assert isinstance(keeper, DeadlineKeeper) and keeper._closes is not None
-        intake, pricing = keeper._closes
-        assert intake is runtime.clerk.intake and pricing == runtime.clerk.recovery_pricing
+        assert isinstance(keeper, DeadlineKeeper)
+        assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
     finally:
         await runtime.close()

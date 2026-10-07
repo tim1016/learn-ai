@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
     guard_broker_read_port,
 )
-from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper, Nudge
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
@@ -462,9 +462,10 @@ async def compose_repository_runtime(
         )
         # ADR 0076: only a Paper account's Clerk rests an option entry at the
         # broker, so only it keeps the deadline. A Live Shadow's and a Live
-        # Clerk take no option plan, and gain no new task until they do.
-        if authority_kind == "sqlite" and account_mode == "paper":
-            deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade)
+        # Clerk take no option plan, and gain no new task until they do. The
+        # keeper's nudge is made first: the facade is built with it, and the
+        # keeper with the facade's pricing.
+        keeper_nudge = Nudge() if authority_kind == "sqlite" and account_mode == "paper" else None
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
@@ -477,11 +478,14 @@ async def compose_repository_runtime(
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
             entry_reading=None if envelope_sync is None else envelope_sync.read_for_entry,
-            entry_deadline_nudge=None if deadline_keeper is None else deadline_keeper.nudge,
+            entry_deadline_nudge=keeper_nudge,
         )
-        if deadline_keeper is not None:
+        if keeper_nudge is not None:
             # A scheduled close is an EXIT, driven with the facade's one pricing seam (ADR 0076).
-            deadline_keeper.keep_scheduled_closes(intake=intake, pricing=facade.recovery_pricing)
+            deadline_keeper = DeadlineKeeper(
+                repo=repository, trade=guarded_trade, intake=intake, pricing=facade.recovery_pricing,
+                nudge=keeper_nudge,
+            )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
             publish if sweep_listener is None else (lambda result: sweep_listener(publish(result)))
