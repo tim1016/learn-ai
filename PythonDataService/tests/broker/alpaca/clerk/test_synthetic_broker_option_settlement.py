@@ -369,7 +369,9 @@ async def test_with_no_price_from_the_last_session_nothing_is_settled_and_the_si
     assert settled.settled == () and settled.waiting == {}
     assert await _held(simulation) == {CALL.occ_symbol: 1.0}
     [why] = settled.not_settled.values()
-    assert "SPY" in why and "last session" in why
+    # A bar that ended at the open is of the hours before the session. It is no old price of the session.
+    assert why.startswith("This simulation kept no price of SPY from the contract's last session")
+    assert "before the close" not in why
     # No promise that one will be kept: none will be, by itself.
     assert "until" not in why
 
@@ -531,6 +533,36 @@ async def _sells_to_open(simulation: SyntheticBroker, contract: OptionContract, 
         ),
         client_order_id=ref,
     )
+
+
+async def test_a_contract_whose_closing_price_is_still_awaited_is_not_let_go_of_at_a_word_and_one_with_none_is(
+    simulation: SyntheticBroker, clock: list[int]
+) -> None:
+    """While the wait lasts the closing bar may still land, so the owner's word ends nothing. Once the wait is
+    over and no price was kept, the same word takes the contract out of the ledger at nothing, once."""
+    await _buys(simulation, CALL, clock)
+    clock[0] = LAST_SESSION_CLOSE + SETTLEMENT_GRACE_MS - 1
+    word = OwnersWord(operator="the-owner", reason="The feed was down all day.", said_at_ms=clock[0])
+
+    early = simulation.settle_expired_options(after_ms=WINDOW, at_the_owners_word={CALL.occ_symbol: word})
+
+    assert (early.settled, early.not_settled) == ((), {})
+    assert early.waiting == {CALL.occ_symbol: LAST_SESSION_CLOSE + SETTLEMENT_GRACE_MS}
+    assert await _held(simulation) == {CALL.occ_symbol: 1.0}
+
+    clock[0] = LAST_SESSION_CLOSE + SETTLEMENT_GRACE_MS
+    late = simulation.settle_expired_options(after_ms=WINDOW, at_the_owners_word={CALL.occ_symbol: word})
+
+    [ending] = late.settled
+    assert (late.not_settled, late.waiting) == ({}, {})
+    assert (ending.record.outcome, ending.record.booked_price, ending.record.cash_cents) == (
+        SimulatedOutcome.ENDED_BY_OWNER, Decimal(0), 0
+    )
+    assert ending.record.owner == word and "kept no price of SPY" in ending.record.why_no_settlement
+    assert await _held(simulation) == {}
+    again = _settle(simulation)
+    assert [settlement.record for settlement in again.settled] == [ending.record]
+    assert (again.not_settled, again.waiting) == ({}, {})
 
 
 async def test_a_sold_contract_is_settled_in_no_way_and_is_not_let_go_of_at_a_word(

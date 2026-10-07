@@ -558,9 +558,9 @@ class SyntheticBroker(OptionOrdersNotTaken):
     ) -> None:
         """Take a contract with no price at the close out of the ledger, at nothing, at the owner's word.
 
-        One record, under the id a settlement of the contract would have
-        used. So the position is gone for good, and a price that turns up
-        later finds nothing to settle.
+        One record, named as a settlement of the contract is named. It
+        takes the whole position out, so a price that turns up later finds
+        nothing to settle.
         """
         assert self._ledger is not None
         symbol = contract.occ_symbol
