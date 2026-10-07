@@ -94,7 +94,8 @@ class _Box:
     bounds: Bounds
     # A date is not said in milliseconds: its range is said in dates, and what was typed is not said back.
     is_a_date: bool = False
-    # Why the range is what it is, where the term's own module gives a reason. Said after the range.
+    # Why the range ends where it does, where the term's own module gives a reason. Said after the range
+    # of a number above it: the reason is about the top, and says nothing true of a number below or between.
     why: str | None = None
 
 
@@ -188,7 +189,7 @@ def numbers_out_of_range(body: object, errors: Sequence[Mapping[str, Any]]) -> O
         else:
             said = number if list(where) == ["body", "legs"] else typed
             refused = out_of_range_sentence(box.what, said, box.bounds, fault)
-            sentences.append(refused if box.why is None else f"{refused} {box.why}")
+            sentences.append(f"{refused} {box.why}" if box.why is not None and fault == "above" else refused)
         if len(where) > 2 and where[1] == "legs" and isinstance(where[2], int):
             legs = body.get("legs")
             leg = legs[where[2]] if isinstance(legs, list) and where[2] < len(legs) else None

@@ -447,7 +447,7 @@ async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_
         pytest.param({"gap_limit_percent": "1e999000"}, ["1e999000", "100"], [], id="a gap limit that would write out to a megabyte"),
         pytest.param({"gap_limit_percent": "7.1234567"}, ["7.1234567", "0.000001"], [], id="a gap limit as fine"),
         pytest.param({"gap_limit_percent": "0"}, ["above 0"], [], id="a gap limit of nothing"),
-        pytest.param({"entry_wait_seconds": 0}, ["1 to 30", "50 seconds"], [], id="an entry that waits for nothing"),
+        pytest.param({"entry_wait_seconds": 0}, ["1 to 30"], [], id="an entry that waits for nothing"),
         pytest.param({"entry_wait_seconds": 31}, ["31", "1 to 30", "50 seconds"], [], id="a wait a second longer than an owner may choose"),
         pytest.param({"entry_wait_seconds": 300}, ["300", "1 to 30"], [], id="the longest wait the Clerk itself would take"),
         pytest.param({"entry_wait_seconds": 2.5}, ["2.5", "whole number"], [], id="an entry wait that is no whole number"),
@@ -923,6 +923,9 @@ async def test_the_entry_wait_is_offered_from_one_to_thirty_seconds_with_the_rea
     refused = await _post(app, {**_SPREAD, "entry_wait_seconds": 31})
     assert (taken.json()["state"], taken.json()["order_terms"]["entry_wait_seconds"]) == ("no_quote_source", 30)
     assert refused.json()["reason_code"] == _OUT_OF_RANGE and wait["range_reason"] in refused.json()["notice"]
+    # The reason is about the top of the range. A wait below it is refused without it.
+    below = await _post(app, {**_SPREAD, "entry_wait_seconds": 0})
+    assert below.json()["reason_code"] == _OUT_OF_RANGE and wait["range_reason"] not in below.json()["notice"]
 
 
 async def test_a_rule_with_no_bound_on_a_side_says_so_and_takes_a_number_of_any_size_there(

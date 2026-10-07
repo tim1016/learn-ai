@@ -51,8 +51,8 @@ def test_each_term_starts_inside_what_it_may_be() -> None:
 
 
 def test_an_owner_chooses_an_entry_wait_of_one_to_thirty_seconds_and_starts_at_twenty() -> None:
-    """Narrower than the Clerk's own second to five minutes: the bot waits fifty seconds at most to learn what
-    an entry came to, and a longer wait could be counted as entered while its order still rests."""
+    """Narrower than the Clerk's own second to five minutes: the bot has fifty seconds to learn what an entry
+    came to, and a longer wait would leave it too little time to take the entry."""
     offered = order_terms.ENTRY_WAIT_SECONDS
 
     assert (offered.lowest, offered.lowest_included, offered.highest, offered.highest_included) == (1, True, 30, True)
@@ -62,6 +62,8 @@ def test_an_owner_chooses_an_entry_wait_of_one_to_thirty_seconds_and_starts_at_t
     ]
     assert order_terms.entry_wait_seconds(CloseTerms()) == 20
     assert "50 seconds" in order_terms.ENTRY_WAIT_RANGE_REASON
+    # It promises nothing about an order that still rests: a wait that cannot fit is refused, not counted.
+    assert "counted as entered" not in order_terms.ENTRY_WAIT_RANGE_REASON
 
 
 def test_no_range_an_owner_is_offered_is_wider_than_what_the_clerk_takes() -> None:

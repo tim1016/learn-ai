@@ -29,11 +29,12 @@ Why each range is what it is:
   cancels the order as it is sent, and of five minutes at most, since the
   quotes it was priced from are seconds old.
 - An owner chooses an entry wait of thirty seconds at most, which is less
-  than the Clerk would take. The bot waits at most fifty seconds from its
-  decision bar's close to learn what an entry came to (#2913). An order
-  that rests longer than that could be counted as entered while it still
-  rests. Thirty seconds leaves the cancel time to be proven inside the
-  fifty.
+  than the Clerk would take. The bot's runner is to learn what an entry
+  came to within fifty seconds of its decision bar's close (#2913). The
+  wait, and the proof that what did not fill was cancelled, both come out
+  of that fifty, so a longer wait leaves less time to take the entry. At
+  thirty seconds an entry taken late in that time may not fit. The runner's
+  wait is not in this module and is not held to this range by a test yet.
 - A close lead is no longer than a whole regular session of 390 minutes,
   which nothing could be counted back from. The Clerk holds every term but
   the entry wait to that.
@@ -68,12 +69,12 @@ MAX_ORDER_TERM_MS = 390 * 60_000
 # ---- What an owner may choose ---------------------------------------------------------------------
 GAP_LIMIT_PERCENT = Bounds(Decimal(0), False, Decimal(100), True, _MILLIONTH)
 COST_LIMIT_PERCENT = Bounds(Decimal(0), True, Decimal(100), True, _MILLIONTH)
-# Thirty seconds at most, inside the fifty the bot waits to learn what an entry came to (#2913).
+# Thirty seconds at most, inside the fifty the bot's runner has to learn what an entry came to (#2913).
 ENTRY_WAIT_SECONDS = Bounds(Decimal(MIN_ENTRY_WAIT_MS // _MS_PER_SECOND), True, Decimal(30), True, _WHOLE)
-# Said to the owner beside the range, and with a wait that is refused for being outside it.
+# Said to the owner beside the range, and with a wait that is refused for being above it.
 ENTRY_WAIT_RANGE_REASON = (
-    "The bot waits at most 50 seconds from its decision bar's close to learn what an entry came to, so a "
-    "longer wait could be counted as entered while its order still rests."
+    "The bot has 50 seconds from its decision bar's close to learn what an entry came to, so a longer "
+    "wait would leave it too little time to take the entry."
 )
 EXPIRY_CLOSE_LEAD_MINUTES = Bounds(Decimal(0), True, Decimal(MAX_ORDER_TERM_MS // _MS_PER_MINUTE), True, _WHOLE)
 

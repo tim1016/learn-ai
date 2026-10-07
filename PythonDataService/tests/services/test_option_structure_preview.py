@@ -565,6 +565,10 @@ async def test_the_gap_is_held_to_the_limit_the_owner_set_and_not_to_the_one_the
     (by_gap,) = seen.entry_refusals
     assert "Leg 2" in by_gap.sentence and "1.82%" in by_gap.sentence
     assert "1.5%" in by_gap.sentence and "8%" not in by_gap.sentence
+    # A wide leg alone, with the cost inside its limit, is enough for the verdict to say an entry would be skipped.
+    assert seen.money is not None and seen.money.over_cost_limit is False
+    assert "would be skipped" in seen.verdict.resolves_sentence
+    assert "can be entered" not in seen.verdict.resolves_sentence
 
 
 async def test_an_entry_that_nothing_here_would_refuse_is_said_apart_from_one_that_would_be_skipped(
