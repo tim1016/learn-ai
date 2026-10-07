@@ -41,7 +41,14 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+)
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
+from app.options.contract import OptionContract
 from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
@@ -227,6 +234,11 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     # so advertising them was a false "yes" to a caller gating on capability.
     # Re-add each here in lockstep with its OrderType member + leg Literal.
     supported_order_types=("market", "limit"),
+    # Alpaca takes an option order and a multi-leg one, on paper and live
+    # ("Options Trading", "Options Level 3 Trading", read 2026-10-06). Whether
+    # this account is approved for them is the account's fact, not the broker's.
+    supports_option_orders=True,
+    supports_multi_leg_option_orders=True,
     data_feed="iex",
     bars_may_gap=True,
     max_stream_symbols=30,
@@ -525,6 +537,31 @@ class AlpacaBroker:
             return None
         return _mapped_evidence("asset", lambda: adapter.from_alpaca_asset(payload))
 
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        """Return Alpaca's listing of one option contract, or ``None`` when it lists none.
+
+        Asked by the contract's own symbol, from the Trading API's contract
+        reference; no market-data subscription is involved.
+        """
+        payload = await self._client.get_option_contract(contract.occ_symbol)
+        if payload is None:
+            return None
+        return _mapped_evidence("option contract", lambda: adapter.from_alpaca_option_contract(payload))
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        """Return the account's option buying power and approval levels.
+
+        Read from the same ``/v2/account`` answer as :meth:`get_account`, in
+        a request of its own, into a model of its own: the account snapshot a
+        route serves is unchanged.
+        """
+        payload = await self._client.get_account()
+        account_mode = self._resolved_settings().mode
+        return _mapped_evidence(
+            "account",
+            lambda: adapter.from_alpaca_option_account(payload, account_mode=account_mode),
+        )
+
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
         return _mapped_evidence("market clock", lambda: adapter.from_alpaca_clock(payload))
@@ -599,6 +636,69 @@ class AlpacaBroker:
         if payload is None:
             return None
         return adapter.from_alpaca_order(payload)
+
+    # ── Option orders (ADR 0076) ────────────────────────────────────────────
+
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder:
+        """Submit one option order, of one leg or several, and map Alpaca's answer.
+
+        The body goes out through the same ``submit_order`` a stock leg
+        uses: one ``POST /v2/orders``, retried only on a throttle, with an
+        unknown outcome marked for the lookup's visibility grace.
+
+        Once Alpaca has accepted the order, nothing here may say it was
+        refused. An answer that cannot be read, a multi-leg one without its
+        legs included, raises ``BrokerEvidenceUnavailable``: an unknown
+        outcome, which the caller settles through
+        :meth:`get_option_order_by_client_order_id`. No second request is
+        made here, because its failure could read as the order's.
+        """
+        body = adapter.to_alpaca_option_order_request(order, client_order_id=client_order_id)
+        payload = await self._client.submit_order(body)
+        return _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+
+    async def get_option_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOptionOrder | None:
+        """Look an option order up by the ``client_order_id`` it was sent under.
+
+        The parent is read exactly as a stock order is, so the same 404
+        discipline and the same visibility grace after an unknown submit
+        apply. Alpaca documents no way to ask this read for nested legs, so
+        a multi-leg parent that comes back without them is read again by its
+        broker order id, which has one.
+        """
+        payload = await self._client.get_order_by_client_order_id(client_order_id)
+        if payload is None:
+            return None
+        if adapter.alpaca_multi_leg_order_lacks_legs(payload):
+            payload = await self._nested_order(payload)
+        return _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        """Look an option order up by its broker-assigned id, legs nested under a multi-leg parent.
+
+        ``order_id`` is the parent's. ``None`` only on a definitive 404.
+        """
+        payload = await self._client.get_nested_order_by_broker_order_id(order_id)
+        if payload is None:
+            return None
+        return _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+
+    async def _nested_order(self, parent: Mapping[str, Any]) -> Any:
+        """Read a multi-leg parent again, by its own id, with its legs nested."""
+        order_id = _mapped_evidence("option order", lambda: adapter.parse_order_link_id(parent.get("id")))
+        nested = None if order_id is None else await self._client.get_nested_order_by_broker_order_id(order_id)
+        if nested is None:
+            # Alpaca just answered for this order; that it now has no id, or none Alpaca knows, proves nothing.
+            raise BrokerEvidenceUnavailable(
+                "Alpaca answered for a multi-leg order but would not show its legs.",
+                broker=BROKER_ID,
+                detail="The order was found by its client order id and not by its own broker order id.",
+            )
+        return nested
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

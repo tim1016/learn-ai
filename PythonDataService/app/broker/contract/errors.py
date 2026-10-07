@@ -112,6 +112,19 @@ class BrokerOrderNotPermitted(BrokerOrderRejected):
     """
 
 
+class BrokerOptionsNotSupported(BrokerError):
+    """This broker was asked for something in options it does not do (ADR 0076).
+
+    An option order, a lookup of one, or its contract reference. Its
+    capabilities already say so (``supports_option_orders``,
+    ``supports_multi_leg_option_orders``); this is the refusal for a caller
+    that asked anyway. Definitive: nothing was sent and no order exists, so
+    it is never the uncertain :class:`BrokerUnavailable`. Surfaced as ``501``.
+    """
+
+    http_status: ClassVar[int] = 501
+
+
 class BrokerUnavailable(BrokerError):
     """Vendor is unreachable or returned a server error (5xx / network).
 
