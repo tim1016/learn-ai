@@ -127,6 +127,13 @@ def test_path_objective_reads_an_overflow_as_undefined_never_as_infinite(objecti
     assert not (path_worst_fall(runaway) <= 0.20).any()
 
 
+def test_path_objective_reads_a_profit_too_large_for_a_float_as_undefined() -> None:
+    path = np.array([[1e152, 1e152]])  # a finite net return of 1e304, whose profit on the capital is not
+    assert np.isfinite(path_net_return(path)[0])
+    profit = path_objective(path, "net_profit", CAPITAL)
+    assert np.isnan(profit[0]) and not (profit > 0).any()
+
+
 def test_path_objective_refuses_an_objective_it_cannot_resample() -> None:
     with pytest.raises(ValueError, match="sortino"):
         path_objective(np.array([[0.01, 0.02]]), "sortino", CAPITAL)  # type: ignore[arg-type]

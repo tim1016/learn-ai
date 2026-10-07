@@ -186,7 +186,8 @@ def path_objective(returns: np.ndarray, objective: RankingMeasure, capital: floa
     if objective == "total_return_pct":
         return net
     if objective == "net_profit":
-        return capital * net
+        with np.errstate(over="ignore"):
+            return _defined(capital * net)
     raise ValueError(f"the objective {objective!r} has no resampled form")
 
 
