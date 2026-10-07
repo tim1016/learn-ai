@@ -482,6 +482,9 @@ def test_every_registered_reason_declares_its_lane_quiet_answer() -> None:
         UNFOLDABLE_BROKER_ORDER_REASON_CODE: False,
         "STREAM_HEALTH_HOLD": False,
         LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: False,
+        # #2913: an option position the Clerk meant to close is still open. It ends by itself, on
+        # the pass a draining lane still runs, once the bot holds none of the contracts it names.
+        "SCHEDULED_CLOSE_MISSED": True,
     }
 
 

@@ -1522,6 +1522,22 @@ class SqliteAlpacaClerkFacade:
                 exc_info=(type(error), error, error.__traceback__),
             )
 
+    async def begin_closing(self) -> None:
+        """Say that this Clerk is closing: from here on it takes no scheduled close (ADR 0076).
+
+        Said under the intake fence, the lock a scheduled close is accepted
+        under. So a close is either accepted before this, and is finished or
+        left for the next start as every unfinished EXIT is, or it is asked
+        after this and not taken. The keeper's task and the account's
+        reconciliation loop both go on while the Clerk closes, and each asks.
+        """
+        try:
+            async with self._intake:
+                self._repo.begin_closing()
+        except IntakeFencePoisonedError:
+            # A poisoned fence takes no run again, so nothing can be accepted under it: said without it.
+            self._repo.begin_closing()
+
     async def drain_effects(self) -> None:
         """Finish accepted broker custody before the repository is closed."""
         pending = tuple(self._effect_tasks.values())

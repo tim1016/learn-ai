@@ -32,7 +32,10 @@ already died (grill 2026-09-29, decision 9). On the pass at or after the end:
    a SELL owes has its sale accepted.
 
 This is the owner-scheduled exception to #2504's Q3 ("a dead run never sells
-by itself"): only the sale the owner scheduled is made for a run that died.
+by itself"): of a position in shares, only the sale the owner scheduled is
+made for a run that died. An option position has one more, owed by what is
+held and not by this schedule: its scheduled close (``scheduled_close``,
+ADR 0076).
 
 The worklist is the runner's: the bots' ends live in their desired state,
 which only the runner reads and writes. The runner and the Clerk share one

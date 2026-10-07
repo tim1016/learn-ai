@@ -232,6 +232,11 @@ async def _open(tmp_path: Path, clock: _TestClock, binding: BrokerBotBinding) ->
     await authority.ensure_recoverable()
     runtime = get_clerk_runtime(binding.sealed_account_id or "")
     assert runtime is not None and runtime.clerk is not None
+    # Time here is a clock the test moves, and the account's own keeper sleeps on the real one: left
+    # running, it would act at whatever moment of the scene its task next got a turn. Its task is
+    # stopped, and a test that wants a round of it asks for one (``deadline_keeper.tick``).
+    assert runtime.deadline_keeper is not None
+    await runtime.deadline_keeper.stop()
     return _DryRun(clerk=runtime.clerk, clock=clock, authority=authority, binding=binding, artifacts_root=tmp_path)
 
 
