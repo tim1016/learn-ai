@@ -13,6 +13,7 @@ lock is taken, and no row of the custody log is read however long it is.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -242,6 +243,33 @@ async def test_a_dry_runs_failed_close_is_tried_no_sooner_than_thirty_seconds_af
     # Counted from the bot's newest exit, whoever made it: two tries are never closer than the wait.
     assert thirty_after_the_close.closes.taken == () and orders_then == orders_made
     assert len(thirty_after_the_bots_exit.closes.taken) == 1 and dry_run.orders() == orders_made + 1
+
+
+@pytest.mark.parametrize("the_pass_starts_first", [False, True], ids=["the keeper first", "the pass first"])
+@pytest.mark.parametrize("still_nothing_bid", [False, True], ids=["a bid is kept", "still nothing bid"])
+async def test_a_pass_and_the_keeper_in_the_moment_a_dry_runs_failed_close_is_ready_make_one_try(
+    dry_run: _DryRun, still_nothing_bid: bool, the_pass_starts_first: bool  # noqa: F811
+) -> None:
+    """An event starts a pass just as the keeper's retry comes due. The pass's watchdog retries a failed close too."""
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+    await keeper.tick()
+    orders_made = dry_run.orders()
+    dry_run.wait(30_000)
+    if not still_nothing_bid:
+        _hand_over(dry_run, "2.10", "2.16")
+
+    both = [keeper.tick(), dry_run.clerk.reconcile_once()]
+    await asyncio.gather(*(reversed(both) if the_pass_starts_first else both))
+
+    # One more order, whoever took it. With a bid it sold the one contract, once.
+    assert dry_run.orders() == orders_made + 1
+    sold = [fill for fill in dry_run.fills() if fill[1] == "sell"]
+    assert (sold, dry_run.held()) == (
+        ([], {SYMBOL: 1.0}) if still_nothing_bid else ([(SYMBOL, "sell", 1.0, 2.10, 100)], {})
+    )
 
 
 async def test_a_failed_close_read_as_ready_is_not_taken_again_once_the_bot_has_made_a_newer_exit(
