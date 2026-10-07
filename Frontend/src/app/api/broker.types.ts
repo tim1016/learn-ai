@@ -6244,7 +6244,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** AbsoluteExpiry */
+        /**
+         * AbsoluteExpiry
+         * @description One named expiry date, as its 16:00 New York anchor.
+         */
         AbsoluteExpiry: {
             /** Expiration Ms */
             expiration_ms: number;
@@ -6256,14 +6259,7 @@ export interface components {
         };
         /**
          * AbsoluteStrike
-         * @description Broker-derived strike — Slice 1F (#605).
-         *
-         *     Emitted by the cockpit's option-leg-picker after the operator drills
-         *     down through ``broker.expirations`` → ``broker.strikes`` → call/put
-         *     and ``broker.searchOptionContracts`` qualifies the choice. The
-         *     strike is the concrete number IBKR listed; ``run_id`` hashes the
-         *     operator's exact pick, not a relative selector that might resolve
-         *     differently at consumption time.
+         * @description One named strike, in dollars.
          */
         AbsoluteStrike: {
             /**
@@ -6508,13 +6504,7 @@ export interface components {
         };
         /**
          * ActionPlan
-         * @description Operator-declared instrument plan, hashed into ``run_id``.
-         *
-         *     Slice 1A shipped the empty-plan envelope; Slice 1B added stock entry
-         *     legs + ``close_leg`` exits; Slice 1C adds option entry legs and the
-         *     strike / expiry selector unions. Hard schema rejections live here.
-         *     Parity *warnings* (asymmetric structures, etc.) are computed
-         *     separately by ``parity_diagnostics`` in Slice 1D (#597).
+         * @description Operator-declared instrument plan, hashed into ``run_id``. Hard schema rejections live here.
          */
         ActionPlan: {
             /** On Enter */
@@ -7239,7 +7229,10 @@ export interface components {
             /** Trading Date */
             trading_date: string | null;
         };
-        /** AtmOffsetStrike */
+        /**
+         * AtmOffsetStrike
+         * @description A whole number of listed strikes above (positive) or below the money.
+         */
         AtmOffsetStrike: {
             /** Offset */
             offset: number;
@@ -7249,7 +7242,10 @@ export interface components {
              */
             selector: "atm_offset";
         };
-        /** AtmStrike */
+        /**
+         * AtmStrike
+         * @description The strike at the money.
+         */
         AtmStrike: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -11427,6 +11423,27 @@ export interface components {
             signal: "ENTER" | "EXIT" | "HOLD";
             /** Values */
             values: components["schemas"]["ExplainedValueView"][];
+        };
+        /**
+         * DeltaStrike
+         * @description The strike whose delta is nearest a target.
+         *
+         *     ``target`` is the size of the delta, a positive number below one. The
+         *     leg's call or put gives it its sign: 0.30 on a put means a delta of -0.30.
+         */
+        DeltaStrike: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            selector: "delta";
+            /** Target */
+            target: number;
+            /**
+             * Tolerance Delta
+             * @default 0.05
+             */
+            tolerance_delta?: number;
         };
         /**
          * DeploySubmissionUncommitted
@@ -18482,6 +18499,26 @@ export interface components {
             strike: number;
         };
         /**
+         * LegDistanceStrike
+         * @description A strike a signed dollar distance above (positive) or below another leg's strike.
+         */
+        LegDistanceStrike: {
+            /** Dollars */
+            dollars: number;
+            /** Leg Id */
+            leg_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            selector: "leg_distance";
+            /**
+             * Tolerance Dollars
+             * @default 0
+             */
+            tolerance_dollars?: number;
+        };
+        /**
          * LiveEnvelopePayload
          * @description The four current account bounds; retired session counts are rejected.
          *
@@ -18935,7 +18972,10 @@ export interface components {
          * @enum {string}
          */
         MarketStatusSource: "ibkr.market_data.status" | "alpaca.stock_data.status";
-        /** MinDteExpiry */
+        /**
+         * MinDteExpiry
+         * @description The nearest listed expiry at least ``days`` calendar days out.
+         */
         MinDteExpiry: {
             /** Days */
             days: number;
@@ -19215,7 +19255,14 @@ export interface components {
             /** Route */
             route: string;
         };
-        /** NearestWeeklyExpiry */
+        /**
+         * NearestWeeklyExpiry
+         * @description The nearest listed expiry after the decision's date that falls on the last session of its week.
+         *
+         *     Never the decision date's own expiry, which is ``same_day``'s to pick: on
+         *     a Friday this is the following week's. A monthly or quarterly expiry that
+         *     falls on such a day counts.
+         */
         NearestWeeklyExpiry: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -19552,7 +19599,7 @@ export interface components {
          */
         OptionEntryLeg: {
             /** Expiry */
-            expiry: components["schemas"]["MinDteExpiry"] | components["schemas"]["NearestWeeklyExpiry"] | components["schemas"]["AbsoluteExpiry"];
+            expiry: components["schemas"]["MinDteExpiry"] | components["schemas"]["NearestWeeklyExpiry"] | components["schemas"]["SameDayExpiry"] | components["schemas"]["AbsoluteExpiry"];
             instrument: components["schemas"]["OptionInstrument"];
             /** Leg Id */
             leg_id: string;
@@ -19569,7 +19616,7 @@ export interface components {
              */
             right: "call" | "put";
             /** Strike */
-            strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"];
+            strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
         };
         /** OptionInstrument */
         OptionInstrument: {
@@ -20112,6 +20159,24 @@ export interface components {
             pnl: number;
             /** Price */
             price: number;
+        };
+        /**
+         * PercentStrike
+         * @description A strike a signed percent of the underlying's price above (positive) or below that price.
+         */
+        PercentStrike: {
+            /** Percent */
+            percent: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            selector: "percent";
+            /**
+             * Tolerance Percent
+             * @default 0.5
+             */
+            tolerance_percent?: number;
         };
         /** PerformanceHorizonResponse */
         PerformanceHorizonResponse: {
@@ -22260,6 +22325,17 @@ export interface components {
             strategy_instance_id: string | null;
             /** Version Token */
             version_token: string;
+        };
+        /**
+         * SameDayExpiry
+         * @description The expiry on the decision's own date.
+         */
+        SameDayExpiry: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            selector: "same_day";
         };
         /**
          * SanitizationSummary

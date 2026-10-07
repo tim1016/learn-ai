@@ -83,11 +83,10 @@ Decision (a) said an expiry is 16:00 ET of its date and left every caller to bui
 - **The anchor names the date. It is not a session time.** On a half day it is still 16:00, three hours after the session closes. When a contract stops trading on its expiry day comes from the calendar (decision (b)), and from nowhere else.
 - A refusal says what the instant is in New York and proposes no other date. An expiry stored the old way falls on the evening before the date it meant, so a suggested anchor would name the wrong day's contracts.
 - IBKR's `YYYYMMDD` expiries and the options companion now use the anchor. The IBKR viewer routes refuse an `expiry_ms` that is not one, and the viewer pages render it in `date-et` mode. The `date-utc` display mode existed only for the midnight-UTC form and is gone.
-- An option contract's identity (`app/options/contract.py`) carries its expiry as the anchor.
+- An option contract's identity (`app/options/contract.py`) and the Action Plan's fixed-date expiry (`AbsoluteExpiry.expiration_ms`) carry the anchor.
 
 **Not yet moved.** None of these is an accepted deviation under (f); each is work left.
 
-- The Action Plan's fixed-date expiry (`AbsoluteExpiry.expiration_ms`) takes any instant. It is held to the anchor with the plan's other option rules (#2913).
 - The portfolio scenario's option position (`OptionPosition.expiration_ms`, `app/models/portfolio.py`) takes any instant (#2934).
 - The options companion counts time to expiry to the anchor itself, as it always has, so on a half day a same-day contract is given three hours it does not have (#2934).
 - The Polygon research pages (Options Lab, Pricing Lab, Strategy Builder) carry expiry as a `YYYY-MM-DD` string and count time to expiry in whole days (#2934).

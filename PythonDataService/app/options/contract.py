@@ -41,7 +41,7 @@ _RIGHT_OF_LETTER: dict[str, OptionRight] = {letter: right for right, letter in _
 # The symbol writes the year in two digits and the strike in eight.
 _FIRST_SYMBOL_YEAR = 2000
 _LAST_SYMBOL_YEAR = 2099
-_MAX_STRIKE_THOUSANDTHS = 99_999_999
+MAX_STRIKE_THOUSANDTHS = 99_999_999
 _THOUSANDTHS_PER_DOLLAR = 1000
 # How large and how fine a number is read at all before it is judged as a strike.
 _MAX_STRIKE_DIGITS = 12
@@ -74,6 +74,17 @@ def strike_thousandths(strike: Decimal | int | float | str) -> int:
     return thousandths
 
 
+def require_symbol_expiry(expiry_ms: int) -> int:
+    """An expiry whose year a contract symbol's two digits can write; refuses any other."""
+    expiry_date = option_expiry_date(expiry_ms)
+    if not _FIRST_SYMBOL_YEAR <= expiry_date.year <= _LAST_SYMBOL_YEAR:
+        raise ValueError(
+            f"an option symbol writes its expiry year in two digits; {expiry_date.isoformat()} is outside "
+            f"{_FIRST_SYMBOL_YEAR}-{_LAST_SYMBOL_YEAR}"
+        )
+    return expiry_ms
+
+
 class OptionContract(BaseModel):
     """One listed option contract: what an order names and a position holds."""
 
@@ -85,18 +96,12 @@ class OptionContract(BaseModel):
     # The expiry date's 16:00 New York anchor (ADR 0022 (i)).
     expiry_ms: OptionExpiryMs
     right: OptionRight
-    strike_thousandths: Annotated[int, Field(gt=0, le=_MAX_STRIKE_THOUSANDTHS)]
+    strike_thousandths: Annotated[int, Field(gt=0, le=MAX_STRIKE_THOUSANDTHS)]
 
     @field_validator("expiry_ms")
     @classmethod
     def _an_expiry_the_symbol_can_write(cls, expiry_ms: int) -> int:
-        expiry_date = option_expiry_date(expiry_ms)
-        if not _FIRST_SYMBOL_YEAR <= expiry_date.year <= _LAST_SYMBOL_YEAR:
-            raise ValueError(
-                f"an option symbol writes its expiry year in two digits; {expiry_date.isoformat()} is outside "
-                f"{_FIRST_SYMBOL_YEAR}-{_LAST_SYMBOL_YEAR}"
-            )
-        return expiry_ms
+        return require_symbol_expiry(expiry_ms)
 
     @classmethod
     def of(

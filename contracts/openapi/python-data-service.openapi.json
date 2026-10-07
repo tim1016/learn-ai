@@ -2,8 +2,12 @@
   "components": {
     "schemas": {
       "AbsoluteExpiry": {
+        "additionalProperties": false,
+        "description": "One named expiry date, as its 16:00 New York anchor.",
         "properties": {
           "expiration_ms": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
             "title": "Expiration Ms",
             "type": "integer"
           },
@@ -20,7 +24,8 @@
         "type": "object"
       },
       "AbsoluteStrike": {
-        "description": "Broker-derived strike \u2014 Slice 1F (#605).\n\nEmitted by the cockpit's option-leg-picker after the operator drills\ndown through ``broker.expirations`` \u2192 ``broker.strikes`` \u2192 call/put\nand ``broker.searchOptionContracts`` qualifies the choice. The\nstrike is the concrete number IBKR listed; ``run_id`` hashes the\noperator's exact pick, not a relative selector that might resolve\ndifferently at consumption time.",
+        "additionalProperties": false,
+        "description": "One named strike, in dollars.",
         "properties": {
           "selector": {
             "const": "absolute",
@@ -776,7 +781,7 @@
       },
       "ActionPlan": {
         "additionalProperties": false,
-        "description": "Operator-declared instrument plan, hashed into ``run_id``.\n\nSlice 1A shipped the empty-plan envelope; Slice 1B added stock entry\nlegs + ``close_leg`` exits; Slice 1C adds option entry legs and the\nstrike / expiry selector unions. Hard schema rejections live here.\nParity *warnings* (asymmetric structures, etc.) are computed\nseparately by ``parity_diagnostics`` in Slice 1D (#597).",
+        "description": "Operator-declared instrument plan, hashed into ``run_id``. Hard schema rejections live here.",
         "properties": {
           "on_enter": {
             "items": {
@@ -2681,6 +2686,8 @@
         "type": "object"
       },
       "AtmOffsetStrike": {
+        "additionalProperties": false,
+        "description": "A whole number of listed strikes above (positive) or below the money.",
         "properties": {
           "offset": {
             "title": "Offset",
@@ -2699,6 +2706,8 @@
         "type": "object"
       },
       "AtmStrike": {
+        "additionalProperties": false,
+        "description": "The strike at the money.",
         "properties": {
           "selector": {
             "const": "atm",
@@ -13099,6 +13108,35 @@
           "checks"
         ],
         "title": "DecisionExplanationView",
+        "type": "object"
+      },
+      "DeltaStrike": {
+        "additionalProperties": false,
+        "description": "The strike whose delta is nearest a target.\n\n``target`` is the size of the delta, a positive number below one. The\nleg's call or put gives it its sign: 0.30 on a put means a delta of -0.30.",
+        "properties": {
+          "selector": {
+            "const": "delta",
+            "title": "Selector"
+          },
+          "target": {
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Target",
+            "type": "number"
+          },
+          "tolerance_delta": {
+            "default": 0.05,
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Tolerance Delta",
+            "type": "number"
+          }
+        },
+        "required": [
+          "selector",
+          "target"
+        ],
+        "title": "DeltaStrike",
         "type": "object"
       },
       "DeploySubmissionUncommitted": {
@@ -30862,6 +30900,38 @@
         "title": "LegDiagnostic",
         "type": "object"
       },
+      "LegDistanceStrike": {
+        "additionalProperties": false,
+        "description": "A strike a signed dollar distance above (positive) or below another leg's strike.",
+        "properties": {
+          "dollars": {
+            "title": "Dollars",
+            "type": "number"
+          },
+          "leg_id": {
+            "pattern": "^[a-z0-9_]{1,32}$",
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "selector": {
+            "const": "leg_distance",
+            "title": "Selector"
+          },
+          "tolerance_dollars": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Tolerance Dollars",
+            "type": "number"
+          }
+        },
+        "required": [
+          "selector",
+          "leg_id",
+          "dollars"
+        ],
+        "title": "LegDistanceStrike",
+        "type": "object"
+      },
       "LiveEnvelopePayload": {
         "additionalProperties": false,
         "description": "The four current account bounds; retired session counts are rejected.\n\nHistorical revisions retain their full hash-bearing representation in storage.\nThe configuration API projects only the fields a trader can currently edit.",
@@ -32259,6 +32329,8 @@
         "type": "string"
       },
       "MinDteExpiry": {
+        "additionalProperties": false,
+        "description": "The nearest listed expiry at least ``days`` calendar days out.",
         "properties": {
           "days": {
             "minimum": 1.0,
@@ -32895,6 +32967,8 @@
         "type": "object"
       },
       "NearestWeeklyExpiry": {
+        "additionalProperties": false,
+        "description": "The nearest listed expiry after the decision's date that falls on the last session of its week.\n\nNever the decision date's own expiry, which is ``same_day``'s to pick: on\na Friday this is the following week's. A monthly or quarterly expiry that\nfalls on such a day counts.",
         "properties": {
           "selector": {
             "const": "nearest_weekly",
@@ -33730,6 +33804,7 @@
         "type": "object"
       },
       "OptionEntryLeg": {
+        "additionalProperties": false,
         "description": "Option ``ActionEntity`` \u2014 Slice 1C.\n\nAdds ``right``, ``strike``, ``expiry`` on top of the common entry-leg\nfields. ``leg_id`` is the same stable identity stock legs carry \u2014\neach option leg of a multi-leg structure resolves to its own\n``conId`` at consumption time, even when several legs share the same\nexpiry-selector inputs.",
         "properties": {
           "expiry": {
@@ -33737,7 +33812,8 @@
               "mapping": {
                 "absolute": "#/components/schemas/AbsoluteExpiry",
                 "min_dte": "#/components/schemas/MinDteExpiry",
-                "nearest_weekly": "#/components/schemas/NearestWeeklyExpiry"
+                "nearest_weekly": "#/components/schemas/NearestWeeklyExpiry",
+                "same_day": "#/components/schemas/SameDayExpiry"
               },
               "propertyName": "selector"
             },
@@ -33747,6 +33823,9 @@
               },
               {
                 "$ref": "#/components/schemas/NearestWeeklyExpiry"
+              },
+              {
+                "$ref": "#/components/schemas/SameDayExpiry"
               },
               {
                 "$ref": "#/components/schemas/AbsoluteExpiry"
@@ -33788,7 +33867,10 @@
               "mapping": {
                 "absolute": "#/components/schemas/AbsoluteStrike",
                 "atm": "#/components/schemas/AtmStrike",
-                "atm_offset": "#/components/schemas/AtmOffsetStrike"
+                "atm_offset": "#/components/schemas/AtmOffsetStrike",
+                "delta": "#/components/schemas/DeltaStrike",
+                "leg_distance": "#/components/schemas/LegDistanceStrike",
+                "percent": "#/components/schemas/PercentStrike"
               },
               "propertyName": "selector"
             },
@@ -33801,6 +33883,15 @@
               },
               {
                 "$ref": "#/components/schemas/AbsoluteStrike"
+              },
+              {
+                "$ref": "#/components/schemas/DeltaStrike"
+              },
+              {
+                "$ref": "#/components/schemas/LegDistanceStrike"
+              },
+              {
+                "$ref": "#/components/schemas/PercentStrike"
               }
             ],
             "title": "Strike"
@@ -33819,6 +33910,7 @@
         "type": "object"
       },
       "OptionInstrument": {
+        "additionalProperties": false,
         "properties": {
           "kind": {
             "const": "option",
@@ -34928,6 +35020,35 @@
           "pnl"
         ],
         "title": "PayoffPoint",
+        "type": "object"
+      },
+      "PercentStrike": {
+        "additionalProperties": false,
+        "description": "A strike a signed percent of the underlying's price above (positive) or below that price.",
+        "properties": {
+          "percent": {
+            "exclusiveMinimum": -100.0,
+            "maximum": 1000.0,
+            "title": "Percent",
+            "type": "number"
+          },
+          "selector": {
+            "const": "percent",
+            "title": "Selector"
+          },
+          "tolerance_percent": {
+            "default": 0.5,
+            "exclusiveMinimum": 0.0,
+            "maximum": 100.0,
+            "title": "Tolerance Percent",
+            "type": "number"
+          }
+        },
+        "required": [
+          "selector",
+          "percent"
+        ],
+        "title": "PercentStrike",
         "type": "object"
       },
       "PerformanceHorizonResponse": {
@@ -40672,6 +40793,21 @@
           "legs"
         ],
         "title": "SafeFlattenPlanResponse",
+        "type": "object"
+      },
+      "SameDayExpiry": {
+        "additionalProperties": false,
+        "description": "The expiry on the decision's own date.",
+        "properties": {
+          "selector": {
+            "const": "same_day",
+            "title": "Selector"
+          }
+        },
+        "required": [
+          "selector"
+        ],
+        "title": "SameDayExpiry",
         "type": "object"
       },
       "SanitizationSummary": {
