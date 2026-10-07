@@ -11,7 +11,8 @@ AM-004  daily time decay with no dividend: the ``BinomialLRVanillaEngine``
 AM-005  daily time decay with cash dividends, and one group with none: the
         same difference from ``FdBlackScholesVanillaEngine``. A stock that
         goes ex inside the day is priced a day later at its price less that
-        dividend, with the dividend gone from the schedule.
+        dividend, with the dividend gone from the schedule. One group goes ex
+        on day 2, a day ahead of the later price.
 
 QuantLib counts time in whole days. A time to expiry that is not a whole
 number of days is the same problem restated over the next whole number up:
@@ -80,13 +81,16 @@ DECAY_SPANS: list[tuple[str, int]] = [
     ("1d15min", DAY_MS + 15 * 60_000),
 ]
 # (label, days to expiry now, [(day the stock goes ex, cash per share), ...], strikes).
-# A stock going ex on day 1 goes ex inside the day the decay is taken over.
+# A stock going ex on day 1 goes ex inside the day the decay is taken over. One going ex on day 2
+# is a day ahead of the later price: the canonical tree is at its coarsest there, so the fixture
+# holds that class too.
 DECAY_DIVIDEND_CASES: list[tuple[str, int, list[tuple[int, float]], tuple[float, ...]]] = [
     ("30d_no_dividend", 30, [], (90.0, 95.0, 100.0, 105.0, 110.0)),
     ("30d_ex_on_day_12", 30, [(12, 1.75)], (90.0, 95.0, 100.0, 105.0, 110.0)),
     ("7d_ex_on_day_3", 7, [(3, 0.6)], (95.0, 100.0, 105.0)),
     ("30d_ex_inside_the_day", 30, [(1, 1.75)], (90.0, 95.0, 100.0, 105.0, 110.0)),
     ("60d_ex_inside_the_day_and_on_day_40", 60, [(1, 0.9), (40, 0.9)], (90.0, 100.0, 110.0)),
+    ("60d_ex_on_day_2", 60, [(2, 1.75)], (85.0, 90.0, 95.0, 100.0)),
 ]
 # The step counts AM-005 is compared at, both prime and over the days to any expiry here. An ex-date
 # exactly on a tree step is counted before or after that step by the last bit of the two times, so

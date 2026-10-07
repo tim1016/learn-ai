@@ -2180,7 +2180,7 @@
       "tolerance": {
         "atol": 0.01,
         "rtol": 0.0,
-        "note": "The one figure here is the looser of the two a test of this fixture accepts (the decay at the default 401 steps). An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so the decay is checked against a finite-difference grid good to about 2e-5 in the decay (under 1.7e-5 from its own doubling) and agrees to the tree's discretization error. A difference of two prices is held to twice what AM-002 holds one price to: atol 2e-3 with the canonical tree at 2,003 steps and 1e-2 at the default 401; measured maxima 9.4e-4 and 5.0e-3 over 84 cases. The 5.0e-3 is one call deep in the money whose stock goes ex a day out; the other 83 cases are within 1.3e-3 at 401 steps. A stock that goes ex inside the day is priced a day later at its price less the dividend in full; the tolerance tells that apart from holding the quoted price (6.4e-2 to 1.75 away) but not from taking off the dividend's present value (2.2e-4 away), which a direct test pins. The test file states every tolerance."
+        "note": "The one figure here is the loosest a test of this fixture accepts. An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so the decay is checked against a finite-difference grid good to about 2e-5 in the decay (under 1.7e-5 from its own doubling) and agrees to the tree's discretization error. With the canonical tree at 2,003 steps every case is held to atol 2e-3; measured maximum 9.4e-4 in the decay over 100 cases. At the default 401 steps each of the six groups of cases is held to about twice its own measured gap, from 5e-4 with no dividend to 1e-2 for the two groups with a price a day before an ex-date; measured maximum 8.1e-3, a call in the money whose stock goes ex on day 2. These are the fixture's own measured gaps, not a bound: outside it 2e-2 was measured at 401 steps for a call in the money with a larger dividend going ex two days out, and 1e-4 at 2,003. A stock that goes ex inside the day is priced a day later at its price less the dividend in full; the tolerance tells that apart from holding the quoted price (6.4e-2 to 1.75 away) but not from taking off the dividend's present value (2.2e-4 away), which a direct test pins. The test file states every tolerance."
       },
       "active_version": 1,
       "versions": {
@@ -2189,21 +2189,66 @@
           "output": "output.json",
           "attribution": "attribution.md",
           "content_sha256": {
-            "input.json": "a9dc085ec3528858d0711ba652328b40d4a604fa315ad382162cd40476a9d5f8",
-            "output.json": "cfef5e498afa3425cb6b391b80d597cbfd0b95c200e87bebbc5deb47dc49cd29",
-            "attribution.md": "337fdf2f2ab0f0de891a92ec5bef4510d4d77b941a4f93c58448f8e207ddcb1d"
+            "input.json": "d05beac6e07e0998d46dc5d8c2c4d1dada3ce48988c00027c6693ed43c67f1ea",
+            "output.json": "6adaa54d973fb9ae312030499db2ec30ab2ba8d7ba5cbead5e64e08bcf6b037e",
+            "attribution.md": "9446190d0e03efeca2b46a65a0e7b53f4dbe1479d3f19549df6f5593cbe36da7"
           },
           "file_sha256": {
-            "input.json": "4db668821bb0bad512d19ed9e6aa6124f795e86e220ed2bb0d150429365dfaa2",
-            "output.json": "0819a7f9676629aceebb646f807978159549a59c30c3a58c43cbb12765e6a3cd",
-            "attribution.md": "337fdf2f2ab0f0de891a92ec5bef4510d4d77b941a4f93c58448f8e207ddcb1d"
+            "input.json": "56d18ba998e7949c5de544816e02eee08083c77e9cd86e7aae607f076a4a9443",
+            "output.json": "ecc99c0b28c6d917f1d9dcdc608bc6dc51bf0d10510762d5b76000caf74bd28c",
+            "attribution.md": "9446190d0e03efeca2b46a65a0e7b53f4dbe1479d3f19549df6f5593cbe36da7"
           }
         }
       },
       "status": "active",
       "validated_by": [
         "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_with_cash_dividends_matches_the_second_engines_difference",
-        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_at_the_default_step_count_stays_within_a_cent_of_the_second_engine"
+        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_at_the_default_step_count_stays_close_to_the_second_engine_group_by_group"
+      ]
+    },
+    {
+      "id": "SB-001",
+      "name": "Stationary bootstrap of a paired, serially dependent series (mean, Sharpe, Sharpe difference)",
+      "category": "resampling",
+      "canonical_module": "PythonDataService/app/research/monte_carlo/stationary.py, PythonDataService/app/research/golden_search/chance.py",
+      "canonical_callable": "stationary_index_chunks, path_sharpe",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "arch==8.0.0 arch.bootstrap.StationaryBootstrap (numpy==2.2.6). Generation-only: in no requirements file, never imported under app/ or tests/.",
+        "citation": "Politis & Romano (1994), The Stationary Bootstrap, Journal of the American Statistical Association 89(428), 1303-1313. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/stationary_bootstrap.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.008,
+        "rtol": 0.0,
+        "note": "A random method, so a Monte Carlo band and not float equality (owner decision 4 on issue #2932): the share of our 200,000 resamples at or below each of arch's quantiles against that quantile's level. Each side places a share to sqrt(p(1-p)/200000) <= 0.00112; 0.008 is five standard errors of their difference. Measured maximum 0.0024. Never widened: a miss means the two disagree about the method."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "8fcf60d4cfc94b8bc1b49324963faac1a63c9a8359e6d236cde627c612444c2a",
+            "output.arrow": "8e0ff72c09439fc5f4a47b16b0c4043cd8c85ad453d17befb42d054fac169b30",
+            "attribution.md": "e0944d958de6fa3eecd8104f8c5bb0a90c98d720c2df0d722cd1785031b91a5d"
+          },
+          "file_sha256": {
+            "input.arrow": "2cb3e36b098a791ebabec945aee19f440f37b7d22c3ea03fe13ec78f72f0e20d",
+            "output.arrow": "53f027c5ddd4a9cef079d631953656947d6dce5f55e8e89de758f1f5df3e2b54",
+            "attribution.md": "e0944d958de6fa3eecd8104f8c5bb0a90c98d720c2df0d722cd1785031b91a5d"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/monte_carlo/test_stationary.py::test_stationary_bootstrap_agrees_with_arch_fixture_sb_001"
       ]
     }
   ]
