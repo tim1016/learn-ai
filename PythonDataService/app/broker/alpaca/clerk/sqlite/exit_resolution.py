@@ -262,10 +262,15 @@ never re-priced at all."""
 RECOVERY_FLATTEN_DECISION_PREFIX = "recovery-flatten-"
 EXIT_REDRIVE_DECISION_PREFIX = "exit-redrive-"
 SCHEDULED_END_DECISION_PREFIX = "scheduled-end-"
+# The Clerk's own scheduled close of an option position (``scheduled_close``,
+# ADR 0076): on its contract's expiry day, or before a session's close for a
+# structure with a sold leg. Its acceptance records which close and when due.
+SCHEDULED_CLOSE_DECISION_PREFIX = "scheduled-close-"
 _RECOVERY_DECISION_PREFIXES = (
     RECOVERY_FLATTEN_DECISION_PREFIX,
     EXIT_REDRIVE_DECISION_PREFIX,
     SCHEDULED_END_DECISION_PREFIX,
+    SCHEDULED_CLOSE_DECISION_PREFIX,
 )
 # The panel's flatten-and-stop decides its EXIT under this namespace (it is
 # colon-bearing, so the facade stores it encoded). With the safe flatten's,
