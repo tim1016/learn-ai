@@ -61,6 +61,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     reconcile_execution_price_conflicts,
     resolve_order_submission,
     trade_port_folds_simulated_evidence,
+    withhold_fill_the_order_cannot_hold,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -1168,6 +1169,21 @@ def _fold_snapshot_evidence(
             raise ReconciliationInvariantError(
                 f"captured order {captured.order_ref!r} has no owning effect"
             )
+        # The account's order list is read loosely, so a row can name another symbol than the
+        # contract its order trades. Its fill is then one the books refuse to write: withheld
+        # like a lost answer, so the pass goes on and the exact lookup settles it (ADR 0076).
+        if (
+            not simulated_authority
+            and broker_order.filled_quantity > 0
+            and withhold_fill_the_order_cannot_hold(
+                repo,
+                effect_operation_id=owner.effect_operation_id,
+                order=broker_order,
+                order_ref=captured.order_ref,
+                quantity=broker_order.filled_quantity,
+            )
+        ):
+            continue
         fold_order_evidence(
             repo,
             effect_operation_id=owner.effect_operation_id,

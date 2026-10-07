@@ -401,6 +401,24 @@ async def test_a_stream_frame_whose_fill_is_not_in_the_orders_contract_is_withhe
     assert paper.held() == {SYMBOL: 1.0} and paper.outcome(order_ref).standing is EntryStanding.FILLED
 
 
+async def test_a_pass_whose_order_list_names_another_contract_on_the_bots_order_goes_on_and_counts_nothing(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting(units=2)
+    paper.venue.option_order_fills(order_ref, contracts=1, average_price="1.94")
+    paper.venue.option_orders[order_ref]["symbol"] = "SPY260918C00590000"
+
+    done = await paper.pass_()
+
+    # The pass ended with a verdict of its own. Nothing of the row was counted, and the exact lookup
+    # that followed was held to the contract asked for, so the outcome is unknown and stays set aside.
+    assert done.verdict != "stale"
+    assert paper.held() == {} and paper.repo.fills_for_order(order_ref) == []
+    assert paper.outcome(order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+    # Two contracts at $1.94 and their fees, whole: $388.09.
+    assert paper.set_aside_cents() == 38_809
+
+
 # ── the exit ─────────────────────────────────────────────────────────────
 
 
