@@ -143,12 +143,18 @@ class SynthesizedOptionFill(BaseModel):
     ``fill_price`` is dollars a share, exact. It is absent, with the model
     and the age, for an order the simulation ended unfilled: a limit the
     quote did not reach.
+
+    ``multiplier`` is the shares one contract's price stands for, as the
+    Clerk's books record the contract. It comes with an opening order's
+    quote, and the position that order opens is counted in dollars by it.
+    A closing order opens nothing and carries none.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request: SingleOptionOrderRequest
     quote: RecordedQuote
+    multiplier: int | None = Field(default=None, ge=1, strict=True)
     # Where the quote is kept, when it was read back from the quotes kept.
     quote_ref: str | None = None
     fill_model: SimulatedFillModel | None

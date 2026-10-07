@@ -12,7 +12,8 @@ money. Here the Clerk asks, in order, and the first "no" refuses the entry:
 4. Has the picked contract's last session ended, and is each quote usable at
    the Clerk's own clock: one generation, both sides, live, not crossed, and
    no side older than the decision-data budget? Is each side priced in whole
-   cents, as an order's price must be?
+   cents, as an order's price must be? The quote is tested once more just
+   before the order is sent, at the clock then (``entry_quote_refusal``).
 5. What would its fees be? The provision is the entry's own fills settled as
    a day of their own.
 6. Is it a structure the plan may open, is each leg's market inside the
@@ -48,6 +49,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.option_effects import (
     STANDARD_CONTRACT_MULTIPLIER,
@@ -69,6 +71,11 @@ from app.options.structure_check import StructureRefused
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg
 from app.services.market_liveness import QUOTE_MAX_AGE_MS
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
+
+if TYPE_CHECKING:
+    from app.options.contract import OptionContract
+    from app.options.quotes import HeldQuote
+    from app.options.structure import LegPosition
 
 _CENT = Decimal("0.01")
 
@@ -141,6 +148,40 @@ def entry_past_cutoff(
     )
 
 
+def entry_quote_refusal(
+    contract: OptionContract,
+    quote: HeldQuote,
+    *,
+    position: LegPosition,
+    generation: int,
+    now_ms: int,
+    at_the_send: bool = False,
+) -> OptionEntryRefused | None:
+    """Why the quote an entry's leg is priced from cannot be used at the Clerk's clock ``now_ms``, or ``None``.
+
+    Asked as the entry is worked out and again just before its order is sent
+    (``at_the_send``): by the same tests, each side's age counted at the
+    clock then. The entry is worked out under the intake lock and sent after
+    it, so a quote that passed can be older than the decision-data budget by
+    the time its order goes out, and a simulation fills from the quote it
+    was handed whatever its age. The refusal is the quote's own fault code
+    both times. ``generation`` is the one the quotes were read in.
+    """
+    fault = quote_fault(
+        quote, at_ms=now_ms, generation=generation, max_age_ms=QUOTE_MAX_AGE_MS, needs_a_bid=position == "short"
+    )
+    if fault is None:
+        return None
+    when = "when its order was about to be sent" if at_the_send else "when the entry reached the account Clerk"
+    return OptionEntryRefused(
+        fault.value,
+        f"The quote for {contract.occ_symbol} could not be used {when} "
+        f"({fault.name.lower().replace('_', ' ')}). A quote is used only when both sides arrived live in the "
+        f"current connection, the bid is not above the ask, and neither side is older than "
+        f"{QUOTE_MAX_AGE_MS:,} ms.",
+    )
+
+
 def work_out_option_entry(
     action_plan: ActionPlan, *, evidence: OptionEntryEvidence | None, units: int, now_ms: int
 ) -> OptionEntryFacts | OptionEntryRefused:
@@ -176,18 +217,11 @@ def work_out_option_entry(
             f"{contract.occ_symbol} expired on {contract.expiry_date.isoformat()} and its last session is over; "
             "nothing can be bought in it.",
         )
-    fault = quote_fault(
-        quote, at_ms=now_ms, generation=evidence.generation, max_age_ms=QUOTE_MAX_AGE_MS,
-        needs_a_bid=leg.position == "short",
+    unusable = entry_quote_refusal(
+        contract, quote, position=leg.position, generation=evidence.generation, now_ms=now_ms
     )
-    if fault is not None:
-        return OptionEntryRefused(
-            fault.value,
-            f"The quote for {contract.occ_symbol} could not be used when the entry reached the account Clerk "
-            f"({fault.name.lower().replace('_', ' ')}). A quote is used only when both sides arrived live in the "
-            f"current connection, the bid is not above the ask, and neither side is older than "
-            f"{QUOTE_MAX_AGE_MS:,} ms.",
-        )
+    if unusable is not None:
+        return unusable
     assert quote.bid is not None and quote.ask is not None
     finer_than_a_cent = [side.price for side in (quote.bid, quote.ask) if side.price % _CENT]
     if finer_than_a_cent:

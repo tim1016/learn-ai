@@ -281,8 +281,14 @@ class GuardedBrokerTradePort:
             return False
         return bool(bind(client_order_id, symbol=symbol))
 
-    def bind_option_entry_quote(self, client_order_id: str, *, symbol: str, quote: HeldQuote) -> None:
-        """Forward the simulation-only capability to bind the quote an option entry fills from (ADR 0076)."""
+    def bind_option_entry_quote(
+        self, client_order_id: str, *, symbol: str, quote: HeldQuote, multiplier: int
+    ) -> None:
+        """Forward the simulation-only capability to bind the quote an option entry fills from (ADR 0076).
+
+        ``multiplier`` is the contract's, as the books record it: the
+        simulation counts the position's dollars by it.
+        """
         self._assert_unfenced("bind_option_entry_quote")
         bind = getattr(self._inner, "bind_option_entry_quote", None)
         if not callable(bind):
@@ -293,7 +299,7 @@ class GuardedBrokerTradePort:
                 broker=self._inner.broker_id,
                 detail="Nothing was sent and no order exists.",
             )
-        bind(client_order_id, symbol=symbol, quote=quote)
+        bind(client_order_id, symbol=symbol, quote=quote, multiplier=multiplier)
 
     def bind_option_close_quotes(
         self,

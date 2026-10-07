@@ -684,6 +684,73 @@ async def test_an_entry_accepted_in_the_session_and_reached_for_sending_after_it
     assert (budget.deployments[0].pending_orders, budget.deployments[0].free) == (Decimal("0"), Decimal("1000"))
 
 
+# ── the quote, tested again just before the order is sent ────────────────
+
+
+def _stands_still_before_the_send(account: _DryRun, monkeypatch: pytest.MonkeyPatch, ms: int) -> None:
+    """The entry is taken, and the process then stands still for ``ms`` before its order is reached for sending."""
+    take = clerk_runtime.accept_option_enter
+
+    def take_and_stand_still(*args: Any, **kwargs: Any) -> Any:
+        taken = take(*args, **kwargs)
+        account.clock.advance(ms)
+        return taken
+
+    monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_stand_still)
+
+
+async def test_an_entry_whose_quote_is_exactly_at_its_age_limit_as_its_order_is_sent_is_still_bought(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The quote is 300 ms old as the entry is taken. 4,700 ms later it is five seconds old: the oldest a
+    decision may use, and still usable."""
+    _stands_still_before_the_send(dry_run, monkeypatch, 4_700)
+
+    bought = await dry_run.enter(dry_run.evidence())
+
+    assert bought.state is EffectOperationState.SUBMITTED, bought.explanation
+    assert dry_run.held() == {SYMBOL: 1.0}
+    [order_ref] = bought.child_order_refs
+    assert dry_run.clerk.synthesized_option_fills()[order_ref].quote_age_ms == 5_000
+
+
+@pytest.mark.parametrize(
+    ("bid_age_ms", "ask_age_ms"),
+    [
+        pytest.param(300, 300, id="both sides a millisecond too old at the send"),
+        pytest.param(300, 100, id="the bid alone too old at the send"),
+        pytest.param(100, 300, id="the ask alone too old at the send"),
+    ],
+)
+async def test_an_entry_whose_quote_grew_too_old_between_being_taken_and_being_sent_is_not_sent(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch, bid_age_ms: int, ask_age_ms: int  # noqa: F811
+) -> None:
+    """The quote is tested once as the entry is taken and again as its order is sent, at the clock then.
+
+    Its older side is 300 ms old as the entry is taken, and the entry is
+    taken. The process then stands still for 4,701 ms: that side is 5,001 ms
+    old when the order is reached for sending, which no entry is taken on.
+    A simulation fills from the quote it is handed whatever its age, so the
+    order is not sent: nothing is bought, and nothing stays set aside.
+    """
+    quote = _sided(dry_run.clock(), bid_age_ms=bid_age_ms, ask_age_ms=ask_age_ms)
+    evidence = dry_run.evidence(quotes={LEG: quote})
+    _stands_still_before_the_send(dry_run, monkeypatch, 4_701)
+
+    refused = await dry_run.enter(evidence)
+
+    assert refused.state is EffectOperationState.REJECTED, refused.explanation
+    assert dry_run.held() == {} and dry_run.fills() == []
+    # No order reached the simulation: it holds none, filled or unfilled.
+    assert dry_run.clerk.synthesized_option_fills() == {}
+    [order_ref] = refused.child_order_refs
+    failed = dry_run.repo.last_order_transition(order_ref=order_ref, transition_kind="ENTER_SUBMISSION_REFUSED")
+    assert failed is not None and failed["summary_code"] == "QUOTE_STALE"
+    # What was set aside for it is free again, as after any refusal before the send.
+    budget = dry_run.repo.account_budget(cash=1000, seen_before_ms=dry_run.clock() + 1)
+    assert (budget.deployments[0].pending_orders, budget.deployments[0].free) == (Decimal("0"), Decimal("1000"))
+
+
 # ── a Live Shadow account takes no option plan ───────────────────────────
 
 SHADOW_ACCOUNT = "shadow:9LIVE0001"
@@ -749,7 +816,7 @@ async def test_beneath_those_gates_a_shadow_ports_send_refuses_an_option_order_b
     """Whatever let an option order reach the send on a Live Shadow account: a refusal, definitive, not a crash."""
     entry = work_out_option_entry(BUYS_ONE_CALL, evidence=_evidence_at(SHADOW_NOON), units=1, now_ms=SHADOW_NOON)
     assert isinstance(entry, OptionEntryFacts)
-    port = _OptionQuoteBoundTradePort(live_shadow._trade, symbol=SYMBOL, quote=entry.the_leg.quote.held)
+    port = _OptionQuoteBoundTradePort(live_shadow._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held)
     io = ClaimedBrokerIO(repo=_Repo(lose_on_call=0), effect_operation_id="op-1", claim_token="tok", trade=port)  # type: ignore[arg-type]
 
     with pytest.raises(BrokerOptionsNotSupported) as refused:
