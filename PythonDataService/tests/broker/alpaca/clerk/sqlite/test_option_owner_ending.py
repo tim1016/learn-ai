@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
     owner_ending_offered_from_ms,
 )
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
-from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader, read_recovery_context
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
@@ -67,6 +67,7 @@ from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import (
     later,
     option_holds,
     poll,
+    share_cash,
 )
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (  # noqa: F401
     PaperOptions,
@@ -886,11 +887,6 @@ async def test_a_bot_that_still_holds_the_contract_is_still_held_for_a_record_an
 @pytest.mark.parametrize(
     ("lots", "also_reported", "in_the_way"),
     [
-        pytest.param(
-            # An expiry takes the newest lot, which is bot-b's: it is booked, and for bot-a it settles nothing.
-            {"bot_a": 1, "bot_b": 1}, [_expiry_of(1, id="exp-2")], "exp-2",
-            id="a record the rule books for another bot's lot",
-        ),
         pytest.param({"bot_a": 1}, [_expiry_of(1, id="exp-2", qty="-0.5")], "exp-2", id="a record the Clerk cannot read"),
         pytest.param(
             {"bot_a": 1}, [_expiry_of(1, id="exp-2", status="canceled")], "exp-2",
@@ -909,8 +905,8 @@ async def test_a_bot_that_still_holds_the_contract_is_still_held_for_a_record_an
 async def test_a_refused_record_does_not_let_the_ending_past_another_record_that_may_be_the_contracts_end(
     tmp_path: Path, lots: dict[str, int], also_reported: list[dict[str, Any]], in_the_way: str
 ) -> None:
-    """Beside the row the rule refused there is one it did not refuse by name. That one may still be the
-    contract's end, so nothing is ended, and the refusal names it and not the refused row."""
+    """Beside the row the rule refused there is one it neither refused by name nor booked whole. That one may
+    still be the contract's end, so nothing is ended, and the refusal names it and not the refused row."""
     repo = _books(tmp_path, **lots)
     account = _FakeReadPort()
     account.option_events.rows = [_expiry_of(5), *also_reported]
@@ -1030,30 +1026,35 @@ async def test_a_refused_record_changes_nothing_else_the_look_at_the_press_asks_
 
 
 @pytest.mark.parametrize(
-    ("lots", "rows", "at_the_broker", "bot", "says_it_will_not_be_booked", "ended_at_the_press"),
+    ("lots", "rows", "at_the_broker", "bot", "says_it_will_not_be_booked", "names_the_ending", "ended_at_the_press"),
     [
-        pytest.param({"bot_a": 1}, [], {}, "bot-a", False, True, id="no record came"),
-        pytest.param({"bot_a": 1}, [_expiry_of(2)], {}, "bot-a", True, True, id="the record that came was refused by name"),
+        pytest.param({"bot_a": 1}, [], {}, "bot-a", False, True, True, id="no record came"),
         pytest.param(
-            {"bot_a": 1}, [_expiry_of(2), _expiry_of(1, id="exp-2", status="canceled")], {}, "bot-a", False, False,
+            {"bot_a": 1}, [_expiry_of(2)], {}, "bot-a", True, True, True, id="the record that came was refused by name"
+        ),
+        pytest.param(
+            {"bot_a": 1}, [_expiry_of(2), _expiry_of(1, id="exp-2", status="canceled")], {}, "bot-a", False, False, False,
             id="another record stands in the way",
         ),
         pytest.param(
-            {"bot_a": 1}, [_expiry_of(2)], {CALL: 3.0}, "bot-a", False, False,
+            # The broker's position may be gone by the time the owner presses: the press reads it again.
+            {"bot_a": 1}, [_expiry_of(2)], {CALL: 3.0}, "bot-a", False, True, False,
             id="the broker still shows some of the contract",
         ),
         pytest.param(
-            {"bot_a": 2, "bot_b": -1}, [_expiry_of(1)], {}, "bot-b", False, False, id="the bot holds the contract sold",
+            {"bot_a": 2, "bot_b": -1}, [_expiry_of(1)], {}, "bot-b", False, False, False,
+            id="the bot holds the contract sold",
         ),
     ],
 )
 async def test_the_notice_of_an_expired_contract_says_its_record_will_not_be_booked_only_where_the_owner_can_end_it(
     tmp_path: Path, lots: dict[str, int], rows: list[dict[str, Any]], at_the_broker: dict[str, float], bot: str,
-    says_it_will_not_be_booked: bool, ended_at_the_press: bool,
+    says_it_will_not_be_booked: bool, names_the_ending: bool, ended_at_the_press: bool,
 ) -> None:
     """The notice sends the owner to "End the expired contract" when no record has come, or when the notice
     itself says the one that came will not be booked. So it says that of a record only where the press then
-    ends the contract, and names the record. It promises no end that cannot come."""
+    ends the contract, and names the record. It promises no end that cannot come: with a record in the way, or
+    for a contract held sold, its next step names no ending at all."""
     repo = _books(tmp_path, **lots)
     account = _FakeReadPort(positions=broker_holds(**at_the_broker))
     account.option_events.rows = rows
@@ -1066,7 +1067,7 @@ async def test_the_notice_of_an_expired_contract_says_its_record_will_not_be_boo
         said = json.loads(notice["facts_json"])["explanation"]
         assert ("will not be booked" in said) is says_it_will_not_be_booked
         assert ("exp-1" in said) is says_it_will_not_be_booked
-        assert END_EXPIRED_OPTION_LABEL in notice["next_step"]
+        assert (END_EXPIRED_OPTION_LABEL in notice["next_step"]) is names_the_ending
         assert ((await _asked_to_end(repo, account, bot)).result == "ended") is ended_at_the_press
     finally:
         repo.close()
@@ -1123,3 +1124,399 @@ async def test_a_dry_runs_ending_names_no_record_of_a_brokers_and_reads_as_it_di
     assert "rows_not_booked" not in booked["owner_word"]
     [served] = _served(dry_run.repo)
     assert served.simulated and "could not be booked" not in served.headline
+
+
+# ── a record that came, is booked whole, and left contracts on the books ─
+#
+# The broker's row for the contract came and is booked. It counted fewer contracts than the books held: a
+# lot is still open, the broker holds none of it, and no other row will come. The row will book nothing
+# more, so it does not stand in the ending's way, and the ending's record names it as booked.
+
+
+def _offered_on_the_books(repo: ClerkSqliteRepository, bot: str = "bot-a", action_id: str = END) -> RecoveryCapability:
+    """One action of a bot's recovery catalog, read from bare books the way the bot's page reads it."""
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        context = reader.recovery_context(strategy_instance_id=bot)
+    finally:
+        reader.close()
+    assert context is not None
+    return next(item for item in build_recovery_catalog(context) if item.action_id == action_id)
+
+
+def _the_owners_word(repo: ClerkSqliteRepository, bot: str = "bot-a") -> dict[str, Any]:
+    [word] = [
+        json.loads(row["facts_json"])["owner_word"] for row in bookings(repo)
+        if (row["strategy_instance_id"], row["summary_code"]) == (bot, "OPTION_ENDED_BY_OWNER")
+    ]
+    return word
+
+
+def _exercise_of_one_with_its_shares(on: str = LAST_DAY, **share_trade: Any) -> list[dict[str, Any]]:
+    """One call exercised, and the share trade Alpaca reports with it: 100 bought at 150 for $15,000.00."""
+    return [
+        documented_option_activity("trading_api", "option_exercise", id="exc-1", qty="-1", date=on),
+        documented_option_activity(
+            "trading_api", "option_exercise", 1,
+            **{"id": "trd-1", "qty": "100", "price": "150", "net_amount": "-15000", "date": on, **share_trade},
+        ),
+    ]
+
+
+async def test_two_calls_held_and_an_expiry_booked_for_one_the_owner_ends_the_other_as_the_page_presses_it(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Two calls bought at $1.94: $388.00. The broker reports an expiry of one, and holds none.
+
+    Saturday's pass books the row: -$194.00, and one call is still on the
+    books. No other row will come. After Monday's close the ending is
+    offered, and pressed it ends the other call: -$388.00 in all, no lot
+    open, no notice left, the account agreeing once more. The record says a
+    row came, was booked and counted fewer contracts than the books held,
+    and names it. Never that no record came, nor that one could not be
+    booked.
+    """
+    order_ref = await paper.resting("a", units=2)
+    await paper.stream_fill(order_ref, contracts=2, filled_in_all=2, price="1.94", execution_id="x-a-buy")
+    _at(paper, SATURDAY_NOON)
+    paper.account.settled.add(SYMBOL)
+    paper.account.option_events.rows = [_expiry_row(qty="-1")]
+    await paper.pass_()
+    assert paper.held("a") == {SYMBOL: 1.0} and fifo(paper.repo, "a").exact_realized_pnl == Decimal("-194")
+    _at(paper, MONDAY_CLOSE)
+    await paper.pass_()
+    notice = option_holds(paper.repo)[("a", "OPTION_EXPIRED_NOT_SETTLED")]
+    said = json.loads(notice["facts_json"])["explanation"]
+    assert "exp-1" in said and "is booked" in said and "no activity read" not in said
+    assert END_EXPIRED_OPTION_LABEL in notice["next_step"]
+    shown = await _offered(paper.clerk, "a")
+    assert shown.available and not (await _offered(paper.clerk, "a", "discharge_attributed_residue")).available
+
+    ended = await _press(paper.clerk, "a", shown=shown)
+
+    assert ended.applied and paper.held() == {}
+    assert fifo(paper.repo, "a").exact_realized_pnl == Decimal("-388") and fifo(paper.repo, "a").open_lots == []
+    assert [row["summary_code"] for row in bookings(paper.repo)] == ["OPTION_EXPIRED", "OPTION_ENDED_BY_OWNER"]
+    word = json.loads(bookings(paper.repo)[1]["facts_json"])["owner_word"]
+    assert [row["ref"] for row in word["rows_booked"]] == ["option-activity:exp-1"]
+    assert "rows_not_booked" not in word
+    why = word["why_no_settlement"]
+    assert "exp-1" in why and "was booked" in why
+    assert "no record of how" not in why and "could not be booked" not in why
+    served = _served(paper.repo)[-1]
+    assert served.kind == "ended_by_owner" and "was booked" in served.headline
+    assert "could not be booked" not in served.headline and "exp-1" not in served.headline
+    assert option_holds(paper.repo) == {}
+    assert (await paper.pass_()).verdict == "clean"
+
+    # The row is read again for days, and changes nothing.
+    paper.wait(option_events.OPTION_EVENT_POLL_INTERVAL_MS)
+    later_pass = await paper.pass_()
+    assert [row["summary_code"] for row in bookings(paper.repo)] == ["OPTION_EXPIRED", "OPTION_ENDED_BY_OWNER"]
+    assert option_holds(paper.repo) == {} and later_pass.verdict == "clean"
+    assert fifo(paper.repo, "a").exact_realized_pnl == Decimal("-388")
+
+
+async def test_an_expiry_booked_for_another_bots_lot_does_not_keep_this_bots_contract_from_being_ended(
+    tmp_path: Path,
+) -> None:
+    """Two bots hold one call each, and the broker reports an expiry of one.
+
+    The expiry takes the newest lot, bot-b's: -$194.00 for bot-b. For
+    bot-a it settles nothing, and no other row will come. Bot-a's call is
+    ended at the owner's word: -$194.00 for bot-a. The record names the row
+    and the bot whose lot it was booked for.
+    """
+    repo = _books(tmp_path, bot_a=1, bot_b=1)
+    account = _FakeReadPort()
+    account.option_events.rows = [_expiry_of(1)]
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account)
+        assert _summaries(repo) == [("bot-b", "OPTION_EXPIRED")] and held(repo, "bot-a") == {CALL: 1.0}
+        assert _offered_on_the_books(repo).available
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert outcome.result == "ended"
+        assert _summaries(repo) == [("bot-b", "OPTION_EXPIRED"), ("bot-a", "OPTION_ENDED_BY_OWNER")]
+        [named] = _the_owners_word(repo)["rows_booked"]
+        assert named["ref"] == "option-activity:exp-1" and "1 for bot-b" in named["detail"]
+        assert held(repo, "bot-a") == {} and held(repo, "bot-b") == {}
+        assert fifo(repo, "bot-a").exact_realized_pnl == Decimal("-194")
+        assert fifo(repo, "bot-b").exact_realized_pnl == Decimal("-194")
+        assert option_holds(repo) == {}
+    finally:
+        repo.close()
+
+
+async def test_a_call_exercised_early_and_booked_does_not_stand_in_the_way_of_the_same_contract_bought_again(
+    tmp_path: Path,
+) -> None:
+    """On Thursday the bot's first call is exercised and booked: -$194.00, and 100 AAPL bought for $15,000.00.
+
+    It buys the same contract again at $1.94. That one expires on Friday.
+    The broker holds none of it and reports nothing: the plain case of a
+    contract no record came for. Thursday's row is still inside the read's
+    window. It is booked, so it does not stand in the way. The second call
+    is ended at the owner's word: -$388.00 in all, and the bot keeps its
+    100 shares and the notice of them.
+    """
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    account = _FakeReadPort(positions=broker_holds(AAPL=100.0))
+    account.option_events.rows = _exercise_of_one_with_its_shares(on="2023-07-20")
+    try:
+        later(repo, MINUTE)
+        await poll(repo, account)
+        assert _summaries(repo) == [("bot-a", "OPTION_EXERCISED")] and held(repo, "bot-a") == {"AAPL": 100.0}
+        holds_option(repo, "bot-a", CALL, contracts=1)
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account, asked_for=True)
+        assert _offered_on_the_books(repo).available
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert outcome.result == "ended"
+        assert _summaries(repo) == [("bot-a", "OPTION_EXERCISED"), ("bot-a", "OPTION_ENDED_BY_OWNER")]
+        assert held(repo, "bot-a") == {"AAPL": 100.0}
+        assert fifo(repo, "bot-a").exact_realized_pnl == Decimal("-388")
+        assert share_cash(repo, "bot-a", "AAPL") == Decimal("-15000")
+        [named] = _the_owners_word(repo)["rows_booked"]
+        assert named["ref"] == "option-activity:exc-1"
+        assert set(option_holds(repo)) == {("bot-a", "OPTION_SHARES_HELD")}
+    finally:
+        repo.close()
+
+
+async def test_two_calls_held_and_one_exercised_on_the_last_day_the_owner_ends_the_other_and_the_bot_keeps_its_shares(
+    tmp_path: Path,
+) -> None:
+    """The exercise of one call is booked with its share trade: -$194.00, and 100 AAPL bought for $15,000.00.
+
+    The other call is still on the books. The broker holds none of it and
+    no row comes for it. The exercise and its own share trade are booked,
+    so neither stands in the way. Ended at the owner's word: -$388.00 in
+    all. The bot still holds its 100 shares, and is still held for them.
+    """
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=2)
+    account = _FakeReadPort(positions=broker_holds(AAPL=100.0))
+    account.option_events.rows = _exercise_of_one_with_its_shares()
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account)
+        assert _summaries(repo) == [("bot-a", "OPTION_EXERCISED")]
+        assert held(repo, "bot-a") == {CALL: 1.0, "AAPL": 100.0}
+        assert _offered_on_the_books(repo).available
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert outcome.result == "ended"
+        assert held(repo, "bot-a") == {"AAPL": 100.0}
+        assert fifo(repo, "bot-a").exact_realized_pnl == Decimal("-388")
+        assert share_cash(repo, "bot-a", "AAPL") == Decimal("-15000")
+        [named] = _the_owners_word(repo)["rows_booked"]
+        assert (named["ref"], named["share_trade_ref"]) == ("option-activity:exc-1", "share-trade:trd-1")
+        assert set(option_holds(repo)) == {("bot-a", "OPTION_SHARES_HELD")}
+    finally:
+        repo.close()
+
+
+async def test_a_share_trade_that_states_other_shares_than_the_booked_exercise_still_stands_in_the_way(
+    tmp_path: Path,
+) -> None:
+    """Two calls held and one exercised on the last day. The broker's share trade is for 200 shares, and one
+    contract gives 100. It may be a second exercise, of the call still on the books. So it is not set aside
+    with the booked exercise: nothing is ended, and the refusal names the share trade and not the exercise."""
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=2)
+    account = _FakeReadPort(positions=broker_holds(AAPL=200.0))
+    account.option_events.rows = _exercise_of_one_with_its_shares(qty="200", net_amount="-30000")
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account)
+        assert ("bot-a", "OPTION_SHARE_TRADE_DISAGREES") in option_holds(repo)
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert (outcome.result, outcome.reason_code) == ("refused", "OPTION_OWNER_ENDING_ROW_NOT_BOOKED")
+        assert "trd-1" in outcome.message and "exc-1" not in outcome.message
+        assert _summaries(repo) == [("bot-a", "OPTION_EXERCISED")] and held(repo, "bot-a")[CALL] == 1.0
+    finally:
+        repo.close()
+
+
+async def test_an_ending_made_beside_a_refused_record_and_a_booked_one_names_each_as_what_it_is(
+    tmp_path: Path,
+) -> None:
+    """Two bots hold one call each. The broker reports an expiry of five, which the rule refuses, and an expiry
+    of one, which is booked for bot-b's lot. Neither will end bot-a's call. Its ending names the first as
+    refused, with the name it was refused by, and the second as booked."""
+    repo = _books(tmp_path, bot_a=1, bot_b=1)
+    account = _FakeReadPort()
+    account.option_events.rows = [_expiry_of(5), _expiry_of(1, id="exp-2")]
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert outcome.result == "ended"
+        word = _the_owners_word(repo)
+        assert [(row["ref"], row["refused_as"]) for row in word["rows_not_booked"]] == [
+            ("option-activity:exp-1", "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD")
+        ]
+        [booked] = word["rows_booked"]
+        assert booked["ref"] == "option-activity:exp-2" and "refused_as" not in booked
+        assert "was booked" in word["why_no_settlement"] and "could not be booked" in word["why_no_settlement"]
+        assert fifo(repo, "bot-a").exact_realized_pnl == Decimal("-194") and held(repo, "bot-a") == {}
+    finally:
+        repo.close()
+
+
+async def test_a_record_that_comes_at_the_press_for_a_part_of_the_position_is_booked_and_the_owner_is_told_it_was_a_part(
+    tmp_path: Path,
+) -> None:
+    """Two calls held, and no record. At the press the broker's expiry of one has come.
+
+    It is booked in the ending's place: -$194.00. The owner is told it was
+    one of the two and that the other is still on the books, never that
+    the contract expired. Pressed again, the other is ended: -$388.00 in
+    all.
+    """
+    repo = _books(tmp_path, bot_a=2)
+    account = _FakeReadPort()
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account)
+        account.option_events.rows = [_expiry_of(1)]
+
+        first = await _asked_to_end(repo, account)
+
+        assert (first.result, first.ended_by) == ("settled", "expired")
+        assert "1 of the 2" in first.message and "still on these books" in first.message
+        assert "It expired worth nothing" not in first.message
+        assert held(repo, "bot-a") == {CALL: 1.0} and fifo(repo, "bot-a").exact_realized_pnl == Decimal("-194")
+        assert _offered_on_the_books(repo).available
+
+        second = await _asked_to_end(repo, account)
+
+        assert second.result == "ended"
+        assert held(repo, "bot-a") == {} and fifo(repo, "bot-a").exact_realized_pnl == Decimal("-388")
+        assert fifo(repo, "bot-a").open_lots == []
+    finally:
+        repo.close()
+
+
+# ── a record in the way: the page offers no ending that could only be refused ──
+
+
+async def test_a_booked_record_that_now_reads_other_figures_keeps_the_contract_on_the_books_and_its_notice_promises_no_end(
+    tmp_path: Path,
+) -> None:
+    """Two calls held. An expiry of one is booked: -$194.00. The broker then shows the same id for two.
+
+    The broker's own record moved, and no rule here can say which reading
+    is the true one. The booking stands as it was made. The other call is
+    not ended at the owner's word and the page does not offer it. The
+    notice says exactly that, and neither it nor its next step names an
+    ending.
+    """
+    repo = _books(tmp_path, bot_a=2)
+    account = _FakeReadPort()
+    account.option_events.rows = [_expiry_of(1)]
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account)
+        account.option_events.rows = [_expiry_of(2)]
+        later(repo, option_events.OPTION_EVENT_POLL_RETRY_MS)
+        await poll(repo, account, asked_for=True)
+        assert ("bot-a", "OPTION_EVENT_ROW_CHANGED") in option_holds(repo)
+
+        notice = option_holds(repo)[("bot-a", "OPTION_EXPIRED_NOT_SETTLED")]
+        offered = _offered_on_the_books(repo)
+        outcome = await _asked_to_end(repo, account)
+
+        said = json.loads(notice["facts_json"])["explanation"]
+        assert "exp-1" in said and "which reading is the true one" in said and "no activity read" not in said
+        assert END_EXPIRED_OPTION_LABEL not in notice["next_step"] and END_EXPIRED_OPTION_LABEL not in said
+        assert not offered.available and offered.needed
+        assert offered.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_RECORD_IN_THE_WAY"
+        assert (outcome.result, outcome.reason_code) == ("refused", "OPTION_OWNER_ENDING_ROW_NOT_BOOKED")
+        assert "exp-1" in outcome.message and "could not be booked" not in outcome.message
+        assert _summaries(repo) == [("bot-a", "OPTION_EXPIRED")] and held(repo, "bot-a") == {CALL: 1.0}
+        assert fifo(repo, "bot-a").exact_realized_pnl == Decimal("-194")
+    finally:
+        repo.close()
+
+
+BERKSHIRE_CALL = "BRKB230721C00150000"
+
+
+def _one_bot_holding(tmp_path: Path, symbol: str, contracts: int, *, registered: str = "AAPL") -> ClerkSqliteRepository:
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"bot-a": registered})
+    holds_option(repo, "bot-a", symbol, contracts=contracts)
+    return repo
+
+
+# Each state: what the bot holds, what the broker reports at each read, and whether the page offers the ending.
+_STATES_OF_AN_EXPIRED_CONTRACT = [
+    pytest.param(CALL, 1, "AAPL", [[]], True, id="no record came"),
+    pytest.param(CALL, 1, "AAPL", [[_expiry_of(2)]], True, id="the record that came was refused by name"),
+    pytest.param(CALL, 2, "AAPL", [[_expiry_of(1)]], True, id="the record that came is booked and left one on the books"),
+    pytest.param(
+        CALL, 2, "AAPL", [[_expiry_of(1)], [_expiry_of(2)]], False, id="a booked record now reads other figures"
+    ),
+    pytest.param(CALL, 1, "AAPL", [[_expiry_of(1, qty="-0.5")]], False, id="a record the Clerk cannot read"),
+    pytest.param(
+        CALL, 1, "AAPL", [[_expiry_of(1, status="canceled")]], False, id="a record that is not reported as executed"
+    ),
+    pytest.param(
+        BERKSHIRE_CALL, 1, "BRK.B",
+        [[documented_option_activity("trading_api", "option_exercise", id="exc-1", qty="-1", symbol=BERKSHIRE_CALL)]],
+        False, id="an exercise whose shares are written under another symbol than the bot's",
+    ),
+    pytest.param(
+        CALL, 1, "AAPL",
+        [[documented_option_activity(
+            "trading_api", "option_exercise", 1, id="trd-9", qty="100", price="150", net_amount="-15000", date=LAST_DAY,
+        )]],
+        False, id="a share trade no record read explains",
+    ),
+]
+
+
+@pytest.mark.parametrize(("symbol", "contracts", "registered", "reads", "offered"), _STATES_OF_AN_EXPIRED_CONTRACT)
+async def test_what_the_page_offers_of_an_expired_contract_does_not_fail_when_pressed(
+    tmp_path: Path, symbol: str, contracts: int, registered: str, reads: list[list[dict[str, Any]]], offered: bool
+) -> None:
+    """The page offers the ending from the notice, and the press looks at the broker's rows.
+
+    A row in the way of the read that wrote the notice is in the way of the
+    read the press makes. So where one stands the ending is not offered,
+    the notice's next step names none, and a press made anyway is refused.
+    Where the ending is offered, the press ends the contract.
+    """
+    repo = _one_bot_holding(tmp_path, symbol, contracts, registered=registered)
+    account = _FakeReadPort()
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        for rows in reads:
+            account.option_events.rows = rows
+            later(repo, option_events.OPTION_EVENT_POLL_RETRY_MS)
+            await poll(repo, account, asked_for=True)
+
+        notice = option_holds(repo)[("bot-a", "OPTION_EXPIRED_NOT_SETTLED")]
+        shown = _offered_on_the_books(repo)
+        pressed = await _asked_to_end(repo, account, symbol=symbol)
+
+        assert shown.available is offered and shown.needed
+        assert (END_EXPIRED_OPTION_LABEL in notice["next_step"]) is offered
+        if offered:
+            assert pressed.result == "ended" and symbol not in held(repo, "bot-a")
+        else:
+            assert shown.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_RECORD_IN_THE_WAY"
+            assert (pressed.result, pressed.reason_code) == ("refused", "OPTION_OWNER_ENDING_ROW_NOT_BOOKED")
+            assert held(repo, "bot-a")[symbol] > 0
+    finally:
+        repo.close()

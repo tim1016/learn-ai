@@ -38,10 +38,24 @@ for more contracts than are held, for the other side, for a contract held
 both ways. Nothing of it was booked and nothing will be while the books
 stand, so waiting for it settles nothing. When every row that may be the
 contract's end is such a row, the ending goes ahead, and its record names
-each row and the name it was refused by. Any other row still stands in the
-way: one the rule could book, one it refused under another name (it was
-offered no lot, or the cash is not whole cents), one it never judged, one
-already booked.
+each row and the name it was refused by.
+
+**Nor does a row that is booked whole.** The row came and is booked, for
+every bot its record names, and it reads as it was booked. It counted fewer
+contracts than the books held: two were held and the expiry was for one, or
+the row took another bot's lot, or it ended an earlier lot of a contract
+the bot then bought again. What it left on the books it will never take.
+Its share trade is set aside with it when the two agree, or differ in the
+printed price alone; a share trade that states other shares may be a second
+exercise, and stands in the way. The ending's record names such a row as
+booked, and says what it counted and for whom.
+
+**Any other row still stands in the way:** one the rule refused under
+another name (it was offered no lot, or the cash is not whole cents), one
+it never judged, one that changed under a booked id, and one a bot its
+record names could not be booked for. While one does, the expired
+contract's notice says so, and the ending is not offered
+(``owner_ending_not_possible_ref``): the press could only be refused.
 
 **A row that comes afterwards** on a real account is still read for
 ``OWNER_ENDING_LATE_ROW_DAYS`` days. An expiry's row books nothing: the lot
@@ -140,6 +154,18 @@ def expired_contract_hold_ref(symbol: str) -> str:
     return f"contract:{symbol.upper()}"
 
 
+def owner_ending_not_possible_ref(symbol: str) -> str:
+    """How the ``OPTION_EXPIRED_NOT_SETTLED`` hold says one contract is not ended at the owner's word as things stand.
+
+    The hold names a bought contract a second time under this reference
+    when a row of the broker's that may be its end stands in the way, with
+    what is known of the row. The one function that writes those words is
+    the one that decides the press, so the page reads this and does not
+    offer an ending that could only be refused.
+    """
+    return f"no-owner-ending:{symbol.upper()}"
+
+
 def owner_ending_offered_from_ms(expiry: date) -> int:
     """When the owner may first end a real account's contract that expires on ``expiry`` at their word.
 
@@ -216,6 +242,7 @@ __all__ = [
     "late_row_read_since_ms",
     "owner_ended",
     "owner_ending_key",
+    "owner_ending_not_possible_ref",
     "owner_ending_offered_from_ms",
     "recent_owner_endings",
     "rows_an_owners_ending_named",

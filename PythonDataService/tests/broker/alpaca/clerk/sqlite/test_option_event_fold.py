@@ -437,9 +437,21 @@ _A_REFUSED_ROW = {
 }
 
 
+# A row of the broker's that is booked whole and left contracts on the books, as an owner's ending names it.
+_A_BOOKED_ROW = {
+    "ref": "option-activity:exp-2",
+    "detail": "2 of AAPL230721C00150000 were expired on 2023-07-21, and that is booked: 2 for bot-a.",
+}
+
+
 def _beside(rows: Any) -> dict[str, Any]:
     """An owner's ending whose word names ``rows`` as the broker's rows that could not be booked."""
     return {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, "rows_not_booked": rows}}
+
+
+def _naming(key: str, named: Any) -> dict[str, Any]:
+    """An owner's ending whose word lists ``named`` under ``key``: rows that were booked, or outside orders."""
+    return {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, key: named}}
 
 
 def _an_owner_endings_record(**changes: Any) -> dict[str, Any]:
@@ -536,6 +548,22 @@ async def test_an_owners_ending_closes_the_lot_at_nothing_so_what_it_cost_is_the
             {**_beside([_A_REFUSED_ROW]), "simulated": True, "simulation": _an_owner_endings_record()},
             _LAST_SESSION_CLOSE, "names no row of a broker's", id="a simulation's ending that names a broker's row",
         ),
+        pytest.param(
+            _naming("rows_booked", []), _LAST_SESSION_CLOSE, "names at least one", id="a list of booked rows that names none"
+        ),
+        pytest.param(
+            _naming("rows_booked", [{**_A_BOOKED_ROW, "ref": " "}]), _LAST_SESSION_CLOSE, "carries its reference",
+            id="a booked row with no reference",
+        ),
+        pytest.param(
+            _naming("rows_booked", [{"ref": _A_BOOKED_ROW["ref"]}]), _LAST_SESSION_CLOSE, "what is known of it",
+            id="a booked row that does not say how it was booked",
+        ),
+        pytest.param(
+            {**_naming("rows_booked", [_A_BOOKED_ROW]), "simulated": True, "simulation": _an_owner_endings_record()},
+            _LAST_SESSION_CLOSE, "a simulated account has no broker",
+            id="a simulation's ending that names a row a broker's booking came from",
+        ),
     ],
 )
 async def test_the_fold_refuses_an_owners_ending_that_is_not_whole_and_writes_nothing(
@@ -562,6 +590,23 @@ async def test_an_owners_ending_made_beside_rows_the_rule_refused_is_booked_with
         assert held(repo, "bot-b") == {} and fifo(repo, "bot-b").exact_realized_pnl == Decimal("-388")
         [ended] = [json.loads(row["facts_json"]) for row in bookings(repo) if row["strategy_instance_id"] == "bot-b"]
         assert ended["owner_word"]["rows_not_booked"] == [_A_REFUSED_ROW]
+    finally:
+        repo.close()
+
+
+async def test_an_owners_ending_made_beside_a_row_that_was_booked_is_booked_with_that_row_on_its_record(
+    tmp_path: Path,
+) -> None:
+    """The control for the refusals of a list of booked rows above: one thing differs from each, and this is booked."""
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        repo.append_transition(
+            _as_for_bot_b(facts, observed_at_ms=_LAST_SESSION_CLOSE, **_naming("rows_booked", [_A_BOOKED_ROW]))
+        )
+
+        assert held(repo, "bot-b") == {} and fifo(repo, "bot-b").exact_realized_pnl == Decimal("-388")
+        [ended] = [json.loads(row["facts_json"]) for row in bookings(repo) if row["strategy_instance_id"] == "bot-b"]
+        assert ended["owner_word"]["rows_booked"] == [_A_BOOKED_ROW]
     finally:
         repo.close()
 

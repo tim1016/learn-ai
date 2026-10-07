@@ -105,6 +105,14 @@ OPTION_EVENT_SHARES_EXECUTION_PREFIX = "option-event:shares:"
 # the name the rule refused it by (``refused_as``) and the rule's own words (``detail``). Left
 # out when no row came.
 OWNER_WORD_ROWS_NOT_BOOKED = "rows_not_booked"
+# Where an owner's word lists the broker's rows that were booked whole and still left contracts on
+# the books: each with its ``ref`` and what it counted and for whom (``detail``). Left out when
+# there is none.
+OWNER_WORD_ROWS_BOOKED = "rows_booked"
+# Where an owner's word lists the orders the Clerk did not place that sold the contract and could
+# not be booked against the bot: each with its ``ref`` and what it sold (``detail``). Left out
+# when there is none.
+OWNER_WORD_OUTSIDE_ORDERS_NOT_BOOKED = "outside_orders_not_booked"
 # The names the canonical rule refuses a row by that an owner's ending may be made beside. Each
 # says the books hold lots of the contract and the row cannot be matched to them, by its count
 # or by its side. A row refused under any other name is no such row: one the rule was offered no
@@ -218,8 +226,10 @@ class OptionPositionEndedFacts:
     # expiry signed for the other side, a lot closed before the row was read.
     notes: list[dict[str, str]] | None = None
     # For a contract ended at the owner's word: operator, reason, said_at_ms and
-    # why_no_settlement, and ``rows_not_booked`` when the broker's rows for the contract
-    # were refused by name. Left out of every other ending.
+    # why_no_settlement. Also ``rows_not_booked`` when rows of the broker's for the contract
+    # were refused by name, ``rows_booked`` when rows were booked and left contracts on the
+    # books, and ``outside_orders_not_booked`` when an order the Clerk did not place sold the
+    # contract and could not be booked. Left out of every other ending.
     owner_word: dict[str, Any] | None = None
 
     def to_facts_json(self) -> str:
@@ -325,6 +335,12 @@ def _require_the_owners_word(
         )
     if OWNER_WORD_ROWS_NOT_BOOKED in word:
         _require_the_rows_an_ending_names(facts, word[OWNER_WORD_ROWS_NOT_BOOKED])
+    for key, what in (
+        (OWNER_WORD_ROWS_BOOKED, "rows that were booked"),
+        (OWNER_WORD_OUTSIDE_ORDERS_NOT_BOOKED, "outside orders that could not be booked"),
+    ):
+        if key in word:
+            _require_what_else_an_ending_names(facts, word[key], what=what)
 
 
 def _require_the_rows_an_ending_names(facts: OptionPositionEndedFacts, rows: object) -> None:
@@ -345,6 +361,23 @@ def _require_the_rows_an_ending_names(facts: OptionPositionEndedFacts, rows: obj
             raise ValueError(
                 "each row an owner's ending names carries its reference and the name the rule refused it by"
             )
+
+
+def _require_what_else_an_ending_names(facts: OptionPositionEndedFacts, named: object, *, what: str) -> None:
+    """Refuse an owner's ending whose list of booked rows, or of outside orders, is not whole.
+
+    Each is named by its reference and says what is known of it. A
+    simulation's ending names none: no broker reports a simulated account's
+    option events or places an order in it.
+    """
+    if facts.simulated:
+        raise ValueError(f"a simulation's ending names no {what}: a simulated account has no broker")
+    if not isinstance(named, list) or not named:
+        raise ValueError(f"an owner's ending that names {what} names at least one")
+    for one in named:
+        ref, detail = (one.get("ref"), one.get("detail")) if isinstance(one, dict) else (None, None)
+        if not isinstance(ref, str) or not ref.strip() or not isinstance(detail, str) or not detail.strip():
+            raise ValueError(f"each of the {what} an owner's ending names carries its reference and what is known of it")
 
 
 def _require_the_figures_the_contract_gives(
@@ -601,6 +634,8 @@ __all__ = [
     "OPTION_EVENT_SHARES_EXECUTION_PREFIX",
     "OPTION_EVENT_SHARE_ORDER_ROLE",
     "OPTION_POSITION_ENDED",
+    "OWNER_WORD_OUTSIDE_ORDERS_NOT_BOOKED",
+    "OWNER_WORD_ROWS_BOOKED",
     "OWNER_WORD_ROWS_NOT_BOOKED",
     "REFUSALS_AN_ENDING_MAY_NAME",
     "OptionEnding",

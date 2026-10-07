@@ -890,7 +890,9 @@ class OptionEventHoldItem:
     """One thing an option-event hold names: a row, a contract or an outside order."""
 
     # What it is and its id: ``option-activity:<id>``, ``share-trade:<id>``,
-    # ``contract:<symbol>``, ``outside-order:<id>`` or ``read``.
+    # ``contract:<symbol>``, ``outside-order:<id>`` or ``read``. And
+    # ``no-owner-ending:<symbol>``: an expired contract with a row in the way
+    # of ending it at the owner's word, with what is known of the row.
     ref: str
     # The symbol the row or the order carries, as written. None when it has none.
     symbol: str | None
