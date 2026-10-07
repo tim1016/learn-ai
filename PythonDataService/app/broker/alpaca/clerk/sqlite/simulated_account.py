@@ -40,7 +40,10 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
+from app.broker.alpaca.clerk.account_authority import (
+    shadow_evidence_account_id_for_strategy,
+    simulated_account_named,
+)
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -159,11 +162,6 @@ class SimulatedAccountProjection:
     def _kept_option_quotes(self) -> KeptOptionQuotes:
         return KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id)
 
-    @property
-    def _named(self) -> str:
-        """What this simulated account is called in a sentence an owner reads."""
-        return "Dry Run" if self.repo.account_id.startswith("sim:") else "Live Shadow"
-
     def _read_kept_option_quotes_ahead(self) -> None:
         """Read the account's kept option quotes before the custody lock is taken, never under it.
 
@@ -209,7 +207,8 @@ class SimulatedAccountProjection:
             kept = self._kept_option_quotes().stated_mark(symbol, at_or_before_ms=at_ms)
         except KeptOptionQuotesUnavailable as exc:
             raise SimulationEvidenceUnavailable(
-                f"The option quotes kept for this {self._named} need repair; {symbol} cannot be marked from them."
+                f"The option quotes kept for this {simulated_account_named(self.repo.account_id)} need repair; "
+                f"{symbol} cannot be marked from them."
             ) from exc
         if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
             raise SimulationEvidenceUnavailable(

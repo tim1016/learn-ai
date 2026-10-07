@@ -93,7 +93,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from app.broker.alpaca.clerk.account_authority import is_shadow_account_id, is_synthetic_account_id
+from app.broker.alpaca.clerk.account_authority import simulated_account_named
 from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite import reads
@@ -732,7 +732,7 @@ def _missed_notice(
     repo: ClerkSqliteRepository, contracts: Sequence[tuple[HeldContract, float]], now_ms: int
 ) -> dict[str, Any]:
     """The notice of one bot's missed closes: what ``raise_uncertainty`` is handed."""
-    simulated = _simulation_named(repo.account_id)
+    simulated = simulated_account_named(repo.account_id)
     ordered = sorted(contracts, key=lambda held: held[0].symbol)
     closes = []
     for item, quantity in ordered:
@@ -763,17 +763,6 @@ def _missed_notice(
         "cause_facts": ScheduledCloseMissedCause(closes=tuple(closes)).to_mapping(),
         "severity": "error",
     }
-
-
-def _simulation_named(account_id: str) -> str | None:
-    """What a simulated account is called in a notice an owner reads, or ``None`` for a real account.
-
-    A Dry Run and a Live Shadow hold nothing real: no broker exercises,
-    assigns or sells what either still holds.
-    """
-    if is_synthetic_account_id(account_id):
-        return "Dry Run"
-    return "Live Shadow" if is_shadow_account_id(account_id) else None
 
 
 def _why_owed(kind: CloseKind) -> str:
@@ -942,7 +931,7 @@ def _state_of(repo: ClerkSqliteRepository, item: HeldContract, now_ms: int) -> S
     held = f"{quantity_text(abs(item.quantity))} {item.symbol}"
     if item.missed is not None:
         standing = CloseStanding.MISSED
-        sentence = _missed_words(item, item.quantity, simulated=_simulation_named(repo.account_id))
+        sentence = _missed_words(item, item.quantity, simulated=simulated_account_named(repo.account_id))
     else:
         attempt = _newest_attempt(repo, item.strategy_instance_id, close.session_open_ms)
         if attempt is not None:
