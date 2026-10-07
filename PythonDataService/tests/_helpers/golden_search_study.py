@@ -143,7 +143,9 @@ class FakeEngine:
             max_drawdown_pct=0.1,
             win_rate=0.5,
         )
-        return EvaluationResult(metrics=metrics, detail=fake_detail(request.window, sharpe) if request.detail else None)
+        detail = fake_detail(request.window, sharpe)
+        # Every run keeps its daily equity; only a detail run keeps its trades too.
+        return EvaluationResult(metrics=metrics, detail=detail if request.detail else None, curve=[(ms, equity) for ms, equity in detail["daily_equity"]])
 
 
 class SimulatedCrash(BaseException):

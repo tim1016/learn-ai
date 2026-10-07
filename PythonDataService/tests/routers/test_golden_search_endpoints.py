@@ -391,12 +391,23 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     folds = await client.get(f"{BASE}/studies/{study['id']}/charts/test-over-time")
     assert folds.status_code == 200, folds.text
     assert {fold["status"] for fold in folds.json()["folds"]} == {"completed"} and not folds.json()["planned"]
-    page = await client.get(f"{BASE}/studies/{study['id']}/evaluations", params={"stage": "search", "page": 1, "page_size": 5})
+    page = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "search", "page": 1, "page_size": 5})
     assert page.status_code == 200 and page.json()["total"] > 5 and len(page.json()["rows"]) == 5
 
     study = await _advance(client, harness, study, "open_exam", {"acknowledge_final_test": True})
     assert study["state"] == "awaiting_review" and [fit["outcome"] for fit in study["results"]["exam"]["fits"]] == ["meets_rules"]
     assert (await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")).json()["exam"] is not None
+    # Every run is listed under the step that asked for it, and its daily curve is read by key.
+    final = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "final", "sort": "sharpe_ratio", "descending": True})
+    assert final.status_code == 200, final.text
+    assert final.json()["total"] == 2 and all(run["has_curve"] for run in final.json()["rows"])
+    keys = [run["evaluation_key"] for run in final.json()["rows"]]
+    curves = await client.get(f"{BASE}/studies/{study['id']}/runs/curves", params=[("key", keys[0]), ("key", "no-such-run")])
+    assert curves.status_code == 200, curves.text
+    assert len(curves.json()["curves"][0]["close_ms"]) == len(curves.json()["curves"][0]["cumulative_return"]) > 0
+    assert curves.json()["not_recorded"] == ["no-such-run"]
+    refused = await client.get(f"{BASE}/studies/{study['id']}/runs", params={"group": "everything"})
+    assert refused.status_code == 422  # the route admits only the groups that exist
 
     study = await _advance(client, harness, study, "approve", APPROVE)
     assert study["state"] == "approved" and study["guidance"]["headline"] == "Golden configuration ready in Deploy"
@@ -591,7 +602,8 @@ async def test_reads_of_a_missing_study_or_candidate_are_404_with_a_code(client:
 
     responses = [
         await client.get(f"{BASE}/studies/{missing}"),
-        await client.get(f"{BASE}/studies/{missing}/evaluations"),
+        await client.get(f"{BASE}/studies/{missing}/runs"),
+        await client.get(f"{BASE}/studies/{missing}/runs/curves", params={"key": "k"}),
         await client.get(f"{BASE}/studies/{missing}/candidates/incumbent"),
         await client.get(f"{BASE}/studies/{missing}/charts/test-over-time"),
         await client.get(f"{BASE}/studies/{missing}/charts/search"),
@@ -602,7 +614,7 @@ async def test_reads_of_a_missing_study_or_candidate_are_404_with_a_code(client:
     before_evidence = await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")
     unknown_key = await client.get(f"{BASE}/studies/{study['id']}/candidates/best_guess")
 
-    assert [(r.status_code, r.json()["detail"]["code"]) for r in responses] == [(404, "NOT_FOUND")] * 8
+    assert [(r.status_code, r.json()["detail"]["code"]) for r in responses] == [(404, "NOT_FOUND")] * 9
     assert before_evidence.status_code == 404 and before_evidence.json()["detail"]["code"] == "CANDIDATE_UNAVAILABLE"
     assert unknown_key.status_code == 422
 

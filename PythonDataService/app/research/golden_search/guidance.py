@@ -321,8 +321,10 @@ def _number(value: Decimal) -> str:
 
 
 def _ema_sentence(values: Mapping[str, Decimal]) -> str:
+    # The bps gap is 0 unless a plan searches it; named only then, so two points that differ in it alone never read the same.
+    bps = f" · normalized gap {_number(values['gap_bps'])} bps" if values["gap_bps"] else ""
     return (
-        f"Gap ${values['gap']:.2f} · RSI {_number(values['rsi_min'])}–{_number(values['rsi_max'])} · "
+        f"Gap ${values['gap']:.2f}{bps} · RSI {_number(values['rsi_min'])}–{_number(values['rsi_max'])} · "
         f"EMA {_number(values['fast_period'])}/{_number(values['slow_period'])} · hold {_number(values['hold_bars'])} bars"
     )
 

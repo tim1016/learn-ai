@@ -27,6 +27,12 @@ Formula:
     attempt is re-run without new budget, at most ``RETRY_ALLOWANCE`` times,
     then recorded failed. A run the owner cancelled stays pending and is
     re-run without new budget or a retry.
+  * daily curve — every completed run keeps ``(session close ms, equity)``
+    for each session it scored: the engine's last equity sample of each ET
+    date (``equity_day_ends``, filled on a summary run too), anchored by
+    ``evidence.daily_equity``. It is the series a detail run's
+    ``daily_equity`` holds. A run whose day ends cannot be anchored keeps
+    its metrics and no curve.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Small
   interfaces with substantial behavior behind them" (Evaluator) and
   "Workload and progress"; the engine projection is
@@ -169,6 +175,8 @@ class EvaluationResult:
     metrics: Metrics
     # Bounded detail: ``initial_cash``, daily equity points and the trade list.
     detail: dict[str, Any] | None = None
+    # ``(session close ms, equity)`` per session, for every completed run whose day ends could be anchored.
+    curve: list[tuple[int, float]] | None = None
 
 
 ExecuteBacktest = Callable[[EvaluationRequest], EvaluationResult]
@@ -263,7 +271,20 @@ def project_response(request: EvaluationRequest, response: EngineBacktestRespons
         error=cell.error,
     )
     detail = detail_payload(response, initial_cash) if request.detail and metrics.status == "completed" else None
-    return EvaluationResult(metrics=metrics, detail=detail)
+    return EvaluationResult(metrics=metrics, detail=detail, curve=daily_curve(response) if metrics.status == "completed" else None)
+
+
+def daily_curve(response: EngineBacktestResponse) -> list[tuple[int, float]] | None:
+    """The run's equity at each session close, or ``None`` when the engine kept no day ends or they cannot be anchored to sessions.
+
+    The curve only draws the run; its metrics stand without it, so a day end
+    the calendar refuses loses the curve and never the result.
+    """
+    try:
+        return daily_equity(response.equity_day_ends) or None
+    except ValueError:
+        logger.warning("golden search run kept no daily curve", extra={"action": "golden_search_curve_unanchored"}, exc_info=True)
+        return None
 
 
 def engine_executor(
@@ -401,7 +422,13 @@ class StudyEvaluator:
                 raise
             run_sync(
                 with_connection(
-                    repo.complete_evaluation, self.study_id, self.attempt, key, metrics=outcome.metrics, detail=outcome.detail
+                    repo.complete_evaluation,
+                    self.study_id,
+                    self.attempt,
+                    key,
+                    metrics=outcome.metrics,
+                    detail=outcome.detail,
+                    curve=outcome.curve,
                 )
             )
             self.new_runs += 1

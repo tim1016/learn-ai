@@ -26,7 +26,6 @@ import asyncpg
 
 from app.research.golden_search.models import (
     CommandRecord,
-    EvaluationPage,
     EvaluationRecord,
     NewStudy,
     StudyRow,
@@ -44,12 +43,16 @@ _STUDY_COLUMNS = """
     exam_locked, decision_json::text AS decision_json, budget_cap, consumed_evaluations, cache_hits,
     invalid_points, incomplete, failure_reason, hidden, run_to_compare
 """
-_EVALUATION_COLUMNS = """
+# Every evaluation column but the detail payload and the curve arrays.
+_RUN_FIELDS = """
     study_id, evaluation_key, point_hash, point_json::text AS point_json, window_start_ms, window_end_ms,
     scenario, detail, stage, fold_index, status, attempt, retries, total_trades, net_profit, total_return_pct,
-    sharpe_ratio, max_drawdown_pct, win_rate, error, detail_json::text AS detail_json, created_at_ms,
-    completed_at_ms
+    sharpe_ratio, max_drawdown_pct, win_rate, error, created_at_ms, completed_at_ms,
+    equity_close_ms IS NOT NULL AS has_curve
 """
+_EVALUATION_COLUMNS = f"{_RUN_FIELDS}, detail_json::text AS detail_json"
+# A run as the runs list reads it: a list of thousands never opens a detail payload.
+_RUN_COLUMNS = f"{_RUN_FIELDS}, NULL::text AS detail_json"
 # Plain columns a transition may set; JSON columns are handled by name below.
 _UPDATABLE_COLUMNS = frozenset(
     {
@@ -132,6 +135,7 @@ def _evaluation(row: asyncpg.Record) -> EvaluationRecord:
         detail_json=json.loads(row["detail_json"]) if row["detail_json"] is not None else None,
         created_at_ms=row["created_at_ms"],
         completed_at_ms=row["completed_at_ms"],
+        has_curve=row["has_curve"],
     )
 
 
@@ -803,15 +807,17 @@ async def complete_evaluation(
     *,
     metrics: Metrics,
     detail: Mapping[str, Any] | None,
+    curve: Sequence[tuple[int, float]] | None = None,
 ) -> None:
-    """Record a pending evaluation's result under the attempt fence, with its trial."""
+    """Record a pending evaluation's result under the attempt fence, with its trial and its daily equity when the run kept one."""
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
         row = await conn.fetchrow(
             """
             UPDATE research_golden_search_evaluations
                SET status = $4, total_trades = $5, net_profit = $6, total_return_pct = $7, sharpe_ratio = $8,
-                   max_drawdown_pct = $9, win_rate = $10, error = $11, detail_json = $12::jsonb, completed_at_ms = $13
+                   max_drawdown_pct = $9, win_rate = $10, error = $11, detail_json = $12::jsonb, completed_at_ms = $13,
+                   equity_close_ms = $14::bigint[], equity_values = $15::float8[]
              WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3
             RETURNING point_hash, stage, fold_index, scenario, detail
             """,
@@ -828,6 +834,8 @@ async def complete_evaluation(
             metrics.error,
             _dumps(dict(detail)) if detail is not None else None,
             now_ms_utc(),
+            None if curve is None else [ms for ms, _ in curve],
+            None if curve is None else [equity for _, equity in curve],
         )
         if row is None:
             raise fence.StaleAttemptError(f"evaluation {evaluation_key} is not pending under attempt {attempt}")
@@ -942,6 +950,28 @@ async def find_detail_evaluation(
     return _evaluation(row) if row is not None else None
 
 
+async def list_runs(conn: asyncpg.Connection, study_id: str) -> list[EvaluationRecord]:
+    """Every evaluation of a study, in the order they were first asked for, without its detail payload."""
+    rows = await conn.fetch(
+        f"SELECT {_RUN_COLUMNS} FROM research_golden_search_evaluations WHERE study_id = $1 ORDER BY created_at_ms, evaluation_key",
+        study_id,
+    )
+    return [_evaluation(row) for row in rows]
+
+
+async def evaluation_curves(conn: asyncpg.Connection, study_id: str, evaluation_keys: Sequence[str]) -> dict[str, list[tuple[int, float]]]:
+    """The stored daily equity ``(session close ms, equity)`` of each named run that kept one."""
+    rows = await conn.fetch(
+        """
+        SELECT evaluation_key, equity_close_ms, equity_values FROM research_golden_search_evaluations
+         WHERE study_id = $1 AND evaluation_key = ANY($2::text[]) AND equity_close_ms IS NOT NULL
+        """,
+        study_id,
+        list(evaluation_keys),
+    )
+    return {row["evaluation_key"]: list(zip(row["equity_close_ms"], row["equity_values"], strict=True)) for row in rows}
+
+
 async def window_evaluations(conn: asyncpg.Connection, study_id: str, *, window_start_ms: int, window_end_ms: int) -> list[EvaluationRecord]:
     """Every scored base-scenario point over one window, one row per point, in the order they were first asked for."""
     rows = await conn.fetch(
@@ -1015,32 +1045,3 @@ async def consumed_outside_evaluator(conn: asyncpg.Connection, study_id: str, st
         step,
     )
     return int(value or 0)
-
-
-async def list_evaluations(
-    conn: asyncpg.Connection,
-    study_id: str,
-    *,
-    stage: str | None = None,
-    fold_index: int | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> EvaluationPage:
-    if page < 1 or not 1 <= page_size <= 500:
-        raise ValueError("page must be positive and page_size between 1 and 500")
-    where = "study_id = $1 AND ($2::text IS NULL OR stage = $2) AND ($3::int IS NULL OR fold_index = $3)"
-    total = await conn.fetchval(f"SELECT COUNT(*) FROM research_golden_search_evaluations WHERE {where}", study_id, stage, fold_index)
-    rows = await conn.fetch(
-        f"""
-        SELECT {_EVALUATION_COLUMNS} FROM research_golden_search_evaluations
-         WHERE {where}
-         ORDER BY created_at_ms, evaluation_key
-         LIMIT $4 OFFSET $5
-        """,
-        study_id,
-        stage,
-        fold_index,
-        page_size,
-        (page - 1) * page_size,
-    )
-    return EvaluationPage(total=int(total or 0), page=page, page_size=page_size, rows=tuple(_evaluation(row) for row in rows))

@@ -151,14 +151,23 @@ describe('GoldenSearchService', () => {
     await expect(hide).resolves.toBeUndefined();
   });
 
-  it('reads paged evaluations and a qualification deploy offer from their own paths', async () => {
-    const page = service.evaluations('study-1', { stage: 'validation', fold_index: 0, page: 2, page_size: 50 });
-    const req = http.expectOne((r) => r.url === `${BASE}/studies/study-1/evaluations`);
-    expect(req.request.params.get('stage')).toBe('validation');
-    expect(req.request.params.get('fold_index')).toBe('0');
-    expect(req.request.params.get('page')).toBe('2');
-    req.flush({ total: 0, page: 2, page_size: 50, rows: [] });
+  it('reads a page of runs by group, fold and order, a run’s curves by key, and a qualification deploy offer, each from its own path', async () => {
+    const page = service.runs('study-1', { group: 'fold_test', fold_index: 0, sort: 'sharpe_ratio', descending: true, page: 2, page_size: 100 });
+    const req = http.expectOne((r) => r.url === `${BASE}/studies/study-1/runs`);
+    expect(['group', 'fold_index', 'sort', 'descending', 'page', 'page_size'].map((name) => req.request.params.get(name))).toEqual(['fold_test', '0', 'sharpe_ratio', 'true', '2', '100']);
+    req.flush({ total: 0, page: 2, page_size: 100, sort: 'sharpe_ratio', folds: 2, groups: [], rows: [] });
     await page;
+    // Every group and every fold: neither filter is sent.
+    void service.runs('study-1', { group: null, fold_index: null, sort: 'recorded', descending: false, page: 1, page_size: 100 });
+    const unfiltered = http.expectOne((r) => r.url === `${BASE}/studies/study-1/runs`);
+    expect([unfiltered.request.params.has('group'), unfiltered.request.params.has('fold_index')]).toEqual([false, false]);
+    unfiltered.flush({ total: 0, page: 1, page_size: 100, sort: 'recorded', folds: 2, groups: [], rows: [] });
+
+    const curves = service.runCurves('study-1', ['k1', 'k2']);
+    const read = http.expectOne((r) => r.url === `${BASE}/studies/study-1/runs/curves`);
+    expect(read.request.params.getAll('key')).toEqual(['k1', 'k2']);
+    read.flush({ curves: [], not_recorded: ['k1', 'k2'] });
+    await expect(curves).resolves.toMatchObject({ not_recorded: ['k1', 'k2'] });
 
     const offer = service.deployOffer('q-1');
     http.expectOne('/api/research/golden-qualifications/q-1/deploy-offer').flush({ qualification_id: 'q-1', status: 'ready' });

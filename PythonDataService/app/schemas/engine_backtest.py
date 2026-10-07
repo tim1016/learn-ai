@@ -430,6 +430,15 @@ class EngineBacktestResponse(BaseModel):
             "carries the count it would have had."
         ),
     )
+    # One point a day, kept on every run (#2930): a summary consumer that
+    # runs thousands of backtests can still draw each one's equity.
+    equity_day_ends: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "The last equity sample of each America/New_York date the run scored, oldest first, as "
+            "{timestamp (int64 ms UTC), equity}. Filled on every run, a summary_only run included."
+        ),
+    )
     # Consolidated OHLCV bars for the price chart (15-min or daily depending
     # on the strategy's consolidator). Much smaller than the full minute-bar
     # stream retained in BacktestResult.bars.

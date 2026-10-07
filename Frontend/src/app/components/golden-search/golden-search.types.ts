@@ -265,15 +265,6 @@ export interface StudyListFilters {
   limit?: number;
 }
 
-export interface EvaluationQuery {
-  stage?: string;
-  fold_index?: number;
-  page: number;
-  page_size: number;
-}
-
-export type EvaluationRow = Omit<Schemas['GoldenSearchEvaluationRow'], 'point'> & { point: Point };
-export type EvaluationPage = Omit<Schemas['GoldenSearchEvaluationPage'], 'rows'> & { rows: EvaluationRow[] };
 
 export type DailyEquityPoint = Schemas['GoldenSearchEquityPoint'];
 export type DrawdownPoint = Schemas['GoldenSearchDrawdownPoint'];
@@ -322,6 +313,28 @@ export interface SearchCharts {
 export type FoldChart = Omit<Schemas['GoldenSearchFoldChart'], 'winner'> & { winner: Point | null };
 export type TestOverTimeCharts = Omit<Schemas['GoldenSearchTestOverTimeCharts'], 'folds'> & { folds: FoldChart[] };
 export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
+
+/** What asked for a run: the step, and for a walk-forward or evidence run which part of it. */
+export type RunGroupKey = Schemas['GoldenSearchRunGroup']['key'];
+export type RunGroup = Schemas['GoldenSearchRunGroup'];
+/** One engine run of a study (#2930), under the step that first asked for it. */
+export type StudyRun = Schemas['GoldenSearchRun'];
+export type RunsPage = Schemas['GoldenSearchRunsPage'];
+/** The order of a page of runs: as recorded, or by a measure. */
+export type RunSort = RunsPage['sort'];
+export interface RunsQuery {
+  group: RunGroupKey | null;
+  /** One fold of the fold groups; null for every fold. */
+  fold_index: number | null;
+  sort: RunSort;
+  descending: boolean;
+  page: number;
+  page_size: number;
+}
+/** One run's daily curve as parallel lists over its session closes; `drawdown` and `deepest_drawdown` are null when its peak never rose above 0. */
+export type RunCurve = Schemas['GoldenSearchRunCurve'];
+/** The named runs' curves, and the runs among them that kept none. */
+export type RunCurves = Schemas['GoldenSearchRunCurves'];
 
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */
 export type CandidateDetail = Omit<Schemas['GoldenSearchCandidateDetail'], 'point'> & { point: Point };

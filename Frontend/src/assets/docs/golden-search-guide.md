@@ -1223,3 +1223,41 @@ A group of bars for each month of the final test: each fit's net return and the 
 #### An everyday comparison
 
 A team's season by month: a title won by steady months is more convincing than one rescued by a single hot streak.
+
+## All runs
+
+All runs lists every engine run the study recorded, under the step that first asked for it: each point the search scored, each fold's training and test runs, the candidate, neighbor and cost-stress runs, and the final test's. A point a later step asks for again is answered from its first run, so it appears once. Filter by what asked for the runs, sort by a measure, and tick runs to draw them together.
+
+Every run keeps one equity value at each session close. A run recorded before runs kept their curve is still listed with its numbers; it says "Curve not recorded" and cannot be drawn.
+
+### Run equity curves {#run-curves}
+
+#### The question it answers
+
+How did each run you ticked travel, not just where it ended?
+
+#### What you're looking at
+
+A line for each run you ticked. On top, the run's cumulative return at every session close it scored, from the study's starting capital. Beneath, its fall from its own highest point so far, with the worst-fall limit dashed. Runs over different windows share one date axis, so a fold's test run sits after its training runs and a final-test run sits at the right. With more than eight runs drawn the lines thin out and lose their end labels.
+
+$$\text{cumulative return} = \frac{\text{equity at the session close}}{\text{starting capital}} - 1$$
+
+$$\text{fall from peak} = \frac{\text{equity today}}{\text{highest equity so far}} - 1$$
+
+#### How to read it
+
+1. Each line is one run you ticked, from the study’s starting capital at every session close it scored.
+2. Runs over different windows sit on one date axis: a line starts and stops with its own window.
+3. Drop to the lower part: each run’s fall from its own peak, against the worst-fall limit.
+4. Hover a session for the runs’ values there, best first. Past twelve runs it lists the best twelve.
+
+#### Good signs and warning signs
+
+- Good: the winner's line inside a band of similar lines. Nearby settings travelled the same way.
+- Warning: the winner far above every other line. One setting standing alone is often luck.
+- Warning: a line that earns its whole return in one jump.
+- The line is drawn at session closes. A fall inside a day can be deeper than it shows.
+
+#### An everyday comparison
+
+Runners' split times on one chart: the finishing order says who won, the lines say who ran a steady race.

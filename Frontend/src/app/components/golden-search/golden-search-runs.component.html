@@ -1,0 +1,102 @@
+@let s = study();
+<div class="runs">
+  <p class="lead">Every engine run of this study, under the step that first asked for it. Tick runs to draw their equity together.</p>
+
+  @if (listError(); as message) {
+    <div role="alert" class="failed">
+      <p>{{ message }}</p>
+      <button type="button" class="link" (click)="retry()">Try again</button>
+    </div>
+  }
+
+  @if (runs(); as page) {
+    @if (totalRuns() === 0) {
+      <p class="muted" role="status">No run is recorded for this study yet. Runs appear here as the search scores them.</p>
+    } @else {
+      <app-golden-search-panel chart="run-curves">
+        <div legend class="drawn">
+          <span>{{ ticked().length | number }} of at most {{ maxDrawn }} drawn</span>
+          <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="drawable() === 0 || full()" (click)="drawPage()"><span>Draw every run on this page</span></button>
+          <button pButton type="button" size="small" severity="secondary" [text]="true" [disabled]="ticked().length === 0" (click)="clear()"><span>Clear</span></button>
+        </div>
+        @if (curvesError(); as message) {
+          <div role="alert" class="failed">
+            <p>{{ message }}</p>
+            <button type="button" class="link" (click)="retryCurves()">Try again</button>
+          </div>
+        } @else if (chart(); as spec) {
+          <app-golden-search-chart [spec]="spec" [height]="380" />
+        } @else if (loadingCurves()) {
+          <p class="muted" role="status">Loading the ticked runs’ curves…</p>
+        } @else {
+          <p class="muted">Tick runs in the list below to draw them here.</p>
+        }
+        <p caption class="caption">Each run from the study’s ${{ s.scope.capital | number: '1.0-0' }} starting capital at every session close it scored, and beneath, its fall from its own peak. Runs over different windows share the date axis.</p>
+      </app-golden-search-panel>
+
+      <div class="filters" role="group" aria-label="What asked for the runs">
+        <button type="button" class="chip" [attr.aria-pressed]="group() === null" (click)="chooseGroup(null)">All <span class="count">{{ totalRuns() | number }}</span></button>
+        @for (item of page.groups; track item.key) {
+          <button type="button" class="chip" [attr.aria-pressed]="group() === item.key" (click)="chooseGroup(item.key)">{{ item.label }} <span class="count">{{ item.runs | number }}</span></button>
+        }
+      </div>
+      @if (folds().length > 0) {
+        <div class="filters" role="group" aria-label="Which fold">
+          <button type="button" class="chip" [attr.aria-pressed]="fold() === null" (click)="chooseFold(null)">Every fold</button>
+          @for (index of folds(); track index) {
+            <button type="button" class="chip" [attr.aria-pressed]="fold() === index" (click)="chooseFold(index)">Fold {{ index + 1 }}</button>
+          }
+        </div>
+      }
+      @if (withoutCurve() > 0) {
+        <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i>
+          <span>Completed runs with no curve recorded: {{ withoutCurve() | number }}. They are listed with their numbers and cannot be drawn.</span></p>
+      }
+
+      @if (!mismatched()) {
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">The study’s runs: tick a run to draw it</caption>
+            <thead>
+              <tr>
+                <th scope="col"><span class="sr-only">Draw</span></th>
+                <th scope="col" [attr.aria-sort]="ariaSort('recorded')"><button type="button" class="sort" (click)="recordedOrder()">Run @if (sort() === 'recorded') { <i class="pi pi-sort-amount-down-alt" aria-hidden="true"></i> }</button></th>
+                <th scope="col">Settings</th>
+                <th scope="col">Window</th>
+                @for (column of columns; track column.key) {
+                  <th scope="col" class="num" [attr.aria-sort]="ariaSort(column.key)">
+                    <button type="button" class="sort" (click)="sortBy(column)">{{ column.label }}
+                      @if (sort() === column.key) { <i class="pi" [class.pi-sort-amount-down]="descending()" [class.pi-sort-amount-up-alt]="!descending()" aria-hidden="true"></i> }
+                    </button>
+                  </th>
+                }
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of rows(); track row.run.evaluation_key) {
+                <tr [class.ticked]="row.ticked">
+                  <td><input type="checkbox" [checked]="row.ticked" [disabled]="!row.run.has_curve || (full() && !row.ticked)" [attr.aria-label]="'Draw ' + row.run.label + ', ' + row.run.params_sentence" (change)="toggle(row.run)" /></td>
+                  <th scope="row">{{ row.run.label }}@if (row.note; as note) { <small [class.bad]="row.run.status === 'failed'">{{ note }}</small> }</th>
+                  <td class="settings">{{ row.run.params_sentence }}</td>
+                  <td class="window"><app-timestamp-display [value]="row.run.window_start_ms" mode="date-et" /> – <app-timestamp-display [value]="row.run.window_end_ms - 1" mode="date-et" /></td>
+                  <td class="num">{{ row.netReturn }}</td>
+                  <td class="num">{{ row.sharpe }}</td>
+                  <td class="num">{{ row.worstFall }}</td>
+                  <td class="num">{{ row.run.total_trades === null ? '—' : (row.run.total_trades | number) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <nav class="pager" aria-label="Pages of runs">
+          <span>{{ firstShown() | number }}–{{ lastShown() | number }} of {{ page.total | number }}</span>
+          <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="page.page <= 1" (click)="turn(-1)"><span>Previous</span></button>
+          <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="page.page >= pages()" (click)="turn(1)"><span>Next</span></button>
+        </nav>
+      }
+    }
+  } @else if (listError() === null) {
+    <p class="muted" role="status">Loading the study’s runs…</p>
+  }
+</div>

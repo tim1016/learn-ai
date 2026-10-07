@@ -66,6 +66,11 @@ def daily_equity(equity_curve: Sequence[Mapping[str, Any]]) -> list[tuple[int, f
     return daily
 
 
+def cumulative_return_series(daily: Sequence[tuple[int, float]], capital: float) -> list[tuple[int, float]]:
+    """``(ms, equity / capital − 1)``: the run's gain on its starting capital at each session close."""
+    return [(ms, equity / capital - 1.0) for ms, equity in daily]
+
+
 def drawdown_series(daily: Sequence[tuple[int, float]]) -> list[tuple[int, float]]:
     """``(ms, equity / running peak − 1)``; refuses a non-positive peak, where drawdown is undefined."""
     series: list[tuple[int, float]] = []

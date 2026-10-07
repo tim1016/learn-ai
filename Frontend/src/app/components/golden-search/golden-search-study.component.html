@@ -13,16 +13,21 @@
         <ol>
           @for (step of steps(); track step.id; let i = $index) {
             <li>
-              <button type="button" [attr.aria-current]="step.id === selectedStep() ? 'step' : null" [attr.data-progress]="step.progress" (click)="selectStep(step.id)">
+              <button type="button" [attr.aria-current]="step.id === selectedStep() && !runsOpen() ? 'step' : null" [attr.data-progress]="step.progress" (click)="selectStep(step.id)">
                 <span class="num" aria-hidden="true">{{ i + 1 }}</span>{{ step.label }} <span class="sr-only">{{ progressText[step.progress] }}</span>
               </button>
             </li>
           }
         </ol>
       </nav>
-      <button #reviewButton type="button" class="review" [attr.aria-expanded]="reviewing() !== null" (click)="toggleReview()">
-        <i class="pi pi-compass" aria-hidden="true"></i> Review this study
-      </button>
+      <div class="tools">
+        <button type="button" class="review" [attr.aria-pressed]="runsOpen()" (click)="toggleRuns()">
+          <i class="pi pi-chart-line" aria-hidden="true"></i> All runs
+        </button>
+        <button #reviewButton type="button" class="review" [attr.aria-expanded]="reviewing() !== null" (click)="toggleReview()">
+          <i class="pi pi-compass" aria-hidden="true"></i> Review this study
+        </button>
+      </div>
     </div>
 
     <app-golden-search-scope-line [scope]="d.scope" />
@@ -66,12 +71,16 @@
     </section>
 
     <div class="step-body">
-      @switch (selectedStep()) {
-        @case ('plan') { <app-golden-search-plan-summary [study]="d" [capability]="capability()" /> }
-        @case ('search') { <app-golden-search-search-step [study]="d" [capability]="capability()" /> }
-        @case ('test') { <app-golden-search-test-step [study]="d" [capability]="capability()" /> }
-        @case ('compare') { <app-golden-search-compare-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
-        @case ('decision') { <app-golden-search-decision-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
+      @if (runsOpen()) {
+        <app-golden-search-runs [study]="d" />
+      } @else {
+        @switch (selectedStep()) {
+          @case ('plan') { <app-golden-search-plan-summary [study]="d" [capability]="capability()" /> }
+          @case ('search') { <app-golden-search-search-step [study]="d" [capability]="capability()" /> }
+          @case ('test') { <app-golden-search-test-step [study]="d" [capability]="capability()" /> }
+          @case ('compare') { <app-golden-search-compare-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
+          @case ('decision') { <app-golden-search-decision-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
+        }
       }
     </div>
 

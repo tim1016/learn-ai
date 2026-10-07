@@ -34,7 +34,12 @@ from app.research.golden_search.concentration import (
 )
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
-from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
+from app.research.golden_search.evidence import (
+    CANDIDATE_LABELS,
+    cumulative_return_series,
+    drawdown_series,
+    monthly_results,
+)
 from app.research.golden_search.final_measures import final_comparison
 from app.research.golden_search.final_test import fit_for, fits_to_test, pick_of, recorded_fits
 from app.research.golden_search.guidance import (
@@ -507,7 +512,7 @@ def run_detail(record: EvaluationRecord) -> dict[str, Any]:
     return {
         "window": window,
         "metrics": metrics_of(record).as_dict(),
-        "cumulative_return": [{"ms": ms, "value": equity / capital - 1.0} for ms, equity in daily],
+        "cumulative_return": [{"ms": ms, "value": value} for ms, value in cumulative_return_series(daily, capital)],
         "daily_equity": [{"ms": ms, "equity": equity} for ms, equity in daily],
         "drawdown": [{"ms": ms, "drawdown": value} for ms, value in drawdown_series(daily)],
         "monthly": [month.as_dict() for month in monthly_results(daily, capital, exits)],

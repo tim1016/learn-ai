@@ -14,6 +14,7 @@ import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.c
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import { GoldenSearchPlanSummaryComponent } from './golden-search-plan-summary.component';
 import { GoldenSearchProcessComponent, researchStage } from './golden-search-process.component';
+import { GoldenSearchRunsComponent } from './golden-search-runs.component';
 import { GoldenSearchScopeLineComponent } from './golden-search-scope-line.component';
 import { GoldenSearchSearchStepComponent } from './golden-search-search-step.component';
 import { primaryAction, singleStageAction, STUDY_STEPS, stepForState, stepProgress, type PrimaryAction, type StepProgress, type StudyStep } from './golden-search-steps';
@@ -41,7 +42,8 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
  * record controls (Cancel, Finish, Hide), and a footer naming the data and
  * where the final test and the current default stand. Review this study
  * walks the key charts across the steps in research order, one question at
- * each (#2821). Every stage change is a command
+ * each (#2821). All runs opens, in place of the selected step, every engine
+ * run the study recorded with its equity curve (#2930). Every stage change is a command
  * carrying the study's revision and an idempotency key; a command that
  * authorizes a stage starts its job through the jobs boundary. Polls while a
  * stage runs; a failed poll keeps the study shown and tries again, and an
@@ -57,6 +59,7 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
     GoldenSearchDecisionStepComponent,
     GoldenSearchPlanSummaryComponent,
     GoldenSearchProcessComponent,
+    GoldenSearchRunsComponent,
     GoldenSearchScopeLineComponent,
     GoldenSearchSearchStepComponent,
     GoldenSearchStudyStripComponent,
@@ -90,6 +93,8 @@ export class GoldenSearchStudyComponent {
   readonly actionRefusal = signal<GridSearchRefusal | null>(null);
   readonly busy = signal(false);
   readonly selectedStep = signal<StudyStep>('search');
+  /** All runs is open in place of the selected step (#2930); choosing a step closes it. */
+  readonly runsOpen = signal(false);
   /** The server's guidance, announced once when the study moves to a new state (never on the first load or a poll that changes nothing). */
   readonly announcement = signal('');
 
@@ -109,7 +114,7 @@ export class GoldenSearchStudyComponent {
   protected readonly primary = computed<PrimaryAction | null>(() => {
     const detail = this.detail();
     const action = detail === null ? null : primaryAction(detail);
-    return action?.kind === 'step' && action.step === this.selectedStep() ? null : action;
+    return action?.kind === 'step' && action.step === this.selectedStep() && !this.runsOpen() ? null : action;
   });
   /** Run only the next stage and pause after it: the quieter alternative to Run research. */
   protected readonly secondary = computed<PrimaryAction | null>(() => {
@@ -180,6 +185,7 @@ export class GoldenSearchStudyComponent {
         this.awaitingClaimPolls = 0;
         // A review belongs to the study it started on; another study starts without one.
         this.reviewing.set(null);
+        this.runsOpen.set(false);
         this.review.stop.set(null);
         void this.reload(id);
       });
@@ -208,6 +214,11 @@ export class GoldenSearchStudyComponent {
 
   selectStep(step: StudyStep): void {
     this.selectedStep.set(step);
+    this.runsOpen.set(false);
+  }
+
+  protected toggleRuns(): void {
+    this.runsOpen.update((open) => !open);
   }
 
   protected toggleReview(): void {
