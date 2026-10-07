@@ -377,6 +377,27 @@ class AlpacaTradingClient:
             describe="activities",
         )
 
+    async def list_non_trade_activities(
+        self,
+        *,
+        limit: int,
+        page_token: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """One newest-first page of the account's non-trade activities, of every type.
+
+        ``category`` is the reference's own filter on
+        ``GET /v2/account/activities``. It names no activity type, so an
+        activity whose code Alpaca's pages spell two ways is returned under
+        whichever it has (#2913).
+        """
+        params = {"page_size": limit, "direction": "desc", "category": "non_trade_activity"}
+        if page_token is not None:
+            params["page_token"] = page_token
+        return await self._call(
+            lambda c: c.get("/account/activities", data=params),
+            describe="non-trade activities",
+        )
+
     async def list_assets(
         self,
         *,

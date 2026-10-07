@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.sqlite.exit import (
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     RECOVERY_FLATTEN_DECISION_PREFIX,
     flatten_send_refusal,
+    option_close_not_taken,
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
@@ -186,6 +187,13 @@ async def execute_safe_flatten_plan(
                 # what the check found, under its own code.
                 raise SafeFlattenExecutionError(
                     f"{unsent.explanation} {unsent.next_step}", refusal=unsent
+                )
+            not_taken = option_close_not_taken(repo, accepted.effect_operation_id, symbol=leg.symbol)
+            if not_taken is not None:
+                # A close of an option contract (ADR 0076): no broker was asked. The Clerk or
+                # a Dry Run's simulation would not take it, and says why under its own code.
+                raise SafeFlattenExecutionError(
+                    f"{not_taken.explanation} {not_taken.next_step}", refusal=not_taken
                 )
             # The broker rejected this reduction (the order row exists but its
             # effect folded to failed). Never report success while exposure

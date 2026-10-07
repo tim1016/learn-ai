@@ -188,7 +188,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_exit_not_flat_uncertainty,
     uncertainty_envelope,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause, ExitStuckCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_STUCK_REASON_CODE,
+    ExitNotFlatCause,
+    ExitStuckCause,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import LOST_ANSWER_NOTICE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import RedriveThenEscalate, reason_age_policy
 from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
@@ -389,6 +393,18 @@ OPTION_CONTRACT_EXPIRED = OptionEffectRefusal.CONTRACT_EXPIRED.value
 
 _EXPIRED_CONTRACT_HEADLINE = "An option contract expired while the bot still held it"
 
+_EXPIRED_CONTRACT_NEXT_STEP = (
+    "No order can close an expired contract, so there is nothing to send. The position stays on "
+    "this bot's books until expired contracts are settled, which is not built yet."
+)
+
+_EXPIRED_CONTRACT_OPERATOR_IMPACT = (
+    "New exposure is on hold for this strategy. No order can reduce this position; reconciliation "
+    "remains available."
+)
+"""What an expired contract's notice says the owner can still do. Never "exact risk reduction remains
+available", as every other ``EXIT_NOT_FLAT`` notice says: nothing reduces an expired contract."""
+
 
 def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
     """Why no order can close a position in ``symbol``, or ``None`` when one still can.
@@ -417,10 +433,7 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
             "seconds, so no order can close it and none was sent. The position is still on the books: a "
             "Dry Run does not yet settle an expired contract at its exercise value."
         ),
-        next_step=(
-            "No order can close an expired contract, so there is nothing to send. The position stays on "
-            "this bot's books until expired contracts are settled, which is not built yet."
-        ),
+        next_step=_EXPIRED_CONTRACT_NEXT_STEP,
     )
 
 
@@ -870,6 +883,7 @@ def _fold_exit_not_flat(
     next_step: str,
     why: str | None = None,
     refusal: BrokerRefusal | None = None,
+    operator_impact: str | None = None,
 ) -> None:
     """Fail the EXIT and raise the ``EXIT_NOT_FLAT`` episode exposure is still held under.
 
@@ -901,6 +915,7 @@ def _fold_exit_not_flat(
             headline=headline,
             explanation=explanation,
             next_step=next_step,
+            operator_impact=operator_impact,
         ),
     )
     fold_failed(
@@ -942,6 +957,7 @@ def _exit_not_flat_notice(
     headline: str,
     explanation: str,
     next_step: str,
+    operator_impact: str | None = None,
 ) -> _ExitNotFlatNotice:
     """The ``EXIT_NOT_FLAT`` notice of an EXIT that ended with ``attributed_qty`` of ``symbol`` still held.
 
@@ -954,7 +970,7 @@ def _exit_not_flat_notice(
         "reason_code": EXIT_NOT_FLAT_REASON_CODE,
         "headline": headline,
         "explanation": explanation,
-        "operator_impact": _EXIT_NOT_FLAT_OPERATOR_IMPACT,
+        "operator_impact": _EXIT_NOT_FLAT_OPERATOR_IMPACT if operator_impact is None else operator_impact,
         "next_step": next_step,
         "evidence_refs": (order_ref,),
         "cause_facts": ExitNotFlatCause(symbol=symbol.upper(), attributed_qty=attributed_qty).to_mapping(),
@@ -1252,6 +1268,7 @@ def _fold_expired_option_close(
         headline=_EXPIRED_CONTRACT_HEADLINE,
         explanation=expired.explanation,
         next_step=expired.next_step,
+        operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
     )
     return True
 
@@ -1282,8 +1299,74 @@ def note_expired_option_position(
             headline=_EXPIRED_CONTRACT_HEADLINE,
             explanation=expired.explanation,
             next_step=expired.next_step,
+            operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
         ),
     )
+
+
+class ExpiredContractNotice(NamedTuple):
+    """What a notice of a held option contract says once the contract has expired."""
+
+    headline: str
+    explanation: str
+    operator_impact: str
+    next_step: str
+
+
+def expired_contract_notice(expired: LegRefusal) -> ExpiredContractNotice:
+    """The one wording of a held contract that has expired (ADR 0076), wherever it is said.
+
+    On the notice an EXIT raises when it meets the expiry, on the notices
+    the Clerk's pass rewrites (:func:`say_the_contract_expired`), and on
+    the bot's page, which reads an open notice in these words from the
+    moment of expiry without waiting for a pass (``projections``).
+    """
+    return ExpiredContractNotice(
+        headline=_EXPIRED_CONTRACT_HEADLINE,
+        explanation=expired.explanation,
+        operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
+        next_step=expired.next_step,
+    )
+
+
+def say_the_contract_expired(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, expired: LegRefusal
+) -> bool:
+    """Say on this bot's open EXIT notices that its option contract expired; whether anything was written.
+
+    A notice raised while the contract still traded tells the operator what
+    could be done then: wait for the Clerk's retry, or flatten. Once the
+    contract's last session is over neither can happen, and a stopped bot
+    makes no later EXIT that would say so. So the Clerk's own pass says it
+    (``exit_watchdog.commit_recovery_evaluations``), on the
+    ``EXIT_NOT_FLAT`` notice and on the ``EXIT_STUCK`` one beside it, in the
+    words an EXIT ended by :func:`_fold_expired_option_close` raises
+    (:func:`expired_contract_notice`).
+
+    Each notice keeps what it names and its evidence: the watchdog still
+    reads the episode's orders from them. The words do not change with the
+    time, so a notice that already says it is left as it is and nothing is
+    written: once per notice, however many passes follow.
+    """
+    written = False
+    for reason_code in (EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE):
+        episode = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=reason_code, strategy_instance_id=strategy_instance_id
+        )
+        if episode is None:
+            continue
+        recorded = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"])
+        outcome = raise_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            reason_code=reason_code,
+            **expired_contract_notice(expired)._asdict(),
+            evidence_refs=tuple(recorded.evidence_refs),
+            cause_facts=recorded.cause_facts,
+            severity=recorded.severity,
+        )
+        written = written or outcome != "unchanged"
+    return written
 
 
 def _send_verdict(
@@ -1349,7 +1432,8 @@ def _created_leg_may_be_sent(
     valid_until_ms = _created_leg_valid_until_ms(repo, effect_operation_id, created)
     now_ms = repo.clock()
     accepted = _accepted_facts(repo, effect_operation_id)
-    if _fold_expired_option_close(
+    # An order sent before to a real broker may be there: its EXIT keeps custody below, expired contract or not.
+    if not sent_to_broker and _fold_expired_option_close(
         repo, accepted, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=created.symbol,
         remaining_qty=remaining_qty, now_ms=now_ms,
     ):
@@ -2759,6 +2843,49 @@ def flatten_send_refusal(repo: ClerkSqliteRepository, effect_operation_id: str) 
         reason_code=row["summary_code"],
         explanation=OrderSubmitFailedFacts.from_facts_json(row["facts_json"]).reason,
         next_step=FLATTEN_COVER_NEXT_STEPS[row["summary_code"]],
+    )
+
+
+def option_close_not_taken(
+    repo: ClerkSqliteRepository, effect_operation_id: str, *, symbol: str
+) -> LegRefusal | None:
+    """Why a failed EXIT's close of an option contract was not taken, or ``None`` for a reduction in shares (ADR 0076).
+
+    Read from the EXIT's own fold, as :func:`flatten_send_refusal` is, so
+    the Flatten that failed and a retry of it are told the same thing. No
+    broker is asked about an option order today: the Clerk itself or a
+    Dry Run's simulation would not take it, and the recorded reason is in
+    the refuser's own words.
+
+    A contract that expired keeps its own code and its own next step,
+    which sends the operator to no retry: none can work. Any other is
+    told under the fold's code. Its next step does not promise that
+    flattening again will work: a Flatten is offered again only when one
+    can go out, and the bot's page says why when none can.
+    """
+    contract_symbol = symbol.upper()
+    if not is_option_contract_symbol(contract_symbol):
+        return None
+    row = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_NOT_FLAT"
+    )
+    if row is None:
+        return None
+    recorded = OrderSubmitFailedFacts.from_facts_json(row["facts_json"])
+    if row["summary_code"] == OPTION_CONTRACT_EXPIRED:
+        return LegRefusal(
+            reason_code=OPTION_CONTRACT_EXPIRED, explanation=recorded.reason, next_step=_EXPIRED_CONTRACT_NEXT_STEP
+        )
+    return LegRefusal(
+        reason_code=row["summary_code"],
+        explanation=(
+            f"The order to close {contract_symbol} was not taken, so nothing was sold or bought and the "
+            f"position is still open. {recorded.why}"
+        ),
+        next_step=(
+            "Run Reconcile now. A Flatten is offered again only when one can go out, and the bot's page "
+            "says why when none can."
+        ),
     )
 
 

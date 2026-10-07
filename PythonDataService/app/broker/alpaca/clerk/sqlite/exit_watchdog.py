@@ -67,7 +67,10 @@ regular session, as a scheduled end's is, and outside it holds for the next
 open. Once the contract's last session has ended no order can close it, so
 every pass holds under ``OPTION_CONTRACT_EXPIRED``: nothing is accepted, no
 attempt is spent, and the episode never escalates for want of a fill that
-cannot come.
+cannot come. The first pass to hold it so also rewrites the bot's open EXIT
+notices to say that the contract expired: they were written while a retry or
+a flatten could still close it, and a stopped bot makes no later EXIT that
+would correct them.
 """
 
 from __future__ import annotations
@@ -108,6 +111,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     redrive_decision_prefix,
     redrive_episode_token,
     regular_session_sale_waits_for_open,
+    say_the_contract_expired,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -523,6 +527,8 @@ def commit_recovery_evaluations(
             result=result, evaluated_at_ms=evaluation.evaluated_at_ms,
             pass_started_at_ms=pass_started_at_ms, interval_ms=interval_ms,
         )
+        if observation is not None:
+            _say_if_the_contract_expired(repo, evaluation)
         if observation is None or result.outcome != "failure":
             continue
         exhausted = stale.regular_failures >= policy.max_count
@@ -534,6 +540,29 @@ def commit_recovery_evaluations(
             failure_elapsed_ms=observation.failure_elapsed_ms, failure_reason=result.explanation,
             next_step=result.next_step,
         )
+
+
+def _say_if_the_contract_expired(repo: ClerkSqliteRepository, evaluation: RecoveryEvaluation) -> None:
+    """Rewrite the notices of an episode this pass held because its option contract has expired (ADR 0076).
+
+    Written with the pass's observation, so only for an episode that is
+    still the bot's open one. The notices then say what is true from now
+    on: the contract expired, no order can close it, and nothing more is
+    sent for it. They send the operator to no flatten and promise no retry.
+    A later pass finds them saying so already and writes nothing.
+    """
+    stale = evaluation.stale
+    if not stale.closes_an_option:
+        return
+    expired = expired_option_close(stale.cause.symbol, evaluation.evaluated_at_ms)
+    if expired is None:
+        return
+    if say_the_contract_expired(repo, strategy_instance_id=stale.strategy_instance_id, expired=expired):
+        logger.warning("a held option contract expired; the bot's open EXIT notices now say so", extra={
+            "action": "exit_notices_say_contract_expired", "account_id": repo.account_id,
+            "strategy_instance_id": stale.strategy_instance_id, "symbol": stale.cause.symbol,
+            "uncertainty_id": stale.episode["uncertainty_id"],
+        })
 
 
 def _accept_admissible_redrive(

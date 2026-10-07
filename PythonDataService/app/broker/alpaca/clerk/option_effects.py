@@ -55,6 +55,9 @@ class OptionEffectRefusal(StrEnum):
     CONTRACT_TERMS_CONFLICT = "OPTION_CONTRACT_TERMS_CONFLICT"
     # The contract's last session has ended: nothing is bought or sold in it.
     CONTRACT_EXPIRED = "OPTION_CONTRACT_EXPIRED"
+    # The entry reached the Clerk too close to the close its position would owe that day to be seen
+    # through. The resolver's recheck refuses the same at its own moment, under the same code.
+    PAST_ENTRY_CUTOFF = "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
     # The fee model has no rate for the day, so the entry's fees cannot be set aside.
     FEE_RATE_NOT_PINNED = "OPTION_FEE_RATE_NOT_PINNED"
     # A simulated close has no quote kept to price it from.

@@ -26,7 +26,11 @@ from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotesUnavailab
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState
 from app.broker.alpaca.clerk.option_effects import OptionExitEvidence
 from app.broker.alpaca.clerk.program_leg import LegRefusal, LegShape
-from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit, ConfirmedRecoveryShape
+from app.broker.alpaca.clerk.recovery_reduction import (
+    ConfirmedRecoveryLimit,
+    ConfirmedRecoveryShape,
+    RegularSessionReduction,
+)
 from app.broker.alpaca.clerk.sqlite import enter as enter_module
 from app.broker.alpaca.clerk.sqlite import exit_resolution
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -34,7 +38,11 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_acc
 from app.broker.alpaca.clerk.sqlite.exit_recovery import latest_exit_recovery
 from app.broker.alpaca.clerk.sqlite.option_admission import work_out_option_entry
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionExitFacts
-from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability, SafeFlattenPlan
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ProjectedUncertainty,
+    RecoveryCapability,
+    SafeFlattenPlan,
+)
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
@@ -42,7 +50,11 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionResult,
     execute_recovery_action,
 )
-from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    RecoveryActionUnavailableError,
+    RecoveryPolicyContext,
+    build_recovery_catalog,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import _OptionQuoteBoundTradePort
 from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenExecutionError,
@@ -364,6 +376,60 @@ async def test_no_question_about_a_contract_is_ever_put_to_the_stock_quote_sourc
     assert "SPY" in _symbols_the_stock_feed_was_asked_about()
 
 
+async def test_a_quote_stamped_after_the_clerks_clock_gets_no_flatten_offered(dry_run: _DryRun) -> None:  # noqa: F811
+    """The newest quote received by now has nothing bid. One stamped a minute ahead has $2.10 bid.
+
+    That one is not a price a close made now could meet, so the page offers
+    no Flatten on it, as the simulation would sell nothing at it.
+    """
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    _hand_over(dry_run, "0", "0.05")
+    await _stop(dry_run)
+    await dry_run.clerk.reconcile_once()
+    dry_run.wait(30_000)
+    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() + 60_000)})
+
+    await _flatten_not_offered(dry_run, "OPTION_EXIT_UNPRICED")
+
+    assert dry_run.held() == {SYMBOL: 1.0} and _sales(dry_run) == []
+
+
+async def test_a_contract_spelled_in_lower_case_is_never_taken_for_a_share(dry_run: _DryRun) -> None:  # noqa: F811
+    """Whether a symbol is a contract is read from its spelling. Spelled in lower case it is one all the same.
+
+    Its Flatten is shown and shaped as a contract's is, a limit for it is
+    refused as a contract's is, the simulation answers from the quotes kept
+    for it, and the stock quote source is asked nothing about it.
+    """
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    _hand_over(dry_run, "0", "0.05")
+    await _stop(dry_run)
+    await dry_run.clerk.reconcile_once()
+    dry_run.wait(30_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    plan = await _a_plan_made_while_a_flatten_could_be_sent(dry_run)
+    in_lower_case = replace(plan, legs=(replace(plan.legs[0], symbol=SYMBOL.lower()),))
+    limit = ConfirmedRecoveryLimit(limit_price=Decimal("2.05"), quote_observed_at_ms=dry_run.clock() - 1_000)
+    simulation = dry_run.clerk._trade
+
+    shown = dry_run.clerk.price_safe_flatten(in_lower_case)
+    shaped = dry_run.clerk._safe_flatten_shape(in_lower_case, None)
+    with pytest.raises(SafeFlattenExecutionError) as with_a_limit:
+        dry_run.clerk._safe_flatten_shape(in_lower_case, limit)
+    priced = simulation.recovery_price_available(SYMBOL.lower(), side="sell")
+    bound_to_a_stock_quote = simulation.bind_latest_recovery_bar("no-such-order", symbol=SYMBOL.lower(), side="sell")
+
+    # The market order in regular hours that closes an option position, with no price of its own.
+    assert isinstance(shown, RegularSessionReduction) and shaped is None
+    assert with_a_limit.value.refusal is not None
+    assert with_a_limit.value.refusal.reason_code == "OPTION_CLOSE_TAKES_NO_LIMIT"
+    # From the $2.10 bid kept for the contract, not from a stock quote nobody has.
+    assert priced and not bound_to_a_stock_quote
+    assert SYMBOL not in _symbols_the_stock_feed_was_asked_about()
+
+
 async def test_the_clerks_own_retry_sells_once_a_quote_with_a_bid_is_kept(dry_run: _DryRun) -> None:  # noqa: F811
     """Before it has given up, the Clerk's next retry reads the newer quote and sells, once."""
     await dry_run.enter(dry_run.evidence())
@@ -463,6 +529,72 @@ async def test_a_priced_leg_that_reaches_the_flattens_own_executor_is_a_refusal_
 
     assert refused.value.refusal is not None and refused.value.refusal.reason_code == "OPTION_CLOSE_TAKES_NO_LIMIT"
     assert dry_run.orders() == orders and dry_run.held() == {SYMBOL: 1.0}
+
+
+async def _pressed_past_the_pages_own_check(account: _DryRun, plan: SafeFlattenPlan) -> SafeFlattenExecutionError:
+    """The Flatten goes to its executor, as it does once the page's own check has passed, and is not taken."""
+    with pytest.raises(SafeFlattenExecutionError) as refused:
+        await execute_safe_flatten_plan(
+            account.repo, plan=plan, read=account.clerk._read, trade=account.clerk._trade,
+            intake=account.clerk._intake, account_id=account.repo.account_id, pricing=account.clerk.recovery_pricing,
+        )
+    assert refused.value.refusal is not None, "the Flatten was refused with no reason code"
+    return refused.value
+
+
+async def test_a_flatten_the_simulation_would_not_take_is_told_in_the_simulations_own_words_under_a_code(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The bid went between the page's check and the sale. The simulation sells nothing for nothing.
+
+    No broker was asked, so the owner is not told that one rejected an
+    order, and is not told to retry.
+    """
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    _hand_over(dry_run, "0", "0.05")
+    await _stop(dry_run)
+    await dry_run.clerk.reconcile_once()
+    dry_run.wait(30_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    plan = await _a_plan_made_while_a_flatten_could_be_sent(dry_run)
+    dry_run.wait(5_000)
+    _hand_over(dry_run, "0", "0.05")
+
+    refused = await _pressed_past_the_pages_own_check(dry_run, plan)
+
+    assert refused.refusal.reason_code == "ORDER_SUBMIT_FAILED"
+    said = str(refused).lower()
+    assert SYMBOL.lower() in said and "simulation" in said
+    assert "broker" not in said and "retry" not in said
+    assert dry_run.held() == {SYMBOL: 1.0} and _sales(dry_run) == []
+
+
+async def test_a_flatten_pressed_as_its_contract_expires_is_told_it_expired_and_is_sent_to_no_retry(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Shown twenty seconds before Friday's close, pressed four seconds before it.
+
+    An order sent then would arrive after the contract's last trade. The
+    Flatten is refused under the expiry's own code, and nothing in what the
+    owner is told says to flatten again.
+    """
+    await dry_run.enter(dry_run.evidence())
+    _wait_until(dry_run, EXPIRY_CLOSE - 60_000)
+    _hand_over(dry_run, "0", "0.05")
+    await _stop(dry_run)
+    await dry_run.clerk.reconcile_once()
+    dry_run.wait(40_000)
+    _hand_over(dry_run, "0.80", "0.86")
+    plan = await _a_plan_made_while_a_flatten_could_be_sent(dry_run)
+    dry_run.wait(16_000)
+
+    refused = await _pressed_past_the_pages_own_check(dry_run, plan)
+
+    assert refused.refusal.reason_code == "OPTION_CONTRACT_EXPIRED"
+    _says_only_what_is_true_of_an_expired_contract(str(refused))
+    assert "broker" not in str(refused).lower()
+    await _expired_and_unsold(dry_run)
 
 
 # ── the contract has expired: nothing is sold at a price from before ──────
@@ -607,6 +739,57 @@ async def test_a_close_held_since_before_the_expiry_and_sent_on_monday_ends_with
     assert failed is not None and failed["summary_code"] == "OPTION_CONTRACT_EXPIRED"
 
 
+async def test_a_closing_order_made_on_friday_and_reached_for_sending_on_monday_is_ended_as_expired(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The exit is decided ten seconds before Friday's close and its order is made. Then the Clerk freezes.
+
+    It comes back on Monday with the order made and not sent. The expiry is
+    asked again before a made order goes out: it is ended under the expiry's
+    own code, and the $2.40 bid it was decided on is never booked.
+    """
+    await dry_run.enter(dry_run.evidence())
+    _wait_until(dry_run, EXPIRY_CLOSE - 10_000)
+    made = exit_resolution._reducing_order_facts
+    frozen: list[int] = []
+
+    def made_and_then_the_clerk_freezes_until_monday(repo: object, order_ref: str) -> object:
+        if not frozen:
+            frozen.append(dry_run.clock())
+            _wait_until(dry_run, MONDAY_AFTER_THE_OPEN)
+        return made(repo, order_ref)
+
+    monkeypatch.setattr(exit_resolution, "_reducing_order_facts", made_and_then_the_clerk_freezes_until_monday)
+
+    await dry_run.exit(dry_run.exit_quotes("2.40", "2.46"))
+
+    assert frozen == [EXPIRY_CLOSE - 10_000], "the closing order was never made"
+    await _expired_and_unsold(dry_run)
+    assert dry_run.repo.active_exit_for_strategy(SID) is None
+    failed = dry_run.repo.last_strategy_transition(strategy_instance_id=SID, transition_kind="EXIT_NOT_FLAT")
+    assert failed is not None and failed["summary_code"] == "OPTION_CONTRACT_EXPIRED"
+
+
+async def test_the_account_reading_of_a_dry_run_holding_an_expired_contract_says_it_expired_and_not_to_wait(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Before the expiry a reading with no fresh quote waits for the feed. After it no feed will quote the
+    contract again: the reading is still unavailable, and says why."""
+    await dry_run.enter(dry_run.evidence())
+    _wait_until(dry_run, THURSDAY_NOON)
+    with pytest.raises(SimulationEvidenceUnavailable) as waiting:
+        dry_run.account_reading()
+    _wait_until(dry_run, MONDAY_NOON)
+
+    with pytest.raises(SimulationEvidenceUnavailable) as unsettled:
+        dry_run.account_reading()
+
+    assert "expired" not in str(waiting.value).lower()
+    said = str(unsettled.value).lower()
+    assert SYMBOL.lower() in said and "expired" in said and "settle" in said
+    assert "wait" not in said and "feed" not in said
+
+
 async def test_a_run_that_ends_on_the_weekend_after_expiry_has_nothing_sold_by_its_simulation(
     dry_run: _DryRun,  # noqa: F811
 ) -> None:
@@ -723,6 +906,237 @@ async def test_what_the_owner_can_still_do_about_an_expired_contract_is_said_as_
     # Neither the notice nor the refused write-off sends the owner to a flatten, which is refused too.
     for words in (_notice_words(dry_run).lower(), write_off.next_step.lower()):
         assert "flatten" not in words and "discharg" not in words and "write" not in words
+
+
+# ── a stopped bot whose close failed before the contract expired ──────────
+
+
+async def _stopped_on_thursday_with_nothing_bid(account: _DryRun) -> None:
+    """Bought on the 8th. On Thursday the 17th nothing is bid and the owner presses Stop.
+
+    The simulation's close of what the run left is refused: it sells nothing
+    for nothing. The contract expires the next day.
+    """
+    await account.enter(account.evidence())
+    _wait_until(account, THURSDAY_NOON)
+    _hand_over(account, "0", "0.05")
+    await _stop(account)
+    await account.clerk.reconcile_once()
+    assert account.held() == {SYMBOL: 1.0} and _notice(account) is not None
+
+
+async def _page_notices(account: _DryRun) -> dict[str, ProjectedUncertainty]:
+    """The bot's open notices as its page reads them, by reason code. Nothing is pressed to read them."""
+    return {notice.reason_code: notice for notice in (await _context(account)).uncertainties}
+
+
+def _sends_the_owner_to_nothing_that_cannot_be_done(*words: str) -> str:
+    """No flatten can go out, the Clerk tries nothing again, and no reduction remains available."""
+    said = " ".join(words).lower()
+    for no_longer_true in ("flatten", "again", "reduction"):
+        assert no_longer_true not in said, (no_longer_true, said)
+    return said
+
+
+def _says_only_what_is_true_of_an_expired_contract(*words: str) -> None:
+    """The contract by name, that it expired, and no instruction that can no longer be carried out."""
+    said = _sends_the_owner_to_nothing_that_cannot_be_done(*words)
+    assert SYMBOL.lower() in said and "expired" in said, said
+
+
+def _transitions(account: _DryRun, kind: str | None = None) -> int:
+    """How many records the Clerk has written to this account's books, of one kind or of any."""
+    with account.repo._write_lock:
+        if kind is None:
+            return account.repo._conn.execute("SELECT COUNT(*) FROM custody_transitions").fetchone()[0]
+        return account.repo._conn.execute(
+            "SELECT COUNT(*) FROM custody_transitions WHERE transition_kind = ?", (kind,)
+        ).fetchone()[0]
+
+
+async def _nothing_can_be_done_and_nothing_offered_says_otherwise(account: _DryRun) -> None:
+    """The Flatten and the write-off are both not offered, each under its own true reason, with nothing pressed."""
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        flatten = await _offered(account, action_id)
+        assert not flatten.available and flatten.reduction_plan is None
+        assert flatten.unavailable_reason_code == "OPTION_CONTRACT_EXPIRED"
+    write_off = await _offered(account, "discharge_attributed_residue")
+    assert not write_off.available and not write_off.needed
+    assert write_off.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
+    _says_only_what_is_true_of_an_expired_contract(write_off.unavailable_reason or "", write_off.next_step)
+
+
+async def _press(account: _DryRun, action_id: str) -> RecoveryExecutionResult:
+    """The owner presses one action as the bot's page shows it now."""
+    shown = await _offered(account, action_id)
+
+    async def current_context() -> RecoveryPolicyContext:
+        return await _context(account)
+
+    return await execute_recovery_action(
+        account.clerk,
+        request=RecoveryExecutionRequest(
+            action_id=action_id, concurrency_token=shown.concurrency_token, execution_ref=shown.execution_ref,
+            reason="owner",
+        ),
+        current_context=current_context,
+    )
+
+
+async def test_a_stopped_bot_the_clerk_gave_up_closing_is_told_its_contract_expired_and_offered_nothing_that_fails(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The common road to an expired position: a worthless contract has no bid.
+
+    Thursday: nothing is bid, the owner stops the bot, the close is refused,
+    three retries fail and the Clerk stops trying. Friday the contract
+    expires. On Monday the owner opens the bot's page, having pressed
+    nothing. Both notices say the contract expired. Neither sends the owner
+    to a flatten or says the Clerk will try again. No Flatten and no
+    write-off is offered, and what is offered does not fail when pressed.
+    """
+    await _stopped_on_thursday_with_nothing_bid(dry_run)
+    await _passes(dry_run, 50)  # twelve and a half minutes of Thursday's session
+    assert open_exit_stuck(dry_run.repo, SID) is not None, "the Clerk never gave up retrying"
+    # Before the expiry the page does send the owner to a flatten: what is asserted absent below was there.
+    assert all("flatten" in notice.next_step.lower() for notice in (await _page_notices(dry_run)).values())
+    _wait_until(dry_run, MONDAY_NOON)
+
+    await _passes(dry_run, 2)
+
+    notices = await _page_notices(dry_run)
+    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK"}
+    for notice in notices.values():
+        _says_only_what_is_true_of_an_expired_contract(
+            notice.headline, notice.explanation, notice.operator_impact, notice.next_step
+        )
+    status = notices["EXIT_NOT_FLAT"].recovery_status
+    assert status is not None and (status.kind, status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
+    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    # The one thing the page offers that writes anything is Reconcile now. Pressed, it works, and
+    # the page reads the same after it.
+    catalog = build_recovery_catalog(await _context(dry_run))
+    assert {item.action_id for item in catalog if item.available and item.mutation} == {"reconcile_now"}
+    assert (await _press(dry_run, "reconcile_now")).applied
+    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    # A write-off pressed from a page shown before the expiry is answered "not available", by
+    # name and before anything is done. It is never taken up and then failed.
+    with pytest.raises(RecoveryActionUnavailableError) as not_available:
+        await _press(dry_run, "discharge_attributed_residue")
+    assert not_available.value.capability.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
+    await _expired_and_unsold(dry_run, fills=1)
+
+
+async def test_the_notices_of_an_expired_contract_are_rewritten_once_and_later_passes_write_nothing(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The first pass after the expiry rewrites both notices. Ten more minutes of passes add no record."""
+    await _stopped_on_thursday_with_nothing_bid(dry_run)
+    await _passes(dry_run, 50)
+    assert open_exit_stuck(dry_run.repo, SID) is not None
+    rewritten_before = _transitions(dry_run, "UNCERTAINTY_REFRESHED")
+    _wait_until(dry_run, MONDAY_NOON)
+
+    await _passes(dry_run, 1)
+
+    assert _transitions(dry_run, "UNCERTAINTY_REFRESHED") == rewritten_before + 2
+    # The books' own rows say it, not only the page's reading of them.
+    words = _notice_words(dry_run)
+    _says_only_what_is_true_of_an_expired_contract(words)
+    stuck = open_exit_stuck(dry_run.repo, SID)
+    assert stuck is not None
+    _says_only_what_is_true_of_an_expired_contract(stuck["headline"], stuck["explanation"], stuck["next_step"])
+    written = _transitions(dry_run)
+    await _passes(dry_run, 40)
+    assert _transitions(dry_run) == written, "a later pass wrote to the books of an expired contract again"
+    assert _recovery_says(dry_run) == ("hold", "OPTION_CONTRACT_EXPIRED")
+
+
+async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_expired_and_never_as_retried(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The lesser road: the close failed on Thursday and the Clerk had retried it once, not three times.
+
+    Its notice said the Clerk tries the close again, and to flatten once a
+    quote with a bid is kept. After the expiry it says neither.
+    """
+    await _stopped_on_thursday_with_nothing_bid(dry_run)
+    await _passes(dry_run, 10)  # past the two minutes a refused close is left to settle: one retry
+    assert open_exit_stuck(dry_run.repo, SID) is None, "the Clerk gave up after fewer than three retries"
+    # Before the expiry the notice does promise a retry: what is asserted absent below was there.
+    assert "again" in _notice_words(dry_run).lower()
+    _wait_until(dry_run, MONDAY_NOON)
+
+    await _passes(dry_run, 2)
+
+    notices = await _page_notices(dry_run)
+    assert set(notices) == {"EXIT_NOT_FLAT"}
+    notice = notices["EXIT_NOT_FLAT"]
+    _says_only_what_is_true_of_an_expired_contract(
+        notice.headline, notice.explanation, notice.operator_impact, notice.next_step
+    )
+    assert notice.recovery_status is not None
+    assert (notice.recovery_status.kind, notice.recovery_status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
+    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    await _expired_and_unsold(dry_run)
+
+
+@pytest.mark.parametrize(
+    ("passes_on_thursday", "open_notices"),
+    [
+        pytest.param(0, {"EXIT_NOT_FLAT"}, id="stopped on Thursday and never passed over again"),
+        pytest.param(50, {"EXIT_NOT_FLAT", "EXIT_STUCK"}, id="the Clerk had given up on Thursday"),
+    ],
+)
+async def test_the_page_says_a_contract_expired_from_the_moment_it_did_without_waiting_for_a_pass(
+    dry_run: _DryRun, passes_on_thursday: int, open_notices: set[str]  # noqa: F811
+) -> None:
+    """A stopped Dry Run's Clerk makes no pass on a timer. On Monday the page is read with none made since.
+
+    The notices' own rows are still Thursday's: a close not taken, a retry
+    promised or a flatten to press. The page reads each in the expired
+    words, the recovery status is the expired hold and not "stuck", and
+    neither a Flatten nor a write-off is offered.
+    """
+    await _stopped_on_thursday_with_nothing_bid(dry_run)
+    await _passes(dry_run, passes_on_thursday)
+    written = _transitions(dry_run)
+    _wait_until(dry_run, MONDAY_NOON)
+
+    notices = await _page_notices(dry_run)
+
+    assert set(notices) == open_notices
+    for notice in notices.values():
+        _says_only_what_is_true_of_an_expired_contract(
+            notice.headline, notice.explanation, notice.operator_impact, notice.next_step
+        )
+    status = notices["EXIT_NOT_FLAT"].recovery_status
+    assert status is not None and (status.kind, status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
+    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    assert _transitions(dry_run) == written, "reading the page wrote to the books"
+
+
+async def test_a_notice_raised_after_the_expiry_already_says_so_and_no_pass_rewrites_it(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Stopped on the Saturday after the expiry: the refused close raises the notice in the expired words.
+
+    The Clerk's passes find it saying so already. Nothing is rewritten.
+    """
+    await dry_run.enter(dry_run.evidence())
+    _wait_until(dry_run, SATURDAY_NOON)
+    await _stop(dry_run)
+    await dry_run.clerk.reconcile_once()
+    notice = (await _page_notices(dry_run))["EXIT_NOT_FLAT"]
+    _says_only_what_is_true_of_an_expired_contract(
+        notice.headline, notice.explanation, notice.operator_impact, notice.next_step
+    )
+    _wait_until(dry_run, MONDAY_AFTER_THE_OPEN)
+
+    await _passes(dry_run, 12)
+
+    assert _transitions(dry_run, "UNCERTAINTY_REFRESHED") == 0
+    assert _recovery_says(dry_run) == ("hold", "OPTION_CONTRACT_EXPIRED")
 
 
 async def test_a_quote_stamped_after_the_clerks_own_clock_prices_no_close(dry_run: _DryRun) -> None:  # noqa: F811

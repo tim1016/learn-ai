@@ -192,6 +192,33 @@ async def test_list_activities_can_request_the_cash_transaction_group() -> None:
     )
 
 
+async def test_non_trade_activities_are_asked_for_by_category_and_never_by_an_activity_code() -> None:
+    """Alpaca's pages spell the option exercise two ways; the category names neither (#2913)."""
+    fake = _FakeAlpaca()
+    payload = await _client(fake).list_non_trade_activities(limit=100)
+
+    assert fake.activities_call == (
+        "/account/activities",
+        {"page_size": 100, "direction": "desc", "category": "non_trade_activity"},
+    )
+    assert payload == [{"id": "act1"}]
+
+
+async def test_a_non_trade_activity_walk_continues_from_its_page_token() -> None:
+    fake = _FakeAlpaca()
+    await _client(fake).list_non_trade_activities(limit=100, page_token="20240301000000000::fee-0099")
+
+    assert fake.activities_call == (
+        "/account/activities",
+        {
+            "page_size": 100,
+            "direction": "desc",
+            "category": "non_trade_activity",
+            "page_token": "20240301000000000::fee-0099",
+        },
+    )
+
+
 async def test_submit_order_posts_to_orders_endpoint_and_returns_raw() -> None:
     fake = _FakeAlpaca()
     body = {"symbol": "SPY", "qty": "1", "side": "buy", "type": "market"}

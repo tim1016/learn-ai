@@ -20,6 +20,10 @@ that hand-over is no older than a share bar may be. A quiet contract's bid
 can stand for minutes, so it is the hand-over that must be fresh, not the
 bid's own receipt. With none, the reading is unavailable, as it is for shares
 with no fresh bar. A bid of zero is a mark: nothing is bid for the contract.
+
+A contract past its last session is quoted by no feed again, and settling
+it at its exercise value is not built. A Dry Run that still holds one has no
+reading until it is, and the reading says that, not to wait for a feed.
 """
 from __future__ import annotations
 
@@ -52,6 +56,8 @@ from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import OrderSide
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from app.marketdata.feed import DELIVERY_ALLOWANCE_MS
+from app.options.contract import OptionContract
+from app.options.deadlines import past_last_session
 from app.services.decision_clock import SOURCE_BAR_MS
 from app.services.source_bar_ledger import SourceBarLedger, SourceBarLedgerCorruptError, SourceBarLedgerMissingError
 
@@ -185,6 +191,14 @@ class SimulatedAccountProjection:
                 f"The option quotes kept for this Dry Run need repair; {symbol} cannot be marked from them."
             ) from exc
         if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
+            expiry = OptionContract.from_occ_symbol(symbol).expiry_date
+            if past_last_session(expiry, at_ms):
+                # No feed quotes it again, so waiting brings nothing (ADR 0076).
+                raise SimulationEvidenceUnavailable(
+                    f"The option contract {symbol} expired on {expiry.isoformat()}. This simulation does not "
+                    "settle an expired contract yet, so it has no value to read the position at, and this "
+                    "account's reading stays unavailable until it does."
+                )
             raise SimulationEvidenceUnavailable(
                 f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
             )

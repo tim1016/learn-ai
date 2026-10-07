@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Literal
 
+from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     DEFAULT_RECOVERY_INTERVAL_MS,
     RECOVERY_STOPPED_AFTER_FAILURES,
@@ -20,6 +21,7 @@ def read_recovery_status(
     conn: sqlite3.Connection, *, strategy_instance_id: str, uncertainty_id: str,
     now_ms: int, stopped: bool, working: bool,
     stopped_because: str = RECOVERY_STOPPED_AFTER_FAILURES,
+    expired: LegRefusal | None = None,
 ) -> RecoveryStatus:
     # The immutable episode id names its original raise sequence. Refreshes
     # can change observed_at_ms, but cannot change this starting instant. An
@@ -45,6 +47,10 @@ def read_recovery_status(
     def status(kind: RecoveryStatusKind, reason_code: str, explanation: str, allowed_from_ms: int | None = None) -> RecoveryStatus:
         return RecoveryStatus(kind, reason_code, explanation, last_checked, since, allowed_from_ms)
 
+    if expired is not None:
+        # Asked first, as the watchdog asks it: the position is in an option contract that has
+        # expired (ADR 0076). No order can close it, so it is neither stuck nor working nor waiting.
+        return status("on_hold", expired.reason_code, expired.explanation)
     if stopped:
         return status("stuck", "EXIT_STUCK", stopped_because)
     if working:

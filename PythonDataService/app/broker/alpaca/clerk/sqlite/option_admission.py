@@ -18,6 +18,11 @@ money. Here the Clerk asks, in order, and the first "no" refuses the entry:
 6. Is it a structure the plan may open, is each leg's market inside the
    owner's gap limit, what does it cost, and is its round-trip cost inside
    the owner's limit? (``app.options.entry.prepare_entry``)
+7. Could the entry still be seen through? Its wait for a fill, the time to
+   prove a cancel and a margin must all end before the close its position
+   would owe today (``entry_past_cutoff``). The runner's recheck asks this
+   at its own moment; the Clerk asks again at its own clock, here and once
+   more just before the order is sent.
 
 What comes back is the entry as the books keep it: the order, the contract,
 the quotes, the money, and when the Clerk cancels what has not filled (its
@@ -36,10 +41,11 @@ one: it is never told as evidence that was incomplete.
 Formula: fee provision = ``option_fee_provision_cents`` of one buy of
   units x ratio contracts at the leg's ask; every other figure is
   ``prepare_entry``'s.
-Reference: ADR 0076 decisions 2, 5 and 7; ADR 0067 for the quote budget.
+Reference: ADR 0076 decisions 2, 5, 7 and 16; ADR 0067 for the quote budget.
 Canonical implementation: ``app/options/entry.py``,
-  ``app/options/requirement.py``, ``app/broker/alpaca/option_fees.py``. This
-  file composes them and computes nothing of its own.
+  ``app/options/requirement.py``, ``app/broker/alpaca/option_fees.py``,
+  ``app/options/deadlines.py`` for the entry cutoff. This file composes them
+  and computes nothing of its own.
 Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.py
   and tests/broker/alpaca/clerk/sqlite/test_option_entry_fences.py.
 """
@@ -60,17 +66,21 @@ from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.option_fees import OptionRateNotPinnedError, fees_for_option_fill, option_fee_provision_cents
 from app.broker.contract.models import OrderSide
 from app.broker.contract.options import SingleOptionOrderRequest, opening_order
-from app.options.deadlines import CloseTerms, past_last_session
+from app.options.deadlines import CloseTerms, entry_cutoff_on, past_last_session
 from app.options.entry import prepare_entry
 from app.options.exact import whole_units
 from app.options.quotes import quote_fault
 from app.options.requirement import StructureMoneyRefused
+from app.options.structure import ResolvedStructure
 from app.options.structure_check import StructureRefused
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg
 from app.services.market_liveness import QUOTE_MAX_AGE_MS
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 _CENT = Decimal("0.01")
+
+# The terms an entry accepted before entries kept their own is held to (#2913).
+ENTRY_CLOSE_TERMS = CloseTerms()
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +126,35 @@ def _written_to_the_cent(price: Decimal) -> Decimal:
     """``price`` in its one written form: whole cents, two decimals. Refuses a price finer than a cent."""
     cents = whole_units(price, units_per_one=100, what="an option order's limit price", unit="cents")
     return Decimal(cents).scaleb(-2)
+
+
+def entry_past_cutoff(structure: ResolvedStructure, *, now_ms: int, terms: CloseTerms) -> OptionEntryRefused | None:
+    """Why no entry on ``structure`` is opened at the Clerk's clock ``now_ms``, or ``None`` when one still may be.
+
+    ``terms`` are the entry's own: the owner's wait, cancel allowance, margin
+    and close leads that came with it and are kept with it.
+
+    An entry admitted seconds before its contract's last close could never
+    be closed again: nothing is sold after a contract's last session. So an
+    entry is refused from the cutoff on: the close its position would owe
+    today, less the entry's own wait for a fill, the time to prove a cancel
+    and a margin (``app.options.deadlines.entry_cutoff_on``). The close is
+    counted back from the calendar's session close, so a half day's cutoff
+    is a half day's. A structure that would owe no close today has none.
+
+    Asked only of a contract that still trades in a session that is open:
+    the expiry and the session are each asked before this.
+    """
+    cutoff_ms = entry_cutoff_on(structure, et_date_at_ms(now_ms), terms)
+    if cutoff_ms is None or now_ms < cutoff_ms:
+        return None
+    contracts = ", ".join(leg.contract.occ_symbol for leg in structure.legs)
+    return OptionEntryRefused(
+        OptionEffectRefusal.PAST_ENTRY_CUTOFF.value,
+        f"An entry on {contracts} reached the account Clerk too close to the time its position must be closed "
+        "by today for the entry to be seen through: its wait for a fill and for a cancel to be proven would "
+        "run past that time. Nothing was opened.",
+    )
 
 
 def work_out_option_entry(
@@ -199,6 +238,9 @@ def work_out_option_entry(
         )
     except (StructureRefused, StructureMoneyRefused) as exc:
         return OptionEntryRefused(exc.reason.value, str(exc))
+    too_late = entry_past_cutoff(prepared.structure, now_ms=now_ms, terms=evidence.terms)
+    if too_late is not None:
+        return too_late
     prepared = replace(prepared, net_limit_price=_written_to_the_cent(prepared.net_limit_price))
     order = opening_order(prepared.structure, units=units, net_limit_price=prepared.net_limit_price)
     assert isinstance(order, SingleOptionOrderRequest)
@@ -215,4 +257,4 @@ def work_out_option_entry(
     )
 
 
-__all__ = ["OptionEntryRefused", "work_out_option_entry"]
+__all__ = ["ENTRY_CLOSE_TERMS", "OptionEntryRefused", "entry_past_cutoff", "work_out_option_entry"]
