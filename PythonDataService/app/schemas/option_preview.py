@@ -37,7 +37,10 @@ _MAX_LEGS_ASKED = 8
 
 
 def _as_an_owner_writes_it(percent: Decimal) -> Decimal:
-    """``1e1`` is 10, and ``10.000`` is 10: a percent is carried back and printed as written out."""
+    """``1e1`` is 10, ``10.000`` is 10 and ``-0`` is 0: a percent is carried back and printed as written out."""
+    if not percent:
+        # Nothing, whatever sign it was written with.
+        return Decimal(0)
     return Decimal(format(percent.normalize(), "f"))
 
 
@@ -88,7 +91,8 @@ PreviewState = Literal[
     "no_quote_source",
     "feed_not_up",
     # No quote line could be had for the preview's contracts: none is spare, IBKR refused one, or too many
-    # previews are open and this one's window was given up.
+    # previews are open and this one's window was given up. ``ask_again_in_ms`` is set when it is IBKR's
+    # allowance that stands in the way: one more line is asked for once a minute while the page asks.
     "no_quote_line",
     # IBKR's list of the underlying's expiries or contracts has not been read yet. Ask again.
     "listing_not_read",

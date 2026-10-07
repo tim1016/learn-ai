@@ -253,6 +253,20 @@ async def test_a_limit_is_carried_back_and_said_as_the_owner_would_write_it(
     assert f"{read_as}%" in seen["money"]["cost_sentence"] and "E" not in seen["money"]["cost_sentence"].split("limit")[1]
 
 
+@pytest.mark.parametrize("written", ["-0", "-0.000", "0.0", "0"])
+async def test_a_cost_limit_of_nothing_is_carried_back_and_said_as_zero_whatever_sign_it_was_written_with(
+    deploy_app, monkeypatch: pytest.MonkeyPatch, written: str
+) -> None:
+    app, _registry = deploy_app
+    desk = Desk(monkeypatch)
+    _on(desk, monkeypatch)
+
+    seen = await _resolved(app, desk, {**_SPREAD, "cost_limit_percent": written})
+
+    assert (seen["state"], seen["cost_limit_percent"], seen["money"]["cost_limit_percent"]) == ("resolved", "0", "0")
+    assert "-0" not in seen["money"]["cost_sentence"]
+
+
 async def test_on_a_process_with_no_option_quote_source_the_preview_says_so_and_shows_no_figure(deploy_app) -> None:
     app, _registry = deploy_app
 
