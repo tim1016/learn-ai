@@ -759,7 +759,12 @@ def to_alpaca_option_order_request(order: OptionOrderRequest, *, client_order_id
 
     ``time_in_force`` is always ``day`` and ``extended_hours`` is never
     written: Alpaca wants it false or absent on an option order.
+
+    ``client_order_id`` must be the caller's own. Alpaca makes one up for an
+    order sent without, and no lookup of ours could then find that order.
     """
+    if not isinstance(client_order_id, str) or not client_order_id.strip():
+        raise ValueError("an option order is sent under the client order id its caller minted; none was given")
     if isinstance(order, SingleOptionOrderRequest):
         body: dict[str, Any] = {
             "symbol": order.contract.occ_symbol,

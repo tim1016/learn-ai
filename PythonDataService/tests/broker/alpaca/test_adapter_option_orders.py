@@ -272,6 +272,13 @@ def test_a_price_is_sent_in_plain_digits_whatever_its_exponent() -> None:
     assert single["limit_price"] == "100"
 
 
+@pytest.mark.parametrize("client_order_id", ["", "   "])
+def test_an_option_order_is_never_written_out_without_its_callers_client_order_id(client_order_id: str) -> None:
+    """Alpaca makes an id up for an order sent without one, and no lookup of ours could then find the order."""
+    with pytest.raises(ValueError, match="client order id"):
+        to_alpaca_option_order_request(_DOCUMENTED_MULTI_LEG["long_call_spread"], client_order_id=client_order_id)
+
+
 def test_a_stock_leg_is_never_written_out_as_an_option_order() -> None:
     stock_leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
 

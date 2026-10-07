@@ -188,7 +188,8 @@ class BrokerTradePort(Protocol):
     multi-leg parent, its legs: each with its own order id, filled quantity,
     average price and status. ``None`` is the vendor saying no such order
     exists, with the same grace after an unknown submit as the stock lookup;
-    an answer that cannot be read whole raises rather than state an outcome.
+    an answer that cannot be read whole, or that names a different order
+    from the one asked about, raises rather than state an outcome.
     """
 
     broker_id: str

@@ -212,6 +212,28 @@ def _activity_page_oldest_ms(
     return dated[-1]
 
 
+def _the_order_asked_about(
+    answered: BrokerOptionOrder, *, client_order_id: str | None = None, order_id: str | None = None
+) -> BrokerOptionOrder:
+    """``answered``, once it is the order that was asked about; any other order is no answer.
+
+    An answer naming another client order id, or another broker order id, is
+    about some other order. Its fills must not be counted as this one's, so
+    the outcome stays unknown (``BrokerEvidenceUnavailable``).
+    """
+    if client_order_id is not None and answered.client_order_id != client_order_id:
+        asked, got = f"client order id {client_order_id!r}", f"{answered.client_order_id!r}"
+    elif order_id is not None and answered.order_id.lower() != order_id.lower():
+        asked, got = f"order id {order_id!r}", f"{answered.order_id!r}"
+    else:
+        return answered
+    raise BrokerEvidenceUnavailable(
+        "Alpaca answered about a different option order from the one asked about.",
+        broker=BROKER_ID,
+        detail=f"Asked about {asked}; the answer names {got}.",
+    )
+
+
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
 # Extended Hours Trading, verified 2026-09-08).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
@@ -657,7 +679,8 @@ class AlpacaBroker:
         """
         body = adapter.to_alpaca_option_order_request(order, client_order_id=client_order_id)
         payload = await self._client.submit_order(body)
-        return _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+        answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+        return _the_order_asked_about(answered, client_order_id=client_order_id)
 
     async def get_option_order_by_client_order_id(
         self, client_order_id: str
@@ -675,7 +698,8 @@ class AlpacaBroker:
             return None
         if adapter.alpaca_multi_leg_order_lacks_legs(payload):
             payload = await self._nested_order(payload)
-        return _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+        answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+        return _the_order_asked_about(answered, client_order_id=client_order_id)
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
         """Look an option order up by its broker-assigned id, legs nested under a multi-leg parent.
@@ -685,7 +709,8 @@ class AlpacaBroker:
         payload = await self._client.get_nested_order_by_broker_order_id(order_id)
         if payload is None:
             return None
-        return _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+        answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+        return _the_order_asked_about(answered, order_id=order_id)
 
     async def _nested_order(self, parent: Mapping[str, Any]) -> Any:
         """Read a multi-leg parent again, by its own id, with its legs nested."""

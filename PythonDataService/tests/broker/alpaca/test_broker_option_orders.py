@@ -250,6 +250,30 @@ async def test_an_accepted_order_whose_answer_cannot_be_read_is_settled_by_looki
     assert (found.order_id, found.filled_quantity) == (_PARENT_ID, 1)
 
 
+@responses.activate
+async def test_an_answer_naming_another_client_order_id_is_not_this_orders_answer(broker: AlpacaBroker) -> None:
+    """Another order's fills must not be counted as this one's; the outcome stays unknown."""
+    someone_elses = _answer("MultilegOptionsOrderResponse", client_order_id="learn-ai/another-bot/v1:enter-9")
+    responses.add(responses.POST, _ORDERS, json=someone_elses)
+    responses.add(responses.GET, _BY_CLIENT_ID, json=someone_elses)
+
+    with pytest.raises(BrokerEvidenceUnavailable) as on_submit:
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    assert isinstance(on_submit.value, BrokerUnavailable)
+    assert "another-bot" in (on_submit.value.detail or "")
+
+
+@responses.activate
+async def test_nothing_is_sent_for_an_option_order_with_no_client_order_id(broker: AlpacaBroker) -> None:
+    with pytest.raises(ValueError, match="client order id"):
+        await broker.submit_option_order(_ratio_spread(), client_order_id="")
+
+    assert len(responses.calls) == 0
+
+
 # ── Looking an order up ─────────────────────────────────────────────────────
 
 
@@ -356,6 +380,24 @@ async def test_a_lookup_by_broker_order_id_reads_a_single_option_order(broker: A
 
     assert order is not None
     assert (order.order_id, order.multi_leg, order.quantity, order.filled_quantity) == (single_id, False, 2, 0)
+
+
+@responses.activate
+async def test_an_answer_about_another_broker_order_id_is_not_this_orders_answer(broker: AlpacaBroker) -> None:
+    asked = "30a077fa-96f6-4f20-a052-4b921ee2f243"
+    responses.add(responses.GET, f"{_ORDERS}/{asked}", json=_answer("MultilegOptionsOrderResponse"))
+
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await broker.get_option_order_by_broker_order_id(asked)
+
+
+@responses.activate
+async def test_a_broker_order_id_is_the_same_id_in_either_case(broker: AlpacaBroker) -> None:
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", json=_answer("MultilegOptionsOrderResponse"))
+
+    order = await broker.get_option_order_by_broker_order_id(_PARENT_ID.upper())
+
+    assert order is not None and order.order_id == _PARENT_ID
 
 
 @responses.activate
