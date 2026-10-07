@@ -126,6 +126,9 @@ class ExecutionRow:
     recorded_at_ms: int
     subject_id: str = ""
     journal_seq: int = 0
+    # An option contract's multiplier: ``quantity`` is then contracts and
+    # ``price`` a premium per share. ``None`` for shares.
+    multiplier: int | None = None
 
 
 @dataclass(frozen=True)

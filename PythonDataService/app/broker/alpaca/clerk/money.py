@@ -1,10 +1,12 @@
 """The single normalization and arithmetic boundary for custody cash admission.
 
 Formula: exact decimal products/sums; required cents = ceil(100*x),
-spendable cents = floor(100*x); consent never rounds.
+spendable cents = floor(100*x); consent never rounds. An option's notional
+is contracts * premium per share * the contract's multiplier (ADR 0076 decision 13).
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2540, Money contract.
 Canonical implementation: this module; historical REAL values enter as str.
-Validated against: tests/broker/alpaca/clerk/test_money.py (integer/Fraction oracle).
+Validated against: tests/broker/alpaca/clerk/test_money.py (integer/Fraction oracle)
+  and tests/broker/alpaca/clerk/test_option_custody_money.py (the multiplier).
 
 Supported input magnitude is < 10**309 and scale <= 324 decimal places.
 The 1400-digit context preserves products of two such inputs and accumulated
@@ -73,10 +75,27 @@ def normalize_money(value: object) -> Decimal:
         return amount.normalize()
 
 
-def notional(quantity: object, price: object) -> Decimal:
-    """Multiply normalized factors once, before any cents display rounding."""
+def contract_multiplier(value: object) -> int:
+    """An option contract's multiplier: the shares one contract's price stands for.
+
+    A whole number, one or more. It is a recorded fact of the contract and is
+    never read off a symbol, so anything else is refused, not repaired.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise MoneyInputError("A contract multiplier must be a whole number, one or more.")
+    return value
+
+
+def notional(quantity: object, price: object, *, multiplier: int | None = None) -> Decimal:
+    """Multiply normalized factors once, before any cents display rounding.
+
+    With ``multiplier``, ``quantity`` is option contracts and ``price`` the
+    premium per share: quantity * price * multiplier (#2913). Without it the
+    quantity is shares and the product is what it has always been.
+    """
     with money_context():
-        return normalize_money(quantity) * normalize_money(price)
+        amount = normalize_money(quantity) * normalize_money(price)
+        return amount if multiplier is None else amount * contract_multiplier(multiplier)
 
 
 def cents_required(amount: Decimal) -> int:

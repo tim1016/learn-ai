@@ -1662,6 +1662,50 @@
       ]
     },
     {
+      "id": "FEE-002",
+      "name": "Alpaca option regulatory and clearing pass-through fees",
+      "category": "broker-fees",
+      "canonical_module": "PythonDataService/app/broker/alpaca/option_fees.py",
+      "canonical_callable": "fees_for_option_fill",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "exact decimal arithmetic over the published SEC/TAF/CAT/ORF/OCC option rates without importing canonical code",
+        "citation": "Alpaca Brokerage Fee Schedule, Options table and How fees are charged (revised 2026-10-01, read 2026-10-06; revisions of 2026-02-12, 2026-04-09, 2026-07-01, 2026-09-01 from the Internet Archive); SEC fee-rate advisories 2025-2/2026-2 and 17 CFR 240.31; FINRA SR-FINRA-2026-020 and SR-FINRA-2026-021; SEC Release 34-105449. From published documents, not a recorded fee activity; see the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/alpaca_option_fees.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact Decimal oracle and exact Decimal model; compared for Decimal equality, provisions as whole cents."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "7dac4f58e2511fc1dc64ba64fd44f3309546634cf02edf86c352c1268ff41f99",
+            "output.json": "6c3cecbf282569dc684627cfe19fb6db97ea840e0fb40e72d4d5b6de86ea81c4"
+          },
+          "file_sha256": {
+            "input.json": "8ee6621c244371a608f4f432e9e153f86e6086967f485dc1f788d24483534a6e",
+            "output.json": "42759eddfa4829e9ac70670b0c6d162b8b9cd703e4440c1c6b75a938e8da8902",
+            "attribution.md": "28799eec27090816a384fb9202ed73b2eb0fd5ffab4802cb993c7d78957a7597"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_alpaca_option_fees_fixture.py"
+      ]
+    },
+    {
       "id": "RD-001",
       "name": "Daily return distribution from minute bars (bins, moments, VaR/CVaR, normal overlay)",
       "category": "return-distribution",
