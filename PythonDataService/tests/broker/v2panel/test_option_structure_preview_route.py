@@ -469,6 +469,12 @@ async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_
             {"legs": [_SPREAD["legs"][0] | {"qty_ratio": 1.5}]}, ["Leg 1", "1.5", "whole number"], ["long_call"],
             id="a contract and a half",
         ),
+        # More digits than the decimal context keeps, in a box with no top. Rounded to 28 digits first, it
+        # read as a whole number inside its range, and the request was refused with nothing to read.
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"strike": {"selector": "atm_offset", "offset": "12345678901234567890123456789.5"}}]},
+            ["Leg 1", "31 characters", "whole number"], ["long_call"], id="thirty digits of steps and a half",
+        ),
         pytest.param(
             {"legs": [_SPREAD["legs"][0], _SPREAD["legs"][1] | {"strike": {"selector": "leg_distance", "leg_id": "long_call", "dollars": 1e308}}]},
             ["Leg 2", "99,999.999"], ["short_call"], id="a distance no two strikes are apart",

@@ -70,6 +70,24 @@ def test_a_number_of_any_size_is_judged_at_once_whether_or_not_the_range_has_a_t
     assert bounds.fault(Decimal(number)) == fault
 
 
+@pytest.mark.parametrize(
+    ("bounds", "number", "fault"),
+    [
+        pytest.param(Bounds(step=Decimal(1)), "12345678901234567890123456789.5", "finer", id="thirty digits and a half"),
+        pytest.param(Bounds(step=Decimal(1)), "1234567890123456789012345678901234567890", None, id="forty digits, whole"),
+        pytest.param(_PERCENT, "5.0000000000000000000000000001", "finer", id="five and a part in the twenty-eighth place"),
+        pytest.param(_PERCENT, "5.0000000000000000000000000000", None, id="five, written to twenty-eight places"),
+        pytest.param(Bounds(step=Decimal("0.001")), "99999.99900000000000000000000000001", "finer", id="a thousandth and a hair"),
+    ],
+)
+def test_a_number_of_more_digits_than_the_decimal_context_keeps_is_read_whole_and_never_rounded_first(
+    bounds: Bounds, number: str, fault: str | None
+) -> None:
+    """The decimal context keeps 28 digits. ``Decimal.normalize`` rounds a longer number to that before anything
+    reads it, so a part in the twenty-ninth place was lost and the number was called a whole one."""
+    assert bounds.fault(Decimal(number)) == fault
+
+
 def test_only_a_finite_number_is_held_to_a_range() -> None:
     for no_number in ("NaN", "Infinity", "-Infinity"):
         with pytest.raises(ValueError, match="finite"):
