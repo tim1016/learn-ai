@@ -382,6 +382,11 @@ ALPACA_SENTENCE = (
 )
 
 
+def orders_in_a_line(*, gap_limit_percent: Decimal, entry_wait_seconds: int) -> str:
+    """How an option bot's orders go, for the one line a Deploy confirms them on."""
+    return f"Limit in, market out · gap up to {gap_limit_percent}% a leg · wait {entry_wait_seconds:,} s"
+
+
 def expiry_close_sentence(lead_minutes: int) -> str:
     """Where the owner's expiry-day close falls against the hour Alpaca names."""
     if lead_minutes > ALPACA_SELL_OUT_WINDOW_MINUTES:

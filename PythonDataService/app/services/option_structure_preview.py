@@ -75,7 +75,13 @@ from app.options.resolver import (
     UnderlyingObservation,
 )
 from app.options.structure import ResolvedStructure
-from app.options.structure_catalogue import expiry_close_sentence, in_a_sentence, label, with_its_article
+from app.options.structure_catalogue import (
+    expiry_close_sentence,
+    in_a_sentence,
+    label,
+    orders_in_a_line,
+    with_its_article,
+)
 from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, NoLine, WindowContract, expiries_wanted, watched_window
 from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg
@@ -573,6 +579,9 @@ class _Asked:
                     cost_limit_percent=request.cost_limit_percent,
                     expiry_close_lead_minutes=request.expiry_close_lead_minutes,
                     expiry_close_sentence=expiry_close_sentence(request.expiry_close_lead_minutes),
+                    orders_sentence=orders_in_a_line(
+                        gap_limit_percent=request.gap_limit_percent, entry_wait_seconds=request.entry_wait_seconds
+                    ),
                 )
                 if self.in_range
                 else None

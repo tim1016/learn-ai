@@ -35245,6 +35245,10 @@
           "gap_limit_percent": {
             "title": "Gap Limit Percent",
             "type": "string"
+          },
+          "orders_sentence": {
+            "title": "Orders Sentence",
+            "type": "string"
           }
         },
         "required": [
@@ -35252,7 +35256,8 @@
           "entry_wait_seconds",
           "cost_limit_percent",
           "expiry_close_lead_minutes",
-          "expiry_close_sentence"
+          "expiry_close_sentence",
+          "orders_sentence"
         ],
         "title": "OptionPreviewOrderTerms",
         "type": "object"

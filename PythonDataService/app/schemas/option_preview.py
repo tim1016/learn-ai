@@ -347,6 +347,8 @@ class OptionPreviewOrderTerms(BaseModel):
     expiry_close_lead_minutes: int
     # Where the expiry-day close falls against the hour Alpaca says it may sell an expiring position in.
     expiry_close_sentence: str
+    # How the bot's orders go, in one line: "Limit in, market out · gap up to 8% a leg · wait 20 s".
+    orders_sentence: str
 
 
 class OptionPreviewLean(BaseModel):

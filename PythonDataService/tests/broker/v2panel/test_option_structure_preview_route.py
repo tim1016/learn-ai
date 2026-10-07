@@ -355,6 +355,11 @@ async def test_a_structure_the_plan_refuses_is_an_answer_and_not_an_error(deploy
 
 
 _BY_DELTA = _SPREAD["legs"][0] | {"strike": {"selector": "delta", "target": 0.30}}
+
+
+def _leg_free(strike: dict, expiry: dict) -> dict:
+    return {"leg_id": "only", "position": "long", "qty_ratio": 1, "right": "call", "strike": strike, "expiry": expiry}
+
 _OUT_OF_RANGE = "OPTION_PREVIEW_VALUE_OUT_OF_RANGE"
 
 
@@ -410,6 +415,22 @@ async def test_a_request_that_is_not_a_preview_request_is_refused_as_malformed(d
         ),
         pytest.param({"legs": [_BY_DELTA] * 9}, ["9", "1 to 4"], [], id="nine legs"),
         pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"strike": {"selector": "atm_offset", "offset": 1.5}}]},
+            ["Leg 1", "1.5", "whole number"], ["long_call"], id="a step and a half from the money",
+        ),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"qty_ratio": 1.5}]}, ["Leg 1", "1.5", "whole number"], ["long_call"],
+            id="a contract and a half",
+        ),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0], _SPREAD["legs"][1] | {"strike": {"selector": "leg_distance", "leg_id": "long_call", "dollars": 1e308}}]},
+            ["Leg 2", "99,999.999"], ["short_call"], id="a distance no two strikes are apart",
+        ),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "absolute", "expiration_ms": 10**30}}]},
+            ["Leg 1", "'99"], ["long_call"], id="a date past any a symbol can write",
+        ),
+        pytest.param(
             {"structures": 101, "legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "min_dte", "days": 0}}]},
             ["Leg 1", "101", "1 or more"], ["long_call"], id="two numbers out of range at once",
         ),
@@ -436,6 +457,46 @@ async def test_a_number_outside_its_range_is_answered_in_words_as_what_cannot_be
     assert not any(f"'{leg_id}'" in seen["notice"] for leg_id in ("long_call", "short_call"))
     # Nothing is resolved, and the rules and terms it was asked with are not said back as if they stood.
     assert (seen["legs"], seen["money"], seen["legs_asked"], seen["order_terms"]) == ([], None, [], None)
+
+
+@pytest.mark.parametrize(
+    "legs",
+    [
+        pytest.param([_leg_free({"selector": "atm_offset", "offset": 10**400}, {"selector": "nearest_weekly"})], id="steps beyond counting"),
+        pytest.param([_leg_free({"selector": "atm_offset", "offset": -(10**400)}, {"selector": "nearest_weekly"})], id="steps below, beyond counting"),
+        pytest.param([_leg_free({"selector": "atm"}, {"selector": "min_dte", "days": 10**400})], id="days beyond counting"),
+        pytest.param([_leg_free({"selector": "delta", "target": 5e-324}, {"selector": "same_day"})], id="the smallest delta there is"),
+        pytest.param(
+            [_leg_free({"selector": "delta", "target": 0.9999999999999999, "tolerance_delta": 5e-324}, {"selector": "same_day"})],
+            id="the largest delta below one, with no room at all",
+        ),
+        pytest.param([_leg_free({"selector": "percent", "percent": 1000, "tolerance_percent": 100}, {"selector": "nearest_weekly"})], id="ten times the price"),
+        pytest.param([_leg_free({"selector": "percent", "percent": -99.99999999999999}, {"selector": "nearest_weekly"})], id="all but nothing"),
+    ],
+)
+async def test_a_number_at_the_far_end_of_what_is_taken_is_answered_and_is_never_an_error(
+    deploy_app, monkeypatch: pytest.MonkeyPatch, legs: list[dict]
+) -> None:
+    """Each is a number the plan takes. What its rule comes to on a real chain is the resolver's to say."""
+    app, _registry = deploy_app
+    desk = Desk(monkeypatch)
+    _on(desk, monkeypatch)
+    body = {"preview_key": "page-0001", "underlying": "SPY", "legs": legs, "structures": 100}
+
+    await _post(app, body)
+    await desk.settle()
+    desk.spy()
+    await desk.settle()
+    # A cent or two bid and offered on every line the window opened, however far from the money it reached.
+    for line in sorted(desk.ibkr.open_option_lines()):
+        desk.ibkr.tick(line, bid=0.01, ask=0.03)
+    desk.ibkr.now += 400
+    response = await _post(app, body)
+
+    assert response.status_code == 200, response.text
+    seen = response.json()
+    assert seen["verdict"]["can_be_deployed"] is True
+    assert OptionStructurePreview.model_validate(seen).legs_asked[0].sentence
 
 
 async def test_a_refused_number_is_said_back_as_the_default_and_every_other_part_as_it_was_asked(deploy_app) -> None:

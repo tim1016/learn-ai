@@ -20248,6 +20248,8 @@ export interface components {
             expiry_close_sentence: string;
             /** Gap Limit Percent */
             gap_limit_percent: string;
+            /** Orders Sentence */
+            orders_sentence: string;
         };
         /**
          * OptionPreviewPricingInputs

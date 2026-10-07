@@ -870,6 +870,15 @@ async def test_where_the_owners_close_falls_against_alpacas_hour_is_said_three_w
     assert len(set(said)) == 3 and all(str(minutes) in words for minutes, words in zip((45, 60, 90), said, strict=True))
 
 
+async def test_how_the_orders_go_is_said_in_one_line_with_the_owners_own_gap_and_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = _BULL_CALL_SPREAD.model_copy(update={"gap_limit_percent": Decimal("6.5"), "entry_wait_seconds": 45})
+
+    seen = await Desk(monkeypatch).preview(asked)
+
+    assert "6.5%" in seen.order_terms.orders_sentence and "45 s" in seen.order_terms.orders_sentence
+    assert "8%" not in seen.order_terms.orders_sentence and "20 s" not in seen.order_terms.orders_sentence
+
+
 # ---- A leg is named by its place, never by its id --------------------------------------------
 
 
