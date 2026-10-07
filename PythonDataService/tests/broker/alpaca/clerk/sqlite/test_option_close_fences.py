@@ -64,6 +64,7 @@ from app.broker.alpaca.clerk.sqlite.simulated_account import SimulationEvidenceU
 from app.broker.alpaca.clerk.sqlite.uncertainty import open_exit_stuck
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.options.contract import OptionContract
+from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.simulated_fill import SimulatedFillModel
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services import market_liveness
@@ -102,6 +103,14 @@ def _wait_until(account: _DryRun, at_ms: int) -> None:
 def _hand_over(account: _DryRun, bid: str, ask: str, *, age_ms: int = 200) -> None:
     """The runner passes the Clerk the newest quote it holds for the contract."""
     account.clerk.keep_option_quotes({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
+
+
+def _an_ask_alone(account: _DryRun, ask: str, *, age_ms: int = 200) -> HeldQuote:
+    """A quote with an ask and no bid: since the last reconnect the bid has not arrived."""
+    return HeldQuote(
+        bid=None, ask=QuoteSide(Decimal(ask), account.clock() - age_ms), data_type=QuoteDataType.LIVE,
+        generation=GENERATION,
+    )
 
 
 async def _stop(account: _DryRun) -> None:
@@ -281,6 +290,57 @@ async def test_a_stopped_bot_whose_last_quote_had_nothing_bid_is_sold_by_the_own
     assert _notice(dry_run) is None
     await dry_run.clerk.reconcile_once()
     assert open_exit_stuck(dry_run.repo, SID) is None
+
+
+async def test_an_older_bid_sells_nothing_once_a_newer_quote_has_no_bid_and_the_next_quote_with_a_bid_does(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """A bid of $2.00 is kept. Then the newest quote kept has an ask and no bid, and the owner presses Stop.
+
+    The $2.00 is what was bid before that quote, and nothing kept says it
+    still is. So the simulation's close of what the run left sells nothing,
+    and no Flatten is offered that would. Then a quote with $0.80 bid is
+    kept, and the owner's Flatten sells the one contract at $0.80.
+    """
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    _hand_over(dry_run, "2.00", "2.06")
+    dry_run.wait(20_000)
+    dry_run.clerk.keep_option_quotes({SYMBOL: _an_ask_alone(dry_run, "2.10")})
+    await _stop(dry_run)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {SYMBOL: 1.0} and _sales(dry_run) == []
+    assert _notice(dry_run) is not None, "the refused close left no notice"
+    dry_run.wait(30_000)
+    await _flatten_not_offered(dry_run, "OPTION_EXIT_UNPRICED")
+
+    _hand_over(dry_run, "0.80", "0.86")
+    flattened = await _flatten(dry_run)
+
+    assert flattened.applied
+    assert dry_run.held() == {}
+    assert _sales(dry_run) == [(SYMBOL, "sell", 1.0, 0.80, 100)]
+    # Bought at $1.94, sold at $0.80, a hundred shares: $114.00 lost.
+    assert dry_run.realized_pnl() == Decimal("-114")
+
+
+async def test_an_exit_whose_own_quote_has_no_bid_is_not_sold_at_the_bid_its_entry_saw(dry_run: _DryRun) -> None:  # noqa: F811
+    """The quote read at the exit decision is the newest there is, and it has no bid. The entry's quote, twenty
+    seconds older, had $1.90 bid: that prices nothing now, so nothing is sold and the position stays open."""
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    with_no_bid = OptionExitEvidence(
+        quotes={SYMBOL: _an_ask_alone(dry_run, "2.10", age_ms=300)}, generation=GENERATION,
+        read_at_ms=dry_run.clock() - 100,
+    )
+
+    refused = await dry_run.exit(with_no_bid)
+
+    assert refused.state is EffectOperationState.REJECTED, refused.explanation
+    assert dry_run.held() == {SYMBOL: 1.0} and _sales(dry_run) == []
+    assert _notice(dry_run) is not None, "the refused close left no notice"
 
 
 async def test_the_owners_flatten_sells_exactly_what_is_held_once_and_a_second_press_sells_nothing(
@@ -788,6 +848,45 @@ async def test_the_account_reading_of_a_dry_run_holding_an_expired_contract_says
     said = str(unsettled.value).lower()
     assert SYMBOL.lower() in said and "expired" in said and "settle" in said
     assert "wait" not in said and "feed" not in said
+
+
+EXPIRES_ON_THE_ENTRY_DAY = OptionContract.of(root="SPY", expiry_date=date(2026, 9, 8), right="call", strike=585)
+ENTRY_DAY_CLOSE = et_minute_of_day_ms(date(2026, 9, 8), 16 * 60)
+
+
+async def test_a_bid_handed_over_just_before_the_last_close_marks_nothing_from_the_close_on(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Bought at noon on its expiry day. At 15:59:30 the bid handed over is $2.10, and the contract is marked at it.
+
+    At the close that hand-over is thirty seconds old, well inside what a
+    mark may be. The contract has stopped trading all the same, and what it
+    is worth is no longer a bid: from the close on the reading is the
+    expired one. And the reading taken while it traded says its marks are
+    good no longer than that.
+    """
+    today = EXPIRES_ON_THE_ENTRY_DAY.occ_symbol
+    await dry_run.enter(dry_run.evidence(picked={LEG: EXPIRES_ON_THE_ENTRY_DAY}))
+    dry_run.wait(ENTRY_DAY_CLOSE - 30_000 - dry_run.clock())
+    dry_run.clerk.keep_option_quotes({today: _quote("2.10", "2.16", received_ms=dry_run.clock() - 200)})
+
+    while_it_traded = dry_run.account_reading()
+    dry_run.wait(29_999)
+    a_millisecond_before_the_close = dry_run.account_reading()
+    dry_run.wait(1)
+    with pytest.raises(SimulationEvidenceUnavailable) as at_the_close:
+        dry_run.account_reading()
+    dry_run.wait(1_000)
+    with pytest.raises(SimulationEvidenceUnavailable) as a_second_after:
+        dry_run.account_reading()
+
+    # Sixteen cents a share over the $1.94 paid, a hundred shares.
+    assert while_it_traded.unrealized_pl_usd == a_millisecond_before_the_close.unrealized_pl_usd == Decimal("16")
+    assert while_it_traded.simulation_marks_valid_until_ms == ENTRY_DAY_CLOSE - 1
+    for unsettled in (at_the_close, a_second_after):
+        said = str(unsettled.value).lower()
+        assert today.lower() in said and "expired" in said and "settle" in said
+        assert "wait" not in said and "feed" not in said
 
 
 async def test_a_run_that_ends_on_the_weekend_after_expiry_has_nothing_sold_by_its_simulation(
@@ -1309,7 +1408,7 @@ async def _holding_a_second_contract(account: _DryRun, monkeypatch: pytest.Monke
     await submit_accepted_enter(
         account.repo, accepted=accepted, leg=entry.order,
         trade=_OptionQuoteBoundTradePort(
-            account.clerk._trade, symbol=OTHER_CALL.occ_symbol, quote=entry.the_leg.quote.held
+            account.clerk._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held
         ),
     )
     assert account.held() == {SYMBOL: 1.0, OTHER_CALL.occ_symbol: 1.0}

@@ -90,7 +90,11 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_start_run,
     submit_stop_run,
 )
-from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTermsConflict, is_option_contract_symbol
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ContractTerms,
+    ContractTermsConflict,
+    is_option_contract_symbol,
+)
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import (
     MARKET_CLOSED,
@@ -169,6 +173,7 @@ from app.broker.alpaca.clerk.sqlite.option_admission import (
     ENTRY_CLOSE_TERMS,
     OptionEntryRefused,
     entry_past_cutoff,
+    entry_quote_refusal,
     work_out_option_entry,
 )
 from app.broker.alpaca.clerk.sqlite.option_entry import (
@@ -404,12 +409,14 @@ class _OptionQuoteBoundTradePort:
 
     The option twin of ``_PricingBarBoundTradePort``: the quote is bound to
     the order's own id just before the order is sent, so the simulation fills
-    from the quote the entry was admitted on and from no other.
+    from the quote the entry was admitted on and from no other. The
+    contract's terms go with it, as the books record them: the simulation
+    holds no listing, and counts the position's dollars by their multiplier.
     """
 
-    def __init__(self, inner: GuardedBrokerTradePort, *, symbol: str, quote: HeldQuote) -> None:
+    def __init__(self, inner: GuardedBrokerTradePort, *, terms: ContractTerms, quote: HeldQuote) -> None:
         self._inner = inner
-        self._symbol = symbol
+        self._terms = terms
         self._quote = quote
 
     @property
@@ -434,7 +441,9 @@ class _OptionQuoteBoundTradePort:
         return await self._inner.get_order_by_broker_order_id(order_id)
 
     async def submit_option_order(self, order: OptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
-        self._inner.bind_option_entry_quote(client_order_id, symbol=self._symbol, quote=self._quote)
+        self._inner.bind_option_entry_quote(
+            client_order_id, symbol=self._terms.symbol, quote=self._quote, multiplier=self._terms.multiplier
+        )
         return await self._inner.submit_option_order(order, client_order_id=client_order_id)
 
     async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
@@ -1909,6 +1918,7 @@ class SqliteAlpacaClerkFacade:
 
         if accepted_enter is not None:
             assert entry is not None
+            priced_from, quote_generation = entry.the_leg, entry.quote_generation
             clock = self._repo.clock
             opened = entry.structure
             # The entry's own terms. One accepted before entries kept theirs is held to the defaults.
@@ -1923,6 +1933,15 @@ class SqliteAlpacaClerkFacade:
                 too_late = entry_past_cutoff(opened, now_ms=now_ms, terms=entry_terms)
                 if too_late is not None:
                     return EntrySubmissionRefusal(summary_code=too_late.reason_code, why=too_late.explanation)
+                # The quote was tested as the entry was worked out. The order goes out later: a
+                # simulation fills it from that quote, and a real account's limit rests at the price
+                # that quote gave. So it is tested again by the same rule, at this clock.
+                unusable = entry_quote_refusal(
+                    priced_from.contract, priced_from.quote.held, position=priced_from.position,
+                    generation=quote_generation, now_ms=now_ms, at_the_send=True,
+                )
+                if unusable is not None:
+                    return EntrySubmissionRefusal(summary_code=unusable.reason_code, why=unusable.explanation)
                 return None
 
             if accepted_enter.created and self._entry_deadline_nudge is not None:
@@ -1936,7 +1955,7 @@ class SqliteAlpacaClerkFacade:
                 # account's order rests at the broker, which needs no quote of ours.
                 trade=(
                     _OptionQuoteBoundTradePort(
-                        self._trade, symbol=entry.contract_terms.symbol, quote=entry.the_leg.quote.held
+                        self._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held
                     )
                     if self._sends_to_a_simulation
                     else self._trade

@@ -61,16 +61,46 @@ def test_a_quote_received_after_the_instant_asked_about_is_left_out(tmp_path: Pa
     assert store.newest(SYMBOL, at_or_before_ms=4_000) is None
 
 
-def test_a_side_can_be_asked_for_and_a_quote_without_it_is_passed_over(tmp_path: Path) -> None:
+def test_the_newest_quote_alone_prices_a_close_and_an_older_bid_prices_nothing_once_a_newer_quote_has_none(
+    tmp_path: Path,
+) -> None:
+    """Bid $1.90 at five seconds. At nine seconds the newest quote held has an ask and no bid.
+
+    A sale made between the two is filled at $1.90. One made after the second
+    has nothing to be filled from: the $1.90 is what was bid before, and
+    nothing kept says it still is. A purchase to close is filled at the ask
+    that did arrive. A later quote with a bid prices the sale again.
+    """
     store = _store(tmp_path)
     store.keep(SYMBOL, _quote("1.90", "1.94", bid_at=5_000, ask_at=5_000), kept_at_ms=6_000)
     store.keep(SYMBOL, _quote(None, "2.60", ask_at=9_000), kept_at_ms=10_000)
 
-    with_a_bid = store.newest(SYMBOL, with_side="bid")
+    between = store.closing_quote(SYMBOL, side="sell", at_ms=7_000)
+    assert between is not None and between.quote.bid == Decimal("1.90")
+    assert store.prices_a_close(SYMBOL, side="sell", at_ms=7_000)
+    assert store.closing_quote(SYMBOL, side="sell", at_ms=10_000) is None
+    assert not store.prices_a_close(SYMBOL, side="sell", at_ms=10_000)
+    to_buy_back = store.closing_quote(SYMBOL, side="buy", at_ms=10_000)
+    assert to_buy_back is not None and to_buy_back.quote.ask == Decimal("2.60")
+    assert store.prices_a_close(SYMBOL, side="buy", at_ms=10_000)
 
-    assert with_a_bid is not None and with_a_bid.quote.bid == Decimal("1.90")
-    newest = store.newest(SYMBOL)
-    assert newest is not None and newest.quote.bid is None
+    store.keep(SYMBOL, _quote("0.80", "0.86", bid_at=12_000, ask_at=12_000), kept_at_ms=12_500)
+
+    bid_again = store.closing_quote(SYMBOL, side="sell", at_ms=13_000)
+    assert bid_again is not None and bid_again.quote.bid == Decimal("0.80")
+    assert store.prices_a_close(SYMBOL, side="sell", at_ms=13_000)
+
+
+def test_a_newest_quote_with_nothing_on_a_side_is_a_quote_to_fill_from_and_no_price(tmp_path: Path) -> None:
+    """Nothing bid is a bid of zero that arrived. The sale has a quote, and the quote has no price for it."""
+    store = _store(tmp_path)
+    store.keep(SYMBOL, _quote("1.90", "1.94", bid_at=5_000, ask_at=5_000), kept_at_ms=6_000)
+    store.keep(SYMBOL, _quote("0", "0.05", bid_at=9_000, ask_at=9_000), kept_at_ms=10_000)
+
+    newest = store.closing_quote(SYMBOL, side="sell", at_ms=10_000)
+
+    assert newest is not None and newest.quote.bid == Decimal(0)
+    assert not store.prices_a_close(SYMBOL, side="sell", at_ms=10_000)
 
 
 def _rows(tmp_path: Path) -> int:
@@ -293,10 +323,10 @@ def test_what_is_kept_through_a_cut_is_what_a_later_reader_can_ask_for_and_no_mo
     noon = et_minute_of_day_ms(TUESDAY, 12 * 60)
     rows = [
         _row(1, kept_at=noon, received=noon - 300),
-        # Received later than any other, but handed over out of order: the newest by receipt.
+        # The last one received with a bid. A newer quote has none, so this bid prices nothing any more.
         _row(2, kept_at=noon + 3_000, received=noon + 2_900),
         _row(3, kept_at=noon + 6_000, received=noon + 2_000),
-        # An ask alone: the newest for a purchase, and nothing a sale could be priced from.
+        # An ask alone, and the newest by receipt: a purchase is priced from it, and no sale is priced at all.
         _row(4, kept_at=noon + 9_000, received=noon + 8_900, bid=None),
         # The last hand-over made for this contract.
         _row(5, kept_at=noon + 12_000, received=noon + 2_500),
@@ -310,8 +340,8 @@ def test_what_is_kept_through_a_cut_is_what_a_later_reader_can_ask_for_and_no_mo
 
     still = rows_still_answerable(rows, as_of_ms=noon + 13_000)
 
-    # Row 1 is behind in both; row 3 is neither the newest received nor the last handed over.
-    assert [row.seq for row in still] == [2, 4, 5, 6, 7, 8]
+    # Rows 1 and 3 are behind in both. Row 2 is not kept for its bid: no close is priced from it again.
+    assert [row.seq for row in still] == [4, 5, 6, 7, 8]
 
 
 def test_a_cut_keeps_one_mark_for_each_sessions_close_and_the_last_one_made_before_it() -> None:
@@ -368,20 +398,55 @@ def test_the_newest_bid_by_now_is_the_same_after_a_cut_as_before_it_when_a_quote
     # The last hand-over before the file is cut. The other contract's row is written after this one's.
     in_time = _quote("2.20", "2.26", bid_at=now - 500, ask_at=now - 500)
     store.keep_all({SYMBOL: in_time, FIFTY[0]: in_time}, kept_at_ms=now - 3_000)
-    before = store.newest(SYMBOL, at_or_before_ms=now, with_side="bid")
+    before = store.closing_quote(SYMBOL, side="sell", at_ms=now)
     rows_before = _rows(tmp_path)
 
     _hand_overs(store, (FIFTY[0],), first_ms=now - 2_000, count=40)
 
     assert _rows(tmp_path) < rows_before, "the file was never cut"
     for handle in (store, _store(tmp_path)):
-        after = handle.newest(SYMBOL, at_or_before_ms=now, with_side="bid")
+        after = handle.closing_quote(SYMBOL, side="sell", at_ms=now)
         assert before is not None and after is not None
         assert after.quote.bid == before.quote.bid == Decimal("2.20")
         stated = handle.last_stated(SYMBOL, at_or_before_ms=now, with_side="bid")
         assert stated is not None and (stated.kept_at_ms, stated.quote.bid) == (now - 3_000, Decimal("2.20"))
-        later = handle.newest(SYMBOL, at_or_before_ms=now + 60_000, with_side="bid")
+        later = handle.closing_quote(SYMBOL, side="sell", at_ms=now + 60_000)
         assert later is not None and later.quote.bid == Decimal("9.00")
+
+
+def test_a_cut_made_while_the_newest_quote_has_no_bid_brings_no_older_bid_back_to_price_a_sale(
+    tmp_path: Path,
+) -> None:
+    """Bid $2.00, then a quote with an ask alone, received later than any other. Then the file is cut, many times over.
+
+    The quote with the ask alone is put back as of its own receipt, as an
+    exit decision's is, and the older $2.00 is handed over once more after
+    it: so the newest quote is the last one handed over for neither side,
+    and is kept only for being the newest. A cut that kept the last quote
+    with a bid and dropped it would make $2.00 the newest again, and a sale
+    would be priced at it. No sale is priced after the cuts, in the process
+    that made them or in a new one, until a quote with a bid is kept.
+    """
+    store = _store(tmp_path)
+    bid_two = _quote("2.00", "2.06", bid_at=TUESDAY_OPEN - 200, ask_at=TUESDAY_OPEN - 200)
+    store.keep(SYMBOL, bid_two, kept_at_ms=TUESDAY_OPEN)
+    store.restore(SYMBOL, _quote(None, "2.10", ask_at=TUESDAY_OPEN + 2_800))
+    store.keep(SYMBOL, bid_two, kept_at_ms=TUESDAY_OPEN + 3_000)
+    rows_before = _rows(tmp_path)
+
+    now = _hand_overs(store, (FIFTY[0],), first_ms=TUESDAY_OPEN + 6_000, count=3 * COMPACT_ABOVE_ROWS)
+
+    assert _rows(tmp_path) < rows_before + 3 * COMPACT_ABOVE_ROWS, "the file was never cut"
+    for restarted in (False, True):
+        if restarted:
+            _as_after_a_restart()
+        handle = _store(tmp_path) if restarted else store
+        assert handle.closing_quote(SYMBOL, side="sell", at_ms=now) is None
+        assert not handle.prices_a_close(SYMBOL, side="sell", at_ms=now)
+        assert handle.prices_a_close(SYMBOL, side="buy", at_ms=now)
+    store.keep(SYMBOL, _quote("0.80", "0.86", bid_at=now + 800, ask_at=now + 800), kept_at_ms=now + 1_000)
+    sold_at = store.closing_quote(SYMBOL, side="sell", at_ms=now + 1_000)
+    assert sold_at is not None and sold_at.quote.bid == Decimal("0.80")
 
 
 def test_putting_a_quote_back_never_cuts_the_file(tmp_path: Path) -> None:
