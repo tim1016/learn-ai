@@ -761,6 +761,31 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "{external_order_id}/acknowledge"
             ),
         ),
+        # The owner's acknowledgement of an option-event notice (#2913), the
+        # account's own or one bot's. Like the review of an outside order it
+        # can neither stop a bot nor reduce what it holds, so a draining lane
+        # refuses it; the holds it ends do not block lane quiet.
+        _op(
+            "custody_option_event_hold_ack",
+            "POST",
+            "/accounts/{account_id}/custody/option-event-holds/acknowledge",
+            capability=Capability.CUSTODY_COMMAND,
+            idempotency=_DURABLE,
+            account=True,
+            agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/option-event-holds/acknowledge",
+        ),
+        _op(
+            "custody_bot_option_event_hold_ack",
+            "POST",
+            "/accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge",
+            capability=Capability.CUSTODY_COMMAND,
+            idempotency=_DURABLE,
+            account=True,
+            agent_path=(
+                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
+                "option-event-holds/acknowledge"
+            ),
+        ),
         # ── Manual orders family ──────────────────────────────────────────
         _op(
             "manual_orders_capability",

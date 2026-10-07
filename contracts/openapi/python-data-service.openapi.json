@@ -5146,6 +5146,20 @@
         "additionalProperties": false,
         "description": "One run of a bot. ``run_id`` is the run's own identity.",
         "properties": {
+          "option_endings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OptionEndingView"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Option Endings"
+          },
           "orders": {
             "$ref": "#/components/schemas/BotHistoryOrders"
           },
@@ -5469,6 +5483,7 @@
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
                   "discharge_attributed_residue",
+                  "end_expired_option",
                   "settle_unknown_exit_order",
                   "stop_bot_decisions",
                   "open_custody_timeline"
@@ -10227,6 +10242,16 @@
             ],
             "title": "Native Order Id"
           },
+          "option_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionEndingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "order_id": {
             "anyOf": [
               {
@@ -10509,6 +10534,16 @@
               }
             ],
             "title": "Native Order Id"
+          },
+          "option_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionEndingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "order_id": {
             "anyOf": [
@@ -34213,6 +34248,306 @@
         "title": "OptionContractView",
         "type": "object"
       },
+      "OptionEndingContract": {
+        "additionalProperties": false,
+        "description": "The contract, as every option view serves one: for the shared renderer, which writes its name.",
+        "properties": {
+          "expiry_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "occ_symbol": {
+            "title": "Occ Symbol",
+            "type": "string"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "strike": {
+            "title": "Strike",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "occ_symbol",
+          "underlying",
+          "expiry_ms",
+          "right",
+          "strike"
+        ],
+        "title": "OptionEndingContract",
+        "type": "object"
+      },
+      "OptionEndingSettlementPrice": {
+        "additionalProperties": false,
+        "description": "The underlying's price a simulation settled a contract from, and when that price is from.",
+        "properties": {
+          "bar_ended_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Ended At Ms",
+            "type": "integer"
+          },
+          "before_close_ms": {
+            "minimum": 0.0,
+            "title": "Before Close Ms",
+            "type": "integer"
+          },
+          "last_session_close_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Close Ms",
+            "type": "integer"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "price_usd": {
+            "title": "Price Usd",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "price",
+          "price_usd",
+          "bar_ended_at_ms",
+          "last_session_close_ms",
+          "before_close_ms"
+        ],
+        "title": "OptionEndingSettlementPrice",
+        "type": "object"
+      },
+      "OptionEndingView": {
+        "additionalProperties": false,
+        "description": "One option position that ended with no order of the bot's.",
+        "properties": {
+          "close_cash_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Cash Cents"
+          },
+          "close_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Cash Usd"
+          },
+          "close_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Price"
+          },
+          "close_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Price Usd"
+          },
+          "contract": {
+            "$ref": "#/components/schemas/OptionEndingContract"
+          },
+          "contracts": {
+            "minimum": 1.0,
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "ended_by_operator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended By Operator"
+          },
+          "ended_on_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ended On Ms",
+            "type": "integer"
+          },
+          "headline": {
+            "minLength": 1,
+            "title": "Headline",
+            "type": "string"
+          },
+          "held": {
+            "enum": [
+              "bought",
+              "sold"
+            ],
+            "title": "Held",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "expired",
+              "exercised",
+              "assigned",
+              "sold_outside",
+              "settled_in_cash",
+              "ended_by_owner"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "no_settlement_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Settlement Reason"
+          },
+          "recorded_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "settled_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionEndingSettlementPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "share_cash_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Cash Cents"
+          },
+          "share_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Cash Usd"
+          },
+          "share_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Price"
+          },
+          "share_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Price Usd"
+          },
+          "share_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Symbol"
+          },
+          "shares": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares"
+          },
+          "simulated": {
+            "title": "Simulated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "contract",
+          "contracts",
+          "held",
+          "ended_on_ms",
+          "recorded_at_ms",
+          "simulated",
+          "headline"
+        ],
+        "title": "OptionEndingView",
+        "type": "object"
+      },
       "OptionEntryLeg": {
         "additionalProperties": false,
         "description": "Option ``ActionEntity`` \u2014 Slice 1C.\n\nAdds ``right``, ``strike``, ``expiry`` on top of the common entry-leg\nfields. ``leg_id`` is the same stable identity stock legs carry \u2014\neach option leg of a multi-leg structure resolves to its own\n``conId`` at consumption time, even when several legs share the same\nexpiry-selector inputs.",
@@ -34317,6 +34652,138 @@
           "expiry"
         ],
         "title": "OptionEntryLeg",
+        "type": "object"
+      },
+      "OptionEventHoldAcknowledgementRequest": {
+        "additionalProperties": false,
+        "description": "The owner has looked at one option-event notice, exactly as they read it.\n\nWho acknowledges is never a request field: the route records the\ninstallation's configured operator identity.",
+        "properties": {
+          "item_refs": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Item Refs",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "enum": [
+              "OPTION_EVENTS_NOT_READ",
+              "OPTION_EVENT_UNREADABLE",
+              "OPTION_EVENT_NOT_EXECUTED",
+              "OPTION_EVENT_CONTRACT_NOT_HELD",
+              "OPTION_EVENT_WRONG_SIDE",
+              "OPTION_EVENT_HELD_ON_BOTH_SIDES",
+              "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+              "OPTION_EVENT_CASH_NOT_WHOLE_CENTS",
+              "OPTION_EVENT_ROW_CHANGED",
+              "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL",
+              "OPTION_SHARE_TRADE_MISSING",
+              "OPTION_SHARE_TRADE_UNPAIRED",
+              "OPTION_SHARE_TRADE_DISAGREES",
+              "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE",
+              "OPTION_EVENT_AFTER_A_LOT_CLOSED",
+              "OPTION_EXPIRED_NOT_SETTLED",
+              "OPTION_SHARES_HELD",
+              "OPTION_ORDER_NOT_OURS"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "uncertainty_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Uncertainty Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason_code",
+          "uncertainty_id",
+          "observed_at_ms",
+          "item_refs"
+        ],
+        "title": "OptionEventHoldAcknowledgementRequest",
+        "type": "object"
+      },
+      "OptionEventHoldAcknowledgementResponse": {
+        "description": "The books' record of one acknowledged option-event notice.",
+        "properties": {
+          "item_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Item Refs",
+            "type": "array"
+          },
+          "operator": {
+            "title": "Operator",
+            "type": "string"
+          },
+          "reason_code": {
+            "enum": [
+              "OPTION_EVENTS_NOT_READ",
+              "OPTION_EVENT_UNREADABLE",
+              "OPTION_EVENT_NOT_EXECUTED",
+              "OPTION_EVENT_CONTRACT_NOT_HELD",
+              "OPTION_EVENT_WRONG_SIDE",
+              "OPTION_EVENT_HELD_ON_BOTH_SIDES",
+              "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+              "OPTION_EVENT_CASH_NOT_WHOLE_CENTS",
+              "OPTION_EVENT_ROW_CHANGED",
+              "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL",
+              "OPTION_SHARE_TRADE_MISSING",
+              "OPTION_SHARE_TRADE_UNPAIRED",
+              "OPTION_SHARE_TRADE_DISAGREES",
+              "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE",
+              "OPTION_EVENT_AFTER_A_LOT_CLOSED",
+              "OPTION_EXPIRED_NOT_SETTLED",
+              "OPTION_SHARES_HELD",
+              "OPTION_ORDER_NOT_OURS"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "reason_code",
+          "item_refs",
+          "operator",
+          "sequence",
+          "recorded_at_ms"
+        ],
+        "title": "OptionEventHoldAcknowledgementResponse",
         "type": "object"
       },
       "OptionExpiryRule": {
@@ -36915,6 +37382,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -37008,6 +37476,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -37092,6 +37561,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -37161,6 +37631,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -37258,6 +37729,7 @@
               "execute_safe_flatten",
               "reconcile_now",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order"
             ],
             "title": "Action Id",
@@ -39340,6 +39812,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -40508,6 +40981,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -40620,6 +41094,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -40696,6 +41171,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -40771,6 +41247,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -48422,6 +48899,7 @@
           "MANUAL_TICKET_COMPLETED",
           "MANUAL_TICKET_PAUSED_UNKNOWN",
           "MANUAL_TICKET_RESERVED",
+          "OPTION_POSITION_ENDED",
           "ORDER_CANCEL_REQUESTED",
           "ORDER_CANCEL_UNCERTAIN",
           "ORDER_FILL_OBSERVED",
@@ -52113,6 +52591,93 @@
         ]
       }
     },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Acknowledge one bot's option-event notice, once the books agree with the broker (#2913).",
+        "operationId": "acknowledge_bot_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionEventHoldAcknowledgementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionEventHoldAcknowledgementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The selected SQLite authority or bot is unavailable."
+          },
+          "409": {
+            "description": "The notice was not acknowledged; the detail says why, and nothing was written."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "The SQLite authority or Alpaca is temporarily unavailable."
+          }
+        },
+        "summary": "Acknowledge Bot Option Event Hold",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
       "post": {
         "operationId": "check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post",
@@ -52408,6 +52973,84 @@
           }
         },
         "summary": "Get Bot Snapshot",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Acknowledge one option-event notice of the account's own, once the books agree with the broker (#2913).",
+        "operationId": "acknowledge_account_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionEventHoldAcknowledgementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionEventHoldAcknowledgementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The selected SQLite authority or bot is unavailable."
+          },
+          "409": {
+            "description": "The notice was not acknowledged; the detail says why, and nothing was written."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "The SQLite authority or Alpaca is temporarily unavailable."
+          }
+        },
+        "summary": "Acknowledge Account Option Event Hold",
         "tags": [
           "alpaca-clerk-sqlite"
         ]
@@ -61483,6 +62126,107 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge (custody_command).",
+        "operationId": "fleet_custody_bot_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Bot Option Event Hold Ack",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check": {
       "post": {
         "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/check (custody_command).",
@@ -61781,6 +62525,98 @@
           }
         },
         "summary": "Fleet Custody Runs Stop",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/option-event-holds/acknowledge (custody_command).",
+        "operationId": "fleet_custody_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Option Event Hold Ack",
         "tags": [
           "broker-clerks"
         ]

@@ -1,9 +1,12 @@
-"""A simulated broker has no assignment, exercise or expiry to report, and says so as a complete answer.
+"""A simulated broker has no option event to report, and says so as a complete answer.
 
-Neither simulation takes an option order yet, so neither holds an option
-that could end (#2913). "None, and that is all" is the truth about its own
-book. A Live Shadow does not pass the live account's events through: they
-end positions its book never held.
+No broker reports a simulated account's option events. A Dry Run's
+simulation settles the contracts it holds past their last session in a step
+of its own, and hands those over with their record
+(``test_synthetic_broker_option_settlement``): never through this read. So
+"none, and that is all" is the truth of the read (#2913). A Live Shadow
+takes no option order, and does not pass the live account's events through:
+they end positions its book never held.
 """
 
 from __future__ import annotations

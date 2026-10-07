@@ -33,6 +33,12 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     option_flatten_waits_for_open,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
+    END_EXPIRED_OPTION_LABEL,
+    expired_contract_hold_ref,
+    owner_ending_not_possible_ref,
+    owner_ending_offered_from_ms,
+)
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AccountCheckKind,
     AuthorityHealth,
@@ -54,7 +60,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     UnknownOrderSettlement,
 )
 from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ORDER_OUTCOME_UNKNOWN_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    OPTION_EXPIRED_NOT_SETTLED_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     VoidAfter,
     reason_age_policy,
@@ -62,6 +71,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     reasons_that_strand_a_residue,
     residue_discharge_role,
 )
+from app.options.contract import OptionContract
+from app.options.deadlines import past_last_session
 from app.utils.et_words import et_when_words
 
 RecoveryActionId = Literal[
@@ -72,6 +83,7 @@ RecoveryActionId = Literal[
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "end_expired_option",
     "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
@@ -344,6 +356,23 @@ _DESCRIPTORS: tuple[_Descriptor, ...] = (
             "account, writes the attributed quantity to zero under your reason, and "
             "submits no order.",
             "Discharge residue",
+        ),
+    ),
+    _Descriptor(
+        action_id="end_expired_option",
+        label=END_EXPIRED_OPTION_LABEL,
+        explanation=(
+            "Count an expired option contract that nothing will settle as worth nothing, at your word. "
+            "The Clerk looks once more for a settlement first and sends no order."
+        ),
+        mutation=True,
+        confirmation=_confirmation(
+            "End the expired contract at your word?",
+            "The Clerk looks once more for the contract's settlement and books that if one has come. If there "
+            "is still none, it closes the position at nothing: what the contract cost is booked as a loss. "
+            "It sends no order. This cannot be undone.",
+            "End the contract",
+            required_token="END",
         ),
     ),
     _Descriptor(
@@ -716,6 +745,8 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
         return _execute_safe_flatten_decision(ctx)
     if action_id == "discharge_attributed_residue":
         return _residue_discharge_decision(ctx)
+    if action_id == "end_expired_option":
+        return _end_expired_option_decision(ctx)
     if action_id == "settle_unknown_exit_order":
         return _settle_unknown_exit_order_decision(ctx)
     raise AssertionError(f"healthy catalog cannot evaluate {action_id!r}")
@@ -1084,6 +1115,132 @@ def _reconciliation_confirms_residue(
     return reconciliation.attempted_at_ms > residue_formed_at_ms
 
 
+#: Why the write-off is not offered for an option contract past its last session.
+EXPIRED_CONTRACT_IS_NOT_WRITTEN_OFF = "EXPIRED_OPTION_CONTRACT_IS_NOT_WRITTEN_OFF"
+
+
+def _expired_contracts_held(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition, ...]:
+    """This bot's positions in option contracts whose last session is over, by symbol."""
+    return tuple(
+        position
+        for position in _relevant_positions(ctx)
+        if is_option_contract_symbol(position.symbol.upper())
+        and past_last_session(OptionContract.from_occ_symbol(position.symbol.upper()).expiry_date, ctx.now_ms)
+    )
+
+
+def _why_an_expired_contract_is_not_ended_yet(
+    ctx: RecoveryPolicyContext, position: ProjectedPosition
+) -> tuple[str, str, str] | None:
+    """Why the owner may not end one expired contract at their word yet, as a code, a reason and a step. None when they may.
+
+    The same on every account: a whole read made after the expiry found
+    no settlement, which the bot's open ``OPTION_EXPIRED_NOT_SETTLED`` hold
+    says by naming the contract. A real account also waits until the close
+    of the session after the contract's last, so the broker's record has
+    had a full business day to come. A sold contract is never ended this
+    way: if it was assigned, shares moved.
+
+    Nor is it offered while the hold itself says the contract is not ended
+    at the owner's word as things stand (``owner_ending_not_possible_ref``):
+    a row of the broker's that may be the contract's end stands in the way,
+    and the press could only be refused. The hold's words are written by
+    the function that decides the press, so what is offered here does not
+    fail there for a reason that was already known.
+    """
+    symbol = position.symbol.upper()
+    if position.attributed_qty < 0:
+        return (
+            "SOLD_OPTION_CONTRACT_NOT_ENDED_AT_A_WORD",
+            f"{symbol} is held sold. If it was assigned, shares moved, and no word undoes that.",
+            "Compare this bot's positions with the broker's.",
+        )
+    named_by_its_hold = {
+        ref
+        for uncertainty in ctx.uncertainties
+        if uncertainty.reason_code == OPTION_EXPIRED_NOT_SETTLED_REASON_CODE
+        and uncertainty.strategy_instance_id == ctx.strategy_instance_id
+        for ref in uncertainty.evidence_refs
+    }
+    held_for = expired_contract_hold_ref(symbol) in named_by_its_hold
+    simulated = is_synthetic_account_id(ctx.account_id)
+    if not held_for:
+        return (
+            "EXPIRED_OPTION_CONTRACT_MAY_STILL_BE_SETTLED",
+            (
+                f"The simulation has not yet said that it has no price to settle {symbol} from."
+                if simulated
+                else f"The Clerk has not yet read the broker's records since {symbol} expired and found none for it."
+            ),
+            "Nothing to do yet: the Clerk looks for the contract's settlement by itself.",
+        )
+    if owner_ending_not_possible_ref(symbol) in named_by_its_hold:
+        return (
+            "EXPIRED_OPTION_CONTRACT_RECORD_IN_THE_WAY",
+            f"A record of the broker's that may be {symbol}'s end is not booked whole as it reads, and the contract "
+            "is not ended at your word while that stands.",
+            "Nothing to do here. The notice that the contract is not settled says what is known of the record.",
+        )
+    if simulated:
+        return None
+    offered_from_ms = owner_ending_offered_from_ms(OptionContract.from_occ_symbol(symbol).expiry_date)
+    if ctx.now_ms < offered_from_ms:
+        return (
+            "EXPIRED_OPTION_CONTRACT_RECORD_MAY_STILL_COME",
+            f"The broker's record of how {symbol} ended may still come. It is waited for until "
+            f"{et_when_words(offered_from_ms, now_ms=ctx.now_ms)}, the close of the session after the contract's last.",
+            "Nothing to do yet: the Clerk books the record by itself when it comes.",
+        )
+    return None
+
+
+def _end_expired_option_decision(ctx: RecoveryPolicyContext) -> _Decision:
+    """Offer the owner's ending of an expired option contract that nothing will settle (ADR 0076 decision 22).
+
+    Presentation reads only durable custody. The proof is the executor's
+    own look, made at the press (``option_events.end_option_at_the_owners_word``):
+    a settlement that has come by then is booked in the ending's place. It
+    asks for no stopped run and no failed close: a running bot whose feed
+    was down for the contract's last session has neither, and holds a
+    contract nothing will settle all the same.
+    """
+    expired = _expired_contracts_held(ctx)
+    waits = {position.symbol.upper(): _why_an_expired_contract_is_not_ended_yet(ctx, position) for position in expired}
+    ready = next((symbol for symbol, why in waits.items() if why is None), None)
+    reason_code: str | None = None
+    reason: str | None = None
+    next_step = "End the contract at your word. The Clerk looks once more for its settlement first."
+    if ctx.strategy_instance_id is None:
+        reason_code = "RECOVERY_SCOPE_UNSUPPORTED"
+        reason = "An expired contract is ended for the one bot that holds it."
+        next_step = "Open the bot that holds the contract."
+    elif not expired:
+        reason_code = "NO_EXPIRED_OPTION_CONTRACT"
+        reason = "This bot holds no option contract past its last session."
+        next_step = "Nothing to end."
+    elif ready is None:
+        reason_code, reason, next_step = next(why for why in waits.values() if why is not None)
+    available = reason_code is None
+    return _Decision(
+        available=available,
+        reason_code=reason_code,
+        reason=reason,
+        # Nothing to end with no expired contract held, for one bot.
+        needed=ctx.strategy_instance_id is not None and bool(expired),
+        freshness="not_required",
+        evidence=(),
+        next_step=next_step,
+        token_facts={
+            "expired": [
+                (position.strategy_instance_id, position.symbol, position.attributed_qty, position.updated_at_ms)
+                for position in expired
+            ],
+            "waits": {symbol: None if why is None else why[0] for symbol, why in waits.items()},
+        },
+        execution_ref=ready if available else None,
+    )
+
+
 def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     """Offer the discharge of one bot's residue that an open EXIT episode strands (#2381).
 
@@ -1095,12 +1252,12 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     and the cure is a flatten, not a discharge. An older one says nothing about
     the residue and does not hide the action.
 
-    A Dry Run holding an expired option contract is never offered it (ADR
-    0076): its simulation is the account's broker and holds the contract
-    too, so the executor would refuse. Nothing can be done about that
-    position until a simulation settles an expired contract, and the step
-    says so. A Live Shadow is the same: its order book is what holds the
-    contract.
+    An expired option contract is never offered it, on any account (ADR
+    0076 decision 22). A write-off takes the position off the books and
+    leaves its lot open: the premium would never be a loss, and the budget
+    would carry it as a position for good. The contract's end is booked
+    from its settlement, and where none will come the owner ends it at
+    their word (``_end_expired_option_decision``), which closes the lot.
     """
     positions = _relevant_positions(ctx)
     relevant = _relevant_uncertainties(ctx)
@@ -1119,31 +1276,23 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     reason_code: str | None = None
     reason: str | None = None
     next_step = "Confirm at the broker that the symbol is flat, then discharge the residue."
-    # A Dry Run's expired option contract, or a Live Shadow's (ADR 0076). The
-    # simulation is the account's broker and holds the contract too, so there
-    # is no residue, whatever a reconciliation has or has not yet seen: asked
-    # before everything else, so the write-off is never offered and then refused.
-    held_by = (
-        "Dry Run's simulation" if is_synthetic_account_id(ctx.account_id)
-        else "Live Shadow's order book" if is_shadow_account_id(ctx.account_id)
-        else None
-    )
-    simulated_expired = (
-        expired_option_close(positions[0].symbol, ctx.now_ms)
-        if len(positions) == 1 and held_by is not None
-        else None
+    # An expired option contract, on any account (ADR 0076 decision 22). Asked
+    # before everything else, so the write-off is never offered and then
+    # refused. Its end is booked from its settlement or at the owner's word.
+    expired_contract = (
+        expired_option_close(positions[0].symbol, ctx.now_ms) if len(positions) == 1 else None
     )
     if ctx.strategy_instance_id is None or len(positions) != 1:
         reason_code = "RECOVERY_SCOPE_UNSUPPORTED"
         reason = "Discharge a residue from the single bot that holds one attributed symbol."
         next_step = "Open the bot that holds the residue."
-    elif simulated_expired is not None:
-        reason_code = "BROKER_AGREES_WITH_CUSTODY"
+    elif expired_contract is not None:
+        reason_code = EXPIRED_CONTRACT_IS_NOT_WRITTEN_OFF
         reason = (
-            f"{positions[0].symbol.upper()} has expired, and this {held_by}, which is the account's "
-            "broker, still holds it. A write-off removes only what the broker does not hold."
+            f"{positions[0].symbol.upper()} has expired. An expired contract is not written off: a write-off "
+            "would leave what it cost on the books as a position for good."
         )
-        next_step = simulated_expired.next_step
+        next_step = expired_contract.next_step
     elif not episodes:
         reason_code = "NO_STRANDED_EXIT_EPISODE"
         reason = f"No open {reasons_that_strand_a_residue()} episode names this bot's exposure."
@@ -1185,8 +1334,13 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason_code=reason_code,
         reason=reason,
         # Nothing to write off with nothing held, no stranded exit naming the
-        # bot (whatever its scope), or a broker that holds the shares too.
-        needed=bool(positions) and bool(episodes) and reason_code != "BROKER_AGREES_WITH_CUSTODY",
+        # bot (whatever its scope), a broker that holds the shares too, or an
+        # expired contract, which is never written off.
+        needed=(
+            bool(positions)
+            and bool(episodes)
+            and reason_code not in ("BROKER_AGREES_WITH_CUSTODY", EXPIRED_CONTRACT_IS_NOT_WRITTEN_OFF)
+        ),
         freshness="not_required",
         evidence=evidence,
         next_step=next_step,
@@ -1609,6 +1763,7 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
         "execute_safe_flatten",
         "prepare_safe_flatten",
         "discharge_attributed_residue",
+        "end_expired_option",
         "open_custody_timeline",
     )
     available = {capability.action_id for capability in capabilities if capability.available}

@@ -528,8 +528,8 @@ async def test_a_contract_a_shadow_still_holds_after_its_expiry_is_told_as_it_is
         scope="CUSTODY_SUBJECT", reason_code=SCHEDULED_CLOSE_MISSED_REASON_CODE, strategy_instance_id=shadow.sid
     )
     assert notice is not None and "This is a Live Shadow: nothing real is held." in notice["facts_json"]
-    assert not write_off.available and write_off.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
-    assert "Live Shadow's order book" in (write_off.unavailable_reason or "")
+    assert not write_off.available and write_off.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_IS_NOT_WRITTEN_OFF"
+    assert "An expired contract is not written off" in (write_off.unavailable_reason or "")
     assert not flatten.available
     assert shadow.live.trade_calls == []
 

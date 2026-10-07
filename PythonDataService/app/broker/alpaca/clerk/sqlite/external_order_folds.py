@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExternalOrderObservedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
 )
@@ -93,6 +94,13 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     observed = reads.external_order_by_broker_order_id(conn, facts.broker_order_id)
     assert observed is not None
     if observed.acknowledged_at_ms is not None:
+        return
+    if outside_order_reduces_a_bots_contract(
+        conn, symbol=facts.symbol, side=facts.side, broker_order_id=facts.broker_order_id
+    ):
+        # ADR 0076 decision 22: an order in an option contract a bot holds, on the side that
+        # reduces it, stands against that bot and that contract alone. The row written above is
+        # what the bot's own reductions ask, from this transition on.
         return
     active = reads.active_hold(
         conn, scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE

@@ -131,6 +131,7 @@ ActionId = Literal[
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "end_expired_option",
     "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
@@ -144,6 +145,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "end_expired_option",
     "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
@@ -164,7 +166,7 @@ RecordedActionId = Literal[ActionId, RetiredActionId]
 # reconcile (#2351) — the one closed set a draining lane still executes. They
 # travel on their own operation (``bot_panel_quiesce_action``, whose request
 # schema is this Literal) while the rest of the action set refuses: new
-# deployment would start decisions again. All six are the SQLite recovery
+# deployment would start decisions again. All seven are the SQLite recovery
 # executor's (``recovery_execution.execute_recovery_action``), which for these
 # ids stops decisions, cancels owned verified working orders, submits a
 # reducing order, reconciles against the broker, discharges a residue the
@@ -173,7 +175,12 @@ RecordedActionId = Literal[ActionId, RetiredActionId]
 # active run, so it cannot let a bot trade again — or settles a closing order
 # whose outcome is unknown on what the Clerk itself reads at the broker
 # (#2854): a lane holding one cannot answer quiet either, and the action
-# sends no order and requires no active run. Excluded on purpose:
+# sends no order and requires no active run. ``end_expired_option`` ends an
+# expired option contract that nothing will settle, at the owner's word
+# (#2913, ADR 0076 decision 22): it sends no order and requires no active
+# run, and for an expired contract it stands where the write-off stood, which
+# is never offered for one, so without it a draining lane whose bot holds
+# such a contract could never answer quiet. Excluded on purpose:
 # ``resolve_execution_coverage`` rewrites fill evidence and can lift a hold,
 # which can let a still-running bot submit ENTERs again; the view and
 # preparation ids (``prepare_safe_flatten``, ``open_custody_timeline``,
@@ -184,6 +191,7 @@ QuiesceActionId = Literal[
     "execute_safe_flatten",
     "reconcile_now",
     "discharge_attributed_residue",
+    "end_expired_option",
     "settle_unknown_exit_order",
 ]
 QUIESCE_ACTION_IDS: Final[tuple[QuiesceActionId, ...]] = get_args(QuiesceActionId)
@@ -370,6 +378,11 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Discharge stranded residue",
         "Write off an attributed position the broker does not hold. The Clerk re-reads "
         "the broker first and sends no order.",
+    ),
+    "end_expired_option": OperatorCopy(
+        "End the expired contract",
+        "Count an expired option contract that nothing will settle as worth nothing, at your word. The Clerk "
+        "looks once more for a settlement first and sends no order.",
     ),
     "settle_unknown_exit_order": OperatorCopy(
         "Settle the uncertain order",

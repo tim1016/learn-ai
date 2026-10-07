@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
 from app.broker.alpaca.clerk.sqlite.exit_resolution import expired_contract_notice, expired_option_close
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding, recorded_option_endings
 from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     OrderProjectionReadError,
@@ -798,6 +799,21 @@ class SqliteClerkProjectionReader:
             )
             operations = self._project_operations(rows)
         return operations[0] if operations else None
+
+    def option_endings(self, effect_operation_ids: Iterable[str]) -> dict[str, RecordedOptionEnding]:
+        """The option position each named operation recorded as ended, by operation (ADR 0076 decision 22).
+
+        An operation that is no such record is left out. With none named
+        nothing is read.
+        """
+        operation_ids = tuple(dict.fromkeys(effect_operation_ids))
+        if not operation_ids:
+            return {}
+        with self._read_transaction():
+            self._verify_identity()
+            return {
+                ending.effect_operation_id: ending for ending in recorded_option_endings(self._conn, operation_ids)
+            }
 
     def operations_by_ids(
         self,
