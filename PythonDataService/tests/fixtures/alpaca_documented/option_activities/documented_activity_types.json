@@ -1,0 +1,35 @@
+{
+  "reference_option_activity_types": [
+    "OPASN",
+    "OPCA",
+    "OPCSH",
+    "OPEXC",
+    "OPEXP",
+    "OPTRD"
+  ],
+  "account_activities_page_option_activity_types": [
+    "OPASN",
+    "OPEXP",
+    "OPXRC"
+  ],
+  "reference_non_trade_activity_fields": [
+    "activity_sub_type",
+    "activity_type",
+    "created_at",
+    "currency",
+    "cusip",
+    "date",
+    "group_id",
+    "id",
+    "net_amount",
+    "per_share_amount",
+    "qty",
+    "status",
+    "symbol"
+  ],
+  "reference_non_trade_activity_statuses": [
+    "executed",
+    "correct",
+    "canceled"
+  ]
+}

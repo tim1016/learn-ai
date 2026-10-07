@@ -22,7 +22,12 @@ from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_risk import fold_account_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_version, fold_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_folds import fold_deploy_committed, fold_deploy_launched
-from app.broker.alpaca.clerk.sqlite.contract_terms import require_fill_in_its_orders_contract
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    bind_order_contract,
+    contract_terms,
+    record_contract_terms,
+    require_fill_in_its_orders_contract,
+)
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     CHAIN_TOTAL_PROVEN_TRANSITION,
@@ -51,6 +56,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
     ExitRecoveryEvaluatedFacts,
+    ExitReducingOrderCreatedFacts,
     ManualOrderCancelResultFacts,
     ManualOrderReplacedFacts,
     OrderCancelRequestedFacts,
@@ -423,6 +429,11 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
     transaction is: insert the command first (effect link still null),
     insert the effect operation (its command now exists), insert the order
     (its effect operation now exists), then backfill the command's link.
+
+    An entry in an option contract (ADR 0076) carries the contract in its
+    facts. Its terms are recorded and the order is bound to it here, with the
+    order's row, so no option order exists without its contract and a rebuild
+    from the mirror rebuilds both.
     """
     facts = EnterAcceptedFacts.from_facts_json(payload["facts_json"])
     _insert_command_row(
@@ -482,6 +493,14 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         "UPDATE commands SET effect_operation_id = ? WHERE command_id = ?",
         (payload["effect_operation_id"], payload["command_id"]),
     )
+    if facts.option is not None:
+        from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
+
+        contract = OptionEntryFacts.from_facts(facts.option).contract_terms
+        if facts.leg["symbol"] != contract.symbol:
+            raise ValueError("an option ENTER's order line and its contract name different symbols")
+        record_contract_terms(conn, contract, recorded_at_ms=payload["recorded_at_ms"])
+        bind_order_contract(conn, order_ref=payload["order_ref"], symbol=contract.symbol)
     if facts.cash_reference_price is not None:
         from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
         from app.broker.alpaca.clerk.money import normalize_money
@@ -561,6 +580,12 @@ def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[st
     The instruction remains in typed transition facts; the order row stores
     identity and broker projection while the partial unique link index makes
     a second reducing intent for the same EXIT impossible.
+
+    A reduction of an option contract the books have recorded is bound to
+    that contract here (ADR 0076), whoever made it: a deciding program's
+    EXIT, an ended run's close, the operator's flatten or the watchdog's
+    re-drive. Without the binding its fills would be refused at the position
+    write. A symbol in shares is never a recorded contract.
     """
     conn.execute(
         "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, "
@@ -573,6 +598,9 @@ def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[st
             payload["recorded_at_ms"],
         ),
     )
+    reduced = ExitReducingOrderCreatedFacts.reduced_symbol(payload["facts_json"])
+    if reduced is not None and contract_terms(conn, reduced) is not None:
+        bind_order_contract(conn, order_ref=payload["order_ref"], symbol=reduced)
     conn.execute(
         "INSERT INTO operation_order_links (effect_operation_id, order_ref, role, linked_at_ms) "
         "VALUES (?, ?, 'REDUCING', ?)",
@@ -1007,8 +1035,9 @@ def _apply_attributed_position_delta(
       test_late_fill_after_residue_discharge.py.
 
     A position is held per instrument: a fill of an order that trades an
-    option contract moves that contract's position and no other, and an
-    option fill of an order bound to no contract is refused (ADR 0076).
+    option contract moves that contract's position and no other, by a whole
+    number of contracts, and an option fill of an order bound to no contract
+    is refused (ADR 0076 decision 13).
     """
     owner = conn.execute(
         "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
@@ -1016,7 +1045,7 @@ def _apply_attributed_position_delta(
     ).fetchone()
     if owner is None:
         raise ValueError("execution fill requires its durable owning effect")
-    require_fill_in_its_orders_contract(conn, order_ref=payload["order_ref"], symbol=symbol)
+    require_fill_in_its_orders_contract(conn, order_ref=payload["order_ref"], symbol=symbol, quantity=quantity)
     if _fill_credit_is_withheld(conn, payload=payload, symbol=symbol):
         return
     signed_delta = quantity if side == "BUY" else -quantity
@@ -1179,6 +1208,9 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_coverage_resolution_replaces_one_cumulative_fill_once.
+
+    No position moves here, so the exact execution meets its order's
+    contract at this write and not at the position's (ADR 0076 decision 13).
     """
     facts = ExecutionCoverageResolvedFacts.from_facts_json(payload["facts_json"])
     exact = validate_execution_coverage_resolved_facts(facts)
@@ -1207,6 +1239,9 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
         raise ValueError("coverage resolution proof does not match immutable evidence")
     if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
         raise ValueError("coverage resolution exact execution already exists")
+    require_fill_in_its_orders_contract(
+        conn, order_ref=facts.order_ref, symbol=exact.symbol, quantity=exact.slice_qty
+    )
     conn.execute("DELETE FROM fills WHERE fill_id = ?", (facts.replaced_cumulative_fill_id,))
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "

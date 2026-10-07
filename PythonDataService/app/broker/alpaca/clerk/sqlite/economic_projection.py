@@ -49,7 +49,6 @@ from app.broker.alpaca.clerk.sqlite.contract_terms import (
     ORDER_CONTRACT_JOINS_SQL,
     ORDER_CONTRACT_MULTIPLIER_SQL,
     ORDER_CONTRACT_SYMBOL_SQL,
-    keeps_option_contracts,
 )
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
@@ -125,41 +124,18 @@ EFFECTIVE_FILL_LINEAGE_CTE = """
     )"""
 
 
-@dataclass(frozen=True)
-class _FillInstrumentSql:
-    """How a reader of fills names the instrument each fill traded.
-
-    For a query over ``orders o``, ``strategy_instances s`` and
-    ``manual_acceptance``: the symbol expression, the ``contract_multiplier``
-    column, and the joins they need.
-    """
-
-    symbol: str
-    multiplier: str
-    joins: str
-
-
-# An order trades its bot's symbol, or its manual leg's, in shares.
-_SHARES = _FillInstrumentSql(
-    symbol="COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol'))",
-    multiplier="NULL AS contract_multiplier",
-    joins="",
+# How a reader of fills names the instrument each fill traded, for a query over
+# ``orders o``, ``strategy_instances s`` and ``manual_acceptance``. An order
+# bound to an option contract trades that contract, and its money is counted
+# with the contract's multiplier (ADR 0076 decision 13). Every other order
+# joins to nothing: it trades its bot's symbol, or its manual leg's, in shares,
+# and its multiplier is NULL.
+_FILL_SYMBOL_SQL = (
+    f"COALESCE({ORDER_CONTRACT_SYMBOL_SQL}, s.symbol, "
+    "json_extract(manual_acceptance.facts_json, '$.leg.symbol'))"
 )
-# An order bound to an option contract trades that contract, and its money is
-# counted with the contract's multiplier (ADR 0076). Every other order joins
-# to nothing and reads as ``_SHARES`` does.
-_SHARES_OR_CONTRACTS = _FillInstrumentSql(
-    symbol=(
-        f"COALESCE({ORDER_CONTRACT_SYMBOL_SQL}, s.symbol, "
-        "json_extract(manual_acceptance.facts_json, '$.leg.symbol'))"
-    ),
-    multiplier=f"{ORDER_CONTRACT_MULTIPLIER_SQL} AS contract_multiplier",
-    joins=ORDER_CONTRACT_JOINS_SQL.format(order="o"),
-)
-
-
-def _fill_instrument_sql(conn: sqlite3.Connection) -> _FillInstrumentSql:
-    return _SHARES_OR_CONTRACTS if keeps_option_contracts(conn) else _SHARES
+_FILL_MULTIPLIER_SQL = f"{ORDER_CONTRACT_MULTIPLIER_SQL} AS contract_multiplier"
+_FILL_CONTRACT_JOINS_SQL = ORDER_CONTRACT_JOINS_SQL.format(order="o")
 
 
 class EconomicProjectionError(RuntimeError):
@@ -191,9 +167,13 @@ class _CachedFifo:
     numerical operation; this cache only retains its mutable inputs between
     equal or append-only SQLite revisions.  A correction or historical insert
     invalidates the prefix and rebuilds from authoritative effective rows.
+    A fill FIFO refuses leaves nothing behind: the cache is emptied, so the
+    next read rebuilds from its own records and never from a batch that
+    stopped part-way.
     Reference: ``fifo_pnl.py``.
     Canonical implementation: ``fifo_pnl.py::apply_fill_to_lots``.
-    Validated against: ``test_economic_projection.py``.
+    Validated against: ``test_economic_projection.py``; the refusal in
+      ``test_option_custody.py``.
     """
 
     records: tuple[FillRecord, ...] = ()
@@ -207,23 +187,33 @@ class _CachedFifo:
         records: tuple[FillRecord, ...],
     ) -> tuple[list[ClosedLot], dict[str, deque[_Lot]], FeeFidelity]:
         if not _is_prefix(self.records, records):
-            self.records = ()
-            self.lots = {}
-            self.closed_lots = []
-            self.fee_total = 0.0
-            self.fee_missing = False
+            self._forget()
 
-        for record in records[len(self.records) :]:
-            apply_fill_to_lots(self.lots, record, self.closed_lots)
-            if record.fee is None:
-                self.fee_missing = True
-                self.fee_total = None
-            elif not self.fee_missing:
-                self.fee_total = (self.fee_total or 0.0) + record.fee
+        try:
+            for record in records[len(self.records) :]:
+                apply_fill_to_lots(self.lots, record, self.closed_lots)
+                if record.fee is None:
+                    self.fee_missing = True
+                    self.fee_total = None
+                elif not self.fee_missing:
+                    self.fee_total = (self.fee_total or 0.0) + record.fee
+        except BaseException:
+            # The fills before the one that stopped the batch are already in
+            # the lots, and ``records`` does not say so: a later read would
+            # apply them again.
+            self._forget()
+            raise
 
         self.records = records
         fee_fidelity: FeeFidelity = "not_reported" if self.fee_missing else "reported"
         return self.closed_lots, self.lots, fee_fidelity
+
+    def _forget(self) -> None:
+        self.records = ()
+        self.lots = {}
+        self.closed_lots = []
+        self.fee_total = 0.0
+        self.fee_missing = False
 
 
 def _is_prefix(prefix: tuple[FillRecord, ...], values: tuple[FillRecord, ...]) -> bool:
@@ -979,14 +969,13 @@ class SqliteEconomicProjectionReader:
         cursor_key: tuple[int, str] | None,
         limit: int,
     ) -> list[sqlite3.Row]:
-        instrument = _fill_instrument_sql(self._conn)
         where = ["1 = 1"]
         params: list[object] = []
         if bot is not None:
             where.append("e.strategy_instance_id = ?")
             params.append(bot)
         if symbol is not None:
-            where.append(f"{instrument.symbol} = ?")
+            where.append(f"{_FILL_SYMBOL_SQL} = ?")
             params.append(symbol.upper())
         if origin is not None:
             where.append("CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END = ?")
@@ -1015,7 +1004,7 @@ class SqliteEconomicProjectionReader:
                    f.recorded_transition_sequence,
                    e.subject_id, e.strategy_instance_id,
                    CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                   {instrument.symbol} AS symbol, {instrument.multiplier},
+                   {_FILL_SYMBOL_SQL} AS symbol, {_FILL_MULTIPLIER_SQL},
                    CASE WHEN EXISTS (
                        SELECT 1 FROM fills successor
                        WHERE successor.superseded_execution_ref = f.execution_id
@@ -1026,7 +1015,7 @@ class SqliteEconomicProjectionReader:
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
-            {instrument.joins}
+            {_FILL_CONTRACT_JOINS_SQL}
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)
@@ -1050,7 +1039,6 @@ class SqliteEconomicProjectionReader:
         total_limit: int | None,
     ) -> list[sqlite3.Row]:
         """Read current execution leaves for explicit SQLite order identities."""
-        instrument = _fill_instrument_sql(self._conn)
         placeholders = _placeholders(order_refs)
         params: list[object] = [*order_refs]
         per_order_where = ""
@@ -1068,7 +1056,7 @@ class SqliteEconomicProjectionReader:
                        f.recorded_transition_sequence,
                        e.subject_id, e.strategy_instance_id,
                        CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                       {instrument.symbol} AS symbol, {instrument.multiplier},
+                       {_FILL_SYMBOL_SQL} AS symbol, {_FILL_MULTIPLIER_SQL},
                        'effective' AS state,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                                 f.source_event_at_ms, f.recorded_at_ms) AS filled_at_ms,
@@ -1077,7 +1065,7 @@ class SqliteEconomicProjectionReader:
                 JOIN orders o ON o.order_ref = f.order_ref
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
                 LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
-                {instrument.joins}
+                {_FILL_CONTRACT_JOINS_SQL}
                 LEFT JOIN custody_transitions manual_acceptance
                     ON manual_acceptance.sequence = (
                         SELECT MIN(acceptance.sequence)
@@ -1186,7 +1174,6 @@ def effective_fill_rows(
     limit_sql = "" if limit is None else " LIMIT ?"
     if limit is not None:
         params.append(limit + 1)
-    instrument = _fill_instrument_sql(conn)
     sql = f"""
         {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
             SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
@@ -1195,7 +1182,7 @@ def effective_fill_rows(
                    e.subject_id, e.strategy_instance_id, o.broker_order_id,
                    COALESCE(roots.root_recorded_at_ms, f.recorded_at_ms) AS root_recorded_at_ms,
                    CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                   {instrument.symbol} AS symbol, {instrument.multiplier},
+                   {_FILL_SYMBOL_SQL} AS symbol, {_FILL_MULTIPLIER_SQL},
                    COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                             f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
                    COALESCE(roots.root_transition_sequence,
@@ -1205,7 +1192,7 @@ def effective_fill_rows(
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
-            {instrument.joins}
+            {_FILL_CONTRACT_JOINS_SQL}
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)

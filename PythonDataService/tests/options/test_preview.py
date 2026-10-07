@@ -156,6 +156,8 @@ def test_a_preview_judges_the_cost_by_the_owners_own_limit_and_shows_what_an_ent
             units=2,
             fee_provision_cents=37,
             cost_limit_percent=Decimal(cost_limit),
+            # As wide as a gap can be: the entry's own gap limit is not what this test asks about.
+            leg_gap_limit_percent=Decimal(200),
         )
 
     assert shown.over_cost_limit is over

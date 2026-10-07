@@ -14,6 +14,9 @@ from app.options.deadlines import (
     close_deadline_ms,
     close_due_on,
     entry_cutoff_ms,
+    entry_cutoff_on,
+    last_session_close_ms,
+    past_last_session,
     sold_leg_close_ms,
 )
 from app.options.resolver import ContractsNotResolved, ResolverLimits, ResolverRefusal
@@ -46,10 +49,11 @@ def _structure(*legs: tuple[str, str, date]) -> ResolvedStructure:
 )
 def test_each_deadline_is_counted_back_from_that_days_own_session_close(day: date, closes_at: int) -> None:
     """With the starting terms: closed 45 minutes before the close on the expiry day; no entry in the minute and
-    a half before that, which is the entry's wait, the time to prove a cancel, and a margin; a sold leg closed
-    10 minutes before the close."""
+    twenty seconds before that, which is the entry's 20 second wait, 30 seconds to prove a cancel, and 30 of
+    margin; a sold leg closed 10 minutes before the close."""
     assert close_deadline_ms(day, _TERMS) == scenes._at(day, closes_at - 1, 15)
-    assert entry_cutoff_ms(day, _TERMS) == scenes._at(day, closes_at - 1, 13, 30)
+    # 45 minutes and 80 seconds before the close: 15:13:40 on a full day, 12:13:40 on a half day.
+    assert entry_cutoff_ms(day, _TERMS) == scenes._at(day, closes_at - 1, 13, 40)
     assert sold_leg_close_ms(day, _TERMS) == scenes._at(day, closes_at - 1, 50)
 
 
@@ -79,16 +83,40 @@ def test_the_resolver_given_the_terms_cutoff_refuses_from_the_cutoff_instant_on(
     """The cutoff here and the resolver's refusal are the same instant: nothing is opened from it on, and a
     selection one millisecond before it still resolves."""
     limits = ResolverLimits(max_quote_age_ms=5_000, entry_cutoff_lead_ms=_TERMS.entry_cutoff_lead_ms)
-    at_the_cutoff = scenes._scene(day=_FRIDAY, selected_at=(15, 13, 30), limits=limits)
+    at_the_cutoff = scenes._scene(day=_FRIDAY, selected_at=(15, 13, 40), limits=limits)
     assert at_the_cutoff.selection_ms == entry_cutoff_ms(_FRIDAY, _TERMS)
     plan = scenes._one("call", {"selector": "atm"})
 
     with pytest.raises(ContractsNotResolved) as refused:
         at_the_cutoff.resolve(plan)
-    just_before = scenes._scene(day=_FRIDAY, selected_at=(15, 13, 29), limits=limits)
+    just_before = scenes._scene(day=_FRIDAY, selected_at=(15, 13, 39), limits=limits)
 
     assert refused.value.reason is ResolverRefusal.PAST_ENTRY_CUTOFF
     assert just_before.resolve(plan).picked["only"] == scenes._contract("call", 585)
+
+
+# ---- When a contract stops trading ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("expiry", "last_trades_until"),
+    [
+        pytest.param(_FRIDAY, (_FRIDAY, 16), id="a full day: four o'clock on its expiry date"),
+        pytest.param(_HALF_DAY, (_HALF_DAY, 13), id="a half day: one o'clock, not the expiry anchor's four"),
+        pytest.param(_THANKSGIVING, (date(2026, 11, 25), 16), id="a date with no session: the close of the session before"),
+    ],
+)
+def test_a_contract_stops_trading_at_the_close_of_its_last_session(
+    expiry: date, last_trades_until: tuple[date, int]
+) -> None:
+    day, hour = last_trades_until
+    close = scenes._at(day, hour, 0)
+
+    assert last_session_close_ms(expiry) == close
+    # Still trading one millisecond before that close; stopped from the close itself, and for good.
+    assert not past_last_session(expiry, close - 1)
+    assert past_last_session(expiry, close)
+    assert past_last_session(expiry, close + 3 * 86_400_000)
 
 
 # ---- What a held structure owes on a session ----------------------------------
@@ -143,3 +171,39 @@ def test_when_the_sold_leg_close_is_set_earlier_than_the_expiry_days_it_is_the_o
     expiring_today = _structure(("bought", "long", _FRIDAY), ("sold", "short", _FRIDAY))
 
     assert close_due_on(expiring_today, _FRIDAY, terms) == DueClose(CloseKind.SOLD_LEG, scenes._at(_FRIDAY, 15, 0))
+
+
+# ---- From when no entry is opened on a structure ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("legs", "session", "no_entry_from"),
+    [
+        pytest.param([("bought", "long", _NEXT_FRIDAY)], _FRIDAY, None, id="expiring another day: no cutoff today"),
+        pytest.param(
+            [("bought", "long", _FRIDAY)], _FRIDAY, (_FRIDAY, 15, 13, 40), id="expiring today: 80 seconds before 15:15"
+        ),
+        pytest.param(
+            [("bought", "long", _HALF_DAY)], _HALF_DAY, (_HALF_DAY, 12, 13, 40), id="expiring on a half day: before 12:15"
+        ),
+        pytest.param(
+            [("bought", "long", _NEXT_FRIDAY), ("sold", "short", _NEXT_FRIDAY)],
+            _FRIDAY,
+            (_FRIDAY, 15, 48, 40),
+            id="a sold leg: 80 seconds before the sold-leg close at 15:50",
+        ),
+    ],
+)
+def test_no_entry_is_opened_from_the_close_its_structure_would_owe_less_the_entrys_own_life(
+    legs: list[tuple[str, str, date]], session: date, no_entry_from: tuple[date, int, int, int] | None
+) -> None:
+    cutoff = entry_cutoff_on(_structure(*legs), session, _TERMS)
+
+    assert cutoff == (None if no_entry_from is None else scenes._at(*no_entry_from))
+
+
+def test_a_bought_contracts_cutoff_on_its_expiry_day_is_the_one_the_resolver_is_given() -> None:
+    """One instant, asked two ways: of the contract's expiry, and of the structure on that session."""
+    assert entry_cutoff_on(_structure(("bought", "long", _FRIDAY)), _FRIDAY, _TERMS) == entry_cutoff_ms(_FRIDAY, _TERMS)
+    longer_wait = replace(_TERMS, entry_wait_ms=60_000)
+    assert entry_cutoff_on(_structure(("bought", "long", _FRIDAY)), _FRIDAY, longer_wait) == scenes._at(_FRIDAY, 15, 13, 0)

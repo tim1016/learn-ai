@@ -86,7 +86,7 @@ class FillRecord:
     native_order_id: str | None = None
     recorded_at_ms: int | None = None
     # An option contract's multiplier, from the contract's own record
-    # (ADR 0076): ``quantity`` is then contracts and ``fill_price`` the premium
+    # (ADR 0076 decision 13): ``quantity`` is then contracts and ``fill_price`` the premium
     # per share. ``None`` for shares, which is every fill of a stock.
     multiplier: int | None = None
 

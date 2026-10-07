@@ -55,6 +55,8 @@ def _stand_ins(marks: frozenset[str]) -> list[type]:
                 "SyntheticBroker",
                 # Wraps the guarded port for one stock leg; it must pass an option call on, not lack the method.
                 "_PricingBarBoundTradePort",
+                # Wraps it for one option entry, to bind the quote that entry is filled from.
+                "_OptionQuoteBoundTradePort",
             },
             id="trade port",
         ),

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.errors import BrokerEvidenceUnavailable
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOptionsNotSupported
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -26,6 +26,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -36,9 +37,11 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.options.contract import OptionContract
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
+    from typing import Literal
 
-    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
+    from app.options.quotes import HeldQuote
     from app.services.source_bar_ledger import RetainedSourceBar
 
 
@@ -132,6 +135,12 @@ class GuardedBrokerReadPort:
             ),
             history_complete=False,
         )
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> BrokerOptionEventEvidence:
+        self._assert_unfenced("read_option_event_activities")
+        return await self._inner.read_option_event_activities(after_ms=after_ms, resume=resume)
 
     async def list_assets(
         self,
@@ -243,11 +252,18 @@ class GuardedBrokerTradePort:
             raise RuntimeError("Synthetic Clerk trade port cannot bind an evaluated source bar.")
         bind(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
-    def recovery_price_available(self, symbol: str) -> bool:
-        """Whether a no-submit port can price a recovery EXIT now; a vendor always can."""
+    def recovery_price_available(self, symbol: str, *, side: Literal["buy", "sell"] | None = None) -> bool:
+        """Whether a no-submit port can price a recovery EXIT now; a vendor always can.
+
+        ``side`` is named for a position in an option contract, whose close
+        is priced from one side of a quote kept for it (ADR 0076). A
+        reduction in shares names none and is asked as it always was.
+        """
         self._assert_unfenced("recovery_price_available")
         probe = getattr(self._inner, "recovery_price_available", None)
-        return True if not callable(probe) else bool(probe(symbol))
+        if not callable(probe):
+            return True
+        return bool(probe(symbol) if side is None else probe(symbol, side=side))
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
         """Bind recovery-only synthetic evidence when the inner port requires it."""
@@ -264,6 +280,57 @@ class GuardedBrokerTradePort:
         if not callable(bind):
             return False
         return bool(bind(client_order_id, symbol=symbol))
+
+    def bind_option_entry_quote(
+        self, client_order_id: str, *, symbol: str, quote: HeldQuote, multiplier: int
+    ) -> None:
+        """Forward the simulation-only capability to bind the quote an option entry fills from (ADR 0076).
+
+        ``multiplier`` is the contract's, as the books record it: the
+        simulation counts the position's dollars by it.
+        """
+        self._assert_unfenced("bind_option_entry_quote")
+        bind = getattr(self._inner, "bind_option_entry_quote", None)
+        if not callable(bind):
+            # A port that fills no option order from a quote: a Live Shadow's, or a real broker's.
+            # Definitive, as any refusal before contact is: nothing was sent and no order exists.
+            raise BrokerOptionsNotSupported(
+                "This account's trade port takes no option order filled from a quote; only a Dry Run's does.",
+                broker=self._inner.broker_id,
+                detail="Nothing was sent and no order exists.",
+            )
+        bind(client_order_id, symbol=symbol, quote=quote, multiplier=multiplier)
+
+    def bind_option_close_quotes(
+        self,
+        client_order_id: str,
+        *,
+        symbol: str,
+        side: Literal["buy", "sell"],
+        quotes: Sequence[HeldQuote],
+        usable_generation: int | None,
+    ) -> bool:
+        """Bind a simulated option close to the newest quote kept; a port that is not a simulation refuses."""
+        self._assert_unfenced("bind_option_close_quotes")
+        bind = getattr(self._inner, "bind_option_close_quotes", None)
+        if not callable(bind):
+            return False
+        return bool(bind(client_order_id, symbol=symbol, side=side, quotes=quotes, usable_generation=usable_generation))
+
+    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
+        """Hand a simulation the newest quotes held for its contracts. A vendor's port keeps none.
+
+        It reaches no broker: the simulation writes them beside its own
+        orders, so it is not fenced.
+        """
+        keep = getattr(self._inner, "keep_option_quotes", None)
+        if callable(keep):
+            keep(quotes)
+
+    def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
+        """How a simulation priced each option order it answered, by client order id. Not fenced: a ledger read."""
+        read = getattr(self._inner, "synthesized_option_fills", None)
+        return read() if callable(read) else {}
 
     def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
         """How a no-submit port priced each order it filled, by client order id (#2912).

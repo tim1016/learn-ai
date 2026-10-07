@@ -19,12 +19,18 @@ From `PythonDataService/`:
 
 ```bash
 python -m scripts.fixture_generators.alpaca_documented_option_examples
+python -m scripts.fixture_generators.alpaca_documented_option_activities   # option_activities/, and golden fixture OEV-001
 ```
 
-It fetches the pages and rewrites the JSON files. It uses no Alpaca key and
-calls no Alpaca API. The `attribution.md` files are written by hand and carry
+Each fetches its pages and rewrites its JSON files. Neither uses an Alpaca key or
+calls an Alpaca API. The `attribution.md` files are written by hand and carry
 the date the pages were read.
 
 These are outside the numerical golden manifest
 (`tests/fixtures/golden/manifest.json`), as the captures in
 `tests/fixtures/alpaca/` are: they pin a payload's shape, not a number.
+
+Where an example's numbers are a reference output, they are held by a golden
+fixture in the manifest, written from the same pages in the same run. `OEV-001`
+(`tests/fixtures/golden/option-events/OEV-001/v1/`) holds the share trade Alpaca
+prints beside each documented exercise and assignment.

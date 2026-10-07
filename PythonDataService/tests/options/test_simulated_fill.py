@@ -123,6 +123,17 @@ def test_an_exit_with_nothing_to_price_a_leg_from_leaves_it_unpriced(leg_id: str
     assert fills[other].model is SimulatedFillModel.NATURAL_PRICE
 
 
+def test_an_exit_no_decision_read_a_quote_for_is_priced_from_an_older_quote_however_fresh_it_is() -> None:
+    """With no generation a decision read in, nothing held is a quote a decision could have used."""
+    fills = simulated_exit_fills(
+        _STRUCTURE, {"bought": _quote("5.10", "5.14"), "sold": _quote("2.90", "2.94")}, units=1, at_ms=_NOW,
+        generation=None, max_age_ms=5_000,
+    )
+
+    assert {fill.model for fill in fills} == {SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE}
+    assert [(fill.price, fill.quote_age_ms) for fill in fills] == [(Decimal("5.10"), 400), (Decimal("2.94"), 900)]
+
+
 def test_a_bought_leg_with_nothing_bid_is_sold_for_nothing() -> None:
     """A call gone worthless has no bid. Its natural price to sell at is zero, and that is what the books get."""
     fill = _exit({"bought": _quote("0", "0.02"), "sold": _quote("2.90", "2.94")})["bought"]

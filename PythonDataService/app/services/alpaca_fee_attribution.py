@@ -14,6 +14,12 @@ Amounts remain Decimal inside the authority. The largest-remainder split is
 global Decimal precision cannot decide who gets a cent.
 Missing population, linkage or overlap evidence is an unresolved account charge,
 never a guessed deployment debit. Simulations never consume broker activities.
+
+A simulated account's option fills are charged by the option fee model
+(``attribute_simulated_option_fees``, ADR 0076): each of its five fee types
+summed over the day's option fills, rounded up to the cent, and shared among
+the bots by this file's one rule. A real account's option fills are not
+attributed here: none of Alpaca's own option fee activities has been seen.
 """
 
 from __future__ import annotations
@@ -25,6 +31,12 @@ from decimal import Decimal, Inexact, localcontext
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.money import apportion_units, money_context
+from app.broker.alpaca.option_fees import (
+    OptionFeeComponent,
+    OptionRateNotPinnedError,
+    fees_for_option_fill,
+    settle_option_session,
+)
 from app.broker.alpaca.regulatory_fees import (
     FeeComponent,
     FillFees,
@@ -39,6 +51,7 @@ ZERO = Decimal("0")
 CENT = Decimal("0.01")
 FeeState = Literal["estimated", "modelled_settled", "observed"]
 COMPONENTS: tuple[FeeComponent, ...] = ("sec", "taf", "cat")
+OPTION_COMPONENTS: tuple[OptionFeeComponent, ...] = ("sec", "taf", "cat", "orf", "occ")
 
 
 @dataclass(frozen=True)
@@ -54,6 +67,9 @@ class FeeFill:
     # When the broker executed it (int64 ms UTC); external fills carry it so
     # the account-money read can lot them in execution order.
     occurred_at_ms: int | None = None
+    # Set for a fill of an option contract: the shares one contract's price
+    # stands for. Its quantity is then contracts and its price dollars a share.
+    multiplier: int | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +179,73 @@ class FeeAttribution:
             ),
             ZERO,
         )
+
+
+@money_context()
+def attribute_simulated_option_fees(
+    *,
+    trade_date: date,
+    fills: Sequence[FeeFill],
+    population_complete: bool,
+    session_ended: bool,
+    settlement_at_ms: int,
+) -> FeeAttribution:
+    """One day's option fills of a simulated account, charged by the option fee model.
+
+    Formula: for each fee type, the day's charge is the sum of the fills'
+      accruals rounded up to the cent (``settle_option_session``); it is
+      shared among the custody subjects in proportion to their own accruals
+      of that type (``apportion_cents``).
+    Reference: ADR 0076; the rates and the settlement rule are
+      ``app/broker/alpaca/option_fees.py``'s, which cites Alpaca's fee schedule.
+    Canonical implementation: ``option_fees`` for the fees, this file for the split.
+    Validated against: tests/services/test_simulated_option_fee_attribution.py.
+
+    The option fills settle as a population of their own. A real day that
+    also traded stock rounds SEC, TAF and CAT once across both; how Alpaca
+    does that has not been seen, so a simulated day rounds the two apart,
+    which is never less than rounding them together. Every amount is the
+    model's: nothing is observed in a simulation.
+    """
+    if not fills:
+        return FeeAttribution((), ZERO, (), None, ZERO)
+    unresolved: list[str] = []
+    if not population_complete:
+        unresolved.append("The complete fee-bearing fill population is unavailable. Reconcile account executions.")
+    try:
+        priced = [
+            fees_for_option_fill(
+                trade_date=trade_date, side=fill.side, contracts=fill.quantity, premium=fill.price,
+                # A fill with no multiplier is not an option fill, and is refused as a ``ValueError``.
+                multiplier=fill.multiplier,
+            )
+            for fill in fills
+        ]
+        with localcontext() as rounding:
+            rounding.traps[Inexact] = False
+            settled = settle_option_session(priced)
+    except OptionRateNotPinnedError:
+        unresolved.append("Option fee rates are not pinned for this day. Review the option fee model before deploying.")
+        return FeeAttribution((), ZERO, tuple(unresolved), None, None)
+    except ValueError as exc:
+        unresolved.append(f"An option fill cannot be priced by the option fee model: {exc}.")
+        return FeeAttribution((), ZERO, tuple(unresolved), None, None)
+    shares: list[FeeShare] = []
+    if population_complete:
+        state: FeeState = "modelled_settled" if session_ended else "estimated"
+        for component in OPTION_COMPONENTS:
+            amount = getattr(settled, component)
+            if not amount:
+                continue
+            weights: dict[str, Decimal] = {}
+            for fill, price in zip(fills, priced, strict=True):
+                weights[fill.subject_id] = weights.get(fill.subject_id, ZERO) + getattr(price, component)
+            shares.extend(
+                FeeShare(f"model:{trade_date}:option:{component}", subject, cents, state, settlement_at_ms)
+                for subject, cents in sorted(apportion_cents(amount, weights).items())
+                if cents
+            )
+    return FeeAttribution(tuple(shares), ZERO, tuple(unresolved), None, settled.total)
 
 
 @dataclass(frozen=True)
