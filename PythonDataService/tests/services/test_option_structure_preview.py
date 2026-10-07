@@ -858,6 +858,41 @@ async def test_a_lookup_that_takes_too_long_is_answered_as_not_read_yet(monkeypa
     assert _shows_no_figure(seen) and seen.ask_again_in_ms is not None
 
 
+async def test_only_so_many_previews_wait_on_a_slow_lookup_at_once_and_one_more_is_told_at_once_to_ask_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a fleet Clerk a preview is worked on the capacity kept for commands. Pages' waits on a slow lookup are
+    bounded, so they cannot take that capacity up between them."""
+    desk = Desk(monkeypatch)
+    monkeypatch.setattr(option_structure_preview, "MAX_PREVIEWS_WAITING_ON_INPUTS", 2)
+    answered = threading.Event()
+    looked_up: list[str] = []
+
+    def slow(underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+        looked_up.append(underlying)
+        answered.wait(timeout=10)
+        return _KNOWN
+
+    await desk.quoted(_BULL_CALL_SPREAD)
+    monkeypatch.setattr(desk, "_model_inputs", slow)
+    waiting = [asyncio.create_task(desk.preview(_BULL_CALL_SPREAD)) for _ in range(2)]
+    try:
+        await _until(lambda: len(looked_up) == 2)
+        # Far inside the seconds an ask may wait: this one is answered without waiting at all.
+        one_more = await asyncio.wait_for(desk.preview(_BULL_CALL_SPREAD), timeout=1)
+        looked_up_while_two_waited = len(looked_up)
+    finally:
+        answered.set()
+    await asyncio.gather(*waiting)
+    once_they_are_done = await desk.preview(_BULL_CALL_SPREAD)
+
+    assert (one_more.state, one_more.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ")
+    assert _shows_no_figure(one_more) and one_more.ask_again_in_ms is not None
+    assert looked_up_while_two_waited == 2
+    # The two that waited gave their places back.
+    assert once_they_are_done.state == "resolved"
+
+
 # ---- The lease ------------------------------------------------------------------------
 
 

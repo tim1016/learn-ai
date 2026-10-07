@@ -513,6 +513,59 @@ def test_a_lookup_given_up_on_that_learns_the_fact_after_all_is_kept(monkeypatch
     assert hung.times_asked == 1
 
 
+def test_a_slow_lookup_that_ends_after_a_newer_one_does_not_put_its_older_answer_back(hung: Hangs) -> None:
+    """FRED is slow, the read gives up, and half a minute later a second lookup learns the rate at once. When
+    the first then comes back with the rate it read earlier, the newer one's answer stays."""
+    rates = option_model_inputs._rates
+    asked = (10, _TUESDAY)
+    older = option_model_inputs.RateLearned(0.0512, RATE_SOURCE_FRED, None)
+    newer = option_model_inputs.RateLearned(0.0498, RATE_SOURCE_FRED, None)
+
+    def slow() -> option_model_inputs.RateLearned:
+        hung.rate(*asked)
+        return older
+
+    first, _ = rates.look_up(asked, NOW, slow, 0.05)
+    gave_up = rates.wait_for(asked, NOW, first)
+    second, _ = rates.look_up(asked, NOW + 31_000, lambda: newer, 5.0)
+    learned = rates.wait_for(asked, NOW + 31_000, second)
+    hung.let_go.set()
+    # The slow lookup has ended, and has kept whatever it keeps.
+    assert first.answer.result(timeout=5) is older
+
+    assert gave_up.why_default == WhyNotKnown.LOOKUP_TOO_SLOW
+    assert learned is newer
+    assert rates.kept(asked, NOW + 32_000) is newer
+
+
+def test_a_slow_lookup_that_ends_while_a_newer_one_is_still_asking_leaves_the_answer_to_the_newer_one(hung: Hangs) -> None:
+    rates = option_model_inputs._rates
+    asked = (10, _TUESDAY)
+    older = option_model_inputs.RateLearned(0.0512, RATE_SOURCE_FRED, None)
+    newer = option_model_inputs.RateLearned(0.0498, RATE_SOURCE_FRED, None)
+    newer_may_answer = threading.Event()
+
+    def slow() -> option_model_inputs.RateLearned:
+        hung.rate(*asked)
+        return older
+
+    def later() -> option_model_inputs.RateLearned:
+        newer_may_answer.wait(timeout=20)
+        return newer
+
+    first, _ = rates.look_up(asked, NOW, slow, 0.05)
+    rates.wait_for(asked, NOW, first)
+    second, _ = rates.look_up(asked, NOW + 31_000, later, 5.0)
+    hung.let_go.set()
+    assert first.answer.result(timeout=5) is older
+    kept_while_the_newer_one_asks = rates.kept(asked, NOW + 31_500)
+    newer_may_answer.set()
+
+    assert kept_while_the_newer_one_asks is not older
+    assert rates.wait_for(asked, NOW + 31_000, second) is newer
+    assert rates.kept(asked, NOW + 32_000) is newer
+
+
 def test_only_so_many_answers_are_kept_and_the_oldest_go_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(option_model_inputs, "MOST_KEPT", 3)
     lookups = Lookups([])

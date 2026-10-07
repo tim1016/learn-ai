@@ -105,6 +105,9 @@ MAX_PREVIEW_WINDOWS = 4
 # How long one ask waits for the rate and the dividends to be looked up before it answers that they are
 # not read yet. The lookup goes on, and a later ask finds what it learned.
 MODEL_INPUTS_WAIT_S = 4.0
+# How many previews may wait on that lookup at once. On a fleet Clerk a preview is worked on the capacity kept
+# for commands, so pages' waits are bounded: one more is told at once to ask again (#2913).
+MAX_PREVIEWS_WAITING_ON_INPUTS = 4
 _ASK_AGAIN_MS = 1_000
 _KEY_PREFIX = "preview:"
 # The refusals that say the picked contracts are another shape than the one named, as against money that
@@ -435,6 +438,27 @@ def _search_not_done(not_run: SearchNotRun, reading: _Reading) -> _NoFigures:
     return _NoFigures("search_not_done", str(reason), notice, passes_by_itself=reason.still_running, reading=reading)
 
 
+class _InputsWaits:
+    """How many previews are waiting on the rate and the dividends right now. Read and moved on the event loop
+    alone."""
+
+    def __init__(self) -> None:
+        self.now = 0
+
+
+_inputs_waits = _InputsWaits()
+
+
+def _inputs_not_read(underlying: str, reading: _Reading) -> _NoFigures:
+    return _NoFigures(
+        "pricing_inputs_unknown",
+        PreviewReason.PRICING_INPUTS_NOT_READ,
+        f"The rate and the dividends for {underlying} are still being looked up.",
+        passes_by_itself=True,
+        reading=reading,
+    )
+
+
 # ---- the answer -----------------------------------------------------------------
 
 
@@ -700,20 +724,18 @@ async def preview_option_structure(
         first = _lines_stand_in_the_way(first) or first
     if isinstance(first, _NoFigures):
         return asked.without_figures(plan, first)
+    if _inputs_waits.now >= MAX_PREVIEWS_WAITING_ON_INPUTS:
+        return asked.without_figures(plan, _inputs_not_read(request.underlying, first))
+    _inputs_waits.now += 1
     try:
         inputs = await asyncio.wait_for(
             off_the_loop(partial(model_inputs, request.underlying, first.now, first.latest_expiry)),
             timeout=MODEL_INPUTS_WAIT_S,
         )
     except (TimeoutError, ModelInputsBeingRead):
-        not_read = _NoFigures(
-            "pricing_inputs_unknown",
-            PreviewReason.PRICING_INPUTS_NOT_READ,
-            f"The rate and the dividends for {request.underlying} are still being looked up.",
-            passes_by_itself=True,
-            reading=first,
-        )
-        return asked.without_figures(plan, not_read)
+        return asked.without_figures(plan, _inputs_not_read(request.underlying, first))
+    finally:
+        _inputs_waits.now -= 1
     reading = read()
     if isinstance(reading, _NoFigures):
         return _Asked(request, clock()).without_figures(plan, reading, inputs)

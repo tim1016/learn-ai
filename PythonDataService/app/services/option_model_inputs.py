@@ -378,6 +378,8 @@ def _sources(
 class _Kept[T]:
     value: T
     until_ms: int
+    # When the lookup it came from began, on this process's own clock.
+    began: float
 
 
 @dataclass(slots=True)
@@ -453,7 +455,7 @@ class _Shelf[K, T]:
         with self._guard:
             if self._running.get(key) is running:
                 del self._running[key]
-                self._keep(key, gave_up, self._ended_ms(running))
+                self._keep(key, gave_up, running)
         if running.queued is not None:
             # Still waiting for a thread: it is never begun, and its vendor is not asked for an answer nobody
             # waits for. One already asking its vendor is not stopped by this, and what it learns is kept.
@@ -487,14 +489,21 @@ class _Shelf[K, T]:
             still_waited_for = self._running.get(key) is running
             if still_waited_for:
                 del self._running[key]
-            # Given up on at its bound, it may still have learned the fact. That it failed after all is not news.
-            if still_waited_for or self._known(learned):
-                self._keep(key, learned, self._ended_ms(running))
+            # Given up on at its bound, it may still have learned the fact. That it failed after all is not news,
+            # and what it learned never replaces the answer of a lookup begun after it.
+            if still_waited_for or (self._known(learned) and self._none_begun_since(key, running)):
+                self._keep(key, learned, running)
         running.answer.set_result(learned)
 
-    def _keep(self, key: K, learned: T, ended_ms: int) -> None:
+    def _none_begun_since(self, key: K, running: _Running[T]) -> bool:
+        """No lookup of ``key`` began after ``running`` did: none is under way, and none's answer is kept."""
+        kept = self._kept.get(key)
+        return key not in self._running and (kept is None or kept.began <= running.began)
+
+    def _keep(self, key: K, learned: T, running: _Running[T]) -> None:
+        ended_ms = self._ended_ms(running)
         self._kept.pop(key, None)
-        self._kept[key] = _Kept(learned, self._kept_until_ms(learned, ended_ms))
+        self._kept[key] = _Kept(learned, self._kept_until_ms(learned, ended_ms), running.began)
         for other in [other for other, kept in self._kept.items() if kept.until_ms <= ended_ms]:
             del self._kept[other]
         for oldest in list(self._kept)[: max(len(self._kept) - MOST_KEPT, 0)]:

@@ -360,6 +360,9 @@ async def test_a_structure_the_plan_refuses_is_an_answer_and_not_an_error(deploy
         pytest.param({"cost_limit_percent": "3.3333333"}, id="a cost limit finer than it can be compared in"),
         pytest.param({"cost_limit_percent": "1e-7"}, id="a cost limit finer than that, written with an exponent"),
         pytest.param({"cost_limit_percent": "NaN"}, id="a cost limit that is no number"),
+        # Refused by the bound on its value, before anything writes it out.
+        pytest.param({"cost_limit_percent": "1e999999999"}, id="a cost limit too large to write out"),
+        pytest.param({"gap_limit_percent": "1e999000"}, id="a gap limit that would write out to a megabyte"),
         pytest.param({"gap_limit_percent": "7.1234567"}, id="a gap limit as fine"),
         pytest.param({"gap_limit_percent": "0"}, id="a gap limit of nothing"),
         pytest.param({"structure": "short_straddle"}, id="a name that is no named structure"),
