@@ -515,7 +515,16 @@ class _Asked:
             preview_sentence="A preview. The bot picks again at every entry.",
         )
 
-    def _deployable(self, plan: ActionPlan) -> dict[str, object]:
+    def _verdict(
+        self,
+        plan: ActionPlan,
+        *,
+        resolves_as_built: bool | None,
+        resolves_sentence: str,
+        resolves_reason_code: str | None = None,
+        leg_ids: tuple[str, ...] = (),
+    ) -> OptionPreviewVerdict:
+        """The verdict on a structure that can be deployed: that half in words, and what it resolves to now."""
         legs = [leg for leg in plan.on_enter if isinstance(leg, OptionEntryLeg)]
         said = ["It goes to Alpaca as one order."]
         if any(leg.position == "short" for leg in legs):
@@ -523,7 +532,17 @@ class _Asked:
         said.append(
             {1: "The exit closes it.", 2: "The exit closes both legs."}.get(len(legs), f"The exit closes all {len(legs)} legs.")
         )
-        return {"can_be_deployed": True, "deploy_sentence": " ".join(said), "deploy_reason_code": None}
+        return OptionPreviewVerdict(
+            can_be_deployed=True,
+            deploy_sentence=" ".join(said),
+            deploy_reason_code=None,
+            resolves_as_built=resolves_as_built,
+            resolves_sentence=resolves_sentence,
+            resolves_reason_code=resolves_reason_code,
+            leg_ids=list(leg_ids),
+            # Red when what it resolves to is not the structure built. Not known is not red.
+            red=resolves_as_built is False,
+        )
 
     def plan_refused(self, reason: PreviewReason, why: str) -> OptionStructurePreview:
         return self._answer(
@@ -556,17 +575,14 @@ class _Asked:
                 leg_ids=why.leg_ids,
                 contract=why.contract,
                 ask_again_in_ms=_ASK_AGAIN_MS if why.passes_by_itself else None,
-                verdict=OptionPreviewVerdict(
-                    **self._deployable(plan),
+                verdict=self._verdict(
+                    plan,
                     resolves_as_built=None,
                     resolves_sentence=(
                         "Right now its rules do not come to a contract for every leg."
                         if why.state == "not_resolved"
                         else "What it resolves to right now is not known."
                     ),
-                    resolves_reason_code=None,
-                    leg_ids=[],
-                    red=False,
                 ),
                 reading=why.reading,
                 inputs=inputs,
@@ -599,13 +615,12 @@ class _Asked:
         return self._answer(
             _Found(
                 state="resolved",
-                verdict=OptionPreviewVerdict(
-                    **self._deployable(plan),
+                verdict=self._verdict(
+                    plan,
                     resolves_as_built=broken is None,
                     resolves_sentence=resolves,
                     resolves_reason_code=None if broken is None else broken.reason,
-                    leg_ids=[] if broken is None else list(broken.leg_ids),
-                    red=broken is not None,
+                    leg_ids=() if broken is None else broken.leg_ids,
                 ),
                 reading=reading,
                 inputs=inputs,

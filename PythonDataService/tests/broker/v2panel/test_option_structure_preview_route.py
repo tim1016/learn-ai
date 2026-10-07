@@ -23,6 +23,7 @@ from app.options.structure_catalogue import order_term_starts
 from app.schemas.action_plan import ExpirySelector, StrikeSelector
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
 from app.services.broker_v2_panel import option_structure_panel
+from app.services.option_search import get_option_searches
 from tests.broker.v2panel.fixtures import ACCT
 
 # A Clerk's option quotes on a stand-in Gateway, and a bull call spread to ask about.
@@ -299,6 +300,13 @@ async def test_a_request_that_is_not_a_preview_request_is_refused_as_malformed(d
     response = await _post(app, {**_SPREAD, **broken})
 
     assert response.status_code == 422, response.text
+
+
+def test_a_pages_search_goes_to_this_processs_preview_lane_and_never_to_the_lane_a_bots_entry_uses() -> None:
+    searches = get_option_searches()
+
+    assert option_structure_panel._preview_searches() is searches.preview
+    assert searches.preview.lane is not searches.entry
 
 
 async def test_the_option_reads_answer_only_for_this_brokers_own_account(deploy_app) -> None:

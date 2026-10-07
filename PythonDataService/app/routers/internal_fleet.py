@@ -484,7 +484,7 @@ async def option_model_inputs(
 ) -> ModelInputsAnswer | ModelInputsBeingLookedUp:
     """Serve a Clerk the rate and the declared dividends an option is priced with (#2913).
 
-    A Clerk holds no Polygon key and no FRED key (ADR 0062); this process
+    A Clerk holds no Polygon key and no FRED key (ADR 0076); this process
     holds both. The answer is what ``read_option_model_inputs`` reads here,
     from the vendors, with what it already keeps: the one implementation a
     process with its own keys also uses. A fact it could not learn is

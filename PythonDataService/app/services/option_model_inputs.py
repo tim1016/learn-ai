@@ -16,7 +16,7 @@ later (#2913).
   fails, or this process has nowhere to look, the dividends are **unknown**:
   ``None``, never an empty list.
 
-A fleet Clerk holds no Polygon key and no FRED key, by design (ADR 0062). It
+A fleet Clerk holds no Polygon key and no FRED key, by design (ADR 0076). It
 asks the coordinator, which holds both and answers with what this same
 function read there (``app.services.option_model_inputs_client``). When the
 coordinator cannot be reached, or its answer cannot be read, the dividends
@@ -553,10 +553,21 @@ def read_option_model_inputs(
             joined |= not begun
         if joined and not wait:
             raise ModelInputsBeingRead(f"the rate and the dividends for {symbol} are being looked up")
+        # Each is waited for to its own end, whatever the other came to: nothing this read began is still
+        # under way when it returns.
+        still_looking: ModelInputsBeingRead | None = None
         if looking_rate is not None:
-            learned_rate = _rates.wait_for(rate_asked, at_ms, looking_rate)
+            try:
+                learned_rate = _rates.wait_for(rate_asked, at_ms, looking_rate)
+            except ModelInputsBeingRead as elsewhere:
+                still_looking = elsewhere
         if looking_dividends is not None:
-            learned_dividends = _dividends.wait_for(dividends_asked, at_ms, looking_dividends)
+            try:
+                learned_dividends = _dividends.wait_for(dividends_asked, at_ms, looking_dividends)
+            except ModelInputsBeingRead as elsewhere:
+                still_looking = elsewhere
+        if still_looking is not None:
+            raise still_looking
     assert learned_rate is not None
     going_ex = learned_dividends or DividendsLearned(
         (), f"Nothing was looked up: {latest_expiry} is already past.", at_ms, None

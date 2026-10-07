@@ -1032,6 +1032,22 @@ async def _turns(times: int = 10) -> None:
         await asyncio.sleep(0)
 
 
+async def test_the_search_worker_is_started_when_a_window_is_first_asked_for_so_that_it_loads_while_quotes_arrive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    workers = _held_back(desk)
+
+    cannot_be_deployed = await desk.preview(_asking(_leg("short_call", "short", "call", _AT_THE_MONEY)))
+    started_for_it = len(workers.made)
+    first_ask = await desk.preview(_BULL_CALL_SPREAD)
+
+    assert (cannot_be_deployed.state, started_for_it) == ("plan_refused", 0)
+    # No quote has arrived, and nothing has been searched for. The worker is up for when one is.
+    assert first_ask.state != "resolved"
+    assert len(workers.made) == 1 and workers.made[0].searches == []
+
+
 async def test_a_second_ask_while_the_search_runs_starts_no_second_search_and_is_told_to_ask_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

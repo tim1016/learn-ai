@@ -284,7 +284,7 @@ def _a_clerk_not_set_up_to_ask(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_on_a_clerk_a_rate_lookup_handed_in_answers_for_the_rate_and_the_dividends_stay_the_coordinators_to_give(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A Clerk boots with no Polygon key (ADR 0062), and this one has no coordinator to ask. It must not answer
+    """A Clerk boots with no Polygon key (#2204), and this one has no coordinator to ask. It must not answer
     that no dividend is declared."""
     _a_clerk_not_set_up_to_ask(monkeypatch)
 

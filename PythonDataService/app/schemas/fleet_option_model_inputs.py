@@ -1,6 +1,6 @@
 """What a Clerk asks the coordinator about the rate and the dividends an option is priced with, and its answer (#2913).
 
-A Clerk holds no Polygon key and no FRED key (ADR 0062), so it asks the
+A Clerk holds no Polygon key and no FRED key (ADR 0076), so it asks the
 coordinator, which holds both. Both sides read and write these models and
 nothing else, so the two cannot drift apart.
 

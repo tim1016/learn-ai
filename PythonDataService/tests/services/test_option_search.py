@@ -335,6 +335,48 @@ async def test_a_worker_that_dies_is_a_search_not_run_never_a_refusal_and_is_rep
     assert isinstance(again, Resolution)
 
 
+class _GoneWhileIdle(Held):
+    """A worker that came up and was then killed. It takes nothing more."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        if fn is option_search.search:
+            raise BrokenProcessPool("a child process terminated abruptly, the process pool is not usable anymore")
+        return super().submit(fn, *args, **kwargs)
+
+
+async def test_a_worker_found_gone_before_a_search_was_handed_to_it_is_replaced_and_the_search_is_run() -> None:
+    """Killed while it was idle. The search that finds it gone did not break it, and is not lost to it."""
+    made: list[Executor] = []
+
+    def worker() -> Executor:
+        made.append(_GoneWhileIdle() if not made else InThisProcess())
+        return made[-1]
+
+    lane = OptionSearchLane("entry", executor=worker)
+    lane.warm()
+
+    found = await lane.search(_ask(_AT_THE_MONEY))
+
+    assert isinstance(found, Resolution)
+    assert made[0].shut_down and len(made) == 2
+
+
+async def test_two_workers_gone_in_a_row_is_a_search_not_run() -> None:
+    workers: list[_GoneWhileIdle] = []
+
+    def worker() -> _GoneWhileIdle:
+        workers.append(_GoneWhileIdle())
+        return workers[-1]
+
+    lane = OptionSearchLane("entry", executor=worker)
+    lane.warm()
+
+    lost = await lane.search(_ask(_AT_THE_MONEY))
+
+    assert isinstance(lost, SearchNotRun) and lost.reason is SearchNotRunReason.WORKER_FAILED
+    assert len(workers) == 2
+
+
 async def test_a_worker_that_does_not_answer_within_the_bound_is_ended_and_replaced() -> None:
     workers = Workers()
     lane = OptionSearchLane("entry", executor=workers, hang_bound_s=0.05)
@@ -399,6 +441,31 @@ async def test_closing_a_lane_stops_its_worker_and_does_not_wait_for_a_search_in
     with pytest.raises(asyncio.CancelledError):
         await searching
     assert workers.made[0].shut_down
+
+
+def test_this_processs_lanes_are_made_once_start_no_worker_by_being_asked_for_and_are_stopped_with_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    made: list[Held] = []
+
+    def worker() -> Held:
+        made.append(Held())
+        return made[-1]
+
+    monkeypatch.setattr(option_search, "_searches", None)
+    monkeypatch.setattr(option_search, "a_worker_process", worker)
+
+    searches = option_search.get_option_searches()
+    asked_for_twice = option_search.get_option_searches()
+    started_by_being_asked_for = len(made)
+    searches.preview.warm()
+    option_search.close_option_searches()
+
+    assert asked_for_twice is searches and started_by_being_asked_for == 0
+    assert [worker.shut_down for worker in made] == [True]
+    # Stopped and forgotten: the next ask for them makes new ones.
+    assert option_search.get_option_searches() is not searches
+    option_search.close_option_searches()
 
 
 # ---- One search at a time, and the two lanes apart ---------------------------------------

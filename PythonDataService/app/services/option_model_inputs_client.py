@@ -1,6 +1,6 @@
 """A Clerk's ask of the coordinator for the rate and the dividends an option is priced with (#2913).
 
-A Clerk holds no Polygon key and no FRED key (ADR 0062). The coordinator
+A Clerk holds no Polygon key and no FRED key (ADR 0076). The coordinator
 holds both, and answers on its internal surface
 (``app.routers.internal_fleet``) with what it read. This is the one call a
 Clerk makes for them. It is sent as the chart-history read is: to the
@@ -23,7 +23,6 @@ only the facts, so a process that reads the vendors never loads them.
 from __future__ import annotations
 
 import logging
-import operator
 import threading
 from datetime import date
 
@@ -99,8 +98,7 @@ def ask_the_coordinator(
         request = OptionModelInputsRequest(
             clerk_id=clerk_id,
             underlying=underlying,
-            # A moment read off a bar is often a numpy integer: the same moment, which the strict wire refuses.
-            at_ms=operator.index(at_ms),
+            at_ms=at_ms,
             latest_expiry_ms=option_expiry_anchor_ms(latest_expiry),
             wait=wait,
         )

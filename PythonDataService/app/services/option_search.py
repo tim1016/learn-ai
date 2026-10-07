@@ -372,17 +372,31 @@ class OptionSearchLane:
         assert self._turn is not None
         return self._turn
 
-    async def _in_turn(self, ask: SearchAsk) -> Searched:
-        async with self._its_turn():
+    async def _hand_over(self, ask: SearchAsk) -> Future[_Resolved | _Refused | _NotAQuestion] | SearchNotRun:
+        """Hand a search to the worker, starting one when there is none. A worker found gone before anything
+        was handed to it, as one killed while it was idle, is replaced once: this search did not break it."""
+        plain = ask.as_plain_data()
+        for last_try in (False, True):
+            had_a_worker = self._pool is not None
             try:
                 worker = await self._worker()
-                handed = worker.submit(search, ask.as_plain_data())
+                return worker.submit(search, plain)
             except TimeoutError:
                 self._end_worker()
                 return self._not_run(SearchNotRunReason.WORKER_DID_NOT_ANSWER, "its worker process did not start in time")
             except _CANNOT_START:
                 self._drop_worker()
-                return self._not_run(SearchNotRunReason.WORKER_FAILED, "its worker process could not be started", failed=True)
+                if last_try or not had_a_worker:
+                    return self._not_run(
+                        SearchNotRunReason.WORKER_FAILED, "its worker process could not be started", failed=True
+                    )
+        raise AssertionError("a search is handed over or said not to have been")
+
+    async def _in_turn(self, ask: SearchAsk) -> Searched:
+        async with self._its_turn():
+            handed = await self._hand_over(ask)
+            if isinstance(handed, SearchNotRun):
+                return handed
             try:
                 found = await asyncio.wait_for(asyncio.wrap_future(handed), self._hang_bound_s)
             except TimeoutError:
@@ -536,7 +550,8 @@ class PreviewSearches[T]:
 class OptionSearches:
     """This process's two lanes."""
 
-    def __init__(self, *, executor: Callable[[], Executor] = a_worker_process) -> None:
+    def __init__(self, *, executor: Callable[[], Executor] | None = None) -> None:
+        executor = executor or a_worker_process
         self.entry = OptionSearchLane("entry", executor=executor)
         self.preview: PreviewSearches[object] = PreviewSearches(OptionSearchLane("preview", executor=executor))
 

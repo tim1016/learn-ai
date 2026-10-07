@@ -1,6 +1,6 @@
 """The coordinator's internal read of the rate and the dividends an option is priced with (#2913).
 
-A Clerk holds no Polygon key and no FRED key (ADR 0062). It asks the
+A Clerk holds no Polygon key and no FRED key (ADR 0076). It asks the
 coordinator, which holds both, over the ``/internal/fleet/*`` surface
 (``app.routers.internal_fleet``), as it asks for chart history. Like that
 read, this is not a ``ProviderOperation``: it belongs to the agent-to-coordinator
