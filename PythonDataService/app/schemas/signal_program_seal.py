@@ -21,6 +21,7 @@ from pydantic import (
 )
 
 from app.schemas.action_plan import ActionPlan
+from app.schemas.option_order_terms import SealedOptionOrderTerms, strip_absent_option_order_terms
 from app.schemas.traded_asset_acknowledgement import (
     UntestedTradedAssetAcknowledgement,
     strip_absent_traded_asset_acknowledgement,
@@ -355,6 +356,10 @@ class SealedBotProgram(BaseModel):
     # symbol it listens to carries none, and its seal is written and hashed
     # exactly as before the field existed (``_omit_an_absent_acceptance``).
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
+    # The four order terms an option bot was deployed with (ADR 0076 decision
+    # 24), under ``bot_configuration_hash`` when given. A bot in shares
+    # carries none, and its seal is written and hashed without them.
+    option_order_terms: SealedOptionOrderTerms | None = None
     bot_configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     # No return annotation: the seal's published schema stays this model's
@@ -365,9 +370,10 @@ class SealedBotProgram(BaseModel):
         """Leave an absent acceptance out of the stored seal and of every payload hashed from it.
 
         The seal refuses unknown fields, so a ``null`` written here could not
-        be read back by the build before this one.
+        be read back by the build before this one. Absent option order terms
+        are left out by the same rule.
         """
-        return strip_absent_traded_asset_acknowledgement(handler(self))
+        return strip_absent_option_order_terms(strip_absent_traded_asset_acknowledgement(handler(self)))
 
     @model_validator(mode="after")
     def validate_nested_hashes(self) -> SealedBotProgram:
@@ -387,6 +393,7 @@ def seal_bot_program(**values: Any) -> SealedBotProgram:
     if isinstance(configured, BaseModel):
         hashed["configured_signal"] = configured.model_dump(mode="json")
     strip_absent_traded_asset_acknowledgement(hashed)
+    strip_absent_option_order_terms(hashed)
     return SealedBotProgram(
         **payload,
         bot_configuration_hash=semantic_payload_hash(strip_absent_qualification(hashed)),

@@ -347,11 +347,14 @@ async def get_deploy_traded_asset(
     account_id: str,
     symbol: str = Query(..., pattern=US_EQUITY_SYMBOL_PATTERN, description="What the bot listens to."),
     traded_symbol: str = Query(..., pattern=US_EQUITY_SYMBOL_PATTERN, description="What the owner picked to trade."),
+    options: bool = Query(
+        False, description="Ask about options on what was picked, not its shares. Options on the symbol the bot listens to are something else too.",
+    ),
 ) -> DeployTradedAssetView:
     if broker != "alpaca":
         raise HTTPException(status_code=404, detail="Trading another asset is available on Alpaca accounts.")
     try:
-        return await panel_deploy.deploy_traded_asset(broker, account_id, symbol, traded_symbol)
+        return await panel_deploy.deploy_traded_asset(broker, account_id, symbol, traded_symbol, options=options)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
 

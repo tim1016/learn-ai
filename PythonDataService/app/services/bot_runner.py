@@ -81,6 +81,7 @@ from app.marketdata.feed import (
     MarketDataFeed,
     MarketDataFeedError,
 )
+from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_end import BotEnd, BotEndInput, BotEndView
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
@@ -91,6 +92,7 @@ from app.schemas.broker_bots import (
 from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
+from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.run_admission import (
     RunAdmissionDecision,
     RunProcessAdmissionFact,
@@ -162,6 +164,7 @@ from app.services.bot_run_terminal import (
     prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
+    ACTION_PLAN_AND_TRADED_SYMBOL,
     LANE_GO_LIVE_HOLD_UNREADABLE,
     LANE_GO_LIVE_PENDING,
     ActivationFailedCleanupProvenError,
@@ -171,10 +174,12 @@ from app.services.bot_runner_errors import (
     CarryoverPolicyRefusedError,
     InvalidStrategyInstanceIdError,
     MarketDataFeedUnavailableError,
+    OptionStartRefusedError,
     RecoveryUncertainError,
     RunAdmissionRefusedError,
     UnknownBotError,
     raise_run_refusal,
+    require_option_start_configuration,
     require_start_configuration,
     require_traded_asset_acknowledgement,
 )
@@ -309,6 +314,26 @@ class _DryRunRestoration:
 
 async def _nothing_to_repair() -> tuple[str, ...]:
     return ()
+
+
+def _plan_to_start(action_plan: ActionPlan | None, *, traded_symbol: str | None, symbol: str) -> ActionPlan:
+    """The plan a start is for: the one handed over, or the shares of what the bot trades.
+
+    A caller says what the bot trades once: a plan, or a traded symbol,
+    never both.
+    """
+    if action_plan is None:
+        return alpaca_v1_action_plan(traded_symbol or symbol)
+    if traded_symbol is not None:
+        raise OptionStartRefusedError(
+            "This start says what the bot trades twice.",
+            detail=(
+                f"It was handed an action plan and the traded symbol {traded_symbol}. A start names one or the "
+                "other, never both."
+            ),
+            reason_code=ACTION_PLAN_AND_TRADED_SYMBOL,
+        )
+    return action_plan
 
 
 def _release_run_owner(run_owner: asyncio.Future[None]) -> None:
@@ -661,6 +686,12 @@ class BotTaskRegistry:
         # The owner's written acceptance that the strategy is untested
         # trading ``traded_symbol``, kept with the bot for good.
         traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
+        # The plan of a bot that trades option contracts, with the four order
+        # terms sealed with it (ADR 0076 decision 24). Given, ``quantity`` is
+        # whole structures and ``traded_symbol`` is not said. ``None`` trades
+        # shares, as above.
+        action_plan: ActionPlan | None = None,
+        option_order_terms: SealedOptionOrderTerms | None = None,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -689,7 +720,10 @@ class BotTaskRegistry:
         require_start_configuration(
             carryover_policy,
         )
-        action_plan = alpaca_v1_action_plan(traded_symbol or symbol)
+        action_plan = _plan_to_start(action_plan, traded_symbol=traded_symbol, symbol=symbol)
+        require_option_start_configuration(
+            action_plan=action_plan, use_rth=use_rth, option_order_terms=option_order_terms,
+        )
         # Execution only: a preview comes before the owner accepts.
         require_traded_asset_acknowledgement(
             mode=mode, action_plan=action_plan, signal_symbol=symbol, acknowledgement=traded_asset_acknowledgement,
@@ -712,6 +746,7 @@ class BotTaskRegistry:
             budget_consent=budget_consent,
             end=end,
             traded_asset_acknowledgement=traded_asset_acknowledgement,
+            option_order_terms=option_order_terms,
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --
@@ -743,6 +778,8 @@ class BotTaskRegistry:
         symbol: str,
         traded_symbol: str | None = None,
         traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
+        action_plan: ActionPlan | None = None,
+        option_order_terms: SealedOptionOrderTerms | None = None,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -760,6 +797,10 @@ class BotTaskRegistry:
             carryover_policy,
         )
         self._confined_instance_dir(strategy_instance_id)
+        action_plan = _plan_to_start(action_plan, traded_symbol=traded_symbol, symbol=symbol)
+        require_option_start_configuration(
+            action_plan=action_plan, use_rth=use_rth, option_order_terms=option_order_terms,
+        )
         request = make_start_request(
             broker=broker,
             strategy_instance_id=strategy_instance_id,
@@ -770,12 +811,13 @@ class BotTaskRegistry:
             quantity=quantity,
             carryover_policy=carryover_policy,
             evidence_override=evidence_override,
-            action_plan=alpaca_v1_action_plan(traded_symbol or symbol),
+            action_plan=action_plan,
             strategy_params=strategy_params,
             exit_terms=exit_terms,
             strategy_param_origins=strategy_param_origins,
             budget_consent=budget_consent,
             traded_asset_acknowledgement=traded_asset_acknowledgement,
+            option_order_terms=option_order_terms,
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --

@@ -25,6 +25,7 @@ from app.lean_sidecar.trading_calendar import next_trading_day
 from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.research.golden_search.qualification_service import JudgedQualification, public_parameters
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
+from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
     AlpacaPaperDeployReadinessCheck,
@@ -1054,8 +1055,14 @@ def build_alpaca_paper_deploy_receipt(
     bot: BotStatusView,
     admission: RunAdmissionDecision,
     resolved_params: ResolvedDeployParams,
+    action_plan: ActionPlan | None = None,
 ) -> AlpacaPaperDeployReceipt:
     """Author the terminal receipt after the runner accepts the deployment.
+
+    ``action_plan`` is the plan the start was handed, for a bot that trades
+    option contracts (#2913): the receipt says what the bot trades, never
+    shares of the contracts' underlying. ``None`` for a bot in shares, whose
+    plan is the one its symbol makes, as before.
 
     The three operator sentences are derived once from the mode's own copy
     row, so a shadow deployment on a live account never inherits paper
@@ -1084,7 +1091,7 @@ def build_alpaca_paper_deploy_receipt(
         sizing=request.sizing,
         carryover_policy=request.carryover_policy,
         evidence_override=request.evidence_override,
-        action_plan=alpaca_v1_action_plan(request.order_symbol),
+        action_plan=action_plan or alpaca_v1_action_plan(request.order_symbol),
         admission=admission,
         bot=bot,
         parameters=resolved_params.effective,
