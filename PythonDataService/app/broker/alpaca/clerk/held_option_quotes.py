@@ -1,5 +1,11 @@
 """The quotes a Dry Run's Clerk keeps for the option contracts its bots hold, runner or no runner (ADR 0076).
 
+A Live Shadow's Clerk keeps them the same way, for the same reason: its
+order book fills and its account reading marks from quotes kept, and it
+sends nothing (ADR 0076 decision 25). Where this module says a Dry Run, it
+holds for a Shadow too, but for one thing: a Shadow's runtime is not closed
+when a run ends, so its books are read for as long as the Clerk is up.
+
 A Dry Run has no option market of its own. What it knows of a contract's
 price is the quotes kept for it (``kept_option_quotes``): a close is priced
 from the newest, and an open contract is marked from the last one handed
@@ -10,8 +16,8 @@ own is made here: no runner states a mark between its two decisions.
 
 **What is held is read from the Clerk's books**, never from a runner: a
 position in a recorded contract, or an order working in one
-(``reads.option_contracts_to_watch``). Each Dry Run's Clerk is followed while
-it is composed.
+(``reads.option_contracts_to_watch``). Each Dry Run's Clerk and each Live
+Shadow's is followed while it is composed.
 
 **What is held is asked for** as the supervisor's first class of quote line
 (``requests``), so a held contract keeps its line when the runner that bought

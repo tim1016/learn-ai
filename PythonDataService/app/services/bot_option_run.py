@@ -4,7 +4,8 @@ A bot whose plan trades option contracts decides as every bot does, on its
 Signal stream's bars. What differs is what an ENTER and an EXIT are handed to
 the Clerk with, and when an ENTER counts. This module works the first out;
 ``bot_trade_strategy`` calls it from the Dry Run's loop and from a Paper
-account's, and a bot in shares never reaches it.
+account's, which a Live Shadow's bot runs too, and a bot in shares never
+reaches it.
 
 **Demand, from the start of the run.** Quotes are held only for contracts
 somebody asked to have watched, and a window asked for at the decision has no
@@ -13,7 +14,7 @@ list, for the window its plan's rules can pick from, and moves that window
 with every closed bar of the underlying. The contract it comes to hold is not
 its to ask for in a Dry Run: that is the Clerk's own demand, read from its
 books (``held_option_quotes``), so the line outlives this run. That keeping
-follows a Dry Run's books only. On a real account the run names, on its own
+follows a Dry Run's books and a Live Shadow's. On a real account the run names, on its own
 request and beside the window, the contracts on its underlying that the
 account's Clerk says a run must ask for: one a bot holds, or one an order is
 working in (``contracts_to_watch``). That lasts as long as the run. A run is
@@ -55,14 +56,15 @@ staged decision. Nothing is kept for a later bar.
 
 **An EXIT** closes what the Clerk says the bot holds. The plan's rules are
 never asked again. Where the account's Clerk fills the close itself, from
-quotes (a Dry Run), the newest live quote the supervisor holds for that
+quotes (a Dry Run, a Live Shadow), the newest live quote the supervisor holds for that
 contract goes with it; with none, the EXIT goes without, and the Clerk prices
 it from the newest quote kept. A real account's close is a market order: no
 quote prices it, so none is read and none is handed over.
 
 **The contract reference in a Dry Run** is IBKR's own listing: the multiplier
 handed to the Clerk is the one the chain lists the contract with. A real
-account's Clerk asks its broker's reference before it takes the entry; a
+account's Clerk asks its broker's reference before it takes the entry, and
+so does a Live Shadow's, of the live account it rehearses; a Dry Run's
 simulation has none.
 """
 
@@ -365,7 +367,7 @@ class OptionRun:
         self._held_contracts = held_contracts
         # The Clerk's answer to which option contracts a run on its account must ask to have quoted, by
         # OCC symbol: one a bot holds, or one an order is working in. None of them where the Clerk's own
-        # keeping asks for those lines (a Dry Run).
+        # keeping asks for those lines (a Dry Run, a Live Shadow).
         self._contracts_to_watch = contracts_to_watch
         # Where the watched window is centred: the close of the underlying's newest bar with a trade in it.
         self._money: Decimal | None = None

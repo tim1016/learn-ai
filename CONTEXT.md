@@ -1741,7 +1741,7 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
   _Avoid_: spot, the underlying's price (that is its live quote).
 - **Watched window (a bot's)** — the contracts a running bot asks to have quoted, from the start of its run to its end, whether an entry of its rests or not: its plan's rules, centred on the newest closed bar of the underlying. The contract it holds is not in it. In a Dry Run that one is the Clerk's to ask for; on a Paper account the run names it beside its window.
 - **Blocked entry** — an ENTER decision that was not sent, with one reason code and one sentence. It is discarded: the bot does not queue it and does not try it again on a later bar. An entry the Clerk accepted and then refused as its order was sent is not this: its receipt is the accepted one, and the books record the refusal.
-- **Refused run (option bot)** — a run ended by name as it starts, before it asks for a bar: its account's Clerk does not take an option plan (a Live Shadow's, a Live account's), its watched window cannot fit the Clerk's line budget, or its Clerk has no option quotes of its own because it reads its market status from a shared source.
+- **Refused run (option bot)** — a run ended by name as it starts, before it asks for a bar: its account's Clerk does not take an option plan (a Live account's, or a plan of several legs on any account), its watched window cannot fit the Clerk's line budget, or its Clerk has no option quotes of its own because it reads its market status from a shared source.
 - **Contract reference (in a Dry Run)** — IBKR's own listing of the contract. A simulated broker has none of its own.
 
 ## Market-data readiness (resolved 2026-09-22)

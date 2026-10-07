@@ -24,8 +24,10 @@ from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.simulated_option_orders import SimulatedOptionOrders
+from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding, recorded_settlement
 from app.broker.alpaca.clerk.sqlite.exit_resolution import OPTION_EXIT_UNPRICED
+from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
@@ -41,7 +43,9 @@ from app.broker.contract.models import OrderSide
 from app.broker.ibkr.config import reset_settings_for_testing
 from app.options.simulated_fill import SimulatedFillModel
 from app.schemas.bot_end import BotEnd
+from app.schemas.market_liveness import MarketLivenessFact, SymbolTradingStatusEvidence
 from app.services import market_liveness
+from app.services.market_liveness import unknown_market_liveness
 from tests.options import test_resolver as scenes
 
 from ._option_floor import CALL_585, ENTER_MS, EXIT_MS, FIRST_GREEN_MS, MINUTE, Step, green, red
@@ -160,6 +164,13 @@ async def test_on_a_live_shadow_an_option_bot_buys_the_call_at_its_ask_marks_it_
     assert shadow.live.listing_reads == [CALL]
     assert shadow.live.trade_calls == [] and alpaca_is_never_sent_to == []
     assert shadow.asked_of_the_clerk == ["ENTER", "EXIT"]
+    # The Shadow's own pass finds its books and its order book agreeing, and its fees are a model's.
+    assert (await shadow.a_pass()).verdict == "clean"
+    with shadow.repo._write_lock:
+        fees = custody_fee_attribution(
+            shadow.repo._conn, now_ms=shadow.clock.value, simulated_fill_cutoff_ms=shadow.clock.value
+        )
+    assert fees.known and sum(share.amount for share in fees.shares) > 0
 
 
 # ---- An entry that cannot fill -------------------------------------------------------------------------
@@ -475,3 +486,77 @@ async def test_after_the_clerk_restarts_the_shadow_still_holds_its_contract_mark
     observation = shadow.clerk.live_envelope.fresh_observation(shadow.clock.value)
     assert observation is not None and observation.unrealized_pl_usd == Decimal("8.00")
     assert shadow.held.held() == {shadow.repo.account_id: (CALL,)}
+
+
+# ---- A contract held past its expiry: what a Shadow does until expiries are settled ----------------------
+
+
+async def test_a_contract_a_shadow_still_holds_after_its_expiry_is_told_as_it_is_and_no_write_off_is_offered(
+    shadow: ShadowFloor,
+) -> None:
+    """Settling an expired contract is not built for a simulation yet. Until it is, a Shadow that still holds
+    one says so: the close it owed is recorded missed, no order is sent for it, its account's reading is
+    unavailable, and the write-off is not offered, because the Shadow's own order book still holds the
+    contract. Nothing real is held, and the words say that."""
+    await _holding_one_call(shadow)
+    await shadow.stop_is_pressed()
+    await shadow.hours_pass_to(scenes._at(EXPIRY_DAY, 16, 0) + MINUTE)
+
+    await shadow.a_pass()
+    reading = await shadow.runtime.envelope_sync.tick()  # type: ignore[union-attr]
+    await shadow.clerk.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
+    write_off = await _offered(shadow, "discharge_attributed_residue")
+    flatten = await _offered(shadow, "execute_safe_flatten")
+
+    assert shadow.holds() == {CALL: 1.0} and len(shadow.fills()) == 1
+    assert reading != "observed"
+    assert shadow.clerk.live_envelope.fresh_observation(shadow.clock.value + 60_000) is None
+    notice = shadow.repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=SCHEDULED_CLOSE_MISSED_REASON_CODE, strategy_instance_id=shadow.sid
+    )
+    assert notice is not None and "This is a Live Shadow: nothing real is held." in notice["facts_json"]
+    assert not write_off.available and write_off.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
+    assert "Live Shadow's order book" in (write_off.unavailable_reason or "")
+    assert not flatten.available
+    assert shadow.live.trade_calls == []
+
+
+# ---- A real account's send rules, a simulation's price -------------------------------------------------
+
+
+async def test_a_halt_of_the_underlying_holds_a_shadows_close_and_the_pass_sells_it_when_the_halt_lifts(
+    shadow: ShadowFloor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Live bot's close is not sent into a halt, so its Shadow's is not filled in one: the book would have
+    priced it, and the Clerk holds it all the same. The halt is asked of the underlying."""
+    await _holding_one_call(shadow)
+    await shadow.stop_is_pressed()
+    await shadow.hours_pass_to(DUE)
+    await _the_call_is_quoted(shadow, "2.10", "2.16")
+    halted, asked = {"SPY"}, []
+
+    def status(symbol: str, now_ms: int) -> MarketLivenessFact:
+        asked.append(symbol)
+        fact = unknown_market_liveness(symbol, observed_at_ms=now_ms)
+        if symbol not in halted:
+            return fact
+        return fact.model_copy(update={
+            "state": "HALTED",
+            "symbol_status": SymbolTradingStatusEvidence(
+                symbol=symbol, state="HALTED", source="ibkr.market_data.status", observed_at_ms=now_ms,
+            ),
+        })
+
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", status)
+
+    await shadow.a_pass()
+
+    assert shadow.holds() == {CALL: 1.0} and len(shadow.fills()) == 1
+    assert asked and set(asked) == {"SPY"}
+
+    halted.clear()
+    await shadow.time_passes_to(shadow.clock.value + 30_000)
+    await shadow.a_pass()
+
+    assert shadow.holds() == {}
+    assert shadow.fills()[-1] == (CALL, "sell", 1.0, 2.10, 100, Decimal("210.00"))

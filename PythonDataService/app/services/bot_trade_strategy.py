@@ -895,7 +895,8 @@ async def run_trade_bot(
     the configured pricing-bar wait; production wiring leaves it unset.
 
     A bot that trades option contracts runs here on an account whose Clerk
-    takes its plan: a Paper account, for one bought call or put (ADR 0076).
+    takes its plan: a Paper account or a Live Shadow, for one bought call or
+    put (ADR 0076).
     The Clerk is asked before any stream is opened, and its refusal of any
     other account or plan is raised as it gave it. ``option_market`` is what
     such a bot reads its quotes through (``bot_option_run``); production
@@ -1568,13 +1569,14 @@ def _option_run(
 
     Shared by both runners. The Clerk is asked first whether its account
     takes the plan, by the rule the bot was registered under, and its refusal
-    is raised as it gave it: a Live Shadow and a Live account take no option
-    plan. Nothing is asked for before that, no stream and no quote line.
+    is raised as it gave it: a Live account takes no option plan. Nothing is
+    asked for before that, no stream and no quote line.
 
     Loaded only for an option bot: it brings the resolver and the pricer
     with it. The contracts the run asks for as held lines are the Clerk's
     answer too: those the account's books say must be quoted on a real
-    account, and none in a Dry Run, whose Clerk asks for them itself.
+    account, and none in a Dry Run or on a Live Shadow, whose Clerk asks for
+    them itself.
     """
     if not is_option_plan(binding.action_plan):
         return None
@@ -1815,7 +1817,7 @@ async def _option_decision_facts(
     """What an option bot's decision is handed to the Clerk with (ADR 0076), or ``None`` when it is not sent.
 
     An EXIT is never refused here. Where the Clerk fills the close itself,
-    from quotes (a Dry Run), it goes with the newest quote held for the
+    from quotes (a Dry Run, a Live Shadow), it goes with the newest quote held for the
     contract the Clerk says the bot holds, or with none: the Clerk prices it
     from the newest quote kept, and says so. A real account's close is a
     market order. No quote prices it, so none is read: a fault in a read the
