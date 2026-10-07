@@ -229,6 +229,24 @@ class AlpacaTradingClient:
             self._uncertain_submissions.pop(client_order_id, None)
             return False
 
+    def hold_submission_uncertain(self, client_order_id: str) -> None:
+        """Start the visibility window for an order Alpaca accepted whose answer the caller would not take.
+
+        :meth:`submit_order` closes the window on a 200. A caller that then
+        refuses that answer, because it will not read or names another
+        order, knows no more than after a timeout, and Alpaca's lookup index
+        may still be catching up: for the same grace, a lookup's 404 stays
+        "not visible yet" (#2913).
+        """
+        self._mark_submission_uncertain(client_order_id)
+
+    def settle_submission(self, client_order_id: str) -> None:
+        """Close the visibility window: the caller has taken an answer as this order's.
+
+        For a lookup made with ``found_settles_submission=False``.
+        """
+        self._clear_uncertain_submission(client_order_id)
+
     def _build_default_client(self) -> Any:
         # Injected settings are the whole binding; otherwise the one this
         # worker resolved (ADR 0060). Deferred to first use, so the client can
@@ -571,7 +589,7 @@ class AlpacaTradingClient:
         )
 
     async def get_order_by_client_order_id(
-        self, client_order_id: str
+        self, client_order_id: str, *, found_settles_submission: bool = True
     ) -> dict[str, Any] | None:
         """GET ``/v2/orders:by_client_order_id`` for the order we minted (S5).
 
@@ -590,6 +608,12 @@ class AlpacaTradingClient:
         ``BrokerUnavailable``: definitively absent → the submit failed, whereas
         unreachable must stay uncertain. Every other failure (timeout, 5xx,
         network, other 4xx) flows through ``_call`` unchanged.
+
+        A found order closes the visibility window. A caller that judges the
+        answer itself passes ``found_settles_submission=False``: the window
+        then stays open until that caller takes an answer as this order's
+        and calls :meth:`settle_submission`, so an answer it refuses is never
+        followed by a 404 read as "absent" (#2913).
         """
 
         def _get(client: Any) -> dict[str, Any] | None:
@@ -610,7 +634,7 @@ class AlpacaTradingClient:
                 raise
 
         result = await self._call(_get, describe="order lookup by client_order_id")
-        if result is not None:
+        if result is not None and found_settles_submission:
             self._clear_uncertain_submission(client_order_id)
         return result
 

@@ -250,6 +250,111 @@ async def test_an_accepted_order_whose_answer_cannot_be_read_is_settled_by_looki
     assert (found.order_id, found.filled_quantity) == (_PARENT_ID, 1)
 
 
+_NOT_FOUND = {"code": 40410000, "message": "order not found"}
+
+# Answers Alpaca could give about an order that this port will not take as that order's.
+_REFUSED_ANSWERS = [
+    pytest.param({"legs": None, "id": "not-an-order-id"}, id="no legs and no usable id"),
+    pytest.param({"filled_qty": "some"}, id="a quantity that will not parse"),
+    pytest.param({"client_order_id": "learn-ai/another-bot/v1:enter-9"}, id="another order"),
+]
+
+
+@pytest.mark.parametrize("refused", [pytest.param({"legs": None}, id="no legs"), *_REFUSED_ANSWERS[1:]])
+@responses.activate
+async def test_an_order_alpaca_accepted_is_not_called_absent_because_its_answer_was_refused_here(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch, refused: dict[str, Any]
+) -> None:
+    """Alpaca said 200, so the order exists; a lookup's 404 a moment later is its index catching up (#2913)."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, json=_answer("MultilegOptionsOrderResponse", **refused))
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    # The same 30 seconds an unknown submit gets, counted from the answer that could not be used.
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S - 2
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+    now[0] += 2
+    assert await broker.get_option_order_by_client_order_id(_REF) is None
+
+
+@pytest.mark.parametrize("refused", _REFUSED_ANSWERS)
+@responses.activate
+async def test_a_lookup_answer_refused_here_does_not_end_the_grace_of_an_unknown_submit(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch, refused: dict[str, Any]
+) -> None:
+    """Only an answer taken as this order's settles it; a 404 after any other still proves nothing (#2913)."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, status=504, json={"message": "gateway timeout"})
+    responses.add(responses.GET, _BY_CLIENT_ID, json=_answer("MultilegOptionsOrderResponse", **refused))
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerUnavailable):
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+
+    now[0] += 1
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    # The window is the submit's own: the refused answer did not start it again.
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S - 2
+    assert await broker.get_option_order_by_client_order_id(_REF) is None
+
+
+@responses.activate
+async def test_a_parent_whose_legs_could_not_be_read_again_does_not_end_the_grace_of_an_unknown_submit(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second read is a request of its own; the grace must still stand while it is in flight and after it fails."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, status=504, json={"message": "gateway timeout"})
+    responses.add(responses.GET, _BY_CLIENT_ID, json=_answer("MultilegOptionsOrderResponse", legs=None))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", status=503, json={"message": "unavailable"})
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerUnavailable):
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+
+@responses.activate
+async def test_an_answer_taken_as_this_orders_ends_the_grace_of_an_unknown_submit(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, status=504, json={"message": "gateway timeout"})
+    responses.add(responses.GET, _BY_CLIENT_ID, json=_answer("MultilegOptionsOrderResponse"))
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerUnavailable):
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+    found = await broker.get_option_order_by_client_order_id(_REF)
+
+    assert found is not None and found.order_id == _PARENT_ID
+    now[0] += 1
+    assert await broker.get_option_order_by_client_order_id(_REF) is None
+
+
 @responses.activate
 async def test_an_answer_naming_another_client_order_id_is_not_this_orders_answer(broker: AlpacaBroker) -> None:
     """Another order's fills must not be counted as this one's; the outcome stays unknown."""

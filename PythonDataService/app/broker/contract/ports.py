@@ -180,16 +180,21 @@ class BrokerTradePort(Protocol):
     is an unknown outcome, resolved through
     ``get_option_order_by_client_order_id``, and any other ``BrokerError``
     means the order does not exist. An accepted order whose answer cannot be
-    read is unknown too, never refused. A broker that takes no such order
-    raises ``BrokerOptionsNotSupported``. ``cancel`` cancels an option
-    order by its parent's broker order id.
+    read, or names a different order, is unknown too, never refused. A
+    broker that takes no such order raises ``BrokerOptionsNotSupported``.
+    ``cancel`` cancels an option order by its parent's broker order id.
 
     The two option lookups answer with the parent order and, under a
     multi-leg parent, its legs: each with its own order id, filled quantity,
     average price and status. ``None`` is the vendor saying no such order
-    exists, with the same grace after an unknown submit as the stock lookup;
-    an answer that cannot be read whole, or that names a different order
-    from the one asked about, raises rather than state an outcome.
+    exists. An answer that cannot be read whole, or that names a different
+    order from the one asked about, raises rather than state an outcome.
+
+    After any unknown submit, the port's own refusal of an accepted answer
+    included, the lookup by client order id keeps the stock lookup's grace:
+    "no such order" stays unknown until the vendor has had time to show the
+    order. Only an answer taken as that order's ends the grace early; one
+    the lookup refuses does not.
     """
 
     broker_id: str

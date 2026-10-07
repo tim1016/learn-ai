@@ -672,34 +672,52 @@ class AlpacaBroker:
 
         Once Alpaca has accepted the order, nothing here may say it was
         refused. An answer that cannot be read, a multi-leg one without its
-        legs included, raises ``BrokerEvidenceUnavailable``: an unknown
-        outcome, which the caller settles through
-        :meth:`get_option_order_by_client_order_id`. No second request is
-        made here, because its failure could read as the order's.
+        legs included, or one naming another order raises
+        ``BrokerEvidenceUnavailable``: an unknown outcome, which the caller
+        settles through :meth:`get_option_order_by_client_order_id`. No
+        second request is made here, because its failure could read as the
+        order's.
+
+        That unknown outcome gets the lookup's visibility grace too, started
+        here: Alpaca's 200 ended the one the client keeps, and an order it
+        took a moment ago can still answer 404 to a lookup.
         """
         body = adapter.to_alpaca_option_order_request(order, client_order_id=client_order_id)
         payload = await self._client.submit_order(body)
-        answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
-        return _the_order_asked_about(answered, client_order_id=client_order_id)
+        try:
+            answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+            return _the_order_asked_about(answered, client_order_id=client_order_id)
+        except Exception:
+            # Alpaca took the order. Whatever stopped its answer being taken, a 404 in the next seconds is not "absent".
+            self._client.hold_submission_uncertain(client_order_id)
+            raise
 
     async def get_option_order_by_client_order_id(
         self, client_order_id: str
     ) -> BrokerOptionOrder | None:
         """Look an option order up by the ``client_order_id`` it was sent under.
 
-        The parent is read exactly as a stock order is, so the same 404
-        discipline and the same visibility grace after an unknown submit
-        apply. Alpaca documents no way to ask this read for nested legs, so
-        a multi-leg parent that comes back without them is read again by its
+        The parent is read as a stock order is, with the same 404
+        discipline: ``None`` is Alpaca saying no such order exists, except
+        inside the visibility grace after an unknown submit, where a 404
+        stays unknown. Unlike the stock read, a found order does not end
+        that grace by being found. It ends once the answer has been read
+        whole and is about the order asked for; an answer refused here
+        leaves it standing, so the 404 that follows is still not "absent".
+
+        Alpaca documents no way to ask this read for nested legs, so a
+        multi-leg parent that comes back without them is read again by its
         broker order id, which has one.
         """
-        payload = await self._client.get_order_by_client_order_id(client_order_id)
+        payload = await self._client.get_order_by_client_order_id(client_order_id, found_settles_submission=False)
         if payload is None:
             return None
         if adapter.alpaca_multi_leg_order_lacks_legs(payload):
             payload = await self._nested_order(payload)
         answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
-        return _the_order_asked_about(answered, client_order_id=client_order_id)
+        accepted = _the_order_asked_about(answered, client_order_id=client_order_id)
+        self._client.settle_submission(client_order_id)
+        return accepted
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
         """Look an option order up by its broker-assigned id, legs nested under a multi-leg parent.
