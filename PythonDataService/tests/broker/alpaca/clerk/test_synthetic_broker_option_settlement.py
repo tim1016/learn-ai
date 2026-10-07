@@ -113,6 +113,11 @@ async def _held(simulation: SyntheticBroker) -> dict[str, float]:
     }
 
 
+def test_the_wait_for_the_closing_bar_and_the_oldest_bar_that_may_stand_for_it_are_what_was_decided() -> None:
+    """Two named settings of the simulation's rule: two minutes, and fifteen. Changed only by a decision."""
+    assert (SETTLEMENT_GRACE_MS, SETTLEMENT_BAR_MAX_AGE_MS) == (2 * MINUTE, 15 * MINUTE)
+
+
 # ── what it settles to ───────────────────────────────────────────────────
 
 

@@ -374,7 +374,7 @@ async def _gone_at_the_broker_with_no_record(account: PaperOptions, sid: str = "
 def test_a_real_accounts_ending_waits_one_full_session_after_the_contracts_last() -> None:
     """Friday's contract: the record is waited for until Monday's close. A Thursday before a Friday half day:
     until that half day's early close."""
-    assert OWNER_ENDING_WAIT_SESSIONS == 1
+    assert (OWNER_ENDING_WAIT_SESSIONS, OWNER_ENDING_LATE_ROW_DAYS) == (1, 7)
     assert owner_ending_offered_from_ms(date(2026, 9, 18)) == MONDAY_CLOSE
     assert owner_ending_offered_from_ms(date(2026, 11, 25)) == et_minute_of_day_ms(date(2026, 11, 27), 13 * 60)
 

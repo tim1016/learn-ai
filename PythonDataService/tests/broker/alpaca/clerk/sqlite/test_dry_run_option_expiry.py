@@ -382,6 +382,32 @@ async def test_a_restart_between_the_simulations_settlement_and_its_booking_book
         assert reopened.realized_pnl() == Decimal("331")
 
 
+async def test_a_settlement_handed_over_once_more_after_it_was_booked_books_nothing_and_holds_nobody(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """A read whose window still reaches the contract's expiry date is handed the settlement on every poll.
+
+    It was booked as a settlement in cash, and it travels as an expiry. The
+    second time it is the same settlement, not a row that changed: nothing
+    more is booked and no notice is raised.
+    """
+    await dry_run.enter(dry_run.evidence())
+    _keeps_spy(dry_run, "590.25")
+    _wait_until(dry_run, SATURDAY_NOON)
+    await dry_run.clerk.reconcile_once()
+    written = dry_run.repo.last_custody_sequence()
+    settled = dry_run.clerk._trade.settle_expired_options(after_ms=0)
+    assert [item.record.outcome.value for item in settled.settled] == ["settled_in_cash"]
+
+    again = option_events.book_option_events(
+        dry_run.repo, option_events.OptionEventRead(after_ms=0, history_complete=True), settled=settled
+    )
+
+    assert (again.booked, again.held) == ((), ())
+    assert dry_run.repo.last_custody_sequence() == written
+    assert [booked["summary_code"] for booked in _booked(dry_run)] == ["OPTION_SETTLED_IN_CASH"]
+
+
 async def test_a_stopped_bot_whose_close_failed_before_expiry_is_flat_once_its_contract_is_settled(
     dry_run: _DryRun,  # noqa: F811
 ) -> None:
