@@ -135,6 +135,20 @@ async def test_a_decision_sent_again_for_more_contracts_is_a_conflict_and_the_bo
     assert dry_run.orders() == 1 and dry_run.held() == {SYMBOL: 1.0}
 
 
+async def test_a_decision_sent_again_for_fewer_contracts_is_a_conflict_and_the_books_keep_the_first(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Three contracts were bought under this decision. Asking it for one is no retry of that entry either."""
+    first = await dry_run.enter(dry_run.evidence(), decision="enter-once", units=3)
+    dry_run.wait(1_000)
+
+    with pytest.raises(DurableConflictError):
+        await dry_run.enter(dry_run.evidence(), decision="enter-once", units=1)
+
+    assert first.state is EffectOperationState.SUBMITTED
+    assert dry_run.orders() == 1 and dry_run.held() == {SYMBOL: 3.0}
+
+
 async def test_a_decision_sent_again_for_another_contract_is_a_conflict(dry_run: _DryRun) -> None:  # noqa: F811
     await dry_run.enter(dry_run.evidence(), decision="enter-once")
     dry_run.wait(1_000)

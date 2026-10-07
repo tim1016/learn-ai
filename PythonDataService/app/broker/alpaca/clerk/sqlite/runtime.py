@@ -1087,7 +1087,7 @@ class SqliteAlpacaClerkFacade:
         if len(plan.legs) != 1:
             return None
         (leg,) = plan.legs
-        if is_option_contract_symbol(leg.symbol):
+        if is_option_contract_symbol(leg.symbol.upper()):
             # Never priced from the stock quote source, which is not asked about a contract (ADR 0076).
             return self._option_flatten_refusal(leg, confirmed_limit=None) or RegularSessionReduction()
         if not self._trade.recovery_price_available(leg.symbol):
@@ -1154,7 +1154,7 @@ class SqliteAlpacaClerkFacade:
                 )
             return None
         (leg,) = plan.legs
-        if is_option_contract_symbol(leg.symbol):
+        if is_option_contract_symbol(leg.symbol.upper()):
             option_refusal = self._option_flatten_refusal(leg, confirmed_limit=confirmed_limit)
             if option_refusal is not None:
                 logger.info(

@@ -387,6 +387,11 @@ OPTION_CONTRACT_EXPIRED = OptionEffectRefusal.CONTRACT_EXPIRED.value
 
 _EXPIRED_CONTRACT_HEADLINE = "An option contract expired while the bot still held it"
 
+_EXPIRED_CONTRACT_NEXT_STEP = (
+    "No order can close an expired contract, so there is nothing to send. The position stays on "
+    "this bot's books until expired contracts are settled, which is not built yet."
+)
+
 _EXPIRED_CONTRACT_OPERATOR_IMPACT = (
     "New exposure is on hold for this strategy. No order can reduce this position; reconciliation "
     "remains available."
@@ -422,10 +427,7 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
             "seconds, so no order can close it and none was sent. The position is still on the books: a "
             "Dry Run does not yet settle an expired contract at its exercise value."
         ),
-        next_step=(
-            "No order can close an expired contract, so there is nothing to send. The position stays on "
-            "this bot's books until expired contracts are settled, which is not built yet."
-        ),
+        next_step=_EXPIRED_CONTRACT_NEXT_STEP,
     )
 
 
@@ -2802,6 +2804,49 @@ def flatten_send_refusal(repo: ClerkSqliteRepository, effect_operation_id: str) 
         reason_code=row["summary_code"],
         explanation=OrderSubmitFailedFacts.from_facts_json(row["facts_json"]).reason,
         next_step=FLATTEN_COVER_NEXT_STEPS[row["summary_code"]],
+    )
+
+
+def option_close_not_taken(
+    repo: ClerkSqliteRepository, effect_operation_id: str, *, symbol: str
+) -> LegRefusal | None:
+    """Why a failed EXIT's close of an option contract was not taken, or ``None`` for a reduction in shares (ADR 0076).
+
+    Read from the EXIT's own fold, as :func:`flatten_send_refusal` is, so
+    the Flatten that failed and a retry of it are told the same thing. No
+    broker is asked about an option order today: the Clerk itself or a
+    Dry Run's simulation would not take it, and the recorded reason is in
+    the refuser's own words.
+
+    A contract that expired keeps its own code and its own next step,
+    which sends the operator to no retry: none can work. Any other is
+    told under the fold's code. Its next step does not promise that
+    flattening again will work: a Flatten is offered again only when one
+    can go out, and the bot's page says why when none can.
+    """
+    contract_symbol = symbol.upper()
+    if not is_option_contract_symbol(contract_symbol):
+        return None
+    row = repo.first_effect_transition(
+        effect_operation_id=effect_operation_id, transition_kind="EXIT_NOT_FLAT"
+    )
+    if row is None:
+        return None
+    recorded = OrderSubmitFailedFacts.from_facts_json(row["facts_json"])
+    if row["summary_code"] == OPTION_CONTRACT_EXPIRED:
+        return LegRefusal(
+            reason_code=OPTION_CONTRACT_EXPIRED, explanation=recorded.reason, next_step=_EXPIRED_CONTRACT_NEXT_STEP
+        )
+    return LegRefusal(
+        reason_code=row["summary_code"],
+        explanation=(
+            f"The order to close {contract_symbol} was not taken, so nothing was sold or bought and the "
+            f"position is still open. {recorded.why}"
+        ),
+        next_step=(
+            "Run Reconcile now. A Flatten is offered again only when one can go out, and the bot's page "
+            "says why when none can."
+        ),
     )
 
 

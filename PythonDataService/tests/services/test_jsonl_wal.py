@@ -10,6 +10,7 @@ of one particular copy of the check.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -162,3 +163,32 @@ def test_a_rewrite_refuses_sequences_that_do_not_rise_and_leaves_the_file_as_it_
         wal.replace_all([_Record(seq=2, value="b"), _Record(seq=1, value="a")])
 
     assert [record.seq for record in wal.read_all()] == [1, 2]
+
+
+class _Stopped(BaseException):
+    """The process is stopped: nothing after this instant runs."""
+
+
+def test_a_rewrite_stopped_before_its_one_last_step_leaves_the_old_file_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new contents are written beside the file and put in its place in one step.
+
+    Stopped just before that step, the file is byte for byte what it was, and
+    a reader started afterwards reads every record it held.
+    """
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
+    before = path.read_bytes()
+
+    def stopped_here(_source: object, _destination: object) -> None:
+        raise _Stopped
+
+    with monkeypatch.context() as stopping:
+        stopping.setattr(os, "replace", stopped_here)
+        with pytest.raises(_Stopped):
+            wal.replace_all([_Record(seq=2, value="2"), _Record(seq=6, value="6")])
+
+    assert path.read_bytes() == before
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [1, 2, 3, 4, 5, 6]

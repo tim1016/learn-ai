@@ -459,14 +459,16 @@ class SyntheticBroker(OptionOrdersNotTaken):
         has something on the side the close fills at: a bid above zero for a
         sale. The stock quote source is not asked about a contract.
         """
-        if is_option_contract_symbol(symbol):
+        contract_symbol = symbol.upper()
+        if is_option_contract_symbol(contract_symbol):
             now_ms = self._clock()
-            if self._kept_quotes is None or past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms):
+            expiry = OptionContract.from_occ_symbol(contract_symbol).expiry_date
+            if self._kept_quotes is None or past_last_session(expiry, now_ms):
                 return False
             try:
-                return self._kept_quotes.prices_a_close(symbol, side=side, at_ms=now_ms)
+                return self._kept_quotes.prices_a_close(contract_symbol, side=side, at_ms=now_ms)
             except KeptOptionQuotesUnavailable:
-                self._log_kept_quotes_unreadable(symbol, client_order_id=None)
+                self._log_kept_quotes_unreadable(contract_symbol, client_order_id=None)
                 return False
         return self._recovery_quote(symbol) is not None
 
@@ -488,7 +490,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
         today's price, never at a bar from an earlier session. ``False`` (no
         fresh quote in an open session) leaves the reduction unsent.
         """
-        if is_option_contract_symbol(symbol):
+        if is_option_contract_symbol(symbol.upper()):
             # A contract is closed from a quote kept for it (``bind_option_close_quotes``), never from the
             # stock quote source, which is not asked about it.
             return False
