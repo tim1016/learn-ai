@@ -98,9 +98,34 @@ A plan's legs are rules, and independent rules can land on a shape nobody meant.
 - **Not asked here:** whether the loss is bounded, which the requirement answers (decision 3), and whether Alpaca lists each contract as standard and tradable, which waits for its contract reference.
 - **Where a named structure starts** is a separate list: the legs and rules the builder fills in. Most hang on one leg picked by delta with the others a dollar distance from it; the strangle and the iron condor pick two legs by delta, a put and a call out of the money. Every value is a starting point the owner changes, and a deployed plan carries its own. **The values themselves are provisional.** Only the bull call spread's (delta 0.50, $5 above, the nearest weekly expiry) come from the builder's design (#2915); the 0.30 delta for a leg out of the money and the other eleven starts await the owner's word.
 
+### 8. Rules become contracts from the quotes held, or not at all
+
+A plan's legs are rules. At an entry one pure function turns them into one contract for every leg, or one typed refusal; nothing is resolved in part. It reads no feed and no clock: the chain's definition, the quotes held, the underlying's price and the times are handed in.
+
+- **There is no snapshot of a chain.** There is the newest bid and the newest ask received for each contract, each with the time its callback delivered it. Four moments are kept apart: the decision bar's close, the selection time, each quote side's receipt time, and the recheck just before an order is sent.
+- **A quote is usable or fails as one thing.** The tests are asked in one order and the first to fail is the fault: an older subscription generation; not live data; one side missing; a side that is no price; an ask of zero; a bid of zero where something is to be sold; bid above ask; a side older than the decision-data budget (ADR 0067), or received after the moment it is used at.
+- **The observations must belong together.** Every picked leg's quote and the underlying's must have been received within a coherence window of each other, 2,000 ms unless set otherwise. Each being fresh is not enough.
+- **The money is the decision bar's close; the model's price is the underlying's live mid.** Strike rules that count from the money use the bar the decision was made on. Delta is solved from each candidate's mid against the underlying's mid, which arrived with the option quotes.
+- **A rule picks the nearest contract with a usable quote.** A faulty quote is passed over. A contract with no quote held stops the search, because it could have been the pick:
+
+  | Refusal | When |
+  |---|---|
+  | Search incomplete | A listed contract that could be the pick has no quote held. For a rule by delta: the next strike toward the target is unwatched, even with a pick inside the tolerance |
+  | No usable quote | Every contract the rule may pick has a faulty quote, or one the model cannot turn into a delta. The fault is named |
+  | Nothing close enough | The chain lists nothing within the tolerance. For a rule by delta: the nearest usable contract is outside it and the next strike toward the target is usable too, or not listed |
+
+- **A rule by strike uses what the chain's definition already says.** It knows every listed strike, so a target just outside the watched window is not "search incomplete" when the nearest listed strike is watched, and a target nothing is listed near is "nothing close enough" without any quote. This is stricter in meaning than "outside the window is always incomplete", and refuses less.
+- **Ties** go as the plan's rules say: the money between two strikes is the lower; a delta or a percent as near two strikes takes the one nearer the money, then the lower; a distance from another leg takes the narrower spread.
+- **Expiry rules count on the New York calendar from the decision's date.** The nearest weekly is the nearest listed expiry after that date on the last session of its week, so a week cut short by a holiday has its weekly on the Thursday. An expiry the chain does not list is refused as that.
+- **Nothing is opened too close to its last trade.** A contract is not offered once the selection is within the entry cutoff's lead of the session close on its expiry date, half days included. Time to expiry runs to that same close. A product that trades past the session close on its last day is counted as stopping with the session until each contract's own hours have a source.
+- **Only standard contracts are on the ladder:** 100 shares, a multiplier of 100, American exercise. A rule counts strikes along the standard ones and never picks another.
+- **The evidence is kept with the pick,** enough to reproduce it: every watched contract of each leg's kind and expiry with its quote, receipt times, data type, generation, the model's inputs and its implied volatility and delta, the provider's own delta, and why it was passed over; the watched window; the moments; the model's rate and dividends with their sources.
+- **The recheck picks nothing.** Just before an order is sent the picked legs' quotes are tested again at that moment. A fault, a missing quote, an unhealthy feed or observations now too far apart refuses the entry, and nothing is sent.
+- **Not yet proven on a real chain.** The tests build their chain from the pricing model's own prices. A chain frozen from the provider during a session is to be added as a golden fixture when option quotes arrive through the Clerk's supervisor.
+
 ## Where it lives
 
-`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-003` pin the American price, delta and implied volatility against QuantLib.
+`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7), `quotes.py` and `resolver.py` (decision 8). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-003` pin the American price, delta and implied volatility against QuantLib.
 
 Nothing on the money path calls these yet.
 
