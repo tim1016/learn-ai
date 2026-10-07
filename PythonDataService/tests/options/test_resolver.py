@@ -1485,6 +1485,23 @@ def test_a_recheck_refuses_when_the_picks_no_longer_stand(
     assert refused.value.recheck is not None
 
 
+def test_a_recheck_refuses_a_pick_that_has_come_inside_its_entry_cutoff() -> None:
+    """Selected two seconds before the cutoff of a contract expiring today, an hour before the close. The order
+    is sent at the recheck, and by then the contract may be inside it."""
+    scene = _scene(day=_FRIDAY, selected_at=(14, 59, 58))
+    resolution = scene.resolve(_one("call", _AT_THE_MONEY))
+
+    def recheck_after(later_ms: int) -> resolver.Recheck:
+        return _recheck(_ticked_again(scene, scene.selection_ms + later_ms - 100), resolution, later_ms)
+
+    with pytest.raises(ContractsNotResolved) as refused:
+        recheck_after(2_000)
+
+    assert (refused.value.reason, refused.value.leg_ids) == (ResolverRefusal.PAST_ENTRY_CUTOFF, ("only",))
+    assert refused.value.contract == _contract("call", 585)
+    assert recheck_after(1_999).recheck_ms == scene.selection_ms + 1_999
+
+
 def test_a_recheck_cannot_come_before_the_selection_it_rechecks() -> None:
     scene = _scene()
     resolution = scene.resolve(_spread())
