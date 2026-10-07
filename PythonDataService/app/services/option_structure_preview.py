@@ -32,7 +32,7 @@ long as it ran (ADR 0076).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -42,8 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from app.broker.alpaca.option_fees import OptionRateNotPinnedError, fees_for_option_fill, option_fee_provision_cents
-from app.broker.contract.models import OrderSide
+from app.broker.alpaca.option_fees import OptionRateNotPinnedError, entry_fee_provision_cents
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import LineUse, WatchRequest
 from app.options.contract import OptionContract
@@ -191,21 +190,12 @@ def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
     return PreviewReason.LINE_REFUSED, sentence(f"No quote line could be had for this preview: {reason}")
 
 
-def _fee_provision(trade_date: date, structure: ResolvedStructure, markets: dict[str, LegQuote], size: EntrySize) -> int | None:
-    """What the entry sets aside for its own fees: each leg filled at the price it is entered at, on
-    ``trade_date``. None when a rate is not pinned for that date."""
-    fills = [
-        fees_for_option_fill(
-            trade_date=trade_date,
-            side=OrderSide.BUY if leg.position == "long" else OrderSide.SELL,
-            contracts=Decimal(size.units * leg.ratio),
-            premium=markets[leg.leg_id].ask if leg.position == "long" else markets[leg.leg_id].bid,
-            multiplier=size.multiplier,
-        )
-        for leg in structure.legs
-    ]
+def _fee_provision(
+    trade_date: date, structure: ResolvedStructure, markets: Mapping[str, LegQuote], size: EntrySize
+) -> int | None:
+    """What the entry sets aside for its own fees on ``trade_date``. None when a rate is not pinned for that date."""
     try:
-        return option_fee_provision_cents(fills)
+        return entry_fee_provision_cents(structure, markets, size, trade_date=trade_date)
     except OptionRateNotPinnedError:
         return None
 
@@ -780,8 +770,9 @@ async def preview_option_structure(
         plan,
         found,
         units=request.structures,
+        leg_gap_limit_percent=request.gap_limit_percent,
         cost_limit_percent=request.cost_limit_percent,
-        fee_provision=lambda structure, markets, size: _fee_provision(today, structure, dict(markets), size),
+        fee_provision=partial(_fee_provision, today),
         model_is_known=inputs.dividends is not None,
     )
     return asked.resolved(plan, reading, figures, inputs)

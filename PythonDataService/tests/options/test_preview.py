@@ -58,12 +58,14 @@ def _figures(
     units: int = 1,
     model_is_known: bool = True,
     cost_limit: str = "10",
+    gap_limit: str = "8",
     **markets: tuple[str, str],
 ) -> StructureFigures:
     return structure_figures(
         plan,
         _resolved(plan, **markets),
         units=units,
+        leg_gap_limit_percent=Decimal(gap_limit),
         cost_limit_percent=Decimal(cost_limit),
         fee_provision=lambda _structure, _markets, _size: fees,
         model_is_known=model_is_known,

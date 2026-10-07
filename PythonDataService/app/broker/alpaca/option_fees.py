@@ -10,7 +10,9 @@ Formula:
     OCC clearing (both sides)  occ = contracts × r_occ(d)
     Day settlement             each fee type summed over the account's ET trade date, then rounded UP to
                                the cent; the charge is the sum of the five rounded types
-    Entry provision            the entry's own fills settled as a day of their own, in whole cents
+    Entry provision            the entry's own fills settled as a day of their own, in whole cents;
+                               each leg is one fill of structures × ratio contracts at the price it is
+                               entered at: its ask when bought, its bid when sold
 Reference:
     Alpaca Securities LLC, "Brokerage Fee Schedule", §"Pass-Through Regulatory and Exchange Fees —
     Options" and §"How fees are charged"
@@ -51,11 +53,11 @@ activities for an option trade have been seen.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, Inexact
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.money import MoneyInputError, contract_multiplier, money_context, normalize_money
 from app.broker.alpaca.regulatory_fees import (
@@ -66,6 +68,10 @@ from app.broker.alpaca.regulatory_fees import (
 )
 from app.broker.alpaca.regulatory_fees import rates_for as stock_rates_for
 from app.broker.contract.models import OrderSide
+
+if TYPE_CHECKING:
+    from app.options.requirement import EntrySize, LegQuote
+    from app.options.structure import ResolvedStructure
 
 OptionFeeComponent = Literal["sec", "taf", "cat", "orf", "occ"]
 
@@ -238,3 +244,27 @@ def option_fee_provision_cents(fills: Sequence[OptionFillFees]) -> int:
     """
     with money_context():
         return int(settle_option_session(fills).total / _CENT)
+
+
+def entry_fee_provision_cents(
+    structure: ResolvedStructure, markets: Mapping[str, LegQuote], size: EntrySize, *, trade_date: date
+) -> int:
+    """What an entry on ``structure`` sets aside for its own fees on ``trade_date``, in whole cents.
+
+    Each leg is one fill at the price it is entered at: a bought leg at its
+    ask and a sold leg at its bid, of structures × ratio contracts. Raises
+    ``OptionRateNotPinnedError`` when a fee type has no rate pinned for that
+    date: a provision with an unknown in it is not a number.
+    """
+    return option_fee_provision_cents(
+        [
+            fees_for_option_fill(
+                trade_date=trade_date,
+                side=OrderSide.BUY if leg.position == "long" else OrderSide.SELL,
+                contracts=Decimal(size.units * leg.ratio),
+                premium=markets[leg.leg_id].ask if leg.position == "long" else markets[leg.leg_id].bid,
+                multiplier=size.multiplier,
+            )
+            for leg in structure.legs
+        ]
+    )

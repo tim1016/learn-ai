@@ -27,7 +27,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
-from app.options.entry import DEFAULT_COST_LIMIT_PERCENT
+from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_PERCENT
 from app.options.named_structures import NamedStructure
 from app.schemas.action_plan import ExpirySelector, StrikeSelector
 
@@ -78,8 +78,8 @@ class OptionStructurePreviewRequest(BaseModel):
     structure: NamedStructure | None = None
     legs: Annotated[list[OptionLegRules], Field(max_length=_MAX_LEGS_ASKED)]
     structures: Annotated[int, Field(ge=1, le=100)] = 1
-    # The widest bid-ask gap a leg may have, as a percent of its mid. Carried back; no leg is judged by it yet.
-    gap_limit_percent: Annotated[_OwnersPercent, Field(gt=0, le=100)] | None = None
+    # The widest bid-ask gap a leg may have, as a percent of its mid. An entry with a leg quoted wider is skipped.
+    gap_limit_percent: Annotated[_OwnersPercent, Field(gt=0, le=100)] = DEFAULT_LEG_GAP_LIMIT_PERCENT
     # The most opening and closing at once may cost, as a percent of what the entry sets aside.
     cost_limit_percent: Annotated[_OwnersPercent, Field(ge=0, le=100)] = DEFAULT_COST_LIMIT_PERCENT
 
