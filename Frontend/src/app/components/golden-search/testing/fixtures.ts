@@ -1071,7 +1071,7 @@ export function runsPage(overrides: Partial<RunsPage> = {}): RunsPage {
 }
 
 /** The session closes every fixture curve is read against. */
-export const CURVE_SESSIONS_MS: readonly number[] = [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')];
+const CURVE_SESSIONS_MS: readonly number[] = [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')];
 
 /** A run's curve over the three fixture sessions, ending at `end`; it dips a quarter of that from its first peak. */
 export function runCurve(key: string, end = 0.087): RunCurve {
