@@ -430,7 +430,8 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
 
     The position stays on the books until its end is booked (ADR 0076
     decision 22): from the broker's own activity on a real account, from the
-    simulation's settlement on a Dry Run. The words are true of either.
+    simulation's settlement on a Dry Run, or at the owner's word when
+    neither will come. The words are true of each.
     """
     contract_symbol = symbol.upper()
     if not is_option_contract_symbol(contract_symbol):

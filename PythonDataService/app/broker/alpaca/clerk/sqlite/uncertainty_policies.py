@@ -450,9 +450,11 @@ _OPTION_EVENT_HOLD_POLICY = ReasonPolicy(
     # acknowledgement is refused while draining, so blocking could wedge a
     # flat lane.
     blocks_lane_quiet=False,
-    # The owner's write-off is the way out of a position the broker no longer
-    # holds and no row explains. A row that arrives afterwards finds no lot
-    # and is held by name; it cannot close a lot twice.
+    # The owner's write-off of a position in a contract that still trades may
+    # go on beside one of these holds. A row that arrives afterwards finds no
+    # lot and is held by name; it cannot close a lot twice. The write-off is
+    # never offered for an expired contract, whatever holds stand (ADR 0076
+    # decision 22): its way out is the owner's ending, which closes the lot.
     residue_discharge="admits",
 )
 _REASON_POLICIES.update(dict.fromkeys(OPTION_EVENT_HOLD_REASON_CODES, _OPTION_EVENT_HOLD_POLICY))

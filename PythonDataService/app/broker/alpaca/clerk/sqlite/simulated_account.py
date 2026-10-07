@@ -22,8 +22,9 @@ bid's own receipt. With none, the reading is unavailable, as it is for shares
 with no fresh bar. A bid of zero is a mark: nothing is bid for the contract.
 
 A contract past its last session is quoted by no feed again. The simulation
-settles it when the Clerk next reads the account's option events (ADR 0076
-decision 22). Until it has, a Dry Run that still holds one has no reading,
+settles it when the Clerk next asks it to, or the owner ends it at their
+word when the simulation has no price to settle it from (ADR 0076
+decision 22). Until then a Dry Run that still holds one has no reading,
 and the reading says that, not to wait for a feed. That
 holds from the last session's close itself: a bid handed over seconds before
 it marks nothing after it, and a reading taken before it is good no longer
@@ -198,7 +199,7 @@ class SimulatedAccountProjection:
             raise SimulationEvidenceUnavailable(
                 f"The option contract {symbol} expired on {expiry.isoformat()}. It is not settled yet, so "
                 "there is no value to read the position at, and this account's reading stays unavailable "
-                "until it is."
+                "until it is settled or ended."
             )
         try:
             kept = self._kept_option_quotes().last_stated(symbol, at_or_before_ms=at_ms, with_side="bid")
