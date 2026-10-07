@@ -40,11 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from typing import Literal
 
-    from app.broker.alpaca.clerk.synthesized_orders import (
-        SimulatedOptionSettlements,
-        SynthesizedAnchor,
-        SynthesizedOptionFill,
-    )
+    from app.broker.alpaca.clerk.simulated_option_settlement import SimulatedOptionSettlements
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
     from app.options.quotes import HeldQuote
     from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -177,14 +174,6 @@ class GuardedBrokerReadPort:
     ) -> BrokerPortfolioHistory:
         self._assert_unfenced("get_portfolio_history")
         return await self._inner.get_portfolio_history(history_range)
-
-    def simulated_option_settlements(self) -> SimulatedOptionSettlements | None:
-        """A simulation's own record of the contracts it settled past expiry. None from a vendor's port.
-
-        It reads the simulation's order ledger and reaches no broker, so it is not fenced.
-        """
-        read = getattr(self._inner, "simulated_option_settlements", None)
-        return read() if callable(read) else None
 
     def _assert_unfenced(self, method: str) -> None:
         if self._intake.current_scope_depth() != 0:
@@ -328,6 +317,19 @@ class GuardedBrokerTradePort:
         if not callable(bind):
             return False
         return bool(bind(client_order_id, symbol=symbol, side=side, quotes=quotes, usable_generation=usable_generation))
+
+    def settle_expired_options(self, *, after_ms: int) -> SimulatedOptionSettlements | None:
+        """Have a simulation settle the contracts it holds past their last session (ADR 0076 decision 22).
+
+        None from a port that is no simulation: that account's broker ends
+        its positions and reports them through the read port. The step
+        writes the simulation's own order ledger, as a broker would act on
+        its own side, so it is refused under the intake fence like every
+        other call that acts there.
+        """
+        self._assert_unfenced("settle_expired_options")
+        settle = getattr(self._inner, "settle_expired_options", None)
+        return settle(after_ms=after_ms) if callable(settle) else None
 
     def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
         """Hand a simulation the newest quotes held for its contracts. A vendor's port keeps none.

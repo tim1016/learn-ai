@@ -11,6 +11,7 @@ from typing import Literal, NamedTuple, Protocol
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.simulated_option_settlement import option_settlement_simulation
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
     MAX_OPEN_ORDER_SNAPSHOT,
     broker_order_in_flight,
@@ -1329,11 +1330,13 @@ async def _reconcile_account_serialized(
     # activities and booked for the bot that held the contract, before the
     # final look at the broker (ADR 0076 decision 22). A contract whose
     # position this pass's snapshot shows differing from the books is read
-    # for at once. On books with no option contract one empty table is read,
-    # the broker is not asked and nothing is written. A fault in this step
-    # is logged and the pass goes on.
+    # for at once. A simulated account's trade port settles what it holds
+    # past expiry first, since no broker does. On books with no option
+    # contract one empty table is read, neither port is asked and nothing is
+    # written. A fault in this step is logged and the pass goes on.
     await poll_option_events_in_a_pass(
-        repo, read=read, off_loop=intake.off_loop, broker_positions=broker_positions
+        repo, read=read, simulation=option_settlement_simulation(trade), off_loop=intake.off_loop,
+        broker_positions=broker_positions,
     )
 
     # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``

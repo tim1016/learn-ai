@@ -216,15 +216,6 @@ class SynthesizedOptionSettlement(BaseModel):
         }
 
 
-class SimulatedOptionSettlements(NamedTuple):
-    """What a simulation says of the contracts it held past expiry."""
-
-    # Its record of each settlement, by the id of the activity it reports for it.
-    notes: Mapping[str, Mapping[str, Any]]
-    # Each contract it still holds past its last session and could not settle, with why.
-    not_settled: Mapping[str, str]
-
-
 class SynthesizedOrderRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

@@ -4,6 +4,9 @@ No broker exists to exercise or expire a simulated position, so the
 simulation applies Alpaca's stated rule to its own book, from the last price
 of the underlying it kept from the contract's last session. This is a
 simulation's rule: nothing here says what a real account would do.
+
+Settling is one explicit step of the simulation's trade port. Its read of
+option events settles nothing and reports none.
 """
 
 from __future__ import annotations
@@ -15,8 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker, settlement_activity_id
+from app.broker.alpaca.clerk.simulated_option_settlement import SimulatedOptionSettlements
+from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.models import OrderSide, OrderType
+from app.broker.contract.option_events import BrokerOptionEventActivity, BrokerOptionShareTradeActivity
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.marketdata.feed import MarketDataBar
 from app.options.contract import OptionContract
@@ -85,6 +90,19 @@ def _spy_bar(bars: SourceBarLedger, *, close: str, end_ms: int) -> None:
     )
 
 
+def _settle(simulation: SyntheticBroker) -> SimulatedOptionSettlements:
+    """The step the Clerk's poll calls: settle what is held past expiry, and hand back what was settled."""
+    return simulation.settle_expired_options(after_ms=WINDOW)
+
+
+def _events(settled: SimulatedOptionSettlements) -> list[BrokerOptionEventActivity]:
+    return [settlement.event for settlement in settled.settled]
+
+
+def _share_trades(settled: SimulatedOptionSettlements) -> list[BrokerOptionShareTradeActivity]:
+    return [settlement.share_trade for settlement in settled.settled if settlement.share_trade is not None]
+
+
 async def _held(simulation: SyntheticBroker) -> dict[str, float]:
     return {
         position.symbol: abs(position.quantity) * (1 if position.side == "long" else -1)
@@ -99,9 +117,9 @@ async def test_nothing_is_settled_while_the_contract_still_trades(
     _spy_bar(bars, close="590", end_ms=LAST_SESSION_CLOSE - 60_000)
     clock[0] = LAST_SESSION_CLOSE - 1
 
-    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
+    settled = _settle(simulation)
 
-    assert (evidence.events, evidence.share_trades) == ((), ())
+    assert settled.settled == () and settled.not_settled == {}
     assert await _held(simulation) == {CALL.occ_symbol: 1.0}
 
 
@@ -112,12 +130,12 @@ async def test_a_call_out_of_the_money_at_the_last_price_expires_and_the_simulat
     _spy_bar(bars, close="584.99", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
+    settled = _settle(simulation)
 
-    [event] = evidence.events
+    [event] = _events(settled)
     assert (event.kind, event.contract, event.position_change) == (OptionEventKind.EXPIRED, CALL, -1)
     assert event.activity_date_ms == et_midnight_ms(EXPIRY)
-    assert evidence.share_trades == () and evidence.read_whole
+    assert _share_trades(settled) == [] and settled.not_settled == {}
     assert await _held(simulation) == {}
 
 
@@ -139,11 +157,11 @@ async def test_a_contract_is_exercised_when_it_is_in_the_money_by_a_cent_or_more
     _spy_bar(bars, close=last_price, end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
+    settled = _settle(simulation)
 
-    [event] = evidence.events
+    [event] = _events(settled)
     assert event.kind is (OptionEventKind.EXERCISED if exercised else OptionEventKind.EXPIRED)
-    assert len(evidence.share_trades) == (1 if exercised else 0)
+    assert len(_share_trades(settled)) == (1 if exercised else 0)
 
 
 async def test_an_exercised_call_leaves_the_simulation_holding_the_shares_at_the_strike(
@@ -154,9 +172,7 @@ async def test_an_exercised_call_leaves_the_simulation_holding_the_shares_at_the
     _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
-
-    [trade] = evidence.share_trades
+    [trade] = _share_trades(_settle(simulation))
     assert (trade.underlying_symbol, trade.shares, trade.price, trade.net_amount) == (
         "SPY", 200, Decimal(585), Decimal(-117000)
     )
@@ -171,7 +187,7 @@ async def test_an_exercised_put_leaves_the_simulation_short_the_shares_at_the_st
     _spy_bar(bars, close="580", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    await simulation.read_option_event_activities(after_ms=WINDOW)
+    _settle(simulation)
 
     assert await _held(simulation) == {"SPY": -100.0}
 
@@ -186,10 +202,10 @@ async def test_the_price_read_is_the_last_one_kept_from_the_last_session_and_the
     _spy_bar(bars, close="599", end_ms=LAST_SESSION_CLOSE + 60_000)
     clock[0] = SATURDAY
 
-    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
+    [settlement] = _settle(simulation).settled
 
-    assert [event.kind for event in evidence.events] == [OptionEventKind.EXPIRED]
-    note = simulation.simulated_option_settlements().notes[settlement_activity_id(CALL.occ_symbol)]
+    assert settlement.event.kind is OptionEventKind.EXPIRED
+    note = settlement.note
     assert note["underlying_price"] == "584"
     assert note["bar_end_ms"] == LAST_SESSION_CLOSE - 60_000
     assert note["last_session_close_ms"] == LAST_SESSION_CLOSE
@@ -211,11 +227,11 @@ async def test_with_no_price_from_the_last_session_nothing_is_settled_and_the_si
         _spy_bar(bars, close="590", end_ms=kept_at)
     clock[0] = SATURDAY
 
-    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
+    settled = _settle(simulation)
 
-    assert evidence.events == ()
+    assert settled.settled == ()
     assert await _held(simulation) == {CALL.occ_symbol: 1.0}
-    [why] = simulation.simulated_option_settlements().not_settled.values()
+    [why] = settled.not_settled.values()
     assert "SPY" in why and "last session" in why
 
 
@@ -226,11 +242,12 @@ async def test_a_contract_is_settled_once_however_often_the_events_are_read(
     _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    first = await simulation.read_option_event_activities(after_ms=WINDOW)
+    first = _settle(simulation)
     clock[0] = SATURDAY + 60_000
-    second = await simulation.read_option_event_activities(after_ms=WINDOW)
+    second = _settle(simulation)
 
-    assert [event.activity_id for event in second.events] == [event.activity_id for event in first.events]
+    assert [event.activity_id for event in _events(second)] == [event.activity_id for event in _events(first)]
+    assert len(_events(first)) == 1
     assert await _held(simulation) == {"SPY": 100.0}
 
 
@@ -240,10 +257,27 @@ async def test_shares_are_never_settled_and_a_settlement_is_no_open_order(
     await _buys(simulation, CALL, clock)
     _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
-    await simulation.read_option_event_activities(after_ms=WINDOW)
+    _settle(simulation)
     clock[0] = SATURDAY + 86_400_000 * 30
 
-    again = await simulation.read_option_event_activities(after_ms=WINDOW)
+    again = _settle(simulation)
 
-    assert len(again.events) == 1 and await _held(simulation) == {"SPY": 100.0}
+    assert len(again.settled) == 1 and await _held(simulation) == {"SPY": 100.0}
     assert await simulation.list_orders(status="open") == []
+
+
+async def test_reading_the_accounts_option_events_settles_nothing_and_reports_none(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    """The read is a read. Only the settlement step settles, and only it hands a settlement over."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
+    clock[0] = SATURDAY
+
+    evidence = await simulation.read_option_event_activities(after_ms=WINDOW)
+
+    assert (evidence.events, evidence.share_trades, evidence.read_whole) == ((), (), True)
+    assert await _held(simulation) == {CALL.occ_symbol: 1.0}
+    # Once the step has settled it, the read still reports none: the step's own answer carries the record.
+    assert len(_settle(simulation).settled) == 1
+    assert (await simulation.read_option_event_activities(after_ms=WINDOW)).events == ()

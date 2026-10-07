@@ -62,6 +62,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.simulated_option_settlement import option_settlement_simulation
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
 from app.broker.alpaca.clerk.sqlite.option_events import OptionEventPoll, poll_option_events
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -168,7 +169,9 @@ class DeadlineKeeper:
 
     async def _read_option_events(self, read: BrokerReadPort) -> OptionEventPoll | None:
         try:
-            return await poll_option_events(self._repo, read=read, off_loop=self._off_loop)
+            return await poll_option_events(
+                self._repo, read=read, simulation=option_settlement_simulation(self._trade), off_loop=self._off_loop
+            )
         except Exception:
             # Its own failure, not the round's: the next read, and the pass, book what this one did not.
             logger.exception(

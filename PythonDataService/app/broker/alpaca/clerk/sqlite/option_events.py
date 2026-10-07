@@ -21,6 +21,12 @@ whole or a hold of this family stands, at once after a restart, and at once
 (at most once a minute) when a pass sees a recorded contract's position
 differ from the books.
 
+**A simulated account settles its own.** A Dry Run has no broker to end an
+option position. Its simulation does, as one step of its trade port
+(``simulated_option_settlement``), and the poll calls that step before it
+reads. What the step hands back is booked by the same batch function, as a
+simulated execution that carries the simulation's record.
+
 **A stock-only account is never read.** The worklist starts at
 ``option_contracts``. On books that never recorded a contract that table is
 empty: no other row is read, the broker is not asked, nothing is written.
@@ -81,6 +87,11 @@ from typing import Any
 
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.simulated_option_settlement import (
+    OptionSettlementSimulation,
+    SimulatedOptionSettlements,
+    SimulatedSettlement,
+)
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_open_work import broker_quantity_by_symbol
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
@@ -330,12 +341,6 @@ class OptionEventRead:
     failure: str | None = None
     # The broker's signed position by symbol, read after the events. None when it was not read.
     broker_positions: Mapping[str, float] | None = None
-    # True when a simulation reported the events: its bookings are simulated executions.
-    simulated: bool = False
-    # A simulation's own record of each settlement, by activity id.
-    settlement_notes: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    # The contracts a simulation holds past their last session and could not settle, with why.
-    not_settled: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def whole(self) -> bool:
@@ -883,17 +888,34 @@ def _pair_share_trades(
 
 
 def _book_events(
-    repo: ClerkSqliteRepository, conn: sqlite3.Connection, read: OptionEventRead, holds: _Holds
+    repo: ClerkSqliteRepository,
+    conn: sqlite3.Connection,
+    read: OptionEventRead,
+    holds: _Holds,
+    *,
+    simulated: Mapping[str, SimulatedSettlement],
 ) -> list[tuple[str, OptionPositionEndedFacts]]:
-    """Book every executed event of one read that is not booked yet, in one fixed order. Each bot with its new record."""
+    """Book every executed event of one read that is not booked yet, in one fixed order. Each bot with its new record.
+
+    ``simulated`` is what a simulation's settlement step handed back, by
+    activity id. Each is booked beside the read's own rows, by the same
+    rule, as a simulated execution that carries the simulation's record.
+    """
     account_id = repo.account_id
-    executed = [event for event in read.events if event.status is OptionActivityStatus.EXECUTED]
+    executed = [
+        *(event for event in read.events if event.status is OptionActivityStatus.EXECUTED),
+        *(settlement.event for settlement in simulated.values()),
+    ]
+    share_trades = [
+        *read.share_trades,
+        *(settlement.share_trade for settlement in simulated.values() if settlement.share_trade is not None),
+    ]
     multiplier_of = {}
     for event in executed:
         terms = contract_terms(conn, event.contract.occ_symbol)
         if terms is not None:
             multiplier_of[event.contract.occ_symbol] = terms.multiplier
-    paired, unpaired = _pair_share_trades(in_allocation_order(executed), read.share_trades, multiplier_of)
+    paired, unpaired = _pair_share_trades(in_allocation_order(executed), share_trades, multiplier_of)
     booked: list[tuple[str, OptionPositionEndedFacts]] = []
     # What outside orders hold of each contract, less what this run's events have taken of it.
     outside_left: dict[str, int] = {}
@@ -1059,9 +1081,9 @@ def _book_events(
                     source_code=event.activity_type, event_date_ms=event.activity_date_ms,
                     position_change=event.position_change, contract=contract, multiplier=multiplier,
                     contracts=contracts, held=held, close_price=Decimal(0), booked_as_of_ms=booked_as_of_ms,
-                    simulated=read.simulated, allocation=allocation_rows, share_trade=share_trade_note,
-                    simulation=dict(read.settlement_notes[event.activity_id])
-                    if event.activity_id in read.settlement_notes else None,
+                    simulated=event.activity_id in simulated, allocation=allocation_rows,
+                    share_trade=share_trade_note,
+                    simulation=dict(simulated[event.activity_id].note) if event.activity_id in simulated else None,
                     notes=notes,
                 )
             except _RowChanged:
@@ -1124,13 +1146,15 @@ def _hold_what_could_not_be_read(conn: sqlite3.Connection, read: OptionEventRead
 
 
 def _hold_what_expired_and_is_still_held(
-    conn: sqlite3.Connection, read: OptionEventRead, holds: _Holds, *, now_ms: int
+    conn: sqlite3.Connection, read: OptionEventRead, holds: _Holds, *, now_ms: int, not_settled: Mapping[str, str]
 ) -> None:
     """After a contract's last session, set any lot still open on it against the broker's position.
 
     A contract held on both sides nets to nothing at the broker and may never
     get a row. So may one whose row is yet to come. Either way the books
     still hold what the broker does not, and the bot is held by name.
+    ``not_settled`` is a simulation's own answer: each contract it holds
+    past its last session and could not settle, with why.
     """
     totals: dict[str, int] = {}
     positions = held_option_positions(conn)
@@ -1142,10 +1166,10 @@ def _hold_what_expired_and_is_still_held(
             continue
         ref = f"contract:{symbol}"
         expired_on = contract.expiry_date.isoformat()
-        if symbol in read.not_settled:
+        if symbol in not_settled:
             holds.add(
                 OPTION_EXPIRED_NOT_SETTLED_REASON_CODE, [sid], ref=ref, symbol=symbol, date_ms=None,
-                detail=f"{symbol} expired on {expired_on}. {read.not_settled[symbol]}",
+                detail=f"{symbol} expired on {expired_on}. {not_settled[symbol]}",
             )
         elif read.broker_positions is not None and read.broker_positions.get(symbol, 0.0) != totals[symbol]:
             holds.add(
@@ -1294,12 +1318,18 @@ def _book_outside_orders(
 # ── The batch function ───────────────────────────────────────────────────────
 
 
-def book_option_events(repo: ClerkSqliteRepository, read: OptionEventRead | None) -> OptionEventRound:
+def book_option_events(
+    repo: ClerkSqliteRepository, read: OptionEventRead | None, *, settled: SimulatedOptionSettlements | None = None
+) -> OptionEventRound:
     """Book what one read of the account's option events found, and hold by name for what could not be booked.
 
     ``read`` is None when the broker was not asked this time. The books' own
     record of outside orders is still acted on: an order in a contract a bot
     holds is held against that bot, and its fill is booked once it has ended.
+
+    ``settled`` is what a simulation's settlement step handed back, on a
+    simulated account. Its settlements are booked with the read's rows, and
+    what it could not settle is held for by name. None on a real account.
 
     Everything from the first read of the books to the last append happens
     inside the repository's write fence. On books that never recorded an
@@ -1320,9 +1350,12 @@ def book_option_events(repo: ClerkSqliteRepository, read: OptionEventRead | None
                         detail=read.failure or "The walk of the account's activities did not reach the window's start.",
                     )
             _hold_what_could_not_be_read(conn, read, holds)
-            booked += _book_events(repo, conn, read, holds)
+            simulated = {} if settled is None else {item.event.activity_id: item for item in settled.settled}
+            booked += _book_events(repo, conn, read, holds, simulated=simulated)
             if whole:
-                _hold_what_expired_and_is_still_held(conn, read, holds, now_ms=repo.clock())
+                _hold_what_expired_and_is_still_held(
+                    conn, read, holds, now_ms=repo.clock(), not_settled={} if settled is None else settled.not_settled
+                )
         # What the books' own record of outside orders holds for ends when that record no longer has it.
         held = _sync_holds(repo, conn, holds, codes=(OPTION_ORDER_NOT_OURS_REASON_CODE,), may_end=True)
         if read is not None:
@@ -1396,8 +1429,6 @@ async def _read_events(repo: ClerkSqliteRepository, read: BrokerReadPort, *, aft
             "the account's option events could not be read",
             extra={"action": "option_events_read_failed", "account_id": repo.account_id, "error": str(exc)},
         )
-    report = getattr(read, "simulated_option_settlements", None)
-    settlements = report() if callable(report) else None
     return OptionEventRead(
         after_ms=after_ms,
         events=tuple(events.values()),
@@ -1405,9 +1436,6 @@ async def _read_events(repo: ClerkSqliteRepository, read: BrokerReadPort, *, aft
         unreadable=tuple(unreadable.values()),
         history_complete=complete,
         failure=failure,
-        simulated=settlements is not None,
-        settlement_notes={} if settlements is None else settlements.notes,
-        not_settled={} if settlements is None else settlements.not_settled,
     )
 
 
@@ -1415,12 +1443,18 @@ async def poll_option_events(
     repo: ClerkSqliteRepository,
     *,
     read: BrokerReadPort,
+    simulation: OptionSettlementSimulation | None = None,
     off_loop: OffLoop = to_thread,
     asked_for: bool = False,
     broker_positions: Sequence[BrokerPosition] | None = None,
     act_on_the_books_between_reads: bool = False,
 ) -> OptionEventPoll:
     """Read the account's option events when a read is due, and book what was read.
+
+    ``simulation`` is the settlement step of a simulated account's trade
+    port. A simulation has no broker to end its positions, so before the
+    read it is asked to settle what it holds past expiry, and what it hands
+    back is booked with the read. A real account names none.
 
     ``broker_positions`` is a pass's own reading of the account. When it
     shows a recorded contract's position differing from the books, the
@@ -1462,6 +1496,8 @@ async def poll_option_events(
         # later, never on the keeper's every round.
         state.read_at_ms, state.nothing_pending = now_ms, False
         after_ms = await off_loop(lambda: option_event_window_start_ms(repo))
+        # A write to the simulation's own ledger, made with no lock of the Clerk's held, as the read is.
+        settled = None if simulation is None else simulation.settle_expired_options(after_ms=after_ms)
         events = await _read_events(repo, read, after_ms=after_ms)
         positions = broker_positions
         expired_held = (
@@ -1479,7 +1515,7 @@ async def poll_option_events(
                 )
         if positions is not None:
             events = replace(events, broker_positions=broker_quantity_by_symbol(list(positions)))
-        done = await off_loop(lambda: book_option_events(repo, events))
+        done = await off_loop(lambda: book_option_events(repo, events, settled=settled))
         state.read_at_ms = repo.clock()
         # While a hold stands something is still to come: a row, a share trade, a price. Look again sooner.
         state.nothing_pending = done.read_whole and not done.held
@@ -1490,6 +1526,7 @@ async def poll_option_events_in_a_pass(
     repo: ClerkSqliteRepository,
     *,
     read: BrokerReadPort,
+    simulation: OptionSettlementSimulation | None,
     off_loop: OffLoop,
     broker_positions: Sequence[BrokerPosition],
 ) -> None:
@@ -1503,7 +1540,7 @@ async def poll_option_events_in_a_pass(
     """
     try:
         await poll_option_events(
-            repo, read=read, off_loop=off_loop, broker_positions=broker_positions,
+            repo, read=read, simulation=simulation, off_loop=off_loop, broker_positions=broker_positions,
             act_on_the_books_between_reads=True,
         )
     except ClerkSqliteError:
