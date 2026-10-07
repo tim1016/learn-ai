@@ -59,6 +59,8 @@ class StructureMoneyRefusal(StrEnum):
     MIXED_EXPIRY_WITH_SOLD_LEG = "OPTION_STRUCTURE_MIXED_EXPIRY_WITH_SOLD_LEG"
     # Requirement plus premium is zero or less: the prices do not belong together.
     COMMITMENT_NOT_POSITIVE = "OPTION_STRUCTURE_COMMITMENT_NOT_POSITIVE"
+    # Opening and closing at once would cost more than the owner's limit, as a percent of the commitment.
+    COST_OVER_LIMIT = "OPTION_STRUCTURE_COST_OVER_LIMIT"
 
 
 class StructureMoneyRefused(ValueError):
