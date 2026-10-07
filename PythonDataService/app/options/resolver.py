@@ -338,6 +338,8 @@ class Resolution:
     quotes: Mapping[str, HeldQuote]
     # The legs to be sold: the ones whose bid is a price something would be sold at.
     sold: frozenset[str]
+    # The multiplier each pick is listed with, by leg id: what a price per share is turned into cash by.
+    multipliers: Mapping[str, int]
     evidence: Evidence
 
 
@@ -1051,6 +1053,7 @@ def resolve_contracts(
         picked=MappingProxyType({leg.leg_id: picked[leg.leg_id].contract for leg in legs}),
         quotes=MappingProxyType({leg.leg_id: quotes[leg.leg_id] for leg in legs}),
         sold=frozenset(leg.leg_id for leg in legs if leg.position == "short"),
+        multipliers=MappingProxyType({leg.leg_id: picked[leg.leg_id].multiplier for leg in legs}),
         evidence=evidence(),
     )
 
