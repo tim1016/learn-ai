@@ -23,7 +23,9 @@ Two questions are asked of what is kept, and they are not the same:
 So a hand-over is written every time, even of a quote already kept
 (``keep``). A quote the Clerk hands back from its own durable facts, in case
 this file was lost, says nothing of what is current: it is written as of its
-own receipt (``restore``).
+own receipt (``restore``). So is what a held contract's line shows while one
+of its sides has still to arrive, which the Clerk's keeping puts back: it is
+the newest quote by receipt, and never a mark (``stated_mark``).
 
 Nothing here judges a quote. Whether one is usable for a decision is
 ``app.options.quotes.quote_fault``'s to say, whether one may be stated as a
@@ -326,16 +328,19 @@ class KeptOptionQuotes:
         """
         self._append([(symbol, quote, kept_at_ms) for symbol, quote in quotes.items()], now_ms=kept_at_ms)
 
-    def restore(self, symbol: str, quote: HeldQuote) -> None:
-        """Put back a quote the caller holds durably, if it is not kept: as of its own receipt, never as of now.
+    def restore(self, symbol: str, quote: HeldQuote, *, now_ms: int | None = None) -> None:
+        """Put back a quote the caller holds, if it is not kept: as of its own receipt, never as of now.
 
         Its receipt says nothing of what time it is, and may be ahead of
-        the clock. So putting one back never cuts the file: the next
-        hand-over does, as of its own clock.
+        the clock. So putting one back cuts the file only for a caller that
+        says what time it is, having seen the quote was received by then
+        (``now_ms``): the Clerk's keeping, which puts back what a line
+        shows many times a day. With none, the next hand-over cuts, as of
+        its own clock.
         """
         times = receipt_times(quote)
         if times:
-            self._append([(symbol, quote, max(times))], now_ms=None)
+            self._append([(symbol, quote, max(times))], now_ms=now_ms)
 
     def _append(self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None) -> None:
         said = [(symbol, RecordedQuote.of(quote), kept_at_ms) for symbol, quote, kept_at_ms in statements if receipt_times(quote)]
@@ -432,6 +437,19 @@ class KeptOptionQuotes:
             and (with_side is None or getattr(row.quote, with_side) is not None)
         ]
         return max(candidates, key=lambda row: (row.kept_at_ms, row.seq), default=None)
+
+    def stated_mark(self, symbol: str, *, at_or_before_ms: int) -> KeptOptionQuote | None:
+        """The quote a bought contract is marked from at an instant, before its freshness is asked.
+
+        The one most lately stated with a bid (``last_stated``), when it is
+        whole. ``None`` when nothing with a bid was stated by then, and when
+        the last such statement shows one side: a line's quote put back
+        while its other side was still to arrive is the line's last word,
+        and is never a mark. An older whole quote does not stand in for it:
+        its bid is no longer what the line shows.
+        """
+        stated = self.last_stated(symbol, at_or_before_ms=at_or_before_ms, with_side="bid")
+        return None if stated is None or stated.quote.ask is None else stated
 
 
 __all__ = [

@@ -55,6 +55,7 @@ from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.market_liveness import AlpacaMarketLivenessConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import OrderSide
+from app.config import settings as service_settings
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.options.contract import OptionContract
 from app.options.resolver import Resolution
@@ -295,6 +296,7 @@ class Floor:
         starts_at_ms: int = FIRST_GREEN_MS - MINUTE,
         watch: OptionWatchList | None = None,
         budget_cents: int = 100_000,
+        status_from: str | None = None,
     ) -> None:
         self.tmp_path = tmp_path
         self._monkeypatch = monkeypatch
@@ -313,15 +315,21 @@ class Floor:
         self.held = get_held_option_quotes()
         # Where the supervisor's stock evidence is published: what a stock bot's entry is admitted on.
         self.store = MarketLivenessStore()
-        # The supervisor exactly as a Clerk's process builds it, on the stand-in connection.
+        # The supervisor exactly as a Clerk's process builds it, on the stand-in connection. ``status_from``
+        # is the shared source a Clerk reads its market status from instead of making its own IBKR pass.
+        alpaca: dict[str, Any] = {}
+        if status_from is not None:
+            alpaca["market_status_upstream_url"] = status_from
+            monkeypatch.setattr(service_settings, "DATA_PLANE_CONTROL_SECRET", "test-control")
         self.consumer = AlpacaMarketLivenessConsumer.for_alpaca(
             read=object(),  # type: ignore[arg-type]
-            settings=AlpacaSettings(api_key_id="paper-key", api_secret_key="paper-secret", mode="paper"),
+            settings=AlpacaSettings(api_key_id="paper-key", api_secret_key="paper-secret", mode="paper", **alpaca),
             store=self.store,
             journal=CaptureJournal(capture_dir=tmp_path / "capture"),
             option_watch=self.watch,
             held_option_quotes=self.held,
         )
+        # None on a Clerk that reads its market status from a shared source: it has no option quotes.
         self.supervisor = self.consumer.option_quotes
         # None: this process has no IBKR quote source for options.
         self.quote_source: Callable[[], Any] = lambda: self.supervisor
@@ -609,6 +617,14 @@ class Floor:
         self.running = False
         await self.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN)
         await self.authority.release_after_run_end()
+
+    async def the_owner_looks_at_the_bot(self) -> str | None:
+        """The owner opens the stopped bot's page. Its account is opened for the read, which runs the pass
+        that tries again what a close left, and is closed after. Returns what the books then say of the last
+        close that left the bot holding: its notice's own facts, or None when no close ever did."""
+        async with self.authority.runtime_for_projection():
+            told = self.repo.last_strategy_transition(strategy_instance_id=SID, transition_kind="EXIT_NOT_FLAT")
+            return None if told is None else told["facts_json"]
 
     def what_the_resolver_picks(self, search: int = -1) -> Resolution:
         """The resolver's own answer, worked out here, from exactly what one of the run's searches was handed."""

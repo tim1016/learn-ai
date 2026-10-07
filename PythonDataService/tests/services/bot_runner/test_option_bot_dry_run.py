@@ -12,6 +12,7 @@ thing (``_option_floor``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -104,7 +105,8 @@ async def on_the_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Async
         for floor in built:
             floor.lane.close()
             await floor.held.stop()
-            await floor.supervisor.close()
+            if floor.supervisor is not None:
+                await floor.supervisor.close()
         await close_synthetic_clerk_runtimes()
         reset_held_option_quotes_for_testing()
         reset_settings_for_testing()
@@ -856,6 +858,76 @@ async def test_a_bot_whose_window_cannot_fit_the_clerks_line_budget_is_refused_a
     assert floor.watch.requests() == () and floor.receipts() == []
 
 
+SHARED_STATUS = "http://status-owner:8000/api/brokers/alpaca/market-status-snapshot"
+
+
+async def test_on_a_clerk_that_reads_its_market_status_from_a_shared_source_an_option_bot_is_refused_as_its_run_starts(
+    on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Such a Clerk makes no IBKR pass of its own, and that pass is what quotes option contracts. Nothing could
+    ever be picked or priced on it. The run is refused once, by a name of its own and in words, before it
+    asks for a bar, a quote line or a search worker: not at every entry, as a feed that is down."""
+    floor = await on_the_floor(status_from=SHARED_STATUS, watch=get_option_watch_list()).open()
+    searches = OptionSearches(executor=lambda: floor.worker)
+    monkeypatch.setattr(option_search, "_searches", searches)
+    set_market_liveness_consumer(floor.consumer)
+    try:
+        with pytest.raises(OptionPlanRefused) as refused:
+            await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))], the_process_own_market=True)
+        worker_started = searches.entry.worker_pid
+    finally:
+        set_market_liveness_consumer(None)
+        searches.close()
+
+    assert floor.consumer.option_quotes is None
+    assert refused.value.reason is OptionEffectRefusal.NO_OPTION_QUOTES_HERE
+    assert refused.value.detail.strip(), "the refusal says nothing in words"
+    assert floor.feed is not None and floor.feed.symbols_asked_for == []
+    assert (get_option_watch_list().requests(), worker_started) == ((), None)
+    assert floor.receipts() == [] and floor.orders_on_the_books() == 0
+
+
+async def test_on_a_clerk_that_reads_its_market_status_from_a_shared_source_the_keeping_does_nothing_and_nothing_raises(
+    on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An account on such a Clerk still holds a call, bought when the Clerk had a connection of its own. No pass
+    of a supervisor comes to begin a round, so the books are not read, no line is asked for, and no mark is
+    written. The stock status goes on being read from the shared source, and closing the Clerk raises nothing."""
+    floor = await on_the_floor(status_from=SHARED_STATUS).open()
+    reads: list[int] = []
+
+    def books() -> tuple[str, ...]:
+        reads.append(floor.clock.value)
+        return (CALL,)
+
+    kept = KeptOptionQuotes.of_account(artifacts_root=floor.tmp_path, account_id="sim:holds-a-call")
+    floor.held.follow("sim:holds-a-call", books=books, kept=kept)
+    status_reads: list[str] = []
+
+    async def shared(url: str, **_: Any) -> MarketStatusSnapshot:
+        status_reads.append(url)
+        now = floor.clock.value
+        return MarketStatusSnapshot(
+            source=MarketStatusSource.IBKR, connected=True, observed_at_ms=now, connection_changed_at_ms=now,
+            symbol_statuses=(), quotes=(),
+        )
+
+    monkeypatch.setattr("app.broker.alpaca.market_liveness.read_shared_market_status", shared)
+    tasks_before = asyncio.all_tasks()
+
+    for _ in range(20):
+        floor.clock.value += 1_000
+        await floor.consumer.refresh_shared_status()
+    rounds_begun = asyncio.all_tasks() - tasks_before
+    await floor.held.settled()
+
+    assert len(status_reads) == 20 and floor.store.status_snapshot(now_ms=floor.clock.value).connected
+    assert (reads, rounds_begun, floor.held.requests()) == ([], set(), ())
+    assert floor.ibkr.open_option_lines() == set() and kept.newest(CALL) is None
+    await floor.consumer.stop()
+    assert reads == [], "closing the Clerk's status source read no books either"
+
+
 async def test_a_bot_whose_window_just_fits_the_budget_runs(on_the_floor: Callable[..., Floor]) -> None:
     floor = await on_the_floor(line_budget=5).open()
 
@@ -955,6 +1027,21 @@ async def test_an_exit_nobody_bids_for_sells_nothing_and_the_run_goes_on_holding
     assert ran.outcomes()[-1][1] == EXIT_MS + MINUTE, "the bar after the refused EXIT was decided on too"
 
 
+async def _the_data_drops_and_comes_back(floor: Floor, *, by_ms: int | None = None) -> None:
+    """IBKR's data farm drops and comes back with every request kept alive. The feed's generation moves, so
+    each side of a line waits for a tick of its own, and nobody quotes anything until a test does."""
+    floor.new_lines_are_answered = False
+    floor.ibkr.client.connection_state = "soft_lost"
+    if by_ms is None:
+        await floor.time_passes_to(floor.clock.value + 15_000)
+    else:
+        await floor.supervisor_passes(1)
+    floor.ibkr.client.connection_state = "connected"
+    floor.ibkr.client.connectivity_lost_count += 1
+    floor.ibkr.client.last_ibkr_code = 1102
+    await floor.time_passes_to(floor.clock.value + 15_000 if by_ms is None else by_ms)
+
+
 async def test_an_exit_whose_call_shows_only_an_ask_since_a_data_loss_sells_nothing_and_the_next_bar_sells_it(
     floor: Floor,
 ) -> None:
@@ -962,7 +1049,8 @@ async def test_an_exit_whose_call_shows_only_an_ask_since_a_data_loss_sells_noth
     ticked. The runner hands over the line as it stands, and that quote is the newest kept. Nothing on it
     says what is bid, and no older quote stands in for it: the close is not priced, the owner is told the
     position was not closed, and the bot goes on holding. The Clerk's own keeping states no quote with one
-    side, so nothing it wrote hides that. On the next bar the call is quoted whole, and the EXIT sells it."""
+    side as a mark, so nothing it wrote hides that. On the next bar the call is quoted whole, and the EXIT
+    sells it."""
     seen: dict[str, Any] = {}
 
     async def exit_bar(floor: Floor) -> None:
@@ -997,6 +1085,31 @@ async def test_an_exit_whose_call_shows_only_an_ask_since_a_data_loss_sells_noth
     # The last whole quote stated for the call is from before the data loss: the keeping stated none after.
     assert seen["last stated with a bid"].kept_at_ms < EXIT_MS - 20_000
     assert [fill[:4] for fill in floor.fills()] == [(CALL, "buy", 1.0, 4.12), (CALL, "sell", 1.0, 4.08)]
+    assert floor.holds() == {} and [row.intent for row in ran.journal] == ["ENTER", "EXIT"]
+
+
+async def test_an_exit_whose_call_shows_only_a_bid_since_a_data_loss_sells_at_that_bid_and_says_how_old_it_is(
+    floor: Floor,
+) -> None:
+    """The other way round: since IBKR's data came back only the call's bid has ticked, at $2.00. That is what
+    the call can be sold for now. The EXIT sells at it, and not at the $4.08 bid from before the loss, and
+    the sale says it was priced from a quote no decision could have used."""
+
+    async def exit_bar(floor: Floor) -> None:
+        await floor.bar_arrives(EXIT_MS - 20_000, quotes=False)
+        await _the_data_drops_and_comes_back(floor, by_ms=EXIT_MS + DELIVERY_MS)
+        floor.ibkr.now = floor.clock.value
+        floor.ibkr.tick(CALL, bid=2.00)
+        await floor.account_is_read()
+
+    script = _round_trip()
+    script[-1] = Step(red(EXIT_MS), before=exit_bar)
+    ran = await floor.run(script)
+
+    _bought, sold = floor.simulated_fills()
+    assert (sold.fill_model, sold.fill_price, sold.quote_age_ms) == (
+        SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("2"), 0,
+    )
     assert floor.holds() == {} and [row.intent for row in ran.journal] == ["ENTER", "EXIT"]
 
 
@@ -1062,6 +1175,85 @@ async def test_a_call_the_stop_could_not_sell_is_still_quoted_with_its_clerk_clo
     (sale,) = floor.sales_the_simulation_made()
     assert (sale.fill_model, sale.fill_price) == (SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("4.5"))
     assert sale.quote_age_ms is not None and sale.quote_age_ms <= KEEP_EVERY_MS
+    assert floor.held.held() == {}
+
+
+async def _the_call_is_quoted_whole_again(floor: Floor, bid: str, ask: str) -> None:
+    """A line with no whole quote is given up and asked for again, a little later each time. Once it is open
+    both sides tick, and the Clerk's keeping states the quote within its fifteen seconds."""
+    while CALL not in floor.ibkr.open_option_lines():
+        await floor.time_passes_to(floor.clock.value + 15_000)
+    floor.quote(585, bid, ask)
+    await floor.time_passes_to(floor.clock.value + 15_000)
+
+
+async def test_with_no_runner_a_call_that_shows_only_an_ask_since_a_data_loss_is_not_sold_by_the_stop_until_it_is_quoted_whole(
+    floor: Floor,
+) -> None:
+    """Bought at $4.12 with $4.08 bid, and the run ends. IBKR's data drops and comes back, and since then only
+    the call's ask has ticked, at $2.04: nothing says what is bid. Five minutes on the owner presses Stop.
+    With no runner alive the Clerk's own keeping has put the line's last word in the account's file, as a
+    runner's EXIT would have. So the Stop sells nothing, least of all at the $4.08 from before the loss, and
+    says the close could not be priced; no Flatten is offered. The call is then quoted whole again at $2.00
+    bid, and once the Clerk has let the failed close settle, the next look at the bot sells it at $2.00."""
+    await _bought_and_never_requoted(floor)
+    await floor.time_passes_to(ENTER_MS + MINUTE)
+    await _the_data_drops_and_comes_back(floor)
+    floor.ibkr.now = only_the_ask_ticked_at = floor.clock.value
+    floor.ibkr.tick(CALL, ask=2.04)
+
+    await floor.time_passes_to(floor.clock.value + 5 * MINUTE)
+    kept, now = floor.kept_quotes(), floor.clock.value
+    newest = kept.newest(CALL, at_or_before_ms=now)
+    flatten_offered = kept.prices_a_close(CALL, side="sell", at_ms=now)
+    await floor.stop_is_pressed()
+    sold_by_the_stop = floor.sales_the_simulation_made()
+    still_held = floor.held.held()
+    told = await floor.the_owner_looks_at_the_bot()
+    sold_by_the_look = floor.sales_the_simulation_made()
+    await _the_call_is_quoted_whole_again(floor, "2.00", "2.04")
+    quoted_whole_at = floor.clock.value - 15_000
+    # The Clerk tries a close that failed again only once it has let the failure settle: two minutes.
+    await floor.time_passes_to(now + 3 * MINUTE)
+    await floor.the_owner_looks_at_the_bot()
+
+    assert newest is not None and (newest.quote.bid, newest.quote.ask) == (None, Decimal("2.04"))
+    assert newest.kept_at_ms == only_the_ask_ticked_at, "it is put back as of its own receipt, never as a mark of now"
+    assert (flatten_offered, sold_by_the_stop, still_held) == (False, [], {ACCOUNT: (CALL,)})
+    assert told is not None and "OPTION_EXIT_UNPRICED" in told and sold_by_the_look == []
+    (sale,) = floor.sales_the_simulation_made()
+    assert (sale.fill_model, sale.fill_price) == (SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("2"))
+    assert sale.quote_age_ms == floor.clock.value - quoted_whole_at
+    assert floor.held.held() == {}
+
+
+async def test_with_no_runner_a_call_that_shows_only_a_bid_since_a_data_loss_is_no_mark_and_the_stop_sells_at_that_bid(
+    floor: Floor,
+) -> None:
+    """The other way round: only the bid has ticked since the data came back, at $2.00. A quote with one
+    side is never the account's mark, not even for its bid, so the account cannot be read. It is what the
+    call can be sold for all the same: the Stop sells at $2.00, as a runner's EXIT handing over the same
+    line does, and never at the $4.08 from before the loss."""
+    await _bought_and_never_requoted(floor)
+    await floor.time_passes_to(ENTER_MS + MINUTE)
+    stated_before = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    await _the_data_drops_and_comes_back(floor)
+    floor.ibkr.now = only_the_bid_ticked_at = floor.clock.value
+    floor.ibkr.tick(CALL, bid=2.00)
+    await floor.time_passes_to(floor.clock.value + 15_000)
+
+    mark = floor.kept_quotes().stated_mark(CALL, at_or_before_ms=floor.clock.value)
+    with pytest.raises(SimulationEvidenceUnavailable, match=CALL):
+        _reading(floor)
+    await floor.stop_is_pressed()
+
+    assert stated_before is not None and floor.clock.value - stated_before.kept_at_ms < 80_000, (
+        "the whole quote stated before the loss is too old by now to show that the one-sided one was refused"
+    )
+    assert mark is None, "a quote with one side was read as the account's mark"
+    (sale,) = floor.sales_the_simulation_made()
+    assert (sale.fill_model, sale.fill_price) == (SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("2"))
+    assert sale.quote_age_ms == floor.clock.value - only_the_bid_ticked_at
     assert floor.held.held() == {}
 
 
@@ -1349,6 +1541,33 @@ async def test_a_keeping_that_breaks_in_every_way_never_fails_the_stock_quotes(
     assert published == [(True, True)] * 3
 
 
+async def test_closing_the_clerks_status_source_ends_the_round_of_the_keeping_it_began(floor: Floor) -> None:
+    """The process shuts its status source while a round of the keeping waits on books that do not answer.
+    Closing ends that round with the supervisor that drove it. Nothing of it is left under way on the loop
+    to outlive the supervisor, though the thread reading the books is still stuck."""
+    stuck, reads = threading.Event(), []
+
+    def books_that_do_not_answer() -> tuple[str, ...]:
+        reads.append(floor.clock.value)
+        stuck.wait(30)
+        return ()
+
+    floor.held.follow(
+        "sim:stuck-books", books=books_that_do_not_answer,
+        kept=KeptOptionQuotes.of_account(artifacts_root=floor.tmp_path, account_id="sim:stuck-books"),
+    )
+    try:
+        await floor.consumer._status_snapshot_source()  # type: ignore[misc]
+        await _wait_for(lambda: bool(reads))
+        await floor.consumer.stop()
+        await asyncio.wait_for(floor.held.settled(), timeout=1)
+        still_stuck = not stuck.is_set()
+    finally:
+        stuck.set()
+
+    assert still_stuck and len(reads) == 1
+
+
 # ---- The search in a real worker process ------------------------------------------------
 
 
@@ -1373,7 +1592,13 @@ async def test_with_a_real_search_worker_process_the_bot_buys_the_call_and_sells
 
 
 @pytest.mark.parametrize(
-    "refusal", [OptionEffectRefusal.WINDOW_OVER_LINE_BUDGET, OptionEffectRefusal.ACCOUNT_NOT_SIMULATED], ids=str
+    "refusal",
+    [
+        OptionEffectRefusal.WINDOW_OVER_LINE_BUDGET,
+        OptionEffectRefusal.ACCOUNT_NOT_SIMULATED,
+        OptionEffectRefusal.NO_OPTION_QUOTES_HERE,
+    ],
+    ids=str,
 )
 async def test_a_run_whose_option_plan_is_refused_is_recorded_under_the_refusals_own_reason(
     tmp_path: Path, refusal: OptionEffectRefusal

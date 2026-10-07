@@ -400,6 +400,10 @@ class AlpacaMarketLivenessConsumer:
         say their bots hold: those contracts are asked for too. Each pass of
         the local source begins a round of their keeping and does not wait
         for it (ADR 0076).
+
+        With a shared status source the local source makes no pass. No option
+        contract is then quoted here, the consumer offers no option quote
+        source, and no round of the keeping is ever begun.
         """
         resolved = settings or resolved_alpaca_settings()
         store = store or get_market_liveness_store()
@@ -554,6 +558,18 @@ def get_option_quotes() -> IbkrMarketStatusSource | None:
     """Where this process's option bots read their quotes: the Clerk's own IBKR supervisor. None when no
     Clerk with an IBKR source of its own runs here."""
     return None if _consumer is None else _consumer.option_quotes
+
+
+def option_quotes_are_read_elsewhere() -> bool:
+    """Whether this process's Clerk is up and has no option quotes of its own.
+
+    A Clerk that reads its market status from a shared source makes no IBKR
+    pass, and that pass is what quotes option contracts. So none is quoted
+    here for as long as this Clerk runs: an option bot cannot trade on it,
+    and the keeping of held quotes is never begun (ADR 0076). False before
+    any Clerk is up, which says nothing of what one will have.
+    """
+    return _consumer is not None and _consumer.option_quotes is None
 
 
 def set_market_liveness_consumer(consumer: AlpacaMarketLivenessConsumer | None) -> None:

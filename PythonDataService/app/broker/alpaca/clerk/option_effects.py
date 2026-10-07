@@ -66,6 +66,9 @@ class OptionEffectRefusal(StrEnum):
     # The plan's watched window can need more quote lines than this Clerk may open, so its
     # contracts could never all be quoted. Refused when the run starts, not at every entry.
     WINDOW_OVER_LINE_BUDGET = "OPTION_WINDOW_OVER_LINE_BUDGET"
+    # This Clerk reads its market status from a shared source and makes no IBKR pass of its own,
+    # so no option contract is ever quoted on it. Refused when the run starts, not at every entry.
+    NO_OPTION_QUOTES_HERE = "OPTION_CLERK_HAS_NO_OPTION_QUOTES"
 
 
 # Shares one standard contract's price stands for. A listing with any other

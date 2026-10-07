@@ -11,7 +11,10 @@ quotes yet. So the run asks at once, under its own key on the process's watch
 list, for the window its plan's rules can pick from, and moves that window
 with every closed bar of the underlying. The contract it comes to hold is not
 its to ask for: that is the Clerk's own demand, read from its books
-(``held_option_quotes``), so the line outlives this run.
+(``held_option_quotes``), so the line outlives this run. A run is refused
+as it starts, by name, when its window can need more quote lines than the
+Clerk may open, or when the Clerk reads its market status from a shared
+source and so has no option quotes of its own.
 
 **An ENTER** is resolved here and judged by the Clerk. After the runner's
 own screens, in order:
@@ -153,12 +156,20 @@ def option_order_terms(binding: BrokerBotBinding) -> OptionOrderTerms:
 ModelInputsReader = Callable[[str, int, date], ModelInputsRead]
 
 
+def _read_here() -> bool:
+    """A market handed no word on it reads its quotes in its own process."""
+    return False
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OptionMarket:
     """What an option bot's runner reads its market through, in the Clerk's own process."""
 
     # The Clerk's IBKR supervisor, when one runs here.
     quotes: Callable[[], IbkrMarketStatusSource | None]
+    # Whether this Clerk is up and will never quote an option contract: it reads its market status
+    # from a shared source, and makes no IBKR pass of its own.
+    quotes_are_read_elsewhere: Callable[[], bool] = _read_here
     # The list that supervisor keeps its quote lines to.
     watch: OptionWatchList
     # Where an entry's search runs: a worker process, never this one.
@@ -176,12 +187,13 @@ def _read_model_inputs(underlying: str, at_ms: int, latest_expiry: date) -> Mode
 
 def this_process_option_market() -> OptionMarket:
     """The option market of the Clerk running in this process, as its settings and its supervisor have it."""
-    from app.broker.alpaca.market_liveness import get_option_quotes
+    from app.broker.alpaca.market_liveness import get_option_quotes, option_quotes_are_read_elsewhere
     from app.broker.ibkr.config import get_settings
 
     settings = get_settings()
     return OptionMarket(
         quotes=get_option_quotes,
+        quotes_are_read_elsewhere=option_quotes_are_read_elsewhere,
         watch=get_option_watch_list(),
         entry_searches=lambda: get_option_searches().entry,
         model_inputs=_read_model_inputs,
@@ -259,6 +271,7 @@ class OptionRun:
         return self._terms
 
     async def __aenter__(self) -> OptionRun:
+        self._require_option_quotes_of_its_own()
         self._require_the_window_fits()
         self._watch(money=None)
         # The search's worker loads while the first bars arrive.
@@ -267,6 +280,18 @@ class OptionRun:
 
     async def __aexit__(self, *_exc: object) -> None:
         self._market.watch.unwatch(self._key)
+
+    def _require_option_quotes_of_its_own(self) -> None:
+        """Refuse a bot on a Clerk that will never quote an option contract: no contract could be picked or
+        priced there, so every entry of such a bot would be refused. Said once, before anything is asked
+        for: no quote line, no bar, no search worker."""
+        if self._market.quotes_are_read_elsewhere():
+            raise OptionPlanRefused(
+                OptionEffectRefusal.NO_OPTION_QUOTES_HERE,
+                "This Clerk reads its market status from a shared source and makes no IBKR pass of its own, "
+                "so it has no option quotes of its own. No contract could be picked or priced here, so every "
+                "entry would be refused. Run this bot on a Clerk with its own IBKR connection.",
+            )
 
     def _require_the_window_fits(self) -> None:
         """Refuse a bot whose watched window can need more quote lines than the Clerk may open: every entry

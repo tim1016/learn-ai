@@ -181,7 +181,8 @@ class SimulatedAccountProjection:
         A contract the account bought is worth what it could be sold for: the
         bid. The quote must have been handed over as the newest held no
         longer before ``at_ms`` than a share bar may close before it, which
-        also holds a previous close's mark to that close.
+        also holds a previous close's mark to that close. It must be whole:
+        a quote with one side is never a mark (``stated_mark``).
 
         From its last session's close on a contract has no mark, whatever
         was handed over and however lately: a bid from before the close is
@@ -200,7 +201,7 @@ class SimulatedAccountProjection:
                 "account's reading stays unavailable until it does."
             )
         try:
-            kept = self._kept_option_quotes().last_stated(symbol, at_or_before_ms=at_ms, with_side="bid")
+            kept = self._kept_option_quotes().stated_mark(symbol, at_or_before_ms=at_ms)
         except KeptOptionQuotesUnavailable as exc:
             raise SimulationEvidenceUnavailable(
                 f"The option quotes kept for this Dry Run need repair; {symbol} cannot be marked from them."
