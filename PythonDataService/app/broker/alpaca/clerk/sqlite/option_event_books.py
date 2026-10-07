@@ -10,7 +10,12 @@ import hashlib
 import sqlite3
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
-from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_POSITION_ENDED, OptionPositionEndedFacts
+from app.broker.alpaca.clerk.sqlite.option_event_folds import (
+    OPTION_EVENT_EFFECT_KIND,
+    OPTION_EVENT_SHARE_ORDER_ROLE,
+    OPTION_POSITION_ENDED,
+    OptionPositionEndedFacts,
+)
 
 # The idempotency key of a booking starts with what was booked: an activity, or an outside order's fill.
 EVENT_KEY_PREFIX = "option-event:"
@@ -83,6 +88,24 @@ def outside_order_reduces_a_bots_contract(conn: sqlite3.Connection, *, symbol: s
     )
 
 
+def event_share_order_symbol(conn: sqlite3.Connection, order_ref: str) -> str | None:
+    """The symbol of the shares an option event left on ``order_ref``, or None when the order is no such thing.
+
+    Such an order was written by the booking's fold, under its effect, and
+    is bound to no contract. Its shares are counted under the symbol their
+    bot is registered under, as every share fill of a bot is.
+    """
+    row = conn.execute(
+        "SELECT s.symbol FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN order_contracts bound ON bound.order_ref = o.order_ref "
+        "WHERE o.order_ref = ? AND o.role = ? AND e.kind = ? AND bound.order_ref IS NULL",
+        (order_ref, OPTION_EVENT_SHARE_ORDER_ROLE, OPTION_EVENT_EFFECT_KIND),
+    ).fetchone()
+    return None if row is None else row["symbol"]
+
+
 __all__ = [
     "EVENT_KEY_PREFIX",
     "OUTSIDE_ORDER_BROKER",
@@ -90,6 +113,7 @@ __all__ = [
     "booking_key",
     "bookings",
     "books_record_no_contract",
+    "event_share_order_symbol",
     "held_option_positions",
     "outside_order_reduces_a_bots_contract",
 ]

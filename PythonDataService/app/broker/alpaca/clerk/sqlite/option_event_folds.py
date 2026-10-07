@@ -30,9 +30,13 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_option_event_booking.py
 The rows written are the ones every reader of money already reads: a command,
 an effect, orders and fills. So FIFO, the budget, cash and the day's P&L
 count an event as they count any fill, and no table is added. The effect's
-kind is ``RECONCILE`` and the orders' role is ``OTHER``: the two words the
-schema kept for work that is neither an entry nor a reduction. Both are
-written already ended, so no worklist of open work lists them.
+kind is ``RECONCILE``, the word the schema kept for work that is neither an
+entry nor a reduction, and it is written already ended, so no worklist of
+open work lists it. The order that closes the lot has the role ``OTHER``.
+The order the shares arrive on has the role ``ENTRY``: every reduction of a
+bot's symbol is keyed on an entry order in it, so the owner's Flatten, an
+ended run's close and the Clerk's own retry sell those shares as they sell
+any others.
 
 The fold reads only its own facts and the books as they stand, so a rebuild
 from the mirror writes the same rows.
@@ -58,7 +62,12 @@ OPTION_POSITION_ENDED = "OPTION_POSITION_ENDED"
 # What the command of a booking is called, and the kind of its effect.
 OPTION_EVENT_COMMAND_ACTION = "OPTION_EVENT"
 OPTION_EVENT_EFFECT_KIND = "RECONCILE"
+# The order that closes the option lot is neither an entry nor a reduction of the bot's own.
 OPTION_EVENT_ORDER_ROLE = "OTHER"
+# The order the shares arrive on stands where an entry's would: no ENTER bought them, and
+# every reduction of a bot's symbol is keyed on an entry order in it. So the owner's Flatten,
+# an ended run's close and the Clerk's retry can sell them as they sell any shares.
+OPTION_EVENT_SHARE_ORDER_ROLE = "ENTRY"
 # The execution id of the fill that closes a lot for an event. An event is no
 # trade, so the fee model is never asked to price such a fill.
 OPTION_EVENT_CLOSE_EXECUTION_PREFIX = "option-event:close:"
@@ -217,13 +226,13 @@ def _require_the_figures_the_contract_gives(facts: OptionPositionEndedFacts, con
 
 
 def _insert_ended_order(
-    conn: sqlite3.Connection, payload: dict[str, Any], *, order_ref: str
+    conn: sqlite3.Connection, payload: dict[str, Any], *, order_ref: str, role: str
 ) -> None:
     """One order of the booking, written as already filled: nothing of it is working anywhere."""
     conn.execute(
         "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, "
         "role, broker_state, submitted_at_ms, updated_at_ms) VALUES (?, ?, ?, NULL, ?, 'filled', NULL, ?)",
-        (order_ref, payload["effect_operation_id"], order_ref, OPTION_EVENT_ORDER_ROLE, payload["recorded_at_ms"]),
+        (order_ref, payload["effect_operation_id"], order_ref, role, payload["recorded_at_ms"]),
     )
 
 
@@ -353,7 +362,7 @@ def fold_option_position_ended(
 
     # The lot closes: the bot sells what it bought, or buys back what it sold.
     close_side = "SELL" if facts.held == _BOUGHT else "BUY"
-    _insert_ended_order(conn, payload, order_ref=facts.option_order_ref)
+    _insert_ended_order(conn, payload, order_ref=facts.option_order_ref, role=OPTION_EVENT_ORDER_ROLE)
     bind_order_contract(conn, order_ref=facts.option_order_ref, symbol=facts.contract_symbol)
     _insert_fill(
         conn, payload, books=books, execution_id=facts.close_execution_id, order_ref=facts.option_order_ref,
@@ -381,7 +390,7 @@ def fold_option_position_ended(
         raise ValueError("the shares of an event are booked on an order and an execution of their own")
     shares = facts.shares["quantity"]
     share_side = "BUY" if shares > 0 else "SELL"
-    _insert_ended_order(conn, payload, order_ref=share_order_ref)
+    _insert_ended_order(conn, payload, order_ref=share_order_ref, role=OPTION_EVENT_SHARE_ORDER_ROLE)
     _insert_fill(
         conn, payload, books=books, execution_id=share_execution_id, order_ref=share_order_ref,
         quantity=abs(shares), price=_exact(facts.shares["price"], what="the price of the shares"),
@@ -400,6 +409,7 @@ __all__ = [
     "OPTION_EVENT_EFFECT_KIND",
     "OPTION_EVENT_ORDER_ROLE",
     "OPTION_EVENT_SHARES_EXECUTION_PREFIX",
+    "OPTION_EVENT_SHARE_ORDER_ROLE",
     "OPTION_POSITION_ENDED",
     "OptionEnding",
     "OptionEventBookWrites",

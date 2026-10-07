@@ -158,6 +158,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
 )
 from app.broker.alpaca.clerk.sqlite.open_replacement import OPEN_REPLACEMENT, replacement_due
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, option_exit_facts, order_contract
+from app.broker.alpaca.clerk.sqlite.option_event_books import event_share_order_symbol
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     BrokerRefusal,
@@ -807,10 +808,14 @@ async def _resolve_claimed(
     out as recorded needs no quote at all (#2440 review).
     """
     state = await run(lambda: _read_exit_claim_state(repo, effect_operation_id))
+    # The entries the broker knows. Shares an option event left were booked on an order that
+    # was never at the broker (ADR 0076 decision 22): there is nothing of it to cancel or to
+    # look up, and a lookup would only find it absent.
+    entries_at_the_broker = await run(lambda: _entries_the_broker_knows(repo, state.entries))
     if not await _prove_entry_set_terminal(
         repo,
         effect_operation_id=effect_operation_id,
-        entries=state.entries,
+        entries=entries_at_the_broker,
         reducing_exists=state.reducing is not None,
         broker=broker,
         run=run,
@@ -831,7 +836,7 @@ async def _resolve_claimed(
         if not await _refresh_terminal_entries(
             repo,
             effect_operation_id=effect_operation_id,
-            entries=state.entries,
+            entries=entries_at_the_broker,
             broker=broker,
             run=run,
         ):
@@ -1977,6 +1982,12 @@ def _single_entry_symbol(repo: ClerkSqliteRepository, entries: list[OrderResourc
     if len(symbols) != 1:
         raise AssertionError("one EXIT may only link entry orders for one symbol")
     return next(iter(symbols))
+
+
+def _entries_the_broker_knows(repo: ClerkSqliteRepository, entries: list[OrderResource]) -> list[OrderResource]:
+    """``entries`` without the orders that are shares an option event left. Every other entry is kept."""
+    with repo.write_fence() as conn:
+        return [entry for entry in entries if event_share_order_symbol(conn, entry.order_ref) is None]
 
 
 async def _prove_entry_set_terminal(

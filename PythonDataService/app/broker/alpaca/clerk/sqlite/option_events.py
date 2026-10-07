@@ -16,9 +16,10 @@ and its record.
 **Who calls the poll.** The deadline keeper, as one more step of its round,
 and the reconciliation pass, before its final look at the broker. The poll
 starts no pass and takes no account-wide gate. How often it reads is kept in
-memory per store: every five minutes, a minute after a read that was not
-whole, at once after a restart, and at once (at most once a minute) when a
-pass sees a recorded contract's position differ from the books.
+memory per store: every five minutes, every minute while a read was not
+whole or a hold of this family stands, at once after a restart, and at once
+(at most once a minute) when a pass sees a recorded contract's position
+differ from the books.
 
 **A stock-only account is never read.** The worklist starts at
 ``option_contracts``. On books that never recorded a contract that table is
@@ -153,8 +154,8 @@ logger = logging.getLogger(__name__)
 
 # How often the account's option events are read while nothing is wrong.
 OPTION_EVENT_POLL_INTERVAL_MS = 5 * 60_000
-# How soon they are read again after a read that was not whole, and the least time between two
-# reads a pass asks for because a contract's position differs from the books.
+# How soon they are read again after a read that was not whole or that left a hold standing, and
+# the least time between two reads a pass asks for because a contract's position differs from the books.
 OPTION_EVENT_POLL_RETRY_MS = 60_000
 # The most pages one poll follows. A walk that is longer is not whole, and says so.
 MAX_OPTION_EVENT_PAGES = 50
@@ -1305,7 +1306,8 @@ class _PollState:
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     read_at_ms: int | None = None
-    read_was_whole: bool = False
+    # Whether that read was whole and left no hold standing: nothing is waited for.
+    nothing_pending: bool = False
 
 
 _POLL_STATES: weakref.WeakKeyDictionary[ClerkSqliteRepository, _PollState] = weakref.WeakKeyDictionary()
@@ -1325,7 +1327,7 @@ def _due(state: _PollState, now_ms: int, *, asked_for: bool) -> bool:
     if state.read_at_ms is None or now_ms < state.read_at_ms:
         # Never read since this process opened the books, or the clock was set back: read.
         return True
-    wait_ms = OPTION_EVENT_POLL_INTERVAL_MS if state.read_was_whole and not asked_for else OPTION_EVENT_POLL_RETRY_MS
+    wait_ms = OPTION_EVENT_POLL_INTERVAL_MS if state.nothing_pending and not asked_for else OPTION_EVENT_POLL_RETRY_MS
     return now_ms - state.read_at_ms >= wait_ms
 
 
@@ -1408,7 +1410,7 @@ async def poll_option_events(
     if not await off_loop(lambda: option_work_on_the_books(repo)):
         if due:
             # Nothing an event could change: look again when the next read would be due.
-            state.read_at_ms, state.read_was_whole = now_ms, True
+            state.read_at_ms, state.nothing_pending = now_ms, True
         return OptionEventPoll(read=False)
     if not due and may_read and broker_positions is not None:
         # A pass's own snapshot shows a recorded contract's position differing from the books.
@@ -1439,7 +1441,8 @@ async def poll_option_events(
             events = replace(events, broker_positions=broker_quantity_by_symbol(list(positions)))
         done = await off_loop(lambda: book_option_events(repo, events))
         state.read_at_ms = repo.clock()
-        state.read_was_whole = done.read_whole
+        # While a hold stands something is still to come: a row, a share trade, a price. Look again sooner.
+        state.nothing_pending = done.read_whole and not done.held
         return OptionEventPoll(read=True, round=done)
 
 

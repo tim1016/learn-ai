@@ -440,7 +440,10 @@ async def test_a_booked_event_is_a_finished_piece_of_work_no_pass_looks_up_at_th
                 "ON e.effect_operation_id = o.effect_operation_id WHERE e.kind = 'RECONCILE' ORDER BY o.order_ref"
             ).fetchall()
             kinds = {row[0] for row in conn.execute("SELECT DISTINCT transition_kind FROM custody_transitions")}
-        assert [tuple(row) for row in event_orders] == [("OTHER", "filled", "RECONCILE", "succeeded")] * 2
+        # The order that closes the lot, and the order the shares came on, which stands where an entry's would.
+        assert sorted(tuple(row) for row in event_orders) == [
+            ("ENTRY", "filled", "RECONCILE", "succeeded"), ("OTHER", "filled", "RECONCILE", "succeeded"),
+        ]
         assert OPTION_POSITION_ENDED in kinds
         assert broker_holds(AAPL=200)[0].quantity == 200
     finally:
