@@ -2,19 +2,23 @@
 
 A bot whose plan trades option contracts decides as every bot does, on its
 Signal stream's bars. What differs is what an ENTER and an EXIT are handed to
-the Clerk with. This module works that out; ``bot_trade_strategy`` calls it
-from the Dry Run's loop, and a bot in shares never reaches it.
+the Clerk with, and when an ENTER counts. This module works the first out;
+``bot_trade_strategy`` calls it from the Dry Run's loop and from a Paper
+account's, and a bot in shares never reaches it.
 
 **Demand, from the start of the run.** Quotes are held only for contracts
 somebody asked to have watched, and a window asked for at the decision has no
 quotes yet. So the run asks at once, under its own key on the process's watch
 list, for the window its plan's rules can pick from, and moves that window
 with every closed bar of the underlying. The contract it comes to hold is not
-its to ask for: that is the Clerk's own demand, read from its books
-(``held_option_quotes``), so the line outlives this run. A run is refused
-as it starts, by name, when its window can need more quote lines than the
-Clerk may open, or when the Clerk reads its market status from a shared
-source and so has no option quotes of its own.
+its to ask for in a Dry Run: that is the Clerk's own demand, read from its
+books (``held_option_quotes``), so the line outlives this run. That keeping
+follows a Dry Run's books only. On a real account the run names what the
+Clerk says its bot holds on its own request, beside the window, for as long
+as the run lasts (``names_what_it_holds``). A run is refused as it starts, by
+name, when its window can need more quote lines than the Clerk may open, or
+when the Clerk reads its market status from a shared source and so has no
+option quotes of its own.
 
 **An ENTER** is resolved here and judged by the Clerk. After the runner's
 own screens, in order:
@@ -31,8 +35,14 @@ Each await is given no longer than the decision has left, and a decision
 whose time ran out on the way is refused as late. A read of the rate and
 dividends that fails refuses its decision too, and the run goes on. The
 runner then judges lateness once more, and hands the Clerk the facts: the
-contracts, their listed multipliers and the recheck's quotes. It hands over
-no price.
+contracts, their listed multipliers, the recheck's quotes and the bot's own
+order terms. It hands over no price.
+
+**An entry rests, and the strategy is settled on what it came to.** The
+Clerk answers an ENTER once its order is sent. The runner then asks what the
+entry came to and waits for the answer, no longer than
+``ENTRY_OUTCOME_WAIT_MS`` after the decision bar closed. ``EntryCameTo`` is
+that answer in the words the runner logs and the Dry Run's journal writes.
 
 **A refusal at any step is one answer**: a reason code and a sentence. The
 runner writes it as the decision's one ``blocked`` receipt and discards the
@@ -45,7 +55,8 @@ it from the newest quote kept.
 
 **The contract reference in a Dry Run** is IBKR's own listing: the multiplier
 handed to the Clerk is the one the chain lists the contract with. A real
-account asks its broker's reference before any order; a simulation has none.
+account's Clerk asks its broker's reference before it takes the entry; a
+simulation has none.
 """
 
 from __future__ import annotations
@@ -67,10 +78,12 @@ from app.broker.alpaca.clerk.option_effects import (
     OptionExitEvidence,
     OptionPlanRefused,
 )
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import WatchRequest
 from app.marketdata.feed import ContinuityPolicy, MarketDataBar, MarketDataFeed
-from app.options.deadlines import CloseTerms
+from app.options.contract import OptionContract
+from app.options.deadlines import CloseTerms, past_last_session
 from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_PERCENT
 from app.options.quotes import HeldQuote, QuoteDataType, receipt_times
 from app.options.resolver import (
@@ -103,6 +116,20 @@ IBKR_LISTING: Final = "ibkr_listing"
 
 _NOT_QUEUED: Final = "No order was sent, and the entry is not kept for a later bar."
 
+# How long after its decision bar closed an entry's outcome is waited for. Still unproven then, the
+# strategy is settled as entered: an exit will come and close whatever turns out to be held.
+#
+# The runner waits inside its own loop, and a run asks its bar stream for one bar at a time. So for as
+# long as it waits, nothing reads the stream. The IBKR stream calls a line stalled when its reader has
+# seen no new bar for sixty seconds (``REALTIME_BAR_STALL_TIMEOUT_S``), and replaces it for every bot
+# on that symbol. A wait must end well inside that, whatever the bot's decision timeframe. It also ends
+# before the next minute's bar closes, so no bar ever closes on a decision that is not settled.
+#
+# Under the terms a Deploy starts from (a twenty-second entry wait) an entry taken on time is cancelled
+# and proven inside it. An entry wait much over twenty-five seconds is not: such an entry is settled as
+# entered while its order still rests.
+ENTRY_OUTCOME_WAIT_MS: Final = 50_000
+
 
 class OptionEntryRefusal(StrEnum):
     """Why the runner sent no option entry, where no resolver, search or Clerk code already says it."""
@@ -119,6 +146,37 @@ class OptionEntryRefusal(StrEnum):
     PRICING_INPUTS_NOT_READ = "OPTION_ENTRY_PRICING_INPUTS_NOT_READ"
     # The search had not answered while the decision was still on time.
     SEARCH_LATE = "OPTION_ENTRY_SEARCH_LATE"
+
+
+class EntryCameTo(StrEnum):
+    """What one option entry came to, as the runner logs it and the Dry Run's journal writes it. A closed set."""
+
+    # Every contract asked for filled.
+    FILLED = "filled"
+    # Some of it filled, and the rest was cancelled. The bot holds what filled.
+    PART_FILLED = "part_filled_then_cancelled"
+    # It ended with nothing filled: cancelled at its deadline, or ended by the broker.
+    CANCELLED_UNFILLED = "cancelled_unfilled"
+    # It was refused at the send, or by the broker, and never rested.
+    REJECTED = "rejected"
+    # Not proven when the strategy had to be settled: the order may still be working.
+    RESTING = "resting"
+
+
+_CAME_TO: Final = {
+    EntryStanding.FILLED: EntryCameTo.FILLED,
+    EntryStanding.PART_FILLED: EntryCameTo.PART_FILLED,
+    EntryStanding.UNFILLED: EntryCameTo.CANCELLED_UNFILLED,
+    EntryStanding.NOT_SENT: EntryCameTo.REJECTED,
+    EntryStanding.WORKING: EntryCameTo.RESTING,
+    EntryStanding.CANCELLATION_REQUESTED: EntryCameTo.RESTING,
+    EntryStanding.OUTCOME_UNKNOWN: EntryCameTo.RESTING,
+}
+
+
+def entry_came_to(standing: EntryStanding) -> EntryCameTo:
+    """What an entry came to, from where the Clerk says it stands: the one place the two sets meet."""
+    return _CAME_TO[standing]
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,7 +305,12 @@ class OptionRun:
     """One run of one option bot: what it asks to have watched, and what its decisions are handed over with."""
 
     def __init__(
-        self, binding: BrokerBotBinding, market: OptionMarket, *, held_contracts: Callable[[], tuple[str, ...]]
+        self,
+        binding: BrokerBotBinding,
+        market: OptionMarket,
+        *,
+        held_contracts: Callable[[], tuple[str, ...]],
+        names_what_it_holds: bool = False,
     ) -> None:
         self._market = market
         self._plan: ActionPlan = binding.action_plan
@@ -257,6 +320,11 @@ class OptionRun:
         self._terms = option_order_terms(binding)
         # The Clerk's answer to which contracts this bot holds now, by OCC symbol.
         self._held_contracts = held_contracts
+        # Whether this run asks for what its bot holds as held lines. True on a real account, where
+        # no keeping of the Clerk's asks for them.
+        self._names_what_it_holds = names_what_it_holds
+        # Where the watched window is centred: the close of the underlying's newest bar with a trade in it.
+        self._money: Decimal | None = None
         self._picks_by_delta = any(
             isinstance(leg, OptionEntryLeg) and isinstance(leg.strike, DeltaStrike) for leg in self._plan.on_enter
         )
@@ -309,10 +377,29 @@ class OptionRun:
     # ---- what is watched --------------------------------------------------------
 
     def _watch(self, *, money: Decimal | None) -> None:
+        self._money = money
         self._market.watch.watch(
             self._key,
-            WatchRequest(underlying=self._underlying, line_class=LineClass.CANDIDATE, plan=self._plan, money=money),
+            WatchRequest(
+                underlying=self._underlying, line_class=LineClass.CANDIDATE, plan=self._plan, money=money,
+                held=self._held_to_name(),
+            ),
         )
+
+    def _held_to_name(self) -> tuple[OptionContract, ...]:
+        """The contracts this run asks for as held lines: what the Clerk says its bot holds, where the run
+        is the one to ask. A contract past its last session is not asked for: nothing trades in it."""
+        if not self._names_what_it_holds:
+            return ()
+        now = self._market.clock()
+        held = (OptionContract.from_occ_symbol(symbol) for symbol in self._held_contracts())
+        return tuple(contract for contract in held if not past_last_session(contract.expiry_date, now))
+
+    def follow_what_is_held(self) -> None:
+        """Ask again, with the window where it is: what the bot holds has changed. The runner says so as an
+        entry settles and after an exit; each closed bar of the underlying asks again by itself."""
+        if self._names_what_it_holds:
+            self._watch(money=self._money)
 
     def tapping(self, feed: MarketDataFeed) -> MarketDataFeed:
         """``feed``, with each closed bar of the underlying it delivers moving this run's watched window."""
@@ -326,6 +413,8 @@ class OptionRun:
             if bar.volume > 0:
                 # A minute with no trade has no price to centre a window on: it stays where it was.
                 self._watch(money=bar.close)
+            else:
+                self.follow_what_is_held()
             self._keep_the_model_inputs_read(bar.end_ms)
         except Exception:
             logger.exception(
@@ -548,6 +637,9 @@ class OptionRun:
             rechecked_at_ms=rechecked.recheck_ms,
             leg_gap_limit_percent=self._terms.leg_gap_limit_percent,
             cost_limit_percent=self._terms.cost_limit_percent,
+            # The bot's own order terms: the Clerk's cutoff and its cancel time use the terms this
+            # run's recheck used.
+            terms=self._terms.close,
         )
 
     # ---- an EXIT ----------------------------------------------------------------
@@ -579,13 +671,16 @@ class OptionRun:
 
 
 __all__ = [
+    "ENTRY_OUTCOME_WAIT_MS",
     "IBKR_LISTING",
+    "EntryCameTo",
     "ModelInputsReader",
     "OptionEntryBlocked",
     "OptionEntryRefusal",
     "OptionMarket",
     "OptionOrderTerms",
     "OptionRun",
+    "entry_came_to",
     "option_order_terms",
     "this_process_option_market",
 ]

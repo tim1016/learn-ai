@@ -17,7 +17,9 @@ MAX_DRY_RUN_TAIL = 500
 
 
 # What only a fill in an option contract carries. Each is left out of a row that has none.
-_OPTION_FILL_FIELDS = ("underlying", "multiplier", "fill_model", "quote_age_ms", "contract_reference")
+_OPTION_FILL_FIELDS = (
+    "underlying", "multiplier", "fill_model", "quote_age_ms", "contract_reference", "entry_outcome",
+)
 
 
 class DryRunActivity(BaseModel):
@@ -57,6 +59,9 @@ class DryRunActivity(BaseModel):
     quote_age_ms: int | None = Field(default=None, ge=0)
     # On an entry: where the contract's listing was read. A simulation has no broker reference to ask.
     contract_reference: Literal["ibkr_listing"] | None = None
+    # On an entry's fill: what the entry came to when the strategy was settled on it, as the Clerk
+    # answered. An entry that filled nothing has no row.
+    entry_outcome: Literal["filled", "part_filled_then_cancelled", "resting"] | None = None
     simulated: Literal[True] = True
 
     @model_serializer(mode="wrap")
@@ -101,9 +106,11 @@ class DryRunActivity(BaseModel):
         multiplier would be read as a share price."""
         if (self.underlying is None) != (self.multiplier is None):
             raise ValueError("an option fill names both its underlying and its contract's multiplier")
-        of_an_option_only = (self.fill_model, self.quote_age_ms, self.contract_reference)
+        of_an_option_only = (self.fill_model, self.quote_age_ms, self.contract_reference, self.entry_outcome)
         if self.multiplier is None and any(value is not None for value in of_an_option_only):
             raise ValueError("only a fill in an option contract says how its quote priced it")
+        if self.entry_outcome is not None and self.intent != "ENTER":
+            raise ValueError("only an entry's fill says what its entry came to")
         return self
 
 

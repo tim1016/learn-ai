@@ -29,6 +29,8 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     rotated_out_before_ms,
     run_first_closes_ms,
 )
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement
+from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
@@ -60,6 +62,15 @@ constant only floors it.
 """
 
 _COMMIT_WORTHY_OUTCOMES: frozenset[str] = ENTER_OUTCOMES | EXIT_OUTCOMES
+
+ENTRY_DISCARDED = "enter_discarded"
+"""The disposition of an ENTER whose option entry the Clerk settled as discarded (ADR 0076).
+
+Its receipt still reads ``enter_intent``: the Clerk writes that when it
+accepts the ENTER and never amends it. But the order then ended with nothing
+filled, or was never sent, and the live runner discarded the decision. Not a
+receipt's outcome, and not commit-worthy, so a replay discards it too.
+"""
 
 
 def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
@@ -303,7 +314,18 @@ class CapturedDecisions:
         return self.rotated_out_before_ms is None or bar_close_ms >= self.rotated_out_before_ms
 
 
-def captured_decision_outcomes(receipts: SqliteDecisionReceipts, *, run_id: str) -> CapturedDecisions:
+def _disposition(receipts: SqliteDecisionReceipts, receipt: DecisionReceiptResource, *, option_entries: bool) -> str:
+    """The disposition a replay reapplies for one receipt: its outcome, but for an option entry the
+    Clerk settled as discarded."""
+    if not option_entries or receipt.outcome not in ENTER_OUTCOMES:
+        return receipt.outcome
+    settled = receipts.option_entry_settlement(receipt)
+    return ENTRY_DISCARDED if settled is EntrySettlement.DISCARDED else receipt.outcome
+
+
+def captured_decision_outcomes(
+    receipts: SqliteDecisionReceipts, *, run_id: str, option_entries: bool = False
+) -> CapturedDecisions:
     """Return this instance's own recently durable decisions, by identity,
     and how far back that record reaches.
 
@@ -335,12 +357,22 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts, *, run_id: str)
     however long it was held. Its bucket closed before
     ``rotated_out_before_ms``, which is unchanged, so no bucket becomes a
     crash candidate, or stops being one, because of it.
+
+    ``option_entries`` says the bot's plan trades option contracts (ADR
+    0076). Its entry is a limit order that rests, and the strategy was
+    settled on what the entry came to, not on its acceptance. So each ENTER
+    in the read is asked for that settlement
+    (:meth:`SqliteDecisionReceipts.option_entry_settlement`): the one the
+    Clerk recorded as it answered the live runner, else its rule on the books
+    as they stand now. An entry settled as discarded is replayed as
+    discarded (``ENTRY_DISCARDED``). A bot in shares leaves it unset: its
+    receipts are not looked up and replay as before.
     """
     window = receipts.retained_window()
     held_entry = receipts.entry_held_into(window)
     return CapturedDecisions(
         outcomes={
-            receipt.intent_id: receipt.outcome
+            receipt.intent_id: _disposition(receipts, receipt, option_entries=option_entries)
             for receipt in (*(() if held_entry is None else (held_entry,)), *window)
             if receipt.intent_id is not None
         },
