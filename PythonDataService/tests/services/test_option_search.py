@@ -36,7 +36,6 @@ from app.options.structure_catalogue import starting_plan
 from app.schemas.action_plan import ActionPlan
 from app.services import option_search
 from app.services.option_search import (
-    Found,
     OptionSearches,
     OptionSearchLane,
     PreviewSearches,
@@ -65,7 +64,7 @@ class InThisProcess(Executor):
         return answered
 
 
-def searches_in_this_process() -> PreviewSearches[Any]:
+def searches_in_this_process() -> PreviewSearches:
     """A preview lane that searches here: what a test of something else hands in, to stay quick."""
     return PreviewSearches(OptionSearchLane("preview", executor=InThisProcess))
 
@@ -791,16 +790,16 @@ async def test_a_lane_runs_one_search_at_a_time_in_the_order_asked() -> None:
 async def test_an_entrys_search_is_not_delayed_by_a_previews_search_that_is_still_running() -> None:
     preview_workers = Workers()
     entry = OptionSearchLane("entry", executor=InThisProcess)
-    previews: PreviewSearches[str] = PreviewSearches(OptionSearchLane("preview", executor=preview_workers))
+    previews = PreviewSearches(OptionSearchLane("preview", executor=preview_workers))
 
-    a_page = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD), standing_on="what the page built"))
+    a_page = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD)))
     await _moments()
     for_a_bot = await asyncio.wait_for(entry.search(_ask(_AT_THE_MONEY)), timeout=5)
 
     assert isinstance(for_a_bot, Resolution)
     assert not a_page.done()
     preview_workers.made[0].let_go()
-    assert isinstance(await a_page, Found)
+    assert isinstance(await a_page, Resolution)
 
 
 def test_the_two_lanes_of_a_process_are_two_workers() -> None:
@@ -821,28 +820,17 @@ def test_the_two_lanes_of_a_process_are_two_workers() -> None:
 # ---- The preview lane's rules ---------------------------------------------------------------
 
 
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 1_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
-def _previews(workers: Workers, *, wait_s: float = 5.0, clock: _Clock | None = None) -> PreviewSearches[str]:
-    return PreviewSearches(
-        OptionSearchLane("preview", executor=workers), wait_s=wait_s, kept_for_s=5.0, clock=clock or _Clock()
-    )
+def _previews(workers: Workers, *, wait_s: float = 5.0) -> PreviewSearches:
+    return PreviewSearches(OptionSearchLane("preview", executor=workers), wait_s=wait_s)
 
 
 async def test_two_asks_under_one_key_start_one_search_and_the_second_is_told_it_is_running() -> None:
     workers = Workers()
     previews = _previews(workers)
 
-    first = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD), standing_on="a spread"))
-    await _moments()
-    second = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
-    (worker,) = workers.made
+    first = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD)))
+    worker = await workers.handed()
+    second = await previews.search("page-1", _ask(_SPREAD))
     searches_begun = len(worker.searches)
     worker.let_go()
     found = await first
@@ -850,107 +838,89 @@ async def test_two_asks_under_one_key_start_one_search_and_the_second_is_told_it
     assert isinstance(second, SearchNotRun) and second.reason is SearchNotRunReason.ALREADY_RUNNING
     assert second.reason.still_running
     assert searches_begun == 1 == len(worker.searches)
-    assert isinstance(found, Found) and found.standing_on == "a spread"
-    assert found.outcome == scenes._scene().resolve(_SPREAD)
+    assert found == scenes._scene().resolve(_SPREAD)
 
 
 async def test_one_search_runs_and_one_waits_and_a_third_page_is_told_the_lane_is_busy() -> None:
     workers = Workers()
     previews = _previews(workers)
 
-    running = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD), standing_on="one"))
-    waiting = asyncio.ensure_future(previews.search("page-2", _ask(_AT_THE_MONEY), standing_on="two"))
-    await _moments()
-    third = await previews.search("page-3", _ask(_AT_THE_MONEY), standing_on="three")
-    (worker,) = workers.made
+    running = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD)))
+    waiting = asyncio.ensure_future(previews.search("page-2", _ask(_AT_THE_MONEY)))
+    worker = await workers.handed()
+    third = await previews.search("page-3", _ask(_AT_THE_MONEY))
     worker.let_go(0)
     await running
-    await _moments()
-    worker.let_go(1)
+    (await workers.handed(2)).let_go(1)
 
     assert isinstance(third, SearchNotRun) and third.reason is SearchNotRunReason.LANE_BUSY
-    assert isinstance(await waiting, Found)
+    # Running or about to: the page is told to ask again, not that anything is wrong.
+    assert third.reason.still_running
+    assert isinstance(await waiting, Resolution)
     # With the lane free again the third page's search is begun.
-    after = asyncio.ensure_future(previews.search("page-3", _ask(_AT_THE_MONEY), standing_on="three"))
-    await _moments()
-    worker.let_go(2)
-    assert isinstance(await after, Found)
+    after = asyncio.ensure_future(previews.search("page-3", _ask(_AT_THE_MONEY)))
+    (await workers.handed(3)).let_go(2)
+    assert isinstance(await after, Resolution)
 
 
-async def test_a_search_that_outlives_its_ask_is_kept_for_the_pages_next_ask_that_stands_on_the_same_thing() -> None:
+async def test_a_search_that_outlives_its_ask_answers_nobody_and_the_pages_next_ask_searches_again() -> None:
+    """A late answer stands on quotes read before its search began, more than four seconds earlier. It is
+    never handed to a later ask: that ask is answered by a search of its own."""
     workers = Workers()
     previews = _previews(workers, wait_s=0.05)
+    read_first, read_later = _ask(_SPREAD), replace(_ask(_SPREAD), selection_ms=_ask(_SPREAD).selection_ms + 1_000)
 
-    told = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
-    while_it_runs = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
+    told = await previews.search("page-1", read_first)
+    while_it_runs = await previews.search("page-1", read_later)
     (worker,) = workers.made
-    worker.let_go()
+    worker.let_go(0)
     await _moments()
-    next_ask = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
+    next_ask = asyncio.ensure_future(previews.search("page-1", read_later))
+    await workers.handed(2)
+    worker.let_go(1)
 
     assert isinstance(told, SearchNotRun) and told.reason is SearchNotRunReason.NOT_DONE_IN_TIME
     assert isinstance(while_it_runs, SearchNotRun) and while_it_runs.reason is SearchNotRunReason.ALREADY_RUNNING
-    assert isinstance(next_ask, Found) and next_ask.outcome == scenes._scene().resolve(_SPREAD)
-    # The one search answered both: nothing was searched for again.
-    assert len(worker.searches) == 1
+    assert told.reason.still_running and while_it_runs.reason.still_running
+    # The search that outlived its ask landed, and the next ask began one of its own on what it read itself.
+    assert isinstance(await next_ask, Resolution)
+    assert [search.asked.selection_ms for search in worker.searches] == [read_first.selection_ms, read_later.selection_ms]
 
 
-async def test_a_kept_answer_is_dropped_when_the_page_has_built_something_else() -> None:
+async def test_a_page_that_hung_up_does_not_stop_its_search_and_its_next_ask_waits_for_that_one_to_end() -> None:
     workers = Workers()
-    previews = _previews(workers, wait_s=0.05)
+    previews = _previews(workers)
 
-    await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
-    (worker,) = workers.made
+    hung_up = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD)))
+    worker = await workers.handed()
+    hung_up.cancel()
+    await _moments()
+    while_it_runs = await previews.search("page-1", _ask(_SPREAD))
     worker.let_go(0)
     await _moments()
-    changed = asyncio.ensure_future(previews.search("page-1", _ask(_AT_THE_MONEY), standing_on="one call"))
-    await _moments()
-    worker.let_go(1)
-    found = await changed
+    after = asyncio.ensure_future(previews.search("page-1", _ask(_SPREAD)))
+    (await workers.handed(2)).let_go(1)
 
-    assert isinstance(found, Found) and found.standing_on == "one call"
-    assert found.outcome.picked.keys() == {"only"}
-
-
-async def test_a_kept_answer_is_handed_over_once_and_only_for_a_few_seconds() -> None:
-    workers, clock = Workers(), _Clock()
-    previews = _previews(workers, wait_s=0.05, clock=clock)
-
-    async def outlived(page: str) -> None:
-        await previews.search(page, _ask(_SPREAD), standing_on="a spread")
-        workers.made[0].let_go(len(workers.made[0].searches) - 1)
-        await _moments()
-
-    await outlived("page-1")
-    clock.now += 5.0
-    in_time = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
-    await outlived("page-2")
-    clock.now += 5.001
-    too_late = asyncio.ensure_future(previews.search("page-2", _ask(_SPREAD), standing_on="a spread"))
-    await _moments()
-
-    assert isinstance(in_time, Found)
-    # Too old to hand over: a search is begun afresh.
-    assert not too_late.done() and len(workers.made[0].searches) == 3
-    workers.made[0].let_go(2)
-    assert isinstance(await too_late, Found)
+    assert hung_up.cancelled()
+    assert isinstance(while_it_runs, SearchNotRun) and while_it_runs.reason is SearchNotRunReason.ALREADY_RUNNING
+    assert isinstance(await after, Resolution) and len(worker.searches) == 2
 
 
-async def test_a_worker_lost_to_a_preview_is_told_as_not_run_and_nothing_is_kept_of_it() -> None:
+async def test_a_worker_lost_to_a_preview_is_told_as_not_run_and_the_next_ask_searches_again() -> None:
     made: list[Executor] = []
 
     def worker() -> Executor:
         made.append(_Dies() if not made else InThisProcess())
         return made[-1]
 
-    previews: PreviewSearches[str] = PreviewSearches(OptionSearchLane("preview", executor=worker))
+    previews = PreviewSearches(OptionSearchLane("preview", executor=worker))
 
-    lost = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
-    again = await previews.search("page-1", _ask(_SPREAD), standing_on="a spread")
+    lost = await previews.search("page-1", _ask(_SPREAD))
+    again = await previews.search("page-1", _ask(_SPREAD))
 
     assert isinstance(lost, SearchNotRun) and lost.reason is SearchNotRunReason.WORKER_FAILED
     assert not lost.reason.still_running
-    assert isinstance(again, Found)
+    assert isinstance(again, Resolution)
 
 
 # ---- Nothing else searches in the Clerk's own process ------------------------------------------

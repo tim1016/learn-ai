@@ -8,7 +8,6 @@ from lives in ``app.options.structure_catalogue``.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
 
 from app.broker.alpaca.market_liveness import get_option_quotes
 from app.broker.ibkr.config import get_settings as ibkr_settings
@@ -57,7 +56,7 @@ def _model_inputs(underlying: str, at_ms: int, latest_expiry: date) -> ModelInpu
     return read_option_model_inputs(underlying, at_ms=at_ms, latest_expiry=latest_expiry, wait=False)
 
 
-def _preview_searches() -> PreviewSearches[Any]:
+def _preview_searches() -> PreviewSearches:
     """Where a page's search for its contracts runs: this process's preview lane, a worker process of its own."""
     return get_option_searches().preview
 

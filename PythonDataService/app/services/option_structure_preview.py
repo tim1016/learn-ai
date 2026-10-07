@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
@@ -431,17 +431,6 @@ def _search_not_done(not_run: SearchNotRun, reading: _Reading) -> _NoFigures:
     return _NoFigures("search_not_done", str(reason), notice, passes_by_itself=reason.still_running, reading=reading)
 
 
-@dataclass(frozen=True, slots=True)
-class _Standing:
-    """What an answer is built from beside the search's own. Two asks of one page stand on the same thing when
-    the page built the same structure and the feed has not reconnected between them."""
-
-    request: OptionStructurePreviewRequest
-    generation: int
-    reading: _Reading = field(compare=False)
-    inputs: ModelInputsRead = field(compare=False)
-
-
 # ---- the answer -----------------------------------------------------------------
 
 
@@ -640,7 +629,7 @@ async def preview_option_structure(
     quotes: IbkrMarketStatusSource | None,
     watch: OptionWatchList,
     model_inputs: ModelInputsReader,
-    searches: PreviewSearches[_Standing],
+    searches: PreviewSearches,
     strikes_each_side: int,
     clock: Clock = now_ms_utc,
 ) -> OptionStructurePreview:
@@ -650,7 +639,9 @@ async def preview_option_structure(
     is put on it, on a lease. ``strikes_each_side`` is the reach that
     supervisor watches a window with, so that the preview knows which
     contracts it asked for. ``searches`` is where the search for the
-    contracts runs: a worker process, never this one.
+    contracts runs: a worker process, never this one. An answer is always
+    this ask's own search, of the quotes this ask read: a search that took
+    too long to wait for is not shown to a later ask.
     """
     key = _KEY_PREFIX + request.preview_key
     asked = _Asked(request, clock())
@@ -753,18 +744,15 @@ async def preview_option_structure(
             decision_bar_close_ms=reading.now,
             selection_ms=reading.now,
         ),
-        standing_on=_Standing(request, reading.feed.generation, reading, inputs),
     )
     if isinstance(found, SearchNotRun):
         return asked.without_figures(plan, _search_not_done(found, reading), inputs)
-    # The answer may be an earlier ask's, kept for this one. It is shown as of the quotes that ask read.
-    reading, inputs = found.standing_on.reading, found.standing_on.inputs
-    if isinstance(found.outcome, ContractsNotResolved):
-        return asked.without_figures(plan, _not_resolved(found.outcome, reading), inputs)
+    if isinstance(found, ContractsNotResolved):
+        return asked.without_figures(plan, _not_resolved(found, reading), inputs)
     today = reading.today
     figures = structure_figures(
         plan,
-        found.outcome,
+        found,
         units=request.structures,
         cost_limit_percent=request.cost_limit_percent,
         fee_provision=lambda structure, markets, size: _fee_provision(today, structure, dict(markets), size),

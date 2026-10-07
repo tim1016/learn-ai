@@ -39,8 +39,9 @@ process from ending.
 
 **The preview lane has rules of its own** (``PreviewSearches``): one search
 at a time for one page, at most one more waiting behind the one running, and
-a bound on how long an ask waits. A search that outlives its ask is kept for
-the page's next ask, when that ask still stands on what the search stood on.
+a bound on how long an ask waits. A search that outlives its ask answers
+nobody: the quotes it read are by then too old to show, and the page's next
+ask searches again.
 """
 
 from __future__ import annotations
@@ -80,8 +81,6 @@ logger = logging.getLogger(__name__)
 
 # How long an ask on the preview lane waits for its own search before it is told to ask again.
 PREVIEW_SEARCH_WAIT_S = 4.0
-# How long a search that outlived its ask is kept for the page's next one.
-PREVIEW_ANSWER_KEPT_S = 5.0
 # A worker that is not up this long after it was started, or has not answered a search this long after it
 # was handed one, is ended and replaced. Several times the preview lane's wait: a worker loads in about a
 # second, and an iron condor on the default window takes about as long.
@@ -117,7 +116,7 @@ class SearchNotRunReason(StrEnum):
     ALREADY_RUNNING = "OPTION_SEARCH_ALREADY_RUNNING"
     # The preview lane only. One search is running and another is waiting: a third is not queued.
     LANE_BUSY = "OPTION_SEARCH_LANE_BUSY"
-    # The preview lane only. The search is running and this ask has waited its time. Its answer is kept.
+    # The preview lane only. The search is running and this ask has waited its time. The next ask searches again.
     NOT_DONE_IN_TIME = "OPTION_SEARCH_NOT_DONE_IN_TIME"
 
     @property
@@ -547,104 +546,78 @@ class OptionSearchLane:
 # ---- the preview lane's rules ---------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class Found[T]:
-    """A search's answer, and what the ask that began it stood on. That may be an earlier ask of the same page."""
-
-    standing_on: T
-    outcome: Resolution | ContractsNotResolved
-
-
 @dataclass(slots=True)
-class _Flight[T]:
-    standing_on: T
-    # Set once its ask has stopped waiting: the answer is then kept for the page's next ask.
+class _Flight:
+    """One page's search, running or waiting its turn."""
+
+    # Set once its ask has stopped waiting for it.
     outlived_its_ask: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class _Kept[T]:
-    found: Found[T]
-    landed_at: float
-
-
-class PreviewSearches[T]:
-    """A page's searches, on a lane of their own.
-
-    ``key`` names the page. ``standing_on`` is whatever the caller's answer
-    is built from beside the search's own: it is handed back with the
-    answer, and two asks stand on the same thing when theirs compare equal.
+class PreviewSearches:
+    """A page's searches, on a lane of their own. ``key`` names the page.
 
     - One search at a time for one page. A second ask while it runs is told
       it is running, and no second search is begun.
     - One search running and one waiting, for every page together. A third
       is told the lane is busy.
     - An ask waits ``wait_s`` for its own search. Past that it is told to ask
-      again, and the search's answer is kept ``kept_for_s`` for the page's
-      next ask: handed over when that ask stands on the same thing, and
-      dropped when it does not.
+      again. Nothing stops a search once it has begun, so it runs to its end,
+      and its answer is shown to nobody: the page's next ask searches again,
+      on quotes read then.
+
+    A late answer is not kept for the next ask. It stands on quotes read
+    before the search began, and a page asks again a second after it is told
+    to: by then those quotes are older than the age a pick may stand on (the
+    resolver's own limit, five seconds), so a kept answer could only ever be
+    one the resolver itself would call stale.
     """
 
-    def __init__(
-        self,
-        lane: OptionSearchLane,
-        *,
-        wait_s: float = PREVIEW_SEARCH_WAIT_S,
-        kept_for_s: float = PREVIEW_ANSWER_KEPT_S,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
+    def __init__(self, lane: OptionSearchLane, *, wait_s: float = PREVIEW_SEARCH_WAIT_S) -> None:
         self.lane = lane
-        self._wait_s, self._kept_for_s, self._clock = wait_s, kept_for_s, clock
-        self._flying: dict[str, _Flight[T]] = {}
-        self._kept: dict[str, _Kept[T]] = {}
+        self._wait_s = wait_s
+        self._flying: dict[str, _Flight] = {}
 
     def warm(self) -> None:
         self.lane.warm()
 
-    async def search(self, key: str, ask: SearchAsk, *, standing_on: T) -> Found[T] | SearchNotRun:
-        now = self._clock()
-        for stale in [page for page, kept in self._kept.items() if now - kept.landed_at > self._kept_for_s]:
-            del self._kept[stale]
-        kept = self._kept.pop(key, None)
-        if kept is not None and kept.found.standing_on == standing_on:
-            return kept.found
+    async def search(self, key: str, ask: SearchAsk) -> Searched:
+        """This ask's own search: the resolver's answer, or that the search has none for this ask. A caller's
+        mistake raises ``ValueError``."""
         if key in self._flying:
             return SearchNotRun(SearchNotRunReason.ALREADY_RUNNING, "a search for this preview is already running")
         if self.lane.in_hand >= _PREVIEW_SEARCHES_IN_HAND:
             return SearchNotRun(
                 SearchNotRunReason.LANE_BUSY, "other previews' searches are running and waiting ahead of this one"
             )
-        flight = self._flying[key] = _Flight(standing_on)
+        flight = self._flying[key] = _Flight()
         task = self.lane.start(ask)
         task.add_done_callback(lambda done: self._landed(key, flight, done))
         try:
-            outcome = await asyncio.wait_for(asyncio.shield(task), self._wait_s)
+            return await asyncio.wait_for(asyncio.shield(task), self._wait_s)
         except TimeoutError:
-            if not task.done():
-                flight.outlived_its_ask = True
-                return SearchNotRun(
-                    SearchNotRunReason.NOT_DONE_IN_TIME, f"the search had not finished after {self._wait_s:g} seconds"
-                )
-            # It finished as the wait ran out.
-            outcome = task.result()
+            if task.done():
+                # It finished as the wait ran out.
+                return task.result()
+            flight.outlived_its_ask = True
+            return SearchNotRun(
+                SearchNotRunReason.NOT_DONE_IN_TIME, f"the search had not finished after {self._wait_s:g} seconds"
+            )
         except asyncio.CancelledError:
-            # The page hung up. Its next ask may still be answered by this search.
+            # The page hung up.
             flight.outlived_its_ask = True
             raise
-        if isinstance(outcome, SearchNotRun):
-            return outcome
-        return Found(standing_on, outcome)
 
     def close(self) -> None:
         self.lane.close()
         self._flying.clear()
-        self._kept.clear()
 
-    def _landed(self, key: str, flight: _Flight[T], done: asyncio.Task[Searched]) -> None:
+    def _landed(self, key: str, flight: _Flight, done: asyncio.Task[Searched]) -> None:
         if self._flying.get(key) is flight:
             del self._flying[key]
         if done.cancelled() or not flight.outlived_its_ask:
             return
+        # Nobody is waiting for it: what it raised would otherwise be seen by nobody.
         failed = done.exception()
         if failed is not None:
             logger.error(
@@ -652,10 +625,6 @@ class PreviewSearches[T]:
                 extra={"action": "option_search_failed_unwatched", "lane": self.lane.name},
                 exc_info=failed,
             )
-            return
-        outcome = done.result()
-        if not isinstance(outcome, SearchNotRun):
-            self._kept[key] = _Kept(Found(flight.standing_on, outcome), self._clock())
 
 
 # ---- this process's lanes -------------------------------------------------------
@@ -667,7 +636,7 @@ class OptionSearches:
     def __init__(self, *, executor: Callable[[], Executor] | None = None) -> None:
         executor = executor or a_worker_process
         self.entry = OptionSearchLane("entry", executor=executor)
-        self.preview: PreviewSearches[object] = PreviewSearches(OptionSearchLane("preview", executor=executor))
+        self.preview = PreviewSearches(OptionSearchLane("preview", executor=executor))
 
     def close(self) -> None:
         self.entry.close()
@@ -694,10 +663,8 @@ def close_option_searches() -> None:
 
 
 __all__ = [
-    "PREVIEW_ANSWER_KEPT_S",
     "PREVIEW_SEARCH_WAIT_S",
     "SEARCH_HANG_BOUND_S",
-    "Found",
     "OptionSearchLane",
     "OptionSearches",
     "PreviewSearches",
