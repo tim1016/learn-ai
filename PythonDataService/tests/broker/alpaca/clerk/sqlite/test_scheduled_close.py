@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
@@ -34,12 +35,14 @@ from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledClo
 from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.residue_discharge import discharge_attributed_residue
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
     ScheduledCloseRound,
     _accept_while_still_owed,
     _record_missed_closes,
+    drive_scheduled_closes,
     held_contracts,
     scheduled_close_state,
 )
@@ -807,19 +810,155 @@ async def test_what_filled_of_an_entry_cancelled_at_its_wait_is_closed_on_its_da
     assert _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
 
 
-async def test_two_bots_each_holding_the_contract_are_each_closed_by_an_order_of_their_own(paper: PaperOptions) -> None:  # noqa: F811
+async def _two_bots_each_hold_one_call(paper: PaperOptions) -> None:  # noqa: F811
     await _holds_one_call(paper, "a")
     # The account is read again after a's fill, as its own cadence reads it, before b enters.
     paper.wait(1_000)
     paper.account.account_observed_at_ms = paper.clock()
     assert await paper.sync.tick() == "observed"
     await _holds_one_call(paper, "b")
+
+
+async def test_two_bots_each_holding_the_contract_are_each_closed_by_an_order_of_their_own(paper: PaperOptions) -> None:  # noqa: F811
+    await _two_bots_each_hold_one_call(paper)
     _until(paper, DUE)
 
     done = await paper.round()
 
     assert len(done.closes.taken) == 2 and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE, SELLS_ONE_TO_CLOSE]
     assert len(_closing_refs(paper, "a")) == 1 and len(_closing_refs(paper, "b")) == 1
+
+
+# ── each close is handled by itself ──────────────────────────────────────
+
+
+def _at_the_venue(paper: PaperOptions, sid: str) -> bool:  # noqa: F811
+    """Whether the venue has taken the bot's closing order."""
+    return any(order_ref in paper.venue.option_orders for order_ref in _closing_refs(paper, sid))
+
+
+async def _comes_true(what: Callable[[], bool]) -> bool:
+    """Whether ``what`` comes true within two seconds, while the event loop and its worker threads run."""
+    for _ in range(200):
+        if what():
+            return True
+        await asyncio.sleep(0.01)
+    return what()
+
+
+def _driving_of(bot: str, does: Callable[[], Awaitable[None]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Driving a close of ``bot`` first does ``does``; every other close is driven as it is."""
+    drive = scheduled_close_module.resolve_exit
+
+    async def driven(repo: object, *, effect_operation_id: str, **rest: object) -> object:
+        if effect_operation_id.startswith(f"effect:{bot}:"):
+            await does()
+        return await drive(repo, effect_operation_id=effect_operation_id, **rest)
+
+    monkeypatch.setattr(scheduled_close_module, "resolve_exit", driven)
+
+
+async def test_a_slow_answer_to_one_bots_close_does_not_hold_up_another_bots(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _two_bots_each_hold_one_call(paper)
+    _until(paper, DUE)
+    answered = asyncio.Event()
+    _driving_of("a", answered.wait, monkeypatch)
+
+    round_ = asyncio.create_task(paper.round())
+
+    # The second bot's close is at the venue while the first is still waiting.
+    assert await _comes_true(lambda: _at_the_venue(paper, "b"))
+    assert not _at_the_venue(paper, "a") and not round_.done()
+
+    answered.set()
+    done = await asyncio.wait_for(round_, timeout=5)
+    assert len(done.closes.driven) == 2 and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE, SELLS_ONE_TO_CLOSE]
+
+
+async def test_a_close_that_breaks_is_left_for_the_pass_and_the_other_bots_close_still_goes_out(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _two_bots_each_hold_one_call(paper)
+    _until(paper, DUE)
+
+    async def breaks() -> None:
+        raise RuntimeError("an answer nothing here expected")
+
+    with monkeypatch.context() as broken:
+        _driving_of("a", breaks, broken)
+        done = await paper.round()
+
+    # Both were taken. The one that broke is told as left, and the other was sent.
+    assert len(done.closes.taken) == 2
+    assert [effect.split(":")[1] for effect in done.closes.driven] == ["b"]
+    assert [effect.split(":")[1] for effect in done.closes.deferred] == ["a"]
+    assert _at_the_venue(paper, "b") and not _at_the_venue(paper, "a")
+
+    # It is an EXIT like any other from here, and the next pass sends it.
+    paper.wait(PASS_MS)
+    await paper.pass_()
+    assert _closes_sent(paper) == [SELLS_ONE_TO_CLOSE, SELLS_ONE_TO_CLOSE]
+
+
+async def test_a_lost_hold_on_the_account_is_raised_and_only_once_the_closes_in_flight_have_come_to_rest(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _two_bots_each_hold_one_call(paper)
+    _until(paper, DUE)
+    answered = asyncio.Event()
+
+    async def loses_the_lease() -> None:
+        raise ExecutionLeaseLost("the Clerk's hold on its account was lost", account_id=paper.repo.account_id)
+
+    _driving_of("a", loses_the_lease, monkeypatch)
+    _driving_of("b", answered.wait, monkeypatch)
+
+    step = asyncio.create_task(
+        drive_scheduled_closes(
+            paper.repo, trade=paper.venue, intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing
+        )
+    )
+
+    # The first bot's close has lost the lease. The step does not end while the second is still on its way.
+    assert await _comes_true(lambda: paper.repo.active_exit_for_strategy("b") is not None)
+    await asyncio.sleep(0.05)
+    assert not step.done()
+
+    answered.set()
+    # It is no one contract's failure: it is raised, and never told as a close that was left.
+    with pytest.raises(ExecutionLeaseLost):
+        await asyncio.wait_for(step, timeout=5)
+    assert _at_the_venue(paper, "b") and not _at_the_venue(paper, "a")
+
+
+async def test_a_close_another_owner_is_driving_is_left_alone_and_sent_once_it_is_free(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """Shown with the step asked to drive a taken close on, as a Dry Run's keeper asks it."""
+    await _holds_one_call(paper)
+    halted, asked = {"SPY"}, []
+    _halts(paper, monkeypatch, halted, asked)
+    _until(paper, DUE)
+    [taken] = (await paper.round()).closes.taken
+    halted.clear()
+    held = paper.repo.claim_before_broker_contact(taken)
+
+    async def step() -> ScheduledCloseRound:
+        return await drive_scheduled_closes(
+            paper.repo, trade=paper.venue, intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing,
+            drive_unfinished=True,
+        )
+
+    left = await step()
+
+    assert (left.driven, left.deferred) == ((), (taken,)) and _closes_sent(paper) == []
+
+    paper.repo.release_operation_claim(effect_operation_id=taken, token=held.token)
+    sent = await step()
+
+    assert sent.driven == (taken,) and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
 
 
 # ── a structure with a sold leg: shown at this level only, until the Clerk takes one ──
