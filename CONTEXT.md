@@ -1667,7 +1667,7 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Unreadable activity** — an option activity the broker reported that could not be read whole. It is listed with its id and the reason and is never booked in part.
 - **Whole read (of option events)** — a read that reached the start of its window, with no unreadable activity and none the broker does not report as executed. Only a whole read's silence means nothing happened.
 - **Activity date** — the date an activity carries, held as 00:00 New York time on it. No time of day is known.
-- **Option entry evidence** — what a runner hands the Clerk with an option ENTER: for each leg the contract picked, its listed multiplier and the quote read just before; the quotes' generation; the bot's two limits. Facts, never a price or a commitment.
+- **Option entry evidence** — what a runner hands the Clerk with an option ENTER: for each leg the contract picked, its listed multiplier and the quote read just before; the quotes' generation; the bot's two limits; the owner's order terms. Facts, never a price or a commitment.
 - **Leg gap limit** — the widest bid-ask gap the owner allows any one leg at an entry, as a percent of that leg's mid. Starts at 8.
 - **Order line** — an option order as the books write it beside a stock leg: the contract's symbol, the side, contracts, the limit a share. The exact order is kept with it.
 - **Quotes kept** — the option quotes a Dry Run's Clerk was handed, kept so a later close or mark can be priced from them. Cut back as they grow to what a later reader can still ask for.
@@ -1676,7 +1676,17 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Last session (of a contract)** — the last regular session a contract trades in: the one on its expiry date, to that session's close, a half day's included. After it the contract has expired: nothing is bought or sold in it.
   _Avoid_: expiry (that names the date), close deadline (when the bot closes, earlier).
 - **Expired contract (held)** — a position in a contract past its last session. No order can close it. It stays on the books under a notice until expired contracts are settled, which is not built.
-- **Entry wait** — how long a resting entry waits for its fill before it is cancelled. Starts at 20 seconds.
+- **Resting entry** — an option entry as it stands at Alpaca: a limit order that has been sent and has not ended. Its bot holds only what has filled.
+- **Entry wait** — how long a resting entry waits for its fill before the Clerk cancels what is left. Set by the owner, 20 seconds unless set, and never less than one second or more than five minutes. Counted from the Clerk's admission of the entry, and stored with it as the time to cancel at.
+- **Order terms** — what an owner fixes for an option bot's orders: the entry wait, the time allowed to prove a cancel, a margin, and how long before a close a position is closed. They come with each entry and are kept with it.
+- **Entry standing** — where an option entry stands, read from the books: working, cancellation requested, filled, filled in part, unfilled, never sent, or outcome unknown. The first two and the last are not proven.
+- **Cancellation requested** — the Clerk has recorded that it is asking Alpaca to cancel an order and no lookup has yet shown the order ended. It is not "cancelled".
+  _Avoid_: cancelled (that is proven only by a lookup).
+- **Entry settlement** — whether a strategy counts itself in after an option entry: entered, or the decision discarded. The Clerk answers it once per entry and records the answer. Asked after the fact, the record wins; with none, the books as they stand decide.
+- **Deadline keeper** — the Clerk's own task that cancels a resting entry when its wait runs out. It keeps no list; the reconciliation pass runs the same step.
+- **Working entry order** — an option entry order the books show working at Alpaca, whatever its ENTER's state. Past its deadline it is cancelled; while it works, its bot's next entry is refused.
+- **Withheld answer** — a broker's answer about one of the Clerk's own orders that the books cannot state or hold: nothing of it is recorded, and the order's outcome is unknown until an exact lookup settles it.
+- **Fee estimate (option fill, real account)** — an option fill's fees as the option fee model works them out, carried until a fee row of the fill's day is seen. From then the fill is charged its part of the day's rows, shared among all the day's fills by each one's own fee model: the day's total is Alpaca's, the part is the models'. If no row comes, the estimate stays and goes on being held back from cash, as a stock fill's does.
 
 ## Market-data readiness (resolved 2026-09-22)
 
