@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
@@ -25,7 +27,9 @@ from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite import scheduled_close as scheduled_close_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS
+from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
+from app.broker.alpaca.clerk.sqlite.exit_watchdog import EpisodeAttempt, scheduled_close_in_its_session
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
 from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
@@ -34,6 +38,8 @@ from app.broker.alpaca.clerk.sqlite.residue_discharge import discharge_attribute
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
     ScheduledCloseRound,
+    _accept_while_still_owed,
+    _record_missed_closes,
     held_contracts,
     scheduled_close_state,
 )
@@ -77,6 +83,7 @@ from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     PaperOptions,
     paper,  # noqa: F401 -- pytest fixture, used by name
 )
+from tests.broker.alpaca.clerk.sqlite.test_resting_entry_facts import _PINNED_OPTION
 
 EXPIRY = CALL.expiry_date
 OPEN = et_minute_of_day_ms(EXPIRY, 9 * 60 + 30)
@@ -245,15 +252,18 @@ async def test_the_bots_own_exit_and_the_scheduled_close_in_the_same_moment_make
 
 
 async def test_a_scheduled_close_that_comes_second_is_not_taken_and_the_bots_own_exit_closes_the_position(
-    paper: PaperOptions,  # noqa: F811
+    paper: PaperOptions, caplog: pytest.LogCaptureFixture  # noqa: F811
 ) -> None:
     await _holds_one_call(paper)
     _until(paper, DUE)
     await paper.exit("a")
+    caplog.set_level(logging.ERROR)
 
     done = await paper.round()
 
     assert done.closes.taken == () and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
+    # Meeting the bot's own exit is no failure: nothing is logged as one.
+    assert caplog.records == []
     [state] = scheduled_close_state(paper.repo, "a")
     assert state.standing is CloseStanding.SCHEDULED and state.taken_at_ms is None
 
@@ -333,6 +343,8 @@ async def test_a_restart_after_the_close_was_due_with_the_session_open_sends_it_
     assert (state.due_ms, state.taken_at_ms, state.late_by_ms, state.late) == (
         DUE, DUE + twenty_minutes, twenty_minutes, True
     )
+    # Late is more than a minute after it was due: a minute to the millisecond is not.
+    assert not replace(state, late_by_ms=60_000).late and replace(state, late_by_ms=60_001).late
 
 
 async def test_a_restart_after_the_session_closed_sends_nothing_and_records_the_close_as_missed(
@@ -487,6 +499,9 @@ async def test_a_close_sent_and_not_filled_reads_as_sent_then_partly_closed_then
     assert (flat.standing, flat.contract, flat.held, flat.taken_at_ms, flat.late) == (
         CloseStanding.FLAT, SYMBOL, 0.0, DUE, False
     )
+    # It is told for the rest of its own day. On Monday the bot has no scheduled close to its name.
+    _until(paper, MONDAY_AFTER_THE_OPEN)
+    assert scheduled_close_state(paper.repo, "a") == ()
 
 
 async def test_a_bot_that_closed_its_own_position_before_the_time_has_no_scheduled_close_to_its_name(
@@ -717,9 +732,13 @@ async def test_a_hold_on_the_account_that_refuses_reductions_holds_the_close_and
 # ── the Clerk has stopped exiting the bot by itself ──────────────────────
 
 
-async def _the_clerk_gives_up_on_the_bots_own_exit(paper: PaperOptions) -> None:  # noqa: F811
-    """On the expiry day's morning the bot's exit is refused, and refused again until the Clerk stops trying."""
-    await _holds_one_call(paper)
+async def _the_clerk_gives_up_on_the_bots_own_exit(paper: PaperOptions, *, holding: bool = False) -> None:  # noqa: F811
+    """On the expiry day's morning the bot's exit is refused, and refused again until the Clerk stops trying.
+
+    ``holding`` says the bot already holds its call; otherwise it buys it first.
+    """
+    if not holding:
+        await _holds_one_call(paper)
     _until(paper, OPEN + 60 * 60_000)
     paper.venue.option_submit_error = BrokerOrderRejected("the venue refused the close", broker="alpaca")
     await paper.exit("a")
@@ -837,6 +856,9 @@ async def test_a_holding_whose_entry_has_a_sold_leg_owes_a_close_ten_minutes_bef
     [weekend] = held_contracts(paper.repo, et_minute_of_day_ms(date(2026, 9, 12), 12 * 60)).held
     assert weekend.owed is None and weekend.missed == owes_on(date(2026, 9, 11), closes_at=16)
     assert not weekend.expired
+    # An hour after the entry it has missed nothing: the session before it ended before it was held.
+    [same_day] = held_contracts(paper.repo, et_minute_of_day_ms(date(2026, 9, 8), 13 * 60)).held
+    assert same_day.missed is None and same_day.owed == owes_on(date(2026, 9, 8), closes_at=16)
 
 
 @pytest.mark.parametrize(
@@ -864,3 +886,151 @@ def test_an_entry_on_a_structure_with_a_sold_leg_is_too_late_from_eighty_seconds
     assert entry_past_cutoff(structure, now_ms=cutoff - 1, terms=CloseTerms()) is None
     refused = entry_past_cutoff(structure, now_ms=cutoff, terms=CloseTerms())
     assert refused is not None and refused.reason_code == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
+
+
+# ── the terms the close is counted from ──────────────────────────────────
+
+
+async def test_the_close_is_counted_back_from_the_lead_the_owner_set_with_the_entry(paper: PaperOptions) -> None:  # noqa: F811
+    ninety_minutes = replace(CloseTerms(), expiry_close_lead_ms=90 * 60_000)
+    receipt = await paper.enter("a", evidence=paper.evidence(terms=ninety_minutes))
+    [order_ref] = receipt.child_order_refs
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-buy")
+    half_past_two = et_minute_of_day_ms(EXPIRY, 14 * 60 + 30)
+    _until(paper, half_past_two - 1)
+
+    early = await paper.round()
+    _until(paper, half_past_two)
+    done = await paper.round()
+
+    assert early.closes.taken == () and len(done.closes.taken) == 1 and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
+    assert _accepted_as(paper, done.closes.taken[0]).the_scheduled_close == ScheduledCloseFacts(
+        kind="expiry_day_close", due_ms=half_past_two, session_open_ms=OPEN
+    )
+
+
+async def test_an_entry_taken_before_entries_kept_their_terms_is_closed_at_the_starting_lead(paper: PaperOptions) -> None:  # noqa: F811
+    before = OptionEntryFacts.from_facts(json.loads(_PINNED_OPTION))
+    assert before.terms is None
+    accepted = accept_option_enter(
+        paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", decision_id="from-before",
+        lifecycle_run_id="run-a", entry=before, envelope=paper.clerk.live_envelope,
+    )
+    await submit_accepted_enter(paper.repo, accepted=accepted, leg=before.order, trade=paper.venue)
+    await paper.stream_fill(accepted.order_ref, contracts=2, filled_in_all=2, price="1.94", execution_id="x-buy")
+    _until(paper, DUE - 1)
+
+    early = await paper.round()
+    _until(paper, DUE)
+    await paper.round()
+
+    # 45 minutes before the close, the lead an entry starts with, and both contracts it holds.
+    assert early.closes.taken == ()
+    [sent] = _closes_sent(paper)
+    assert (sent.side, sent.intent, sent.quantity) == (OrderSide.SELL, OptionPositionIntent.CLOSE, 2)
+
+
+# ── asked again in the run that takes the close ──────────────────────────
+
+
+async def test_a_close_read_as_owed_is_not_taken_once_another_exit_of_the_bot_has_begun(paper: PaperOptions) -> None:  # noqa: F811
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    [owed] = held_contracts(paper.repo, paper.clock()).held
+    assert owed.to_be_taken(paper.clock())
+    await paper.exit("a")
+
+    assert _accept_while_still_owed(paper.repo, owed) is None
+    assert len(_closing_refs(paper)) == 1
+
+
+async def test_a_close_read_as_owed_is_not_taken_once_the_bot_holds_nothing(paper: PaperOptions) -> None:  # noqa: F811
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    [owed] = held_contracts(paper.repo, paper.clock()).held
+    await paper.exit("a")
+    await _the_close_fills(paper)
+    assert paper.held() == {} and paper.repo.active_exit_for_strategy("a") is None
+
+    assert _accept_while_still_owed(paper.repo, owed) is None
+    assert len(_closing_refs(paper)) == 1
+
+
+async def test_a_close_read_as_owed_is_not_taken_once_the_clerk_has_stopped_exiting_the_bot(paper: PaperOptions) -> None:  # noqa: F811
+    await _holds_one_call(paper)
+    [owed] = held_contracts(paper.repo, DUE).held
+    assert owed.to_be_taken(DUE) and not owed.left_to_owner
+    await _the_clerk_gives_up_on_the_bots_own_exit(paper, holding=True)
+    sent = len(paper.venue.option_submit_calls)
+    _until(paper, DUE)
+
+    assert _accept_while_still_owed(paper.repo, owed) is None
+    assert len(paper.venue.option_submit_calls) == sent
+
+
+async def test_a_contract_no_longer_held_when_the_notice_is_written_is_not_named_in_it(paper: PaperOptions) -> None:  # noqa: F811
+    """The books are read, then the position is written off, then the notice's turn comes."""
+    await _the_clerk_was_down_through_the_close(paper)
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+    read = held_contracts(paper.repo, paper.clock())
+    assert read.held[0].missed is not None and read.noticed == ("a",)
+    await discharge_attributed_residue(
+        paper.repo, read=_FakeReadPort(), intake=paper.clerk.intake, strategy_instance_id="a", symbol=SYMBOL,
+        operator_reason="expired worthless",
+    )
+
+    named = _record_missed_closes(paper.repo, read, paper.clock())
+
+    assert named == () and _notice(paper) is None
+
+
+async def test_a_bot_whose_entry_cannot_be_read_keeps_its_notice_and_the_other_bot_is_still_served(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    unreadable = await _holds_one_call(paper, "a")
+    paper.wait(1_000)
+    paper.account.account_observed_at_ms = paper.clock()
+    assert await paper.sync.tick() == "observed"
+    await _holds_one_call(paper, "b")
+    _until(paper, MONDAY_AFTER_THE_OPEN)
+    await paper.round()
+    assert _notice(paper, "a") is not None and _notice(paper, "b") is not None
+    as_kept = scheduled_close_module.option_entry_of_order
+
+    def cannot_read_a(repo: object, order_ref: str) -> object:
+        if order_ref == unreadable:
+            raise ValueError("this entry's facts cannot be read back")
+        return as_kept(repo, order_ref)
+
+    monkeypatch.setattr(scheduled_close_module, "option_entry_of_order", cannot_read_a)
+    written = paper.repo.last_custody_sequence()
+
+    done = await paper.round()
+
+    # Nothing is concluded about a: its notice stands. b is read and told as before, and nothing is written.
+    assert held_contracts(paper.repo, paper.clock()).unread == frozenset({"a"})
+    assert done.closes.missed == (("b", SYMBOL),)
+    assert _notice(paper, "a") is not None and paper.repo.last_custody_sequence() == written
+
+
+# ── the watchdog's rule holds for the close's own session only ───────────
+
+
+def test_a_scheduled_closes_own_retry_rule_holds_from_its_sessions_open_to_its_close_and_no_longer() -> None:
+    close = ScheduledCloseFacts(kind="sold_leg_close", due_ms=DUE, session_open_ms=OPEN)
+    its_order = EpisodeAttempt("its-order", True, True, False, None, False, regular_session_only=True, scheduled_close=close)
+    another = EpisodeAttempt("another-exits-order", True, True, False, None, True, regular_session_only=True)
+
+    assert scheduled_close_in_its_session((another, its_order), OPEN) == close
+    assert scheduled_close_in_its_session((another, its_order), CLOSE - 1) == close
+    # Not before its session opens, not from its close on, and not in a later session.
+    assert scheduled_close_in_its_session((another, its_order), OPEN - 1) is None
+    assert scheduled_close_in_its_session((another, its_order), CLOSE) is None
+    assert scheduled_close_in_its_session((another, its_order), MONDAY_AFTER_THE_OPEN) is None
+    # An episode none of whose orders is a scheduled close keeps the ordinary rule at any hour.
+    assert scheduled_close_in_its_session((another,), DUE) is None
+    # Of two sessions' closes, the later session's is the one carried on.
+    monday_open = et_minute_of_day_ms(date(2026, 9, 21), 9 * 60 + 30)
+    mondays = ScheduledCloseFacts(kind="sold_leg_close", due_ms=monday_open + 1, session_open_ms=monday_open)
+    its_next = EpisodeAttempt("mondays", True, True, False, None, False, regular_session_only=True, scheduled_close=mondays)
+    assert scheduled_close_in_its_session((its_order, its_next), MONDAY_AFTER_THE_OPEN) == mondays

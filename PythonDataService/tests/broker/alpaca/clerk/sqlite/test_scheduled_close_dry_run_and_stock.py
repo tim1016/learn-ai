@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite import reads, reconcile
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS, DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
@@ -32,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
+    HeldContracts,
     ScheduledCloseRound,
     drive_scheduled_closes,
     held_contracts,
@@ -210,6 +212,24 @@ async def test_a_dry_runs_keeper_drives_on_a_close_it_took_and_could_not_send_si
     assert dry_run.held() == {} and dry_run.fills()[-1] == (SYMBOL, "sell", 1.0, 2.10, 100)
 
 
+async def test_a_dry_runs_keeper_drives_on_no_exit_but_a_scheduled_close(dry_run: _DryRun) -> None:  # noqa: F811
+    """The bot's own exit was taken and nothing has driven it. That exit is not the keeper's to send."""
+    bought = await dry_run.enter(dry_run.evidence())
+    [order_ref] = bought.child_order_refs
+    _until(dry_run, DUE - 60_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    accept_exit(
+        dry_run.repo, account_id=dry_run.repo.account_id, strategy_instance_id=SID, decision_id="the-bots-own-exit",
+        lifecycle_run_id=RUN, entry_order_ref=order_ref,
+    )
+    _until(dry_run, DUE)
+
+    done = await _keeper(dry_run).tick()
+
+    assert (done.closes.taken, done.closes.driven, done.closes.deferred) == ((), (), ())
+    assert dry_run.held() == {SYMBOL: 1.0} and dry_run.orders() == 1
+
+
 async def test_a_stopped_dry_run_whose_run_end_close_sold_its_contract_owes_no_close(dry_run: _DryRun) -> None:  # noqa: F811
     await dry_run.enter(dry_run.evidence())
     _until(dry_run, DUE - 60 * 60_000)
@@ -283,7 +303,8 @@ async def test_a_stock_only_accounts_books_are_never_read_for_a_close_however_lo
             with _StepsCounted(repo) as the_read:
                 read = held_contracts(repo, repo.clock())
             assert done.closes == stepped == ScheduledCloseRound() and done.wake_in_ms == IDLE_WAKE_MS
-            assert read.held == () and read.noticed == () and repo.last_custody_sequence() == written
+            # Nothing held in a contract, nothing unreadable, no notice: the shares are not even looked at twice.
+            assert read == HeldContracts() and repo.last_custody_sequence() == written
             costs[transitions] = (the_round.steps, the_step.steps, the_read.steps)
         finally:
             repo.close()
