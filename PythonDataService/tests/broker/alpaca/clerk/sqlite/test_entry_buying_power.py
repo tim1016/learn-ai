@@ -1006,16 +1006,19 @@ async def test_an_entry_being_sent_while_a_new_clerks_first_round_runs_is_not_ta
 
     paper.venue.submit_option_order = a_send_that_waits  # type: ignore[method-assign]
     entering = asyncio.ensure_future(paper.enter())
-    for _ in range(50):
-        await asyncio.sleep(0)
-    assert paper.venue.option_submit_calls == [] and not entering.done()
+    try:
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert paper.venue.option_submit_calls == [] and not entering.done()
+        # The round finds an option entry on the books with no comparison, and leaves it alone: it is being sent.
+        recorded_meanwhile = await paper.clerk.compare_entries_with_buying_power()
+    finally:
+        # Whatever was found, the send is let go: an entry left waiting would hold the account open.
+        alpaca_answers.set()
+        sent = await entering
 
-    # The round finds an option entry on the books with no comparison, and leaves it alone: it is being sent.
-    assert await paper.clerk.compare_entries_with_buying_power() == ()
-
-    alpaca_answers.set()
-    [order_ref] = (await entering).child_order_refs
-    assert paper.comparisons(order_ref) == []
+    [order_ref] = sent.child_order_refs
+    assert recorded_meanwhile == () and paper.comparisons(order_ref) == []
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
     paper.account.buying_power = Decimal("99806.00")
     assert (await paper.compared(order_ref)).result == "consistent"
