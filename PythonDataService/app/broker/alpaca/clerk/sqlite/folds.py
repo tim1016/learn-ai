@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_risk import fold_account_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import authorization_version, fold_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_folds import fold_deploy_committed, fold_deploy_launched
+from app.broker.alpaca.clerk.sqlite.contract_terms import require_fill_in_its_orders_contract
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     CHAIN_TOTAL_PROVEN_TRANSITION,
@@ -1004,6 +1005,10 @@ def _apply_attributed_position_delta(
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_late_fill_after_residue_discharge.py.
+
+    A position is held per instrument: a fill of an order that trades an
+    option contract moves that contract's position and no other, and an
+    option fill of an order bound to no contract is refused (ADR 0076).
     """
     owner = conn.execute(
         "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
@@ -1011,6 +1016,7 @@ def _apply_attributed_position_delta(
     ).fetchone()
     if owner is None:
         raise ValueError("execution fill requires its durable owning effect")
+    require_fill_in_its_orders_contract(conn, order_ref=payload["order_ref"], symbol=symbol)
     if _fill_credit_is_withheld(conn, payload=payload, symbol=symbol):
         return
     signed_delta = quantity if side == "BUY" else -quantity

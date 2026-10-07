@@ -49,8 +49,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
+from app.broker.alpaca.clerk.money import notional
 from app.broker.contract.models import OrderSide
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
@@ -74,7 +76,7 @@ class FillRecord:
     event_key: str
     symbol: str
     side: OrderSide
-    quantity: float  # positive share count
+    quantity: float  # positive share count; contracts when ``multiplier`` is set
     fill_price: float
     filled_at_ms: int  # int64 ms UTC
     fee: float | None  # None = "not reported"
@@ -83,6 +85,15 @@ class FillRecord:
     ledger_sequence: int = 0
     native_order_id: str | None = None
     recorded_at_ms: int | None = None
+    # An option contract's multiplier, from the contract's own record
+    # (ADR 0076): ``quantity`` is then contracts and ``fill_price`` the premium
+    # per share. ``None`` for shares, which is every fill of a stock.
+    multiplier: int | None = None
+
+    @property
+    def exact_notional(self) -> Decimal:
+        """What the fill paid or received before fees, exact: quantity * price, by the multiplier for an option."""
+        return notional(self.quantity, self.fill_price, multiplier=self.multiplier)
 
 
 def normalize_fill_event(

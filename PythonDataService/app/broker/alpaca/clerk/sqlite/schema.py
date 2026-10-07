@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.budget_schema import (
     SCHEMA_V22_DDL,
     SCHEMA_V22_STATEMENTS,
 )
+from app.broker.alpaca.clerk.sqlite.contract_terms import SCHEMA_V23_DDL, SCHEMA_V23_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     COMMAND_SUBJECT_COMPATIBILITY_DDL,
     CUSTODY_SUBJECT_IDENTITY_DDL,
@@ -35,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
 )
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -735,6 +736,8 @@ SCHEMA_DDL = (
     + SCHEMA_V21_DDL
     + "\n"
     + SCHEMA_V22_DDL
+    + "\n"
+    + SCHEMA_V23_DDL
 ).rstrip("\n")
 
 
@@ -775,6 +778,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # v21 -> v22: a Stop's recorded release on its budget row (#2555); the
     # same statements as the fresh block, backfilling from recorded Stops.
     21: SCHEMA_V22_STATEMENTS,
+    # v22 -> v23: the two empty tables that say which option contract an order
+    # trades and what it multiplies by (#2913); same statements as the fresh block.
+    22: SCHEMA_V23_STATEMENTS,
 }
 
 

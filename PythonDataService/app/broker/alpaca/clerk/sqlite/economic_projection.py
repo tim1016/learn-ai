@@ -45,6 +45,12 @@ from app.broker.alpaca.clerk.fifo_pnl import (
 )
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ORDER_CONTRACT_JOINS_SQL,
+    ORDER_CONTRACT_MULTIPLIER_SQL,
+    ORDER_CONTRACT_SYMBOL_SQL,
+    keeps_option_contracts,
+)
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
@@ -117,6 +123,43 @@ EFFECTIVE_FILL_LINEAGE_CTE = """
         FROM lineage
         WHERE parent_execution_id IS NULL
     )"""
+
+
+@dataclass(frozen=True)
+class _FillInstrumentSql:
+    """How a reader of fills names the instrument each fill traded.
+
+    For a query over ``orders o``, ``strategy_instances s`` and
+    ``manual_acceptance``: the symbol expression, the ``contract_multiplier``
+    column, and the joins they need.
+    """
+
+    symbol: str
+    multiplier: str
+    joins: str
+
+
+# An order trades its bot's symbol, or its manual leg's, in shares.
+_SHARES = _FillInstrumentSql(
+    symbol="COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol'))",
+    multiplier="NULL AS contract_multiplier",
+    joins="",
+)
+# An order bound to an option contract trades that contract, and its money is
+# counted with the contract's multiplier (ADR 0076). Every other order joins
+# to nothing and reads as ``_SHARES`` does.
+_SHARES_OR_CONTRACTS = _FillInstrumentSql(
+    symbol=(
+        f"COALESCE({ORDER_CONTRACT_SYMBOL_SQL}, s.symbol, "
+        "json_extract(manual_acceptance.facts_json, '$.leg.symbol'))"
+    ),
+    multiplier=f"{ORDER_CONTRACT_MULTIPLIER_SQL} AS contract_multiplier",
+    joins=ORDER_CONTRACT_JOINS_SQL.format(order="o"),
+)
+
+
+def _fill_instrument_sql(conn: sqlite3.Connection) -> _FillInstrumentSql:
+    return _SHARES_OR_CONTRACTS if keeps_option_contracts(conn) else _SHARES
 
 
 class EconomicProjectionError(RuntimeError):
@@ -936,13 +979,14 @@ class SqliteEconomicProjectionReader:
         cursor_key: tuple[int, str] | None,
         limit: int,
     ) -> list[sqlite3.Row]:
+        instrument = _fill_instrument_sql(self._conn)
         where = ["1 = 1"]
         params: list[object] = []
         if bot is not None:
             where.append("e.strategy_instance_id = ?")
             params.append(bot)
         if symbol is not None:
-            where.append("COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) = ?")
+            where.append(f"{instrument.symbol} = ?")
             params.append(symbol.upper())
         if origin is not None:
             where.append("CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END = ?")
@@ -971,7 +1015,7 @@ class SqliteEconomicProjectionReader:
                    f.recorded_transition_sequence,
                    e.subject_id, e.strategy_instance_id,
                    CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                   COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                   {instrument.symbol} AS symbol, {instrument.multiplier},
                    CASE WHEN EXISTS (
                        SELECT 1 FROM fills successor
                        WHERE successor.superseded_execution_ref = f.execution_id
@@ -982,6 +1026,7 @@ class SqliteEconomicProjectionReader:
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            {instrument.joins}
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)
@@ -1005,6 +1050,7 @@ class SqliteEconomicProjectionReader:
         total_limit: int | None,
     ) -> list[sqlite3.Row]:
         """Read current execution leaves for explicit SQLite order identities."""
+        instrument = _fill_instrument_sql(self._conn)
         placeholders = _placeholders(order_refs)
         params: list[object] = [*order_refs]
         per_order_where = ""
@@ -1022,7 +1068,7 @@ class SqliteEconomicProjectionReader:
                        f.recorded_transition_sequence,
                        e.subject_id, e.strategy_instance_id,
                        CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                       COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                       {instrument.symbol} AS symbol, {instrument.multiplier},
                        'effective' AS state,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                                 f.source_event_at_ms, f.recorded_at_ms) AS filled_at_ms,
@@ -1031,6 +1077,7 @@ class SqliteEconomicProjectionReader:
                 JOIN orders o ON o.order_ref = f.order_ref
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
                 LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                {instrument.joins}
                 LEFT JOIN custody_transitions manual_acceptance
                     ON manual_acceptance.sequence = (
                         SELECT MIN(acceptance.sequence)
@@ -1139,6 +1186,7 @@ def effective_fill_rows(
     limit_sql = "" if limit is None else " LIMIT ?"
     if limit is not None:
         params.append(limit + 1)
+    instrument = _fill_instrument_sql(conn)
     sql = f"""
         {EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
             SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
@@ -1147,7 +1195,7 @@ def effective_fill_rows(
                    e.subject_id, e.strategy_instance_id, o.broker_order_id,
                    COALESCE(roots.root_recorded_at_ms, f.recorded_at_ms) AS root_recorded_at_ms,
                    CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                   COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                   {instrument.symbol} AS symbol, {instrument.multiplier},
                    COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                             f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
                    COALESCE(roots.root_transition_sequence,
@@ -1157,6 +1205,7 @@ def effective_fill_rows(
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            {instrument.joins}
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)
@@ -1236,6 +1285,7 @@ def _to_fill_record(
         ledger_sequence=_required_ledger_sequence(row, field="economic_ledger_sequence"),
         native_order_id=row["broker_order_id"],
         recorded_at_ms=int(row["root_recorded_at_ms"]),
+        multiplier=row["contract_multiplier"],
     )
 
 
@@ -1281,6 +1331,7 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         recorded_at_ms=int(row["recorded_at_ms"]),
         subject_id=row["subject_id"],
         journal_seq=_required_ledger_sequence(row),
+        multiplier=row["contract_multiplier"],
     )
 
 
