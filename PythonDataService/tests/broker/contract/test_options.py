@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 
 import pytest
 from pydantic import ValidationError
@@ -16,6 +16,8 @@ from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.options import (
     BrokerOptionContract,
     BrokerOptionDeliverable,
+    BrokerOptionOrder,
+    BrokerOptionOrderLeg,
     MultiLegOptionOrderRequest,
     OptionContractRefusal,
     OptionLegRequest,
@@ -229,6 +231,36 @@ def test_an_order_that_only_buys_cannot_claim_a_credit_nor_one_that_only_sells_a
     assert _spread(legs=sold, net_limit_price=Decimal("-6.00")).net_limit_price == Decimal("-6.00")
 
 
+@pytest.mark.parametrize(
+    "price", [Decimal("1E+20"), Decimal("-1E+20"), Decimal("1E-50"), Decimal("NaN"), Decimal("Infinity")]
+)
+def test_a_price_too_large_too_fine_or_not_a_number_is_refused(price: Decimal) -> None:
+    with pytest.raises(ValidationError):
+        _single(limit_price=price)
+    with pytest.raises(ValidationError):
+        _spread(net_limit_price=price)
+
+
+@pytest.mark.parametrize("ratio", [0, -1, True, 1.0, "1"])
+def test_a_legs_ratio_is_a_whole_number_one_or_more(ratio: object) -> None:
+    """A ratio of zero would pass the divisor rule beside a ratio of one, and send a leg of no contracts."""
+    with pytest.raises(ValidationError):
+        _leg(_contract("call", "450"), OrderSide.BUY, ratio=ratio)  # type: ignore[arg-type]
+
+
+def test_an_order_cannot_be_changed_once_it_is_built() -> None:
+    single, spread = _single(), _spread()
+
+    with pytest.raises(ValidationError):
+        single.quantity = 5
+    with pytest.raises(ValidationError):
+        spread.net_limit_price = Decimal("-1.94")
+    with pytest.raises(ValidationError):
+        spread.legs[0].ratio = 2
+
+    assert (single.quantity, spread.net_limit_price, spread.legs[0].ratio) == (1, Decimal("1.94"), 1)
+
+
 @pytest.mark.parametrize("asked", [{"extended_hours": True}, {"time_in_force": "gtc"}, {"time_in_force": "day"}])
 def test_extended_hours_and_a_time_in_force_cannot_be_asked_for(asked: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
@@ -330,6 +362,17 @@ def test_a_lone_sold_option_opens_at_the_price_it_receives() -> None:
     assert (order.side, order.limit_price) == (OrderSide.SELL, Decimal("2.50"))
 
 
+def test_a_lone_sold_options_price_keeps_every_digit_whatever_the_decimal_context() -> None:
+    """Unary minus rounds to the context in force; a caller working in two digits must not shorten the price."""
+    short_put = ResolvedStructure(legs=(_resolved("short", "put", "440", leg_id="put"),))
+
+    with localcontext(Context(prec=2)):
+        order = opening_order(short_put, units=1, net_limit_price=Decimal("-12.3456"))
+
+    assert isinstance(order, SingleOptionOrderRequest)
+    assert order.limit_price == Decimal("12.3456")
+
+
 def test_a_lone_leg_whose_price_has_the_wrong_sign_is_refused() -> None:
     long_call = ResolvedStructure(legs=(_resolved("long", "call", "450", leg_id="call"),))
     short_put = ResolvedStructure(legs=(_resolved("short", "put", "440", leg_id="put"),))
@@ -356,9 +399,30 @@ def test_the_exit_is_one_market_order_that_reverses_and_closes_every_leg() -> No
     assert order.order_type is OrderType.MARKET
     assert order.net_limit_price is None
     assert order.quantity == 2
-    assert [(leg.contract.occ_symbol, leg.side, leg.intent) for leg in order.legs] == [
-        ("SPY261218C00450000", OrderSide.BUY, OptionPositionIntent.CLOSE),
-        ("SPY261218C00455000", OrderSide.SELL, OptionPositionIntent.CLOSE),
+    assert [(leg.contract.occ_symbol, leg.side, leg.intent, leg.ratio) for leg in order.legs] == [
+        ("SPY261218C00450000", OrderSide.BUY, OptionPositionIntent.CLOSE, 1),
+        ("SPY261218C00455000", OrderSide.SELL, OptionPositionIntent.CLOSE, 1),
+    ]
+
+
+def test_the_exit_keeps_each_legs_ratio_so_no_contract_is_left_open() -> None:
+    """A butterfly closed one-for-one would leave one of its two sold calls open and uncovered."""
+    butterfly = ResolvedStructure(
+        legs=(
+            _resolved("long", "call", "445", leg_id="lower"),
+            _resolved("short", "call", "450", leg_id="body", ratio=2),
+            _resolved("long", "call", "455", leg_id="upper"),
+        )
+    )
+
+    order = closing_order(butterfly, units=3)
+
+    assert isinstance(order, MultiLegOptionOrderRequest)
+    assert order.quantity == 3
+    assert [(leg.contract.occ_symbol, leg.side, leg.intent, leg.ratio) for leg in order.legs] == [
+        ("SPY261218C00445000", OrderSide.SELL, OptionPositionIntent.CLOSE, 1),
+        ("SPY261218C00450000", OrderSide.BUY, OptionPositionIntent.CLOSE, 2),
+        ("SPY261218C00455000", OrderSide.SELL, OptionPositionIntent.CLOSE, 1),
     ]
 
 
@@ -368,6 +432,195 @@ def test_an_order_is_built_for_whole_structures(units: object) -> None:
         opening_order(_bought_call_spread(), units=units, net_limit_price=Decimal("1.94"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="whole number of structures"):
         closing_order(_bought_call_spread(), units=units)  # type: ignore[arg-type]
+
+
+# ── What a broker says back ─────────────────────────────────────────────────
+
+_TIMES: dict[str, object] = {
+    "submitted_at_ms": 1_700_000_000_000,
+    "created_at_ms": 1_700_000_000_000,
+    "updated_at_ms": 1_700_000_000_000,
+    "filled_at_ms": None,
+    "canceled_at_ms": None,
+    "expired_at_ms": None,
+}
+
+
+def _reported_leg(order_id: str, strike: str, side: OrderSide, **overrides: object) -> BrokerOptionOrderLeg:
+    leg: dict[str, object] = {
+        "order_id": order_id,
+        "client_order_id": None,
+        "contract": _contract("call", strike),
+        "side": side,
+        "intent": OptionPositionIntent.OPEN,
+        "ratio": 1,
+        "quantity": 2,
+        "filled_quantity": 0,
+        "filled_avg_price": None,
+        "status": "new",
+        **_TIMES,
+    }
+    leg.update(overrides)
+    return BrokerOptionOrderLeg(**leg)  # type: ignore[arg-type]
+
+
+def _reported(**overrides: object) -> BrokerOptionOrder:
+    order: dict[str, object] = {
+        "broker": "alpaca",
+        "order_id": "parent",
+        "client_order_id": "learn-ai/spy-options/v1:enter-1",
+        "order_type": "limit",
+        "time_in_force": "day",
+        "quantity": 2,
+        "filled_quantity": 0,
+        "limit_price": Decimal("1.94"),
+        "filled_avg_price": None,
+        "status": "new",
+        **_TIMES,
+        "observed_at_ms": 1_700_000_000_000,
+    }
+    order.update(overrides)
+    return BrokerOptionOrder(**order)  # type: ignore[arg-type]
+
+
+def _reported_spread(**overrides: object) -> BrokerOptionOrder:
+    spread: dict[str, object] = {
+        "multi_leg": True,
+        "contract": None,
+        "side": None,
+        "intent": None,
+        "legs": (_reported_leg("bought", "450", OrderSide.BUY), _reported_leg("sold", "455", OrderSide.SELL)),
+    }
+    spread.update(overrides)
+    return _reported(**spread)
+
+
+def _reported_single(**overrides: object) -> BrokerOptionOrder:
+    single: dict[str, object] = {
+        "multi_leg": False,
+        "contract": _contract("call", "450"),
+        "side": OrderSide.BUY,
+        "intent": OptionPositionIntent.OPEN,
+    }
+    single.update(overrides)
+    return _reported(**single)
+
+
+def test_a_reported_spread_and_a_reported_single_order_are_read() -> None:
+    spread, single = _reported_spread(), _reported_single()
+
+    assert (spread.multi_leg, len(spread.legs), spread.contract) == (True, 2, None)
+    assert (single.multi_leg, single.legs, single.side) == (False, (), OrderSide.BUY)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"quantity": True},
+        {"quantity": "2"},
+        {"quantity": 2.0},
+        {"filled_quantity": "0"},
+        {"limit_price": 0.1 + 0.2},
+        {"limit_price": "1.94"},
+        {"filled_avg_price": 1},
+        {"side": "buy"},
+    ],
+)
+def test_what_a_broker_reported_is_never_coerced_into_a_quantity_a_price_or_a_side(change: dict[str, object]) -> None:
+    """A float price would carry the float's own digits: 0.1 + 0.2 is not thirty cents."""
+    with pytest.raises(ValidationError):
+        _reported_single(**change)
+
+
+@pytest.mark.parametrize("field", ["ratio", "quantity"])
+def test_a_reported_leg_states_its_ratio_and_its_quantity_or_says_it_has_none(field: str) -> None:
+    """Left out is an adapter that forgot the field; ``None`` is the broker's answer not saying."""
+    stated = _reported_leg("bought", "450", OrderSide.BUY, **{field: None})
+    assert getattr(stated, field) is None
+
+    fields = {**stated.model_dump(), "contract": stated.contract}
+    assert BrokerOptionOrderLeg.model_validate(fields) == stated
+    del fields[field]
+    with pytest.raises(ValidationError):
+        BrokerOptionOrderLeg.model_validate(fields)
+
+
+def test_a_single_order_may_state_no_intent_and_a_multi_leg_parent_never_states_one() -> None:
+    """Alpaca's one published single-leg answer carries no intent; a parent's intents are its legs'."""
+    assert _reported_single(intent=None).intent is None
+    assert _reported_single(intent=OptionPositionIntent.CLOSE).intent is OptionPositionIntent.CLOSE
+
+    with pytest.raises(ValidationError, match="no contract, side or intent"):
+        _reported_spread(intent=OptionPositionIntent.OPEN)
+
+
+def _legs_on(*strikes: str) -> tuple[BrokerOptionOrderLeg, ...]:
+    return tuple(_reported_leg(f"leg-{strike}", strike, OrderSide.BUY) for strike in strikes)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"legs": _legs_on("450")}, id="one leg"),
+        pytest.param({"legs": _legs_on("440", "445", "450", "455", "460")}, id="five legs"),
+        pytest.param({"legs": ()}, id="no legs"),
+        pytest.param({"contract": _contract("call", "450")}, id="a contract of its own"),
+        pytest.param({"side": OrderSide.BUY}, id="a side of its own"),
+        pytest.param(
+            {"legs": (_reported_leg("parent", "450", OrderSide.BUY), _reported_leg("sold", "455", OrderSide.SELL))},
+            id="a leg under the parent's order id",
+        ),
+        pytest.param(
+            {"legs": (_reported_leg("same", "450", OrderSide.BUY), _reported_leg("same", "455", OrderSide.SELL))},
+            id="two legs under one order id",
+        ),
+        pytest.param(
+            {"legs": (_reported_leg("bought", "450", OrderSide.BUY), _reported_leg("sold", "450", OrderSide.SELL))},
+            id="two legs on one contract",
+        ),
+    ],
+)
+def test_a_reported_multi_leg_order_that_cannot_be_one_is_refused(change: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _reported_spread(**change)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"legs": _legs_on("450", "455")}, id="legs"),
+        pytest.param({"contract": None}, id="no contract"),
+        pytest.param({"side": None}, id="no side"),
+        pytest.param({"quantity": 0}, id="no contracts"),
+    ],
+)
+def test_a_reported_single_order_that_cannot_be_one_is_refused(change: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _reported_single(**change)
+
+
+def test_nothing_reported_has_filled_more_than_was_ordered() -> None:
+    """True whatever a quantity counts, so a wrong guess about the units reads as no answer, not as a fill."""
+    with pytest.raises(ValidationError, match="filled 3 of a quantity of 2"):
+        _reported_single(filled_quantity=3)
+    with pytest.raises(ValidationError, match="filled 7 of a quantity of 2"):
+        _reported_spread(filled_quantity=7)
+    with pytest.raises(ValidationError, match="filled 99 of a quantity of 3"):
+        _reported_leg("bought", "450", OrderSide.BUY, quantity=3, filled_quantity=99)
+
+    assert _reported_single(filled_quantity=2).filled_quantity == 2
+    # A leg whose quantity the broker did not state has no quantity to exceed.
+    assert _reported_leg("bought", "450", OrderSide.BUY, quantity=None, filled_quantity=5).filled_quantity == 5
+
+
+def test_a_leg_is_not_held_to_its_ratio_times_the_parents_quantity() -> None:
+    """Alpaca's published request and answer disagree on what a leg's quantity counts; it is read, not judged."""
+    legs = (
+        _reported_leg("bought", "450", OrderSide.BUY, ratio=3, quantity=3),
+        _reported_leg("sold", "455", OrderSide.SELL, ratio=1, quantity=1),
+    )
+
+    assert [leg.quantity for leg in _reported_spread(quantity=3, legs=legs).legs] == [3, 1]
 
 
 # ── Which contracts a bot may trade ─────────────────────────────────────────
@@ -434,6 +687,31 @@ def test_a_listed_contract_a_bot_may_not_trade_is_refused_with_its_reason(
 
     assert refusal is not None
     assert (refusal.reason, refusal.symbol) == (reason, contract.occ_symbol)
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"status": "ACTIVE"}, OptionContractRefusal.NOT_ACTIVE),
+        ({"status": "Active"}, OptionContractRefusal.NOT_ACTIVE),
+        ({"style": "American"}, OptionContractRefusal.NOT_AMERICAN),
+        ({"style": "AMERICAN"}, OptionContractRefusal.NOT_AMERICAN),
+        (
+            {"deliverables": (BrokerOptionDeliverable(kind="EQUITY", symbol="SPY", amount=Decimal("100")),)},
+            OptionContractRefusal.NOT_STANDARD,
+        ),
+    ],
+)
+def test_a_word_the_brokers_reference_does_not_list_is_not_taken_for_the_one_it_resembles(
+    change: dict[str, object], reason: OptionContractRefusal
+) -> None:
+    """Alpaca's reference lists ``active``, ``american`` and ``equity`` in lowercase and nothing else."""
+    contract = _contract("call", "450")
+
+    refusal = option_contract_refusal(contract, _listing(contract, **change))
+
+    assert refusal is not None
+    assert refusal.reason is reason
 
 
 @pytest.mark.parametrize(
