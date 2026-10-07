@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "case": "trading_api/option_exercise",
+      "share_trade": {
+        "symbol": "AAPL",
+        "qty": "200",
+        "price": "90",
+        "net_amount": "-30000"
+      },
+      "price_from_net_amount": "150",
+      "price_in_sentence": "150"
+    },
+    {
+      "case": "trading_api/option_assignment",
+      "share_trade": {
+        "symbol": "AAPL",
+        "qty": "-200",
+        "price": "150",
+        "net_amount": "30000"
+      },
+      "price_from_net_amount": "150",
+      "price_in_sentence": "150"
+    },
+    {
+      "case": "trading_api/otm_option_expiry",
+      "share_trade": null
+    },
+    {
+      "case": "broker_api/exercising_call",
+      "share_trade": {
+        "symbol": "QS",
+        "qty": "100",
+        "price": "6.5",
+        "net_amount": "-650"
+      },
+      "price_from_net_amount": "6.5",
+      "price_in_sentence": null
+    },
+    {
+      "case": "broker_api/exercising_put",
+      "share_trade": {
+        "symbol": "QS",
+        "qty": "-100",
+        "price": "6.5",
+        "net_amount": "650"
+      },
+      "price_from_net_amount": "6.5",
+      "price_in_sentence": null
+    },
+    {
+      "case": "broker_api/call_assignment",
+      "share_trade": {
+        "symbol": "QS",
+        "qty": "-100",
+        "price": "4.5",
+        "net_amount": "450"
+      },
+      "price_from_net_amount": "4.5",
+      "price_in_sentence": null
+    },
+    {
+      "case": "broker_api/put_assignment",
+      "share_trade": {
+        "symbol": "QS",
+        "qty": "100",
+        "price": "9",
+        "net_amount": "-900"
+      },
+      "price_from_net_amount": "9",
+      "price_in_sentence": null
+    },
+    {
+      "case": "broker_api/call_expiration",
+      "share_trade": null
+    },
+    {
+      "case": "broker_api/put_expiration",
+      "share_trade": null
+    }
+  ]
+}

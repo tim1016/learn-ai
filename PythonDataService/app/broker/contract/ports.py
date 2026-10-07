@@ -24,6 +24,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -80,6 +81,28 @@ class BrokerReadPort(Protocol):
         limit: int = 100,
         activity_type: str | None = None,
     ) -> list[BrokerActivity]: ...
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> BrokerOptionEventEvidence:
+        """The account's assignments, exercises and expiries, and the share trades they created (ADR 0076).
+
+        These end an option position without an order, and a broker reports
+        them as account activities with a date and no time. The read covers
+        whole New York dates: every such activity dated on or after the date
+        ``after_ms`` falls on, newest first, in bounded steps. It is complete
+        only when the walk proved it reached that date; otherwise the
+        evidence carries a ``resume``, and handing it back whole, with the
+        same ``after_ms``, goes on as the same walk: the next page is held
+        to the order of the pages already read.
+
+        Each activity is read whole or listed as unreadable, never in part.
+        No event in the window means nothing happened only when the
+        evidence's ``read_whole`` is true: the walk is complete, no row is
+        unreadable, and the broker reports every row as executed. A broker
+        whose book can hold no option position answers with none, complete.
+        """
+        ...
 
     async def list_assets(
         self,
