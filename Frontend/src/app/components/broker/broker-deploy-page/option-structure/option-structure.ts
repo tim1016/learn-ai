@@ -25,7 +25,8 @@ export type OptionRules = Pick<OptionStructureCatalogue, 'strike_rules' | 'expir
  * The option order terms as the owner set them, under the names the
  * catalogue's `order_terms` gives them. A percent is kept as typed, so an
  * exact decimal never passes through a float. A whole-number term is `null`
- * while its box holds no whole number.
+ * while its box is empty. Whether a term can be sent as it stands is
+ * {@link orderTermsSet}'s to say.
  */
 export interface OptionOrderTerms {
   readonly gap_limit_percent: string;
@@ -380,18 +381,51 @@ export function startingOrderTerms(defaults: OptionOrderTermDefaults): OptionOrd
   };
 }
 
-/** A percent as the routes take one: plain digits, with at most six decimal places. */
-const PERCENT = /^\d+(\.\d{1,6})?$/;
+/** The order terms that are a percent, and those that are a whole number. */
+export type OptionPercentTerm = 'gap_limit_percent' | 'cost_limit_percent';
+export type OptionCountTerm = 'entry_wait_seconds' | 'expiry_close_lead_minutes';
 
-/** Whether `text` is a percent a route can be sent. Its range is the server's to judge. */
-export function isPercent(text: string): boolean {
-  return PERCENT.test(text);
+/** A decimal as the routes read one written: a sign, digits, a fraction, a power of ten. `.3` and `1e1` are both read. */
+const WRITTEN_DECIMAL = /^\s*(?=-?\.?\d)-?(\d*)\.?(\d*)(?:e([+-]?\d+))?\s*$/i;
+
+/** The decimal places a written number has once its trailing zeros are dropped, as the routes count them. */
+function decimalPlaces(whole: string, fraction: string, exponent: number): number {
+  const digits = whole + fraction;
+  const significant = digits.replace(/0+$/, '');
+  return significant === '' ? 0 : Math.max(0, fraction.length - (digits.length - significant.length) - exponent);
+}
+
+/**
+ * Why a percent term as typed cannot be sent, in the form's own words, or
+ * `null` when it can. The bounds are the preview route's own (#2913): no
+ * finer than a millionth of a percent and no more than 100; the widest gap
+ * is more than nothing, and the cost limit may be nothing. The text is only
+ * read here: what is sent is what the owner typed.
+ */
+export function percentProblem(text: string, term: OptionPercentTerm): string | null {
+  if (text.trim() === '') return 'Enter a percent.';
+  const written = WRITTEN_DECIMAL.exec(text);
+  if (written === null) return 'Write the percent in digits, such as 7.5.';
+  if (decimalPlaces(written[1], written[2], Number(written[3] ?? 0)) > 6) return 'A percent takes at most six decimal places.';
+  const percent = Number(text);
+  if (term === 'gap_limit_percent' ? percent <= 0 : percent < 0) {
+    return term === 'gap_limit_percent' ? 'Must be more than 0.' : 'Cannot be less than 0.';
+  }
+  return percent > 100 ? 'Cannot be more than 100.' : null;
+}
+
+/** Why a whole-number term cannot be sent, in the form's own words, or `null` when it can. */
+export function countProblem(count: number | null): string | null {
+  return count !== null && Number.isInteger(count) && count >= 0 ? null : 'Enter a whole number, 0 or more.';
 }
 
 /** Whether every order term holds something a route can be sent. */
 export function orderTermsSet(terms: OptionOrderTerms | null): terms is OptionOrderTerms {
-  return terms !== null && isPercent(terms.gap_limit_percent) && isPercent(terms.cost_limit_percent)
-    && terms.entry_wait_seconds !== null && terms.expiry_close_lead_minutes !== null;
+  return terms !== null
+    && percentProblem(terms.gap_limit_percent, 'gap_limit_percent') === null
+    && percentProblem(terms.cost_limit_percent, 'cost_limit_percent') === null
+    && countProblem(terms.entry_wait_seconds) === null
+    && countProblem(terms.expiry_close_lead_minutes) === null;
 }
 
 /** The order terms on one line, each under the catalogue's own label and unit. */

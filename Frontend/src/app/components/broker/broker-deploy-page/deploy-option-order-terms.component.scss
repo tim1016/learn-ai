@@ -1,10 +1,6 @@
 @use '../../../styles/eyebrow-heading' as *;
-@use '../../../styles/filled-controls' as *;
-@use '../../../styles/visually-hidden' as *;
 
 :host { display: block; min-width: 0; }
-
-.sr-only { @include visually-hidden; }
 
 .order-terms {
   display: grid;
@@ -23,45 +19,6 @@
   p {
     margin: 0;
     color: var(--text-secondary);
-    font-size: var(--fs-xs);
-  }
-}
-
-.order-terms__fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-}
-
-.order-terms__field {
-  display: grid;
-  align-content: end;
-  gap: var(--space-1);
-  min-width: 0;
-
-  label { @include field-label; }
-}
-
-// A number with its unit beside it, in the server's word for the unit.
-.order-terms__unit {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  min-width: 0;
-
-  input {
-    @include filled-field;
-    flex: 0 0 4.5rem;
-    width: 4.5rem;
-    appearance: textfield;
-
-    &::-webkit-inner-spin-button,
-    &::-webkit-outer-spin-button { margin: 0; appearance: none; }
-  }
-
-  > span {
-    min-width: 0;
-    color: var(--text-subtle);
     font-size: var(--fs-xs);
   }
 }

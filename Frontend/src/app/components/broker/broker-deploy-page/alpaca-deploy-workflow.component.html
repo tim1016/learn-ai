@@ -180,6 +180,7 @@
             <app-deploy-option-order-terms
               [terms]="options.order_terms"
               [defaults]="optionCatalogueView()?.order_terms ?? null"
+              [failure]="optionCatalogueFailure()"
               (termsChange)="setOptionOrderTerms($event)"
             />
           } @else {

@@ -122,6 +122,11 @@ async function useBullCallSpread(): Promise<void> {
   await within(step('What')).findByRole('region', { name: 'Bull call spread' });
 }
 
+/** What the option order term boxes hold, in the order they stand. */
+function termValues(terms: HTMLElement): string[] {
+  return Array.from(terms.querySelectorAll('input')).map((box) => box.value);
+}
+
 function chooseMoney(amount = '1000.00'): void {
   fireEvent.input(screen.getByLabelText(/\(USD\)$/), { target: { value: amount } });
 }
@@ -184,7 +189,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
 
     expect(within(how).queryByRole('group', { name: /^Exit terms/ })).toBeNull();
     const terms = await within(how).findByRole('group', { name: 'Option order terms · fixed for this bot’s life' });
-    await vi.waitFor(() => expect(within(terms).getAllByRole<HTMLInputElement>('spinbutton').map((box) => box.value)).toEqual(['8', '30', '10', '45']));
+    await vi.waitFor(() => expect(termValues(terms)).toEqual(['8', '30', '10', '45']));
     expect(within(how).getByRole('radio', { name: 'One structure' })).toBeTruthy();
     expect(within(how).queryByRole('radio', { name: 'One share' })).toBeNull();
 
@@ -258,6 +263,42 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     expect(within(what).getByRole('combobox', { name: 'Trades' }).textContent).not.toContain('AAPL');
   });
 
+  it('says in How why the order terms could not be read, and no longer that it is reading them', async () => {
+    const service = mockService();
+    service.getOptionStructures.mockRejectedValue(new Error('offline'));
+    await renderWorkflow(service);
+
+    trade('Options');
+
+    // What says it as an alert, beside the retry; How says the same in place of its boxes.
+    expect((await within(step('What')).findByRole('alert')).textContent).toContain('The option structures could not be read.');
+    const terms = within(step('How')).getByRole('group', { name: /^Option order terms/ });
+    await vi.waitFor(() => expect(terms.textContent).toContain('The option structures could not be read.'));
+    expect(terms.textContent).not.toContain('Reading the option order terms');
+    expect(terms.querySelector('input')).toBeNull();
+  });
+
+  it('asks for no preview while an order term holds what the server refuses', async () => {
+    const { service } = await renderWorkflow();
+    await tradeOptions();
+    await useBullCallSpread();
+    const how = step('How');
+    await within(step('What')).findByText('Stand-in: which way it leans.');
+    const asked = service.previewOptionStructure.mock.calls.length;
+
+    // A widest gap of nothing is refused by the route: it is not asked, and How's header says what is missing.
+    fireEvent.input(within(how).getByLabelText(/^Widest bid-ask gap/), { target: { value: '0' } });
+    fireEvent.blur(within(how).getByLabelText(/^Widest bid-ask gap/));
+    await settle();
+
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(asked);
+    expect(within(how).getByRole('alert').textContent).toContain('Must be more than 0.');
+
+    fireEvent.input(within(how).getByLabelText(/^Widest bid-ask gap/), { target: { value: '.3' } });
+    await vi.waitFor(() => expect(service.previewOptionStructure.mock.calls.at(-1)?.[1]).toMatchObject({ gap_limit_percent: '.3' }));
+    expect(within(how).queryByRole('alert')).toBeNull();
+  });
+
   it('previews the size and the limits the owner set in How', async () => {
     const { service } = await renderWorkflow();
     await tradeOptions();
@@ -266,7 +307,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
 
     fireEvent.click(within(how).getByRole('radio', { name: 'Custom structures' }));
     fireEvent.input(within(how).getByLabelText('Whole structures per entry'), { target: { value: '3' } });
-    fireEvent.change(within(how).getByRole('spinbutton', { name: /^Whole-structure cost/ }), { target: { value: '7.5' } });
+    fireEvent.input(within(how).getByLabelText(/^Whole-structure cost/), { target: { value: '7.5' } });
 
     await vi.waitFor(() => expect(service.previewOptionStructure.mock.calls.at(-1)?.[1]).toMatchObject({
       structures: 3, cost_limit_percent: '7.5',
@@ -302,7 +343,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     await tradeOptions();
     await useBullCallSpread();
     const how = step('How');
-    fireEvent.change(within(how).getByRole('spinbutton', { name: /^Entry wait/ }), { target: { value: '20' } });
+    fireEvent.input(within(how).getByLabelText(/^Entry wait/), { target: { value: '20' } });
 
     trade('Same as signal');
 
@@ -321,7 +362,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     await tradeOptions();
     expect(within(what).getByRole('region', { name: 'Custom' })).toBeTruthy();
     const terms = await within(how).findByRole('group', { name: /^Option order terms/ });
-    await vi.waitFor(() => expect(within(terms).getAllByRole<HTMLInputElement>('spinbutton').map((box) => box.value)).toEqual(['8', '30', '10', '45']));
+    await vi.waitFor(() => expect(termValues(terms)).toEqual(['8', '30', '10', '45']));
   });
 
   it('leaves Options when the owner chooses another stock or ETF instead', async () => {

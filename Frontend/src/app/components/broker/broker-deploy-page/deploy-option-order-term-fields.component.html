@@ -1,0 +1,25 @@
+<div class="term-fields">
+  @for (box of boxes(); track box.name) {
+    <div class="term-fields__field">
+      <label [for]="box.id">{{ box.label }}<span class="sr-only"> ({{ box.unit }})</span></label>
+      <span class="term-fields__unit">
+        @if (box.percent) {
+          <!-- Text, not a number box: the percent is sent exactly as it was typed. -->
+          <input
+            type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+            [id]="box.id" [formField]="box.field"
+            [attr.aria-invalid]="box.problem !== null" [attr.aria-describedby]="box.problem === null ? null : box.problemId"
+          />
+        } @else {
+          <input
+            type="number" inputmode="numeric" step="1"
+            [id]="box.id" [formField]="box.field"
+            [attr.aria-invalid]="box.problem !== null" [attr.aria-describedby]="box.problem === null ? null : box.problemId"
+          />
+        }
+        <span aria-hidden="true">{{ box.unit }}</span>
+      </span>
+      @if (box.problem; as why) { <em [id]="box.problemId" role="alert">{{ why }}</em> }
+    </div>
+  }
+</div>

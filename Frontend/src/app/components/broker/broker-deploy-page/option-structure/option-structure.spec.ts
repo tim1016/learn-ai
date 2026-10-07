@@ -117,12 +117,36 @@ describe('the option order terms', () => {
 
   it.each([
     [{ gap_limit_percent: '' }],
-    [{ cost_limit_percent: '1e1' }],
+    [{ gap_limit_percent: '0' }],
+    [{ gap_limit_percent: '0.000' }],
+    [{ gap_limit_percent: '100.000001' }],
+    [{ gap_limit_percent: '1e3' }],
+    [{ gap_limit_percent: '1.5e-6' }],
+    [{ gap_limit_percent: 'eight' }],
+    [{ gap_limit_percent: '.' }],
     [{ cost_limit_percent: '7.1234567' }],
+    [{ cost_limit_percent: '-0.5' }],
     [{ entry_wait_seconds: null }],
-    [{ expiry_close_lead_minutes: null }],
-  ])('are not set while one holds %o', (change) => {
+    [{ entry_wait_seconds: 2.5 }],
+    [{ expiry_close_lead_minutes: -1 }],
+  ])('are not set while one holds %o, which the server refuses', (change) => {
     expect(orderTermsSet({ ...TERMS, ...change })).toBe(false);
+  });
+
+  // Each of these was read by the preview route's own rule for an owner's percent.
+  it.each([
+    [{ gap_limit_percent: '.3' }],
+    [{ gap_limit_percent: '5.' }],
+    [{ gap_limit_percent: '1e1' }],
+    [{ gap_limit_percent: '1E2' }],
+    [{ gap_limit_percent: '1e-6' }],
+    [{ gap_limit_percent: '1.2300000' }],
+    [{ gap_limit_percent: '100' }],
+    [{ cost_limit_percent: '0' }],
+    [{ cost_limit_percent: '0.000001' }],
+    [{ entry_wait_seconds: 0 }],
+  ])('are set while one holds %o, which the server takes', (change) => {
+    expect(orderTermsSet({ ...TERMS, ...change })).toBe(true);
   });
 
   it('read on one line under the catalogue’s labels and units', () => {
