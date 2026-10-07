@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
+from app.broker.alpaca.clerk.sqlite.entry_outcome import ENTRY_OUTCOME_LIMIT_PAST, EntryOutcomeWaitRefused
 from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.market_liveness import set_market_liveness_consumer
@@ -739,21 +740,25 @@ async def test_on_its_expiry_day_an_entry_after_the_cutoff_is_refused_by_the_run
     _nothing_was_sent(floor, ran)
 
 
-async def test_the_clerk_refuses_an_entry_past_the_cutoff_whatever_the_runner_let_through(
+async def test_the_clerk_refuses_an_entry_past_the_cutoff_at_its_own_clock_though_the_runners_recheck_passed(
     on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A bot whose own terms would let it enter up to the close. Its runner's recheck passes at 15:14. The
-    Clerk asks the cutoff itself, at its own clock and under its own terms, and refuses: one refused
-    decision, written once, and nothing sent."""
-    monkeypatch.setattr(
-        bot_option_run, "option_order_terms",
-        lambda _binding: OptionOrderTerms(
-            close=CloseTerms(expiry_close_lead_ms=0, entry_wait_ms=0, cancel_allowance_ms=0, entry_margin_ms=0)
-        ),
-    )
+    """A bot whose own terms put the cutoff at 15:13:01, a second after its decision bar closes. Its runner's
+    recheck passes, three tenths of a second after that close. The entry reaches the Clerk a second later.
+    The Clerk asks the cutoff itself, at its own clock and under the terms the runner handed it, and
+    refuses: one refused decision, written once, and nothing sent."""
+    terms = CloseTerms(entry_margin_ms=69_000)
+    monkeypatch.setattr(bot_option_run, "option_order_terms", lambda _binding: OptionOrderTerms(close=terms))
     floor = await _on_friday_afternoon(on_the_floor)
+    ask = floor.clerk.execute_for_instance
 
-    ran = await floor.run([*_entered_on_the_bar_closing_at(AT_1513 + MINUTE), Step(red(AT_1513 + 2 * MINUTE))])
+    async def a_second_later(**effect: Any) -> Any:
+        floor.clock.value += 1_000
+        return await ask(**effect)
+
+    monkeypatch.setattr(floor.clerk, "execute_for_instance", a_second_later)
+
+    ran = await floor.run([*_entered_on_the_bar_closing_at(AT_1513), Step(red(AT_1513 + MINUTE))])
 
     assert [code for code, _ in ran.blocked()] == [OptionEffectRefusal.PAST_ENTRY_CUTOFF.value]
     assert [outcome for outcome, _ in ran.outcomes()] == ["no_action", "blocked", "no_action"]
@@ -1638,6 +1643,24 @@ async def test_a_run_whose_option_plan_is_refused_is_recorded_under_the_refusals
     view = registry.status("alpaca", _SID)
     assert view.duty_outcome is not None
     assert (view.duty_outcome.kind, view.duty_outcome.reason_code) == ("CRASHED", refusal.value)
+    assert view.desired_state == "STOPPED"
+
+
+async def test_a_run_ended_by_a_refused_wait_for_its_entrys_outcome_is_recorded_under_the_refusals_own_reason(
+    tmp_path: Path,
+) -> None:
+    """The Clerk refuses the runner's wait for what an option entry came to, and the runner settles nothing
+    by itself, so the run ends. Through the registry's own supervision: the bot's page says so in the
+    refusal's code, not the name of a Python exception, and the bot is left stopped."""
+    refused = EntryOutcomeWaitRefused(ENTRY_OUTCOME_LIMIT_PAST, "the limit was already past when the wait was asked for")
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="crash", error=refused))
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.duty_outcome is not None
+    assert (view.duty_outcome.kind, view.duty_outcome.reason_code) == ("CRASHED", ENTRY_OUTCOME_LIMIT_PAST)
     assert view.desired_state == "STOPPED"
 
 
