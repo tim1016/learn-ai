@@ -164,6 +164,28 @@ async def test_a_live_account_is_sent_no_option_order_and_the_refusal_says_nothi
 
 
 @responses.activate
+async def test_a_broker_built_around_a_live_client_with_no_settings_of_its_own_sends_no_option_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The process's own binding says Paper. The client that would post is bound to Live, and it is the one asked."""
+    live = AlpacaSettings(
+        api_key_id="k", api_secret_key="s", mode="live",
+        live_loss_fraction=0.02, live_loss_usd=500.0, live_xh_entry_bps=10.0, live_xh_exit_bps=10.0,
+    )
+    paper_binding = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
+    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", lambda: paper_binding)
+    client = AlpacaTradingClient(
+        settings=live, journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS)
+    )
+    built_around_it = AlpacaBroker(client=client)
+
+    with pytest.raises(BrokerOptionsNotSupported):
+        await built_around_it.submit_option_order(_long_call(), client_order_id=_REF)
+
+    assert len(responses.calls) == 0
+
+
+@responses.activate
 async def test_a_multi_leg_order_goes_out_once_and_comes_back_as_a_parent_with_its_legs(broker: AlpacaBroker) -> None:
     responses.add(responses.POST, _ORDERS, json=_answer("MultilegOptionsOrderResponse"))
 
