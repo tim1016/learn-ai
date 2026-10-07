@@ -1083,6 +1083,17 @@ async def test_any_other_order_term_longer_than_a_session_is_refused_by_name(pap
     assert paper.venue.option_submit_calls == []
 
 
+@pytest.mark.parametrize(
+    "term", ["cancel_allowance_ms", "entry_margin_ms", "expiry_close_lead_ms", "sold_leg_close_lead_ms"]
+)
+async def test_an_order_term_of_exactly_a_session_is_taken(paper: PaperOptions, term: str) -> None:  # noqa: F811
+    # Ten days before the contract expires, so no cutoff is counted back from these terms today.
+    sent = await paper.enter(evidence=paper.evidence(terms=CloseTerms(**{term: MAX_ORDER_TERM_MS})))
+
+    assert sent.state is EffectOperationState.SUBMITTED, sent.explanation
+    assert len(paper.venue.option_submit_calls) == 1
+
+
 async def test_a_proven_outcome_is_recorded_even_after_the_run_stopped(paper: PaperOptions) -> None:  # noqa: F811
     order_ref = await paper.resting(decision="d-1")
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
