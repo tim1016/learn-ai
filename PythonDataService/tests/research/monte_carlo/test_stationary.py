@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
+import pyarrow.ipc as ipc
 import pytest
 
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks, stationary_indices
+
+SB_001 = Path(__file__).resolve().parents[2] / "fixtures" / "golden" / "resampling" / "SB-001" / "v1"
 
 
 def _ar1(n: int, seed: int) -> np.ndarray:
@@ -84,3 +89,29 @@ def test_stationary_draws_refuse_bad_arguments(kwargs: dict[str, float]) -> None
     # The chunked form refuses when it is called, not when its first chunk is taken.
     with pytest.raises(ValueError):
         stationary_index_chunks(n, rng=np.random.default_rng(0), **arguments)  # type: ignore[arg-type]
+
+
+def _read(name: str) -> dict[str, np.ndarray]:
+    with ipc.open_file(str(SB_001 / name)) as reader:
+        table = reader.read_all()
+    return {column: table[column].to_numpy() for column in table.schema.names}
+
+
+def test_stationary_bootstrap_agrees_with_arch_fixture_sb_001() -> None:
+    # The statistic the readings score a resampled path on, so the fixture holds the draw and it together.
+    from app.research.golden_search.chance import path_sharpe
+
+    series, reference = _read("input.arrow"), _read("output.arrow")
+    a, b = series["a"], series["b"]
+    means, sharpes, differences = [], [], []
+    for index in stationary_index_chunks(a.size, size=a.size, mean_block=5, replications=200_000, rng=np.random.default_rng(1)):
+        sharpe = path_sharpe(a[index])
+        means.append(a[index].mean(axis=1))
+        sharpes.append(sharpe)
+        differences.append(sharpe - path_sharpe(b[index]))
+    for name, ours in (("mean", means), ("sharpe", sharpes), ("sharpe_difference", differences)):
+        drawn = np.concatenate(ours)
+        shares = [float(np.mean(drawn <= threshold)) for threshold in reference[name]]
+        # Monte Carlo agreement, not float equality: each side places a share to sqrt(p(1-p)/200,000) <= 0.0011,
+        # so their difference has a standard error of at most 0.0016, and 0.008 is five of them.
+        assert np.allclose(shares, reference["level"], atol=0.008, rtol=0.0), name
