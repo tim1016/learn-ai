@@ -221,6 +221,18 @@ async def test_redirects_are_not_followed_on_internal_traffic(
         await client.aclose()
 
 
+async def test_the_client_for_a_worker_thread_does_not_follow_a_redirect_either(
+    internal_server: _InternalServer,
+) -> None:
+    """The synchronous twin over a real socket, called from a thread as its one caller calls it (#2913)."""
+    client = build_internal_sync_client()
+    try:
+        response = await asyncio.to_thread(client.get, f"{internal_server.base_url}/redirect")
+        assert (response.status_code, response.headers["location"]) == (302, "/events")
+    finally:
+        client.close()
+
+
 async def test_an_oversized_event_refuses_instead_of_buffering(
     internal_server: _InternalServer,
 ) -> None:

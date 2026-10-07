@@ -20,6 +20,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.broker.fleet.internal_http import build_internal_sync_client
 from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH, OPTION_MODEL_INPUTS_READ_TIMEOUT_S
 from app.config import fleet_settings, settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
@@ -34,6 +35,9 @@ from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.error_handlers import install_fleet_control_error_handler
 from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import to_ms_utc
+
+# A real server on a loopback port, as the fleet's lane tests start one.
+from tests.broker.fleet import test_a2_alpaca_lane as lanes
 
 CLERK_ID = "clrk_inputs000000000000000000aa"
 TOKEN = "svct_" + "4" * 32
@@ -226,6 +230,23 @@ def test_the_answer_on_the_wire_has_its_numbers_as_text_and_its_dates_as_moments
         {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "USD"},
         {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.470625", "currency": "USD"},
     ]
+
+
+def test_over_a_real_socket_the_fleets_own_client_reads_the_same_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every other test here hands the Clerk a client that opens no connection. This one is the fleet's own."""
+    coordinator = Coordinator(monkeypatch)
+    server = lanes._RealServer(coordinator._app)
+    server.start()
+    try:
+        monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", server.base_url)
+        monkeypatch.setattr(option_model_inputs_coordinator, "build_internal_sync_client", build_internal_sync_client)
+        read = _read()
+    finally:
+        server.stop()
+
+    assert read.rate.hex() == (0.1 + 0.2).hex()
+    assert read.dividends == READ.dividends and read.dividends_read_ms == READ.dividends_read_ms
+    assert coordinator.asked == [("SPY", NOW, _NEXT_FRIDAY, True)]
 
 
 def test_dividends_the_coordinator_could_not_learn_stay_unknown_with_its_reason_and_the_rate_is_still_read(
