@@ -103,9 +103,9 @@ def bid_ask_gap_percent_of_mid(bid: Decimal, ask: Decimal) -> Fraction:
 
 
 def _legs_over_their_gap_limit(
-    structure: ResolvedStructure, markets: Mapping[str, LegQuote], *, limit_percent: Decimal, first_only: bool
+    structure: ResolvedStructure, markets: Mapping[str, LegQuote], *, limit_percent: Decimal
 ) -> list[LegGapOverLimit]:
-    """Each leg, in the structure's own order, whose market is wider than the limit: the first alone, or all."""
+    """Each leg, in the structure's own order, whose market is wider than the limit."""
     limit = Fraction(require_everyday(limit_percent, what="a leg gap limit"))
     if limit < 0:
         raise ValueError(f"a leg gap limit is a percent, zero or more; got {limit_percent}")
@@ -118,8 +118,6 @@ def _legs_over_their_gap_limit(
                     leg_id=leg.leg_id, contract=leg.contract, bid=market.bid, ask=market.ask, limit_percent=limit_percent
                 )
             )
-            if first_only:
-                break
     return over
 
 
@@ -230,11 +228,7 @@ def entry_figures(
         refusals.append(refused)
         if first_refusal_only:
             return so_far()
-    refusals.extend(
-        _legs_over_their_gap_limit(
-            structure, markets, limit_percent=leg_gap_limit_percent, first_only=first_refusal_only
-        )
-    )
+    refusals.extend(_legs_over_their_gap_limit(structure, markets, limit_percent=leg_gap_limit_percent))
     if refusals and first_refusal_only:
         return so_far()
     fees = fee_provision(structure, markets, size)
