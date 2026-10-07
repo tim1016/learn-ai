@@ -259,7 +259,7 @@ Nothing in the Clerk calls any of this yet. No account has been assigned, has ex
 
 ### 15. The Clerk takes one bought option, and works its entry out from facts
 
-**Who takes an option plan today.** A Dry Run's account and a Paper account, and only a plan of one bought call or put. A plan with a sold leg, or with more than one leg, is refused by name. A Live Shadow or a Live account refuses to register an option bot and refuses an option effect, each by name, and writes nothing. The books do not record an account's mode, so that refusal is the facade's, asked at registration and again at every effect. Beneath it are two more fences that know their own account: a Live Shadow's port refuses an option order by type, and the Alpaca port refuses to send one on a live binding (decision 19). Nothing about option orders has been checked against Alpaca.
+**Who takes an option plan today.** A Dry Run's account and a Paper account, and only a plan of one bought call or put. A plan with a sold leg, or with more than one leg, is refused by name. A Live Shadow refuses to register an option bot and refuses an option effect, each by name, and writes nothing: it is not built. A Live account does the same while one setting is off, which it is unless a deployment turns it on (decision 24). The books do not record an account's mode, so that refusal is the facade's, asked at registration and again at every effect. Beneath it are two more fences that know their own account: a Live Shadow's port refuses an option order by type, and the Alpaca port refuses to send one on a live binding while that same setting is off (decision 19). Nothing about option orders has been checked against Alpaca.
 
 - An option bot is registered under its underlying, on a Dry Run and on Paper alike. Its budget is committed with no minimum position cost: what one option position costs is known only from its contract's quotes, at each entry.
 
@@ -465,7 +465,7 @@ An option entry is a limit order that waits at Alpaca. Nothing waited before: ev
 
 - **A restart ends the wait early.** The Clerk stops every run when it starts, and no entry outlives its run, so a resting entry is cancelled at the restart whatever its deadline. The runner that waited is gone and no settlement was recorded, so the next Start's replay settles that entry from the books as they stand: dropped when nothing was bought, entered when something was, entered while nothing proves either.
 - **A simulation cannot rest an order.** It fills at once or not at all. Its entry keeps a deadline like any other and is never on the keeper's worklist. A Dry Run's keeper is started only when its store is opened to operate, never for a read.
-- **Paper takes one bought option. Live Shadow and Live do not yet, and each refuses by name.** A Paper account's close is a market order, sent with no quote of ours. A Paper account's bot reaches all of this through its runner (decision 21), which asks the Clerk whether the account takes its plan before it opens a stream (`require_option_plan_taken`, the rule a bot is registered under).
+- **Paper takes one bought option. Live Shadow does not, and Live does not while its setting is off (decision 24). Each refuses by name.** A Paper account's close is a market order, sent with no quote of ours. A Paper account's bot reaches all of this through its runner (decision 21), which asks the Clerk whether the account takes its plan before it opens a stream (`require_option_plan_taken`, the rule a bot is registered under).
 - **Live has a second fence.** The Alpaca port refuses to send an option order, opening or closing, on a live binding, before anything is built: definitive, so the Clerk records the order as not sent. A Live option order therefore needs two independent mistakes. The fence asks the settings of the client that posts, when that client is bound to some, so a port built around a live client is refused whatever the process's own binding says. Alpaca itself takes option orders on a live account, so the capabilities still say so. Opening Live to option bots removes this refusal on purpose.
 - **On Paper the picked contract is first asked of Alpaca's own contract reference** (decision 11), outside the Clerk's intake lock: not listed, not the contract asked for, inactive, not tradable, not American, or not a standard contract of a hundred shares, each is refused by name, and so is a listing that could not be read. The read has three seconds, well inside the five the entry's quotes are good for; a listing that takes longer refuses the entry for that, by name. It is not asked at all for an entry that the closed session or an unhealthy channel refuses anyway, and such an entry is never taken without its listing if those answers have changed by the time it is judged. The listing is asked once an attempt, not once a decision: an entry that waits for a newer account reading is judged again from the top, and its listing is asked again, each time inside its own three seconds and outside the lock.
 - **A Paper entry's quote is tested again at the send, as a Dry Run's is** (decision 15). Its limit order would rest at the price that quote gave. So a quote that passed when the entry was taken and is past the decision-data budget when its order is reached for sending refuses the entry there, under the quote's own fault code: nothing is sent, nothing stays set aside, and the entry reads never sent. The listing is read before the entry is taken, so its three seconds are spent before the first test of the quote, not between the two.
@@ -527,7 +527,7 @@ An option bot in a Dry Run runs end to end: its Signal stream decides, its runne
 - **A refusal on the way is one decision.** Whatever stops an entry before its order is taken, by the runner or by the Clerk, the decision gets one `blocked` receipt with a reason code and a sentence, the staged decision is discarded, and nothing is kept for a later bar. A refusal at the send is the next bullet but one: that entry was accepted, and its receipt says so. The codes are the resolver's own (`OPTION_CONTRACT_…`), the search's own (`OPTION_SEARCH_…`), the Clerk's own, the existing `DECISION_LATE` and `PRICING_BAR_…`, and seven of the runner's: `OPTION_ENTRY_NO_QUOTE_SOURCE`, `OPTION_ENTRY_LISTING_NOT_READ`, `OPTION_ENTRY_DIVIDENDS_UNKNOWN`, `OPTION_ENTRY_PRICING_INPUTS_LATE`, `OPTION_ENTRY_PRICING_INPUTS_NOT_READ`, `OPTION_ENTRY_SEARCH_LATE`, `OPTION_ENTRY_TAKEN_TOO_LATE`.
 - **The entry cutoff is asked twice, under one set of terms.** The runner's recheck refuses an entry past the cutoff under the bot's own terms, and the Clerk is never asked. The runner hands those terms over with the entry, and the Clerk asks again under them at its own clock, later (decision 16). Its refusal is the same one blocked decision, written by the Clerk, under the same code. As first built the Clerk asked under the starting terms, so a bot with other terms could be passed by one and refused by the other for the terms alone.
 - **A refusal at the send is the Clerk's, and the runner takes it as it does for shares.** As the order is sent the Clerk asks the session and the cutoff again and tests the entry's quote again at that clock (decisions 15 and 16). An entry refused there was accepted and never sent: its receipt is the accepted one (`enter_intent`), not a `blocked` one, and the books record the refusal as `ENTER_SUBMISSION_REFUSED` with its reason. The runner discards the decision, the journal lists no purchase, and what was set aside is free again. The receipt does not say it was refused, so the runner says it once in its log: the decision, the word "rejected", and the code the books recorded of the order. It reads the entry's standing for that (`option_entry_of_decision`, a read that waits for nothing and records nothing).
-- **The limits are the deployment's.** The runner reads the bot's two limits and its close terms in one place. Deploy does not store them yet, so every option bot runs under the terms a Deploy starts from: 8, 10, and the default close terms.
+- **The limits are the deployment's.** The runner reads the bot's two limits and its close terms in one place, from the four order terms sealed with the bot on its binding (decision 24). A bot with none sealed is refused as its run starts, by name: nothing is assumed in their place.
 - **A machine whose clock is behind the feed's** can be handed a bar a moment before, by its own clock, that bar closed. The selection is then stamped at the bar's close, never before it; its quotes are judged a little older than they were.
 
 **An exit closes what the Clerk says the bot holds.** In a Dry Run the runner asks the Clerk which contract the bot holds and hands over the newest quote the supervisor holds for it, whatever its age, when that quote is live data. The Clerk judges whether a decision could have used it (decision 16). Delayed or frozen data is not handed over. With nothing to hand over the EXIT is sent all the same.
@@ -600,7 +600,7 @@ An option bot in a Dry Run runs end to end: its Signal stream decides, its runne
   - the resolver's whole evidence (every candidate of every leg) is not written down with the entry. The Clerk keeps the contract, the multiplier and the quote, and the runner logs the pick. A pick cannot yet be reproduced from stored evidence;
   - the Clerk's own ENTER facts do not say where the multiplier came from;
   - every scheduled close;
-  - a bot's own order terms stored at Deploy: every bot still runs under the terms a Deploy starts from. An entry wait longer than the runner can see through is refused by the runner (decision 19); Deploy does not bound what it offers yet;
+  - a check, at the Clerk, of the terms a runner hands over against the ones sealed in the Clerk's own copy of the bot's configuration: the runner is the one reader of them (decision 24);
   - a quote line for a contract a stopped Paper bot still holds;
   - the run replay proof (`run_replay_proof.py`) settles a replayed decision from the live record's outcome alone. Nothing in the app calls it since its receipt was cut (#2755). Called on an option bot's run, it would replay an ENTER settled as discarded as entered;
   - a line budget check at Deploy;
@@ -628,6 +628,74 @@ The preview shows a structure's daily time decay beside what it leans. One contr
 - **A model's figure, shown to the cent.** Nothing is judged by it and nothing is set aside for it.
 - **Not yet:** an entry records no decay (the PRD asks for it on every entry: the entry lane can be asked for it the same way); the bot page shows none.
 
+### 24. Deploy seals an option bot's plan and its four order terms, and opens a Dry Run and Paper
+
+Decisions 20 and 22 are other work's, and are written where that work lands.
+
+Deploy takes an option structure as what a bot trades. What it writes is fixed for the bot's life, and what it refuses it refuses by name before the bot has one.
+
+**One choice, and a bot in shares is unchanged**
+
+- **A Deploy says what its bot trades once.** One field, `trades`, is one of three: the shares of the symbol it listens to, another stock or ETF, or an option structure. The field a different-stock Deploy has always used, `traded_symbol`, is still taken, and the two together are refused. Once read, a request has one spelling: only an option choice stays in `trades`.
+- **So a bot in shares is the Deploy it always was.** Its request dumps to the same bytes, and its fingerprint, its review token, its binding, its configuration hash, its instance record and its seal are what they were. Each new field is left out of every dump when it is absent.
+- **An option choice is the structure as the builder holds it:** the underlying, the name it was started from, its legs exactly as the preview takes them, and four order terms. Its size is the request's own sizing, in whole structures. Its plan is the one the preview builds from the same legs.
+- **Every bot still carries exit terms.** The Clerk asks every registration for sealed ones. Nothing of an option bot reads them: its exits are market orders in regular hours.
+
+**The four terms are sealed**
+
+- **The widest gap a leg, the entry wait, the whole-structure cost limit and the expiry-day close** are said on the request, each a number inside the range decision 17's catalogue offers. None is filled in for one left out.
+- **They ride beside the plan** on the start request, the binding, the instance record and the seal, under the configuration hash and the seal's hash. The review token binds them too: a review of one set of terms is no review of another.
+- **The runner reads them from the binding, in one place,** and hands them to the Clerk with every entry (decision 21). It assumes none: a bot sealed with no terms is refused as its run starts. A bot in shares may carry none.
+- **The Clerk does not check them against its own copy** of the bot's configuration. The runner is the one reader.
+
+**What stops a Deploy**
+
+Each is found by the authority that already holds the rule, and said in a sentence that names a leg by its place.
+
+- **A structure no plan can hold:** the preview's own checks, asked with no quote source, in the preview's own words.
+- **A structure the Clerk does not take yet:** the Clerk's own rule, one bought call or put (decision 15). The builder and the preview still show every structure.
+- **The account's mode.** A Dry Run and a Paper account are open. A Live Shadow is refused: it is not built. Live is below.
+- **This Clerk cannot quote it:** it reads its market status from a shared source, or it counts too few quote lines free. The count is what this plan's window can need and what the option bots already running here can need, against the Clerk's own budget. It is this system's own estimate and cannot see another IBKR session, and the sentence says so.
+- **On a real account, what Alpaca says:** the account's option level does not cover the structure (2 to buy an option, 3 for several legs; a level Alpaca did not report is not known, and not known is never approval); its option buying power is short of one entry, with both figures (not reported, that is a note and stops nothing); or Alpaca does not list the contract the preview picked. A read that failed stops the Deploy and says so. A Dry Run asks nothing of a broker.
+- **What the preview finds right now:** picks that are not the structure built, or money that cannot be set aside. A leg quoted too wide, or a cost over its limit, stops nothing: the bot picks again at every entry, and the review says an entry would be skipped right now.
+- **Extended hours.** Every Deploy is regular hours, so this cannot be chosen today. The rule is held where a start takes its hours: an option bot is never started for extended hours.
+
+A Deploy is refused for the first of these. The money review lists them all, as rows for the page's "Can't deploy yet" list.
+
+**The money**
+
+- **One entry is priced by the preview.** An option contract has no top of book to price a position from. The review asks the preview for the structure, on a hold of quote lines of its own, and reads the entry's own figures from its answer (decision 17). It computes nothing.
+- **The rows are the five quantities by their names:** what is set aside, and the premium, Alpaca's requirement and the fee estimate that add up to it; the loss at expiry if held, an estimate, or "not estimated"; and what the budget has free after one entry. Each is whole cents with dollars written out beside.
+- **The budget must cover one entry as priced now.** The Clerk's registration asks an option bot's budget for no minimum, because it cannot price a contract (decision 15). So Deploy asks, as it does of a bot in shares.
+- **With no price there is no review to consent to.** While the preview is only still arriving the review waits; otherwise it says why. At the click Deploy waits a few seconds for a preview that is still arriving.
+
+**The acknowledgement**
+
+- **An option bot always trades something else,** options on the symbol it listens to included. The one rule (#2912) is asked of it without its plan: a Paper, Live Shadow or Live bot needs the owner's written acceptance, and a Dry Run is warned and asked for nothing.
+- **The warning is its own:** options have no backtest here, and they lose value with time and move with volatility.
+
+**Live is built and switched off**
+
+- **One setting, `ALPACA_LIVE_OPTION_BOTS_ENABLED`, off unless a deployment turns it on.** No option order from this system has been sent to Alpaca, Paper included.
+- **Three fences read it.** Deploy refuses a Live option bot by name and says what to do: check the first Paper option orders, then turn the setting on. The account Clerk refuses the plan at registration and at every effect. The Alpaca port refuses to send an option order on a live binding.
+- **Turning it on is the only change.** A test holds each fence off and on, the Clerk's and the port's on stand-ins.
+- **A Live Shadow is refused whatever the setting says,** at Deploy and at the Clerk.
+
+**What the screens are told**
+
+- **A bot's row names its structure** for a list ("Bull call spread") and for a sentence ("a bull call spread on"). A stock's row is written as before.
+- **The review carries** Confirm's Trades and Orders lines, what the two sizing choices mean in structures, the sentence under the bot's end when a sold leg makes the Clerk schedule a close, the contracts picked, the rows, the blockers and the notes.
+- **Notes for a real account,** each said once: no option order has been sent to Alpaca yet; option fees are this system's estimate until Alpaca posts them; and if Alpaca's trade stream does not carry option fills, the account stops taking entries at its first one.
+- **The entry wait's reason is what the runner does.** A test holds the longest wait offered, and the sentence an owner reads beside it, to the runner's own two guards.
+
+**Not yet**
+
+- Live Shadow for an option plan.
+- The comparison of Alpaca's option buying power around an entry with what was set aside.
+- Several legs and sold legs through the Clerk, so every such structure is refused at Deploy.
+- A list of the other bots on the same underlying that names option bots as such: the one-line note about the same symbol is the existing one.
+- The warning for a contract a scheduled close would end before the strategy's own exit.
+
 ## Where it lives
 
 `PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7), `quotes.py` and `resolver.py` (decision 8), `watch.py` (decision 9: the window, and who holds a line). The IBKR side of decision 9 is `PythonDataService/app/broker/ibkr/option_chain.py` (the listing) and `option_quotes.py` (the lines), driven by `market_liveness.py`. Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-005` pin the American price, delta, implied volatility and daily time decay against QuantLib.
@@ -648,7 +716,9 @@ The preview shows a structure's daily time decay beside what it leans. One contr
 
 `PythonDataService/app/services/bot_option_run.py` is the runner's option side (decision 21): what a run asks to have watched, the chain an ENTER goes through, the quote an EXIT is handed, the one place a bot's order terms are read, how long an entry's outcome is waited for, the time kept to prove a cancel and the two checks it makes, and which of the six words a standing comes to. The words themselves are `app/options/entry_came_to.py`, which the Dry Run's journal reads too. `app/services/bot_trade_strategy.py` calls it from the Dry Run's loop and from a Paper account's through three helpers both runners share: `_option_run` (the Clerk is asked first), `_shown_to_the_option_run` (both bar streams) and `_settle_option_decision` (what is done with the Clerk's receipt, with `_settle_option_entry` for an entry it took, decision 19). It also writes the journal's row. `app/services/bot_trade_strategy_warmup.py` replays an option entry by its settlement, read through `clerk/sqlite/decision_receipts.py::option_entry_settlement`. `app/broker/alpaca/clerk/held_option_quotes.py` is the Clerk's keeping of quotes for what its bots hold: where every mark after the entry's own is stated (`mark_fault`), and where a line that shows one side is put back (`shows_one_side`). The account's reading takes a mark only from a whole statement (`clerk/kept_option_quotes.py::stated_mark`). The keeping is followed from `clerk/active_authority.py` (a Dry Run's Clerk), given its last word in `clerk/active_runtime.py`, and begun by the supervisor's pass in `app/broker/alpaca/market_liveness.py`. The books' answers are `clerk/sqlite/reads.py::option_contracts_to_watch` and `clerk/sqlite/option_decision_fills.py` (what the order one decision made has filled). An option bot's money view is `app/services/broker_v2_panel/budget_deploy.py::_next_entry`.
 
-Custody reads the contract tables on every read of fills, and tells a contract's symbol by decision 1's spelling. One order path writes the tables: an entry in one bought option on a Dry Run or a Paper account, and the orders that close it (decisions 15, 16 and 19). A Dry Run's bot and a Paper account's reach it through their runner, which calls the entry lane, the watch list, the pricing inputs and the supervisor's option reads (decision 21). On a Paper account the Clerk sends an option order to Alpaca, looks it up, cancels it, and asks the contract reference before an entry. No order has been sent to Alpaca: the Paper path is proven on a stand-in. Nothing in the Clerk reads the account's option fields or matches an option event to lots. The preview's own modules read and write nothing of a bot's: the preview reads the resolver, the entry's own figures function, the option fee model and each pick's daily decay. It sets nothing aside and sends nothing.
+`PythonDataService/app/schemas/option_order_terms.py` is the four sealed terms, and `app/schemas/option_deploy.py` what a Deploy says its bot trades and what its review carries (decision 24). `app/services/broker_v2_panel/option_deploy.py` judges an option Deploy: its plan, what stops it, one entry's price and the review. `panel_deploy.py` calls it from the money review, the admission preview and the click, and `budget_deploy.py` reviews a budget against the price it is handed. The terms ride `bot_start_admission.py`, `bot_binding_repository.py` and `app/schemas/signal_program_seal.py`, and `bot_option_run.option_order_terms` reads them. The Live setting is `app/config.py`'s, read by `option_deploy.py`, `clerk/sqlite/runtime.py` and `app/broker/alpaca/broker.py`.
+
+Custody reads the contract tables on every read of fills, and tells a contract's symbol by decision 1's spelling. One order path writes the tables: an entry in one bought option on a Dry Run or a Paper account, and the orders that close it (decisions 15, 16 and 19). A Dry Run's bot and a Paper account's reach it through their runner, which calls the entry lane, the watch list, the pricing inputs and the supervisor's option reads (decision 21). On a Paper account the Clerk sends an option order to Alpaca, looks it up, cancels it, and asks the contract reference before an entry. No order has been sent to Alpaca: the Paper path is proven on a stand-in. Deploy reads the account's option fields, through the broker's port, for a real account's option bot (decision 24); nothing in the Clerk reads them or matches an option event to lots. The preview's own modules read and write nothing of a bot's: the preview reads the resolver, the entry's own figures function, the option fee model and each pick's daily decay. It sets nothing aside and sends nothing.
 
 ## Alternatives considered
 
