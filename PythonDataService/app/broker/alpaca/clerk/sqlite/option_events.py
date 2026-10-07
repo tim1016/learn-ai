@@ -74,6 +74,15 @@ when the owner acknowledges it (:func:`acknowledge_option_event_hold`). A
 read that failed or was not whole ends no hold and is never read as "nothing
 happened".
 
+**The acknowledgement** ends the holds that nothing else ends, and no other
+(``option_event_acknowledgement``). It is given for the notice exactly as
+the owner read it, and only once a reconciliation pass made for it shows
+the books agree with the broker in every contract and underlying the hold
+names. It books nothing, so it never stands in for a booking. An expired
+contract still on the books is never acknowledged away: the owner's ending
+is its exit. The hold for an order the Clerk did not place is not either:
+that order's own review is.
+
 **An order the Clerk did not place, in a contract a bot holds.** It stands
 against that bot and that contract alone. While it is unsettled (working, or
 filled and not yet booked) no order of the bot's own to reduce that contract
@@ -103,7 +112,7 @@ import logging
 import sqlite3
 import threading
 import weakref
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
@@ -118,6 +127,7 @@ from app.broker.alpaca.clerk.simulated_option_settlement import (
     SimulatedSettlement,
     plain,
 )
+from app.broker.alpaca.clerk.sqlite import option_event_acknowledgement as acknowledgement
 from app.broker.alpaca.clerk.sqlite import option_owner_ending as owner_ending_rule
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_open_work import broker_quantity_by_symbol
@@ -128,6 +138,14 @@ from app.broker.alpaca.clerk.sqlite.facts import UncertaintyResolvedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import CommandExistingConflict, TransitionInput
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import (
+    ComparedWithTheBroker,
+    HoldAcknowledgementReceipt,
+    HoldAcknowledgementRequest,
+    OptionEventHoldNotAcknowledged,
+    refuse_what_an_acknowledgement_does_not_end,
+    symbols_a_hold_names,
+)
 from app.broker.alpaca.clerk.sqlite.option_event_books import (
     EVENT_KEY_PREFIX,
     OPTION_EVENT_HOLD_ACKNOWLEDGED,
@@ -254,15 +272,6 @@ _READ_HOLDS = tuple(
     for code in OPTION_EVENT_HOLD_REASON_CODES
     if code not in (OPTION_EVENTS_NOT_READ_REASON_CODE, OPTION_SHARES_HELD_REASON_CODE, OPTION_ORDER_NOT_OURS_REASON_CODE)
 )
-# What the owner may acknowledge. The other holds end only by proof: a whole read, a flat position, or,
-# for an order the Clerk did not place, that order's end or the owner's review of the order itself.
-_ACKNOWLEDGEABLE = frozenset(_READ_HOLDS)
-_NOT_ACKNOWLEDGED_BECAUSE: dict[str, str] = {
-    OPTION_ORDER_NOT_OURS_REASON_CODE: (
-        "ends when the order has ended and what it filled is booked, or by the review of the order itself "
-        "while it has filled nothing; it is not acknowledged away"
-    ),
-}
 
 # What each hold says. The reason code names it; these are the owner's words for it.
 _HOLD_COPY: dict[str, tuple[str, str]] = {
@@ -379,10 +388,17 @@ _OPERATOR_IMPACTS: dict[str, str] = {
     ),
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: "This bot takes no new entries. No order can close an expired contract.",
 }
-_DEFAULT_NEXT_STEP = "Compare this bot's positions with the broker's, then acknowledge the notice."
+# What the owner does about a hold only an acknowledgement ends, for a bot's hold and for the account's.
+_ACKNOWLEDGE_IT = (
+    "Compare {whose} positions with the broker's. When they agree, acknowledge the notice: the Clerk then "
+    "compares them once more itself, and refuses while they differ."
+)
 if set(_HOLD_COPY) != set(OPTION_EVENT_HOLD_REASON_CODES):
     # A hold with no words of its own could not be raised at all.
     raise RuntimeError("every option-event hold needs its own words")
+if not set(acknowledgement.ENDS_ANOTHER_WAY) <= set(_NEXT_STEPS):
+    # A hold an acknowledgement does not end would send the owner to acknowledge it.
+    raise RuntimeError("every option-event hold that ends another way says what the owner does about it")
 if not {refusal.value for refusal in OptionEventRefusal} <= set(OPTION_EVENT_HOLD_REASON_CODES):
     # A refusal with no hold of its own would be found and then dropped without a word.
     raise RuntimeError("every refusal of the allocation rule needs a hold under its own code")
@@ -791,11 +807,17 @@ class _Holds:
         return self._found
 
 
-def _next_step(reason_code: str, *, simulated: bool) -> str:
-    """What the owner does about a hold. A simulated account has no broker, so some of it reads otherwise."""
+def _next_step(reason_code: str, *, simulated: bool, for_the_account: bool) -> str:
+    """What the owner does about a hold.
+
+    A simulated account has no broker, so some of it reads otherwise. A hold
+    of the account's own names no bot, and its words name none.
+    """
     if simulated and reason_code in _SIMULATED_NEXT_STEPS:
         return _SIMULATED_NEXT_STEPS[reason_code]
-    return _NEXT_STEPS.get(reason_code, _DEFAULT_NEXT_STEP)
+    return _NEXT_STEPS.get(
+        reason_code, _ACKNOWLEDGE_IT.format(whose="the account's" if for_the_account else "this bot's")
+    )
 
 
 def _raise_hold(repo: ClerkSqliteRepository, sid: str | None, reason_code: str, items: Sequence[OptionEventHoldItem]) -> None:
@@ -812,7 +834,9 @@ def _raise_hold(repo: ClerkSqliteRepository, sid: str | None, reason_code: str, 
             if sid is not None
             else "No bot of this account takes a new entry. Reductions and the Flatten stay available.",
         ),
-        next_step=_next_step(reason_code, simulated=is_synthetic_account_id(repo.account_id)),
+        next_step=_next_step(
+            reason_code, simulated=is_synthetic_account_id(repo.account_id), for_the_account=sid is None
+        ),
         evidence_refs=tuple(item.ref for item in items),
         cause_facts=OptionEventHoldCause(items=tuple(items)).to_mapping(),
     )
@@ -845,37 +869,122 @@ def _resolve_hold(
 
 
 def acknowledge_option_event_hold(
-    repo: ClerkSqliteRepository, *, strategy_instance_id: str | None, reason_code: str, operator: str
-) -> bool:
+    repo: ClerkSqliteRepository,
+    *,
+    request: HoldAcknowledgementRequest,
+    operator: str,
+    compared: ComparedWithTheBroker,
+) -> HoldAcknowledgementReceipt:
     """The owner has looked at what one option-event hold names: end it, and do not raise it for those things again.
 
+    ``compared`` is a reconciliation pass made for this request. Every check
+    and the record are made inside the repository's write fence, so the hold
+    that is checked is the hold that ends (``option_event_acknowledgement``
+    says what is checked and why). Refused with ``OptionEventHoldNotAcknowledged``,
+    and nothing written, unless all of it holds.
+
     The acknowledgement is the hold's own resolution, hash-chained, naming
-    the owner and each thing the hold named. A later read that still has
-    those rows raises nothing for them. A new row raises the hold again.
-    Whether a hold was open to acknowledge is the answer.
+    the owner, each thing the hold named and what was wrong with it. A later
+    read that still has those rows raises nothing for them. A new row, or a
+    new fault in the same row, raises the hold again.
     """
-    if reason_code not in _ACKNOWLEDGEABLE:
-        raise ValueError(
-            f"{reason_code!r} {_NOT_ACKNOWLEDGED_BECAUSE.get(reason_code, 'ends by proof, not by acknowledgement')}"
-        )
+    sid, reason_code = request.strategy_instance_id, request.reason_code
+    refuse_what_an_acknowledgement_does_not_end(reason_code)
     if not operator.strip():
-        raise ValueError("an acknowledgement names who made it")
+        raise OptionEventHoldNotAcknowledged(
+            acknowledgement.NO_OPERATOR, "An acknowledgement names who made it, and this one names nobody."
+        )
     with repo.write_fence() as conn:
         active = reads.active_uncertainty(
-            conn, scope="ACCOUNT_CLERK" if strategy_instance_id is None else "CUSTODY_SUBJECT",
-            reason_code=reason_code, strategy_instance_id=strategy_instance_id,
+            conn, scope="ACCOUNT_CLERK" if sid is None else "CUSTODY_SUBJECT", reason_code=reason_code,
+            strategy_instance_id=sid,
         )
         if active is None:
-            return False
+            raise OptionEventHoldNotAcknowledged(
+                acknowledgement.NOT_OPEN, "No such notice is open. It may have ended since it was read."
+            )
         cause = OptionEventHoldCause.from_mapping(json.loads(active["facts_json"])["cause_facts"])
-        return _resolve_hold(
-            repo, strategy_instance_id, reason_code, resolution_kind="OPERATOR_ACKNOWLEDGED",
+        named = tuple(item.ref for item in cause.items)
+        if (active["uncertainty_id"], int(active["observed_at_ms"])) != (request.uncertainty_id, request.observed_at_ms):
+            raise OptionEventHoldNotAcknowledged(
+                acknowledgement.NOTICE_CHANGED,
+                "The notice has changed since it was read. Read it again before acknowledging it.",
+                item_refs=named,
+            )
+        if set(named) != set(request.item_refs):
+            raise OptionEventHoldNotAcknowledged(
+                acknowledgement.NAMES_OTHER_ITEMS,
+                "The notice names other things than the acknowledgement does. Read it again before acknowledging it.",
+                item_refs=named,
+            )
+        # The pass's own fence: its comparison is of the books as they stood then, and of no later books.
+        if compared.verdict == "stale" or compared.through_sequence is None:
+            raise OptionEventHoldNotAcknowledged(
+                acknowledgement.ACCOUNT_NOT_COMPARED,
+                "The account could not be compared with the broker just now, so nothing shows the books agree "
+                "with it. Try again once the broker can be read.",
+            )
+        if reads.last_custody_sequence(conn) != compared.through_sequence:
+            raise OptionEventHoldNotAcknowledged(
+                acknowledgement.BOOKS_MOVED,
+                "The books changed while the account was being compared with the broker. Try again.",
+            )
+        registered = None if sid is None else reads.strategy_instance(conn, sid)
+        differ = sorted(
+            {*compared.drifted_symbols, *compared.indeterminate_symbols}
+            & set(symbols_a_hold_names(cause.items, registered_symbol=(registered or {}).get("symbol")))
+        )
+        if differ:
+            raise OptionEventHoldNotAcknowledged(
+                acknowledgement.POSITIONS_DIFFER,
+                f"The broker's position differs from the books' in {', '.join(differ)}. An acknowledgement books "
+                "nothing, so it would leave them apart. Bring them together first, then acknowledge the notice.",
+                symbols=differ,
+            )
+        _resolve_hold(
+            repo, sid, reason_code, resolution_kind="OPERATOR_ACKNOWLEDGED",
             summary_code=OPTION_EVENT_HOLD_ACKNOWLEDGED,
             evidence_refs=(
                 f"{_ACK_OPERATOR_REF_PREFIX}{operator.strip()}",
-                *(AcknowledgedFinding.of(strategy_instance_id, reason_code, item).evidence_ref for item in cause.items),
+                *(AcknowledgedFinding.of(sid, reason_code, item).evidence_ref for item in cause.items),
             ),
         )
+        recorded = conn.execute(
+            "SELECT sequence, recorded_at_ms FROM custody_transitions ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+    logger.warning(
+        "an option-event hold was acknowledged",
+        extra={
+            "action": "option_event_hold_acknowledged", "account_id": repo.account_id, "strategy_instance_id": sid,
+            "reason_code": reason_code, "operator": operator.strip(), "item_refs": list(named),
+        },
+    )
+    return HoldAcknowledgementReceipt(
+        strategy_instance_id=sid, reason_code=reason_code, item_refs=named, operator=operator.strip(),
+        sequence=int(recorded["sequence"]), recorded_at_ms=int(recorded["recorded_at_ms"]),
+    )
+
+
+async def acknowledge_option_event_hold_after_a_pass(
+    repo: ClerkSqliteRepository,
+    *,
+    reconcile: Callable[[], Awaitable[ComparedWithTheBroker]],
+    off_loop: OffLoop,
+    request: HoldAcknowledgementRequest,
+    operator: str,
+) -> HoldAcknowledgementReceipt:
+    """Acknowledge one option-event hold on a reconciliation pass made for the request.
+
+    ``reconcile`` runs one whole pass of the account, now. It reads the
+    broker with no lock of the Clerk's held, reads and books the account's
+    option events as every pass does, and compares positions. A hold that an
+    acknowledgement does not end is refused before any pass is made.
+    """
+    refuse_what_an_acknowledgement_does_not_end(request.reason_code)
+    compared = await reconcile()
+    return await off_loop(
+        lambda: acknowledge_option_event_hold(repo, request=request, operator=operator, compared=compared)
+    )
 
 
 def _sync_holds(
@@ -2288,6 +2397,7 @@ __all__ = [
     "OwnerEndingReceipt",
     "OwnerEndingRefused",
     "acknowledge_option_event_hold",
+    "acknowledge_option_event_hold_after_a_pass",
     "book_option_events",
     "book_outside_option_orders_in_a_pass",
     "books_record_no_contract",

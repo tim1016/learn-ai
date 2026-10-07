@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import OptionEventHoldNotAcknowledged
 from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
@@ -43,6 +44,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     documented_option_activity,
 )
 from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import (
+    acknowledge,
     bookings,
     books_at,
     fifo,
@@ -603,10 +605,8 @@ def test_the_bots_hold_for_an_outside_order_is_not_acknowledged_away_and_the_ord
         observe_external_order(repo, order=_outside("by-hand-1", status="new"))
         book_option_events(repo, None)
 
-        with pytest.raises(ValueError, match="review"):
-            option_events.acknowledge_option_event_hold(
-                repo, strategy_instance_id="bot-a", reason_code="OPTION_ORDER_NOT_OURS", operator="owner"
-            )
+        with pytest.raises(OptionEventHoldNotAcknowledged, match="reviewed"):
+            acknowledge(repo, "bot-a", "OPTION_ORDER_NOT_OURS")
 
         assert ("bot-a", "OPTION_ORDER_NOT_OURS") in option_holds(repo)
         assert not _bot_may_sell(repo, "bot-a", CALL, 1)

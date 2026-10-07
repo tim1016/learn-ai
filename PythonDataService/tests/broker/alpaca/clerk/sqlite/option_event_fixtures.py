@@ -8,6 +8,8 @@ The activities are the rows Alpaca's pages document, read by the real port.
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -17,7 +19,15 @@ from app.broker.alpaca.clerk.fifo_pnl import PnLResult, compute_fifo_pnl
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
-from app.broker.alpaca.clerk.sqlite.option_events import OptionEventPoll, poll_option_events
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import (
+    HoldAcknowledgementReceipt,
+    HoldAcknowledgementRequest,
+)
+from app.broker.alpaca.clerk.sqlite.option_events import (
+    OptionEventPoll,
+    acknowledge_option_event_hold,
+    poll_option_events,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_EVENT_HOLD_REASON_CODES
 from app.broker.contract.models import BrokerPosition
@@ -112,6 +122,40 @@ def option_holds(repo: ClerkSqliteRepository) -> dict[tuple[str | None, str], di
         for row in repo.active_uncertainties()
         if row["reason_code"] in OPTION_EVENT_HOLD_REASON_CODES
     }
+
+
+@dataclass(frozen=True)
+class Compared:
+    """What a reconciliation pass found when it compared the account with the broker, as a test says it did."""
+
+    through_sequence: int | None
+    verdict: str = "clean"
+    drifted_symbols: tuple[str, ...] = ()
+    indeterminate_symbols: tuple[str, ...] = ()
+
+
+def as_read(repo: ClerkSqliteRepository, bot: str | None, reason_code: str, **changes: Any) -> HoldAcknowledgementRequest:
+    """An acknowledgement of one open notice exactly as its owner read it just now, with ``changes`` laid over."""
+    hold = option_holds(repo)[(bot, reason_code)]
+    return HoldAcknowledgementRequest(**{
+        "strategy_instance_id": bot, "reason_code": reason_code, "uncertainty_id": hold["uncertainty_id"],
+        "observed_at_ms": hold["observed_at_ms"],
+        "item_refs": tuple(item["ref"] for item in json.loads(hold["facts_json"])["cause_facts"]["items"]),
+        **changes,
+    })
+
+
+def acknowledge(
+    repo: ClerkSqliteRepository, bot: str | None, reason_code: str, **differs: Any
+) -> HoldAcknowledgementReceipt:
+    """The owner acknowledges an open notice, on a pass that has just compared the account with the broker.
+
+    The pass found them agreeing, but for what ``differs`` says of it.
+    """
+    return acknowledge_option_event_hold(
+        repo, request=as_read(repo, bot, reason_code), operator="owner",
+        compared=Compared(**{"through_sequence": repo.last_custody_sequence(), **differs}),
+    )
 
 
 def bookings(repo: ClerkSqliteRepository) -> list[dict[str, Any]]:

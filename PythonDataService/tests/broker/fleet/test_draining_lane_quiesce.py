@@ -268,6 +268,10 @@ async def test_a_draining_lane_routes_its_quiesce_operations_and_reads(
         # Both accept every recovery id, resolve_execution_coverage included.
         "custody_bot_recovery_execute",
         "custody_recovery_execute",
+        # The acknowledgement of an option-event notice (#2913) stops no bot
+        # and reduces nothing: no quiesce act, so a draining lane refuses it.
+        "custody_option_event_hold_ack",
+        "custody_bot_option_event_hold_ack",
         "bot_create",
         "paper_access_confirm",
         "live_graduation_apply",

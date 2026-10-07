@@ -153,6 +153,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Bot Option Event Hold
+         * @description Acknowledge one bot's option-event notice, once the books agree with the broker (#2913).
+         */
+        post: operations["acknowledge_bot_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_event_holds_acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
         parameters: {
             query?: never;
@@ -222,6 +242,26 @@ export interface paths {
         get: operations["get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Account Option Event Hold
+         * @description Acknowledge one option-event notice of the account's own, once the books agree with the broker (#2913).
+         */
+        post: operations["acknowledge_account_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__option_event_holds_acknowledge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2365,6 +2405,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Bot Option Event Hold Ack
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge (custody_command).
+         */
+        post: operations["fleet_custody_bot_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_event_holds_acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check": {
         parameters: {
             query?: never;
@@ -2419,6 +2479,26 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/stop (custody_command).
          */
         post: operations["fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/option-event-holds/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Option Event Hold Ack
+         * @description Fleet-routed POST /accounts/{account_id}/custody/option-event-holds/acknowledge (custody_command).
+         */
+        post: operations["fleet_custody_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_option_event_holds_acknowledge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20042,6 +20122,47 @@ export interface components {
             strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
         };
         /**
+         * OptionEventHoldAcknowledgementRequest
+         * @description The owner has looked at one option-event notice, exactly as they read it.
+         *
+         *     Who acknowledges is never a request field: the route records the
+         *     installation's configured operator identity.
+         */
+        OptionEventHoldAcknowledgementRequest: {
+            /** Item Refs */
+            item_refs: string[];
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "OPTION_EVENTS_NOT_READ" | "OPTION_EVENT_UNREADABLE" | "OPTION_EVENT_NOT_EXECUTED" | "OPTION_EVENT_CONTRACT_NOT_HELD" | "OPTION_EVENT_WRONG_SIDE" | "OPTION_EVENT_HELD_ON_BOTH_SIDES" | "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD" | "OPTION_EVENT_CASH_NOT_WHOLE_CENTS" | "OPTION_EVENT_ROW_CHANGED" | "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL" | "OPTION_SHARE_TRADE_MISSING" | "OPTION_SHARE_TRADE_UNPAIRED" | "OPTION_SHARE_TRADE_DISAGREES" | "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE" | "OPTION_EVENT_AFTER_A_LOT_CLOSED" | "OPTION_EXPIRED_NOT_SETTLED" | "OPTION_SHARES_HELD" | "OPTION_ORDER_NOT_OURS";
+            /** Uncertainty Id */
+            uncertainty_id: string;
+        };
+        /**
+         * OptionEventHoldAcknowledgementResponse
+         * @description The books' record of one acknowledged option-event notice.
+         */
+        OptionEventHoldAcknowledgementResponse: {
+            /** Item Refs */
+            item_refs: string[];
+            /** Operator */
+            operator: string;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "OPTION_EVENTS_NOT_READ" | "OPTION_EVENT_UNREADABLE" | "OPTION_EVENT_NOT_EXECUTED" | "OPTION_EVENT_CONTRACT_NOT_HELD" | "OPTION_EVENT_WRONG_SIDE" | "OPTION_EVENT_HELD_ON_BOTH_SIDES" | "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD" | "OPTION_EVENT_CASH_NOT_WHOLE_CENTS" | "OPTION_EVENT_ROW_CHANGED" | "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL" | "OPTION_SHARE_TRADE_MISSING" | "OPTION_SHARE_TRADE_UNPAIRED" | "OPTION_SHARE_TRADE_DISAGREES" | "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE" | "OPTION_EVENT_AFTER_A_LOT_CLOSED" | "OPTION_EXPIRED_NOT_SETTLED" | "OPTION_SHARES_HELD" | "OPTION_ORDER_NOT_OURS";
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Sequence */
+            sequence: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+        };
+        /**
          * OptionExpiryRule
          * @description One way of choosing a leg's expiry, as the builder offers it.
          */
@@ -26870,6 +26991,65 @@ export interface operations {
             };
         };
     };
+    acknowledge_bot_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionEventHoldAcknowledgementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionEventHoldAcknowledgementResponse"];
+                };
+            };
+            /** @description The selected SQLite authority or bot is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The notice was not acknowledged; the detail says why, and nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The SQLite authority or Alpaca is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post: {
         parameters: {
             query?: never;
@@ -27015,6 +27195,64 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    acknowledge_account_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionEventHoldAcknowledgementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionEventHoldAcknowledgementResponse"];
+                };
+            };
+            /** @description The selected SQLite authority or bot is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The notice was not acknowledged; the detail says why, and nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The SQLite authority or Alpaca is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -31237,6 +31475,46 @@ export interface operations {
             };
         };
     };
+    fleet_custody_bot_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fleet_custody_bot_recovery_check_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__recovery_actions_check_post: {
         parameters: {
             query?: never;
@@ -31328,6 +31606,45 @@ export interface operations {
                 clerk_id: string;
                 account_id: string;
                 sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_option_event_holds_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
             };
             cookie?: never;
         };

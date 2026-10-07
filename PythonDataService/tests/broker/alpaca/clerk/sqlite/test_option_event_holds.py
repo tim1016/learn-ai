@@ -10,6 +10,7 @@ Alpaca.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import option_events
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import OptionEventHoldNotAcknowledged
 from app.broker.alpaca.clerk.sqlite.option_events import acknowledge_option_event_hold
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import ReductionIntent, admit_new_exposure, decide_capability
@@ -25,6 +27,9 @@ from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, documented_option_activity
 from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import (
+    Compared,
+    acknowledge,
+    as_read,
     bookings,
     books_at,
     broker_holds,
@@ -580,9 +585,10 @@ async def test_an_acknowledged_row_is_not_held_for_again_and_a_new_row_is(tmp_pa
     try:
         await _read(repo, account, _expiry(qty="-0.5"))
 
-        assert acknowledge_option_event_hold(
-            repo, strategy_instance_id="bot-a", reason_code="OPTION_EVENT_UNREADABLE", operator="owner"
-        )
+        receipt = acknowledge(repo, "bot-a", "OPTION_EVENT_UNREADABLE")
+        assert (receipt.operator, receipt.item_refs) == ("owner", ("option-activity:exp-1",))
+        assert receipt.sequence == repo.last_custody_sequence()
+
         await _read(repo, account, _expiry(qty="-0.5"))
         assert option_holds(repo) == {}
         assert _entry_refused_for(repo, "bot-a") != "OPTION_EVENT_UNREADABLE"
@@ -606,9 +612,7 @@ async def test_an_acknowledgement_covers_what_was_wrong_then_and_a_new_fault_in_
     try:
         await _read(repo, account, _expiry(qty="-0.5"))
         [first] = _cause(repo, "bot-a", "OPTION_EVENT_UNREADABLE")
-        assert acknowledge_option_event_hold(
-            repo, strategy_instance_id="bot-a", reason_code="OPTION_EVENT_UNREADABLE", operator="owner"
-        )
+        acknowledge(repo, "bot-a", "OPTION_EVENT_UNREADABLE")
 
         await _read(repo, account, _expiry(activity_type="OPCA"))
 
@@ -618,20 +622,219 @@ async def test_an_acknowledgement_covers_what_was_wrong_then_and_a_new_fault_in_
         repo.close()
 
 
-async def test_a_hold_that_ends_only_by_proof_cannot_be_acknowledged_away(tmp_path: Path) -> None:
+async def test_a_notice_of_the_accounts_own_is_acknowledged_for_the_account(tmp_path: Path) -> None:
+    """A row that names no bot's contract holds the account. Its acknowledgement names no bot either."""
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    unreadable = _expiry(symbol="MSFT230721C00300000", qty="-0.5")
+    try:
+        await _read(repo, account, unreadable)
+        hold = option_holds(repo)[(None, "OPTION_EVENT_UNREADABLE")]
+        assert "the account's positions" in hold["next_step"] and "this bot" not in hold["next_step"]
+
+        receipt = acknowledge(repo, None, "OPTION_EVENT_UNREADABLE")
+        await _read(repo, account, unreadable)
+
+        assert receipt.strategy_instance_id is None and option_holds(repo) == {}
+        assert _entry_refused_for(repo, "bot-b") is None
+    finally:
+        repo.close()
+
+
+async def _held_for(repo: ClerkSqliteRepository, reason_code: str) -> None:
+    """Books on which bot-a is held under one of the holds an acknowledgement does not end."""
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+    from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture
+
+    account = _FakeReadPort()
+    if reason_code == "OPTION_SHARES_HELD":
+        await _read(repo, account, _exercise(), _share_trade(100))
+    elif reason_code == "OPTION_EVENTS_NOT_READ":
+        account.option_events.error = BrokerUnavailable("no answer", broker="alpaca")
+        await _read(repo, account)
+    elif reason_code == "OPTION_EXPIRED_NOT_SETTLED":
+        later(repo, 2 * 86_400_000)
+        await _read(repo, account)
+    else:
+        observe_external_order(repo, order=_broker_order_fixture(
+            "not-ours-1", order_id="by-hand-1", symbol=CALL, status="new", side="sell", quantity=1,
+        ))
+        option_events.book_option_events(repo, None)
+    assert ("bot-a", reason_code) in option_holds(repo)
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "what_ends_it"),
+    [
+        pytest.param("OPTION_SHARES_HELD", "holds no shares", id="shares an event left"),
+        pytest.param("OPTION_EVENTS_NOT_READ", "next whole read", id="a read that failed"),
+        pytest.param("OPTION_EXPIRED_NOT_SETTLED", "end the contract at your word", id="an expired contract nothing settled"),
+        pytest.param("OPTION_ORDER_NOT_OURS", "marking the order itself reviewed", id="an order the Clerk did not place"),
+    ],
+)
+async def test_a_hold_that_ends_another_way_is_not_acknowledged_away_and_the_owner_is_told_what_ends_it(
+    tmp_path: Path, reason_code: str, what_ends_it: str
+) -> None:
+    """Acknowledged, the expired contract would stay on the books with nothing ever raised for it again."""
+    repo = _one_bot(tmp_path)
+    try:
+        await _held_for(repo, reason_code)
+        written = repo.last_custody_sequence()
+
+        with pytest.raises(OptionEventHoldNotAcknowledged, match=what_ends_it) as refused:
+            acknowledge(repo, "bot-a", reason_code)
+
+        assert refused.value.refusal_code == "OPTION_EVENT_HOLD_ENDS_ANOTHER_WAY"
+        assert ("bot-a", reason_code) in option_holds(repo) and repo.last_custody_sequence() == written
+    finally:
+        repo.close()
+
+
+async def test_an_acknowledgement_of_a_notice_that_is_not_open_is_refused(tmp_path: Path) -> None:
     repo = _one_bot(tmp_path)
     account = _FakeReadPort()
     try:
-        await _read(repo, account, _exercise(), _share_trade(100))
+        await _read(repo, account, _expiry(qty="-0.5"))
+        for_another_bot = replace(as_read(repo, "bot-a", "OPTION_EVENT_UNREADABLE"), strategy_instance_id="bot-b")
 
-        with pytest.raises(ValueError, match="proof"):
+        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
             acknowledge_option_event_hold(
-                repo, strategy_instance_id="bot-a", reason_code="OPTION_SHARES_HELD", operator="owner"
+                repo, request=for_another_bot, operator="owner",
+                compared=Compared(through_sequence=repo.last_custody_sequence()),
             )
-        assert ("bot-a", "OPTION_SHARES_HELD") in option_holds(repo)
-        assert not acknowledge_option_event_hold(
-            repo, strategy_instance_id="bot-b", reason_code="OPTION_EVENT_UNREADABLE", operator="owner"
+
+        assert refused.value.refusal_code == "OPTION_EVENT_HOLD_NOT_OPEN"
+        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo)
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("changes", "refusal_code"),
+    [
+        pytest.param({"item_refs": ("option-activity:exp-1",)}, "OPTION_EVENT_HOLD_NAMES_OTHER_ITEMS", id="it names one of the two rows"),
+        pytest.param(
+            {"item_refs": ("option-activity:exp-1", "option-activity:exp-2", "option-activity:exp-3")},
+            "OPTION_EVENT_HOLD_NAMES_OTHER_ITEMS", id="it names a row the notice does not",
+        ),
+        pytest.param({"observed_at_ms": 1}, "OPTION_EVENT_HOLD_CHANGED_SINCE_READ", id="the notice was written again since it was read"),
+        pytest.param({"uncertainty_id": "another-notice"}, "OPTION_EVENT_HOLD_CHANGED_SINCE_READ", id="it is another notice"),
+    ],
+)
+async def test_an_acknowledgement_that_is_not_of_the_notice_as_it_stands_is_refused_and_says_what_it_names_now(
+    tmp_path: Path, changes: dict[str, Any], refusal_code: str
+) -> None:
+    """The owner acknowledges what they read. A notice that names other things now is one they have not read."""
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(qty="-0.5"), _expiry(qty="-0.5", id="exp-2"))
+        written = repo.last_custody_sequence()
+
+        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
+            acknowledge_option_event_hold(
+                repo, request=as_read(repo, "bot-a", "OPTION_EVENT_UNREADABLE", **changes), operator="owner",
+                compared=Compared(through_sequence=written),
+            )
+
+        assert refused.value.refusal_code == refusal_code
+        assert set(refused.value.item_refs) == {"option-activity:exp-1", "option-activity:exp-2"}
+        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo) and repo.last_custody_sequence() == written
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("the_pass", "refusal_code", "named"),
+    [
+        pytest.param({"verdict": "stale"}, "OPTION_EVENT_HOLD_ACCOUNT_NOT_COMPARED", (), id="the broker could not be read"),
+        pytest.param({"through_sequence": None}, "OPTION_EVENT_HOLD_ACCOUNT_NOT_COMPARED", (), id="the pass reached no verdict"),
+        pytest.param({"through_sequence": 1}, "OPTION_EVENT_HOLD_BOOKS_MOVED_SINCE_THE_PASS", (), id="the books moved after the pass compared them"),
+        pytest.param(
+            {"verdict": "position_drift", "drifted_symbols": (CALL,)}, "OPTION_EVENT_HOLD_POSITIONS_DIFFER", (CALL,),
+            id="the contract differs",
+        ),
+        pytest.param(
+            {"verdict": "position_drift", "drifted_symbols": ("AAPL",)}, "OPTION_EVENT_HOLD_POSITIONS_DIFFER", ("AAPL",),
+            id="the underlying's shares differ",
+        ),
+        pytest.param(
+            {"verdict": "position_drift", "indeterminate_symbols": (CALL,)}, "OPTION_EVENT_HOLD_POSITIONS_DIFFER",
+            (CALL,), id="the contract differs while an order still works in it",
+        ),
+    ],
+)
+async def test_an_acknowledgement_is_refused_unless_a_pass_shows_the_books_agree_with_the_broker_in_what_the_hold_names(
+    tmp_path: Path, the_pass: dict[str, Any], refusal_code: str, named: tuple[str, ...]
+) -> None:
+    """An acknowledgement books nothing. Given while the broker holds something else, it would hide that."""
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(qty="-0.5"))
+        written = repo.last_custody_sequence()
+
+        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
+            acknowledge(repo, "bot-a", "OPTION_EVENT_UNREADABLE", **the_pass)
+
+        assert (refused.value.refusal_code, refused.value.symbols) == (refusal_code, named)
+        assert all(symbol in str(refused.value) for symbol in named)
+        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo) and repo.last_custody_sequence() == written
+    finally:
+        repo.close()
+
+
+async def test_a_difference_in_a_symbol_the_hold_does_not_name_does_not_stop_its_acknowledgement(tmp_path: Path) -> None:
+    """The owner holds some MSFT by hand, as they always could. The notice is about an AAPL contract."""
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(qty="-0.5"))
+
+        acknowledge(
+            repo, "bot-a", "OPTION_EVENT_UNREADABLE", verdict="position_drift",
+            drifted_symbols=("MSFT", OTHER_CALL),
         )
+
+        await _read(repo, account, _expiry(qty="-0.5"))
+        assert option_holds(repo) == {}
+    finally:
+        repo.close()
+
+
+async def test_a_bots_shares_are_compared_under_the_symbol_it_trades_whatever_the_contracts_root_spells(
+    tmp_path: Path,
+) -> None:
+    """A share-class ticker: the contract's root is BRKB and the bot's shares are counted under BRK.B."""
+    berkshire = "BRKB230721C00150000"
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"bot-a": "BRK.B"})
+    holds_option(repo, "bot-a", berkshire, contracts=1)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(symbol=berkshire, qty="-0.5"))
+
+        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
+            acknowledge(repo, "bot-a", "OPTION_EVENT_UNREADABLE", verdict="position_drift", drifted_symbols=("BRK.B",))
+
+        assert refused.value.symbols == ("BRK.B",)
+    finally:
+        repo.close()
+
+
+async def test_an_acknowledgement_that_names_nobody_is_refused(tmp_path: Path) -> None:
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(qty="-0.5"))
+
+        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
+            acknowledge_option_event_hold(
+                repo, request=as_read(repo, "bot-a", "OPTION_EVENT_UNREADABLE"), operator="  ",
+                compared=Compared(through_sequence=repo.last_custody_sequence()),
+            )
+
+        assert refused.value.refusal_code == "OPTION_EVENT_HOLD_NO_OPERATOR"
+        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo)
     finally:
         repo.close()
 

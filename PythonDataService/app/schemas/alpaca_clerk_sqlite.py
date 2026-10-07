@@ -8,7 +8,7 @@ as given.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, get_args
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -33,8 +33,10 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     quote_spread_bps,
 )
 from app.broker.alpaca.clerk.sqlite.models import CommandResource
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import HoldAcknowledgementRequest
 from app.broker.alpaca.clerk.sqlite.projection_models import SettlementAttestation
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_EVENT_HOLD_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -897,3 +899,72 @@ class RecoveryActionExecuteResponse(BaseModel):
                 for order in result.orders
             ),
         )
+
+
+# ── The acknowledgement of an option-event hold (ADR 0076 decision 22) ───────
+
+# Every option-event hold. The route takes any of them, so that a hold an
+# acknowledgement does not end is refused in words that say what does end it.
+OptionEventHoldReasonCode = Literal[
+    "OPTION_EVENTS_NOT_READ",
+    "OPTION_EVENT_UNREADABLE",
+    "OPTION_EVENT_NOT_EXECUTED",
+    "OPTION_EVENT_CONTRACT_NOT_HELD",
+    "OPTION_EVENT_WRONG_SIDE",
+    "OPTION_EVENT_HELD_ON_BOTH_SIDES",
+    "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+    "OPTION_EVENT_CASH_NOT_WHOLE_CENTS",
+    "OPTION_EVENT_ROW_CHANGED",
+    "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL",
+    "OPTION_SHARE_TRADE_MISSING",
+    "OPTION_SHARE_TRADE_UNPAIRED",
+    "OPTION_SHARE_TRADE_DISAGREES",
+    "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE",
+    "OPTION_EVENT_AFTER_A_LOT_CLOSED",
+    "OPTION_EXPIRED_NOT_SETTLED",
+    "OPTION_SHARES_HELD",
+    "OPTION_ORDER_NOT_OURS",
+]
+if set(get_args(OptionEventHoldReasonCode)) != set(OPTION_EVENT_HOLD_REASON_CODES):
+    # The wire's closed set is the Clerk's own family of holds, or a hold could not be named here.
+    raise RuntimeError("OptionEventHoldReasonCode must be the Clerk's option-event hold reason codes")
+
+
+class OptionEventHoldAcknowledgementRequest(BaseModel):
+    """The owner has looked at one option-event notice, exactly as they read it.
+
+    Who acknowledges is never a request field: the route records the
+    installation's configured operator identity.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason_code: OptionEventHoldReasonCode
+    # The notice that was read: its ``uncertainty_id``, and its ``observed_at_ms``, which is
+    # when it was last written. A notice written again since is not the one that was read.
+    uncertainty_id: str = Field(min_length=1, max_length=256)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # Each thing the notice named: its ``evidence_refs``, every one of them.
+    item_refs: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(min_length=1, max_length=200)
+
+    def to_request(self, strategy_instance_id: str | None) -> HoldAcknowledgementRequest:
+        return HoldAcknowledgementRequest(
+            strategy_instance_id=strategy_instance_id, reason_code=self.reason_code,
+            uncertainty_id=self.uncertainty_id, observed_at_ms=self.observed_at_ms, item_refs=self.item_refs,
+        )
+
+
+class OptionEventHoldAcknowledgementResponse(BaseModel):
+    """The books' record of one acknowledged option-event notice."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    # The bot whose notice it was. None for a notice of the account's own.
+    strategy_instance_id: str | None
+    reason_code: OptionEventHoldReasonCode
+    # Each thing the notice named, now acknowledged with what was wrong with it.
+    item_refs: tuple[str, ...]
+    operator: str
+    # The record's place in the custody log, and when it was written, ``int64`` ms UTC.
+    sequence: int
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)

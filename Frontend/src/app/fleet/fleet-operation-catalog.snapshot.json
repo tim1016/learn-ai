@@ -282,6 +282,11 @@
       "path_template": "/accounts/{account_id}/custody/timeline",
       "requires_account": true
     },
+    "custody_bot_option_event_hold_ack": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge",
+      "requires_account": true
+    },
     "custody_bot_recovery_check": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check",
@@ -310,6 +315,11 @@
     "custody_historical_recovery_prepare": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare",
+      "requires_account": true
+    },
+    "custody_option_event_hold_ack": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/option-event-holds/acknowledge",
       "requires_account": true
     },
     "custody_recovery_check": {

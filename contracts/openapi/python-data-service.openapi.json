@@ -34649,6 +34649,138 @@
         "title": "OptionEntryLeg",
         "type": "object"
       },
+      "OptionEventHoldAcknowledgementRequest": {
+        "additionalProperties": false,
+        "description": "The owner has looked at one option-event notice, exactly as they read it.\n\nWho acknowledges is never a request field: the route records the\ninstallation's configured operator identity.",
+        "properties": {
+          "item_refs": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Item Refs",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "enum": [
+              "OPTION_EVENTS_NOT_READ",
+              "OPTION_EVENT_UNREADABLE",
+              "OPTION_EVENT_NOT_EXECUTED",
+              "OPTION_EVENT_CONTRACT_NOT_HELD",
+              "OPTION_EVENT_WRONG_SIDE",
+              "OPTION_EVENT_HELD_ON_BOTH_SIDES",
+              "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+              "OPTION_EVENT_CASH_NOT_WHOLE_CENTS",
+              "OPTION_EVENT_ROW_CHANGED",
+              "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL",
+              "OPTION_SHARE_TRADE_MISSING",
+              "OPTION_SHARE_TRADE_UNPAIRED",
+              "OPTION_SHARE_TRADE_DISAGREES",
+              "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE",
+              "OPTION_EVENT_AFTER_A_LOT_CLOSED",
+              "OPTION_EXPIRED_NOT_SETTLED",
+              "OPTION_SHARES_HELD",
+              "OPTION_ORDER_NOT_OURS"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "uncertainty_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Uncertainty Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason_code",
+          "uncertainty_id",
+          "observed_at_ms",
+          "item_refs"
+        ],
+        "title": "OptionEventHoldAcknowledgementRequest",
+        "type": "object"
+      },
+      "OptionEventHoldAcknowledgementResponse": {
+        "description": "The books' record of one acknowledged option-event notice.",
+        "properties": {
+          "item_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Item Refs",
+            "type": "array"
+          },
+          "operator": {
+            "title": "Operator",
+            "type": "string"
+          },
+          "reason_code": {
+            "enum": [
+              "OPTION_EVENTS_NOT_READ",
+              "OPTION_EVENT_UNREADABLE",
+              "OPTION_EVENT_NOT_EXECUTED",
+              "OPTION_EVENT_CONTRACT_NOT_HELD",
+              "OPTION_EVENT_WRONG_SIDE",
+              "OPTION_EVENT_HELD_ON_BOTH_SIDES",
+              "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+              "OPTION_EVENT_CASH_NOT_WHOLE_CENTS",
+              "OPTION_EVENT_ROW_CHANGED",
+              "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL",
+              "OPTION_SHARE_TRADE_MISSING",
+              "OPTION_SHARE_TRADE_UNPAIRED",
+              "OPTION_SHARE_TRADE_DISAGREES",
+              "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE",
+              "OPTION_EVENT_AFTER_A_LOT_CLOSED",
+              "OPTION_EXPIRED_NOT_SETTLED",
+              "OPTION_SHARES_HELD",
+              "OPTION_ORDER_NOT_OURS"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "reason_code",
+          "item_refs",
+          "operator",
+          "sequence",
+          "recorded_at_ms"
+        ],
+        "title": "OptionEventHoldAcknowledgementResponse",
+        "type": "object"
+      },
       "OptionExpiryRule": {
         "additionalProperties": false,
         "description": "One way of choosing a leg's expiry, as the builder offers it.",
@@ -51805,6 +51937,93 @@
         ]
       }
     },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Acknowledge one bot's option-event notice, once the books agree with the broker (#2913).",
+        "operationId": "acknowledge_bot_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionEventHoldAcknowledgementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionEventHoldAcknowledgementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The selected SQLite authority or bot is unavailable."
+          },
+          "409": {
+            "description": "The notice was not acknowledged; the detail says why, and nothing was written."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "The SQLite authority or Alpaca is temporarily unavailable."
+          }
+        },
+        "summary": "Acknowledge Bot Option Event Hold",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
       "post": {
         "operationId": "check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post",
@@ -52100,6 +52319,84 @@
           }
         },
         "summary": "Get Bot Snapshot",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Acknowledge one option-event notice of the account's own, once the books agree with the broker (#2913).",
+        "operationId": "acknowledge_account_option_event_hold_api_alpaca_clerk_sqlite_accounts__account_id__option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionEventHoldAcknowledgementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionEventHoldAcknowledgementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The selected SQLite authority or bot is unavailable."
+          },
+          "409": {
+            "description": "The notice was not acknowledged; the detail says why, and nothing was written."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "The SQLite authority or Alpaca is temporarily unavailable."
+          }
+        },
+        "summary": "Acknowledge Account Option Event Hold",
         "tags": [
           "alpaca-clerk-sqlite"
         ]
@@ -61175,6 +61472,107 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/option-event-holds/acknowledge (custody_command).",
+        "operationId": "fleet_custody_bot_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Bot Option Event Hold Ack",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check": {
       "post": {
         "description": "Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/recovery-actions/check (custody_command).",
@@ -61473,6 +61871,98 @@
           }
         },
         "summary": "Fleet Custody Runs Stop",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/option-event-holds/acknowledge": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/custody/option-event-holds/acknowledge (custody_command).",
+        "operationId": "fleet_custody_option_event_hold_ack_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_option_event_holds_acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Custody Option Event Hold Ack",
         "tags": [
           "broker-clerks"
         ]
