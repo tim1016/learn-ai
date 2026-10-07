@@ -25,7 +25,10 @@ differ from the books.
 option position. Its simulation does, as one step of its trade port
 (``simulated_option_settlement``), and the poll calls that step before it
 reads. What the step hands back is booked by the same batch function, as a
-simulated execution that carries the simulation's record.
+simulated execution that carries the simulation's record. A bot that
+booking leaves holding nothing is cleared of its exit's notices at once: a
+Dry Run has no pass on a timer to do it, and a failed scheduled close would
+otherwise keep a running bot from its next entry.
 
 **A stock-only account is never read.** The worklist starts at
 ``option_contracts``. On books that never recorded a contract that table is
@@ -212,7 +215,7 @@ from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
     rows_an_owners_ending_named,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty, resolve_flat_exit_fences
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     OPTION_EVENT_AFTER_A_LOT_CLOSED_REASON_CODE,
     OPTION_EVENT_CASH_NOT_WHOLE_CENTS_REASON_CODE,
@@ -2566,6 +2569,18 @@ def book_option_events(
             # A read that was not whole ends no hold: a row it did not reach is not a row that is gone.
             held += _sync_holds(repo, conn, holds, codes=(OPTION_EVENTS_NOT_READ_REASON_CODE, *_READ_HOLDS), may_end=whole)
         _sync_shares_held(repo, conn)
+        if is_synthetic_account_id(repo.account_id):
+            # A simulated account has no pass on a timer to end an exit's notices once its bot
+            # holds nothing (ADR 0076 decision 20). Its simulation is its own broker, and let go
+            # of the contract in the step whose record was just booked. So a bot this run's
+            # bookings left flat in every symbol is cleared of them here, as the owner's
+            # write-off clears its own, and a failed scheduled close does not keep a running bot
+            # from its next entry. Not in the booking's transaction: a stop in between leaves the
+            # notices to the next pass, which ends them on the same proof.
+            for sid in sorted({sid for sid, _facts in booked}):
+                resolve_flat_exit_fences(
+                    repo, strategy_instance_id=sid, evidence_refs=("simulated_option_position_ended", "attributed_flat")
+                )
         return OptionEventRound(
             booked=tuple(f"cmd:{facts.idempotency_key}" for _sid, facts in booked), held=tuple(held), read_whole=whole,
             owner_ending=owner_outcome,

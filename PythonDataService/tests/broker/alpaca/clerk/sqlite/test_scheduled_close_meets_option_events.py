@@ -37,7 +37,8 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionR
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionUnavailableError, RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.scheduled_close import CloseStanding, scheduled_close_state
-from app.broker.alpaca.clerk.sqlite.uncertainty import open_exit_stuck
+from app.broker.alpaca.clerk.sqlite.uncertainty import decide_capability, open_exit_stuck
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import Capability
 from app.broker.contract.errors import BrokerOrderRejected
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture
 from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import bookings, books_at, fifo, holds_option
@@ -207,8 +208,10 @@ async def test_a_dry_runs_close_with_nothing_bid_is_tried_until_the_session_ends
     nothing for nothing. At the close the keeper records the close as
     missed and asks the simulation, which is still waiting for the closing
     bar. The bar lands at 590.25: the contract is sold by the simulation's
-    rule at 5.25 a share, $525.00, and $331.00 is made. The missed close
-    ends on the round after that.
+    rule at 5.25 a share, $525.00, and $331.00 is made. The failed close's
+    own notice ends with that booking, and the missed close on the round
+    after it. No pass is made: a Dry Run makes none on a timer. The bot
+    then carries no notice of a position and may enter again.
     """
     runtime = get_clerk_runtime(dry_run.repo.account_id)
     assert runtime is not None and isinstance(runtime.deadline_keeper, DeadlineKeeper)
@@ -250,14 +253,18 @@ async def test_a_dry_runs_close_with_nothing_bid_is_tried_until_the_session_ends
     assert [(side, price) for _symbol, side, _contracts, price, _multiplier in dry_run.fills()] == [
         ("buy", 1.94), ("sell", 5.25)
     ]
+    # The failed close's own notice said a position was still on the books. It ends with the booking.
+    assert NOT_FLAT not in set(await _page_notices(dry_run))
 
     dry_run.wait(keeper_module.IDLE_WAKE_MS)
     after, _read = await a_round()
 
     assert after.closes.taken == () and after.closes.missed == ()
-    assert MISSED not in set(await _page_notices(dry_run))
     assert open_exit_stuck(dry_run.repo, SID) is None
-    # The failed close's own notice ends on a flat proof, which a pass makes. A Dry Run makes no pass on a timer.
+    # No pass was made. The bot carries no notice of a position, and nothing holds its next entry.
+    assert await _page_notices(dry_run) == {}
+    assert decide_capability(dry_run.repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id=SID).allowed
+    # A pass made afterwards finds nothing to end and nothing to hold for.
     await dry_run.clerk.reconcile_once()
     assert await _page_notices(dry_run) == {}
 
