@@ -11,12 +11,12 @@ makes the supervisor's pass, and is where bots decide and send.
 So a search is handed to another process, and the loop only awaits its
 answer.
 
-**Two lanes, one worker process each.** ``entry`` is a bot's own entry;
-``preview`` is a page's. A bot's entry never waits behind a page. A lane's
-worker is started the first time the lane is used or warmed, with the
-``spawn`` start method: this process holds sockets, threads and a running
-loop, and none of them may be copied into a child. A process that never
-searches never starts one.
+**Two lanes, one worker process each.** ``entry`` is for a bot's own entry
+and ``preview`` for a page's, so that a bot's entry never waits behind a
+page. A lane's worker is started the first time the lane is used or warmed,
+with the ``spawn`` start method: this process holds sockets, threads and a
+running loop, and none of them may be copied into a child. A process that
+never searches never starts one.
 
 **What crosses to the worker is plain data**: the plan, the chain, the
 underlying's observation, the feed's state, the model's inputs, the limits
@@ -86,7 +86,7 @@ PREVIEW_SEARCH_WAIT_S = 4.0
 # second, and an iron condor on the default window takes about as long.
 SEARCH_HANG_BOUND_S = 20.0
 # How long a worker that was just killed is waited for. One is gone in milliseconds; this only bounds the wait.
-KILLED_WORKER_WAIT_S = 2.0
+_KILLED_WORKER_WAIT_S = 2.0
 # The most searches the preview lane has in hand at once: one running and one waiting behind it.
 _PREVIEW_SEARCHES_IN_HAND = 2
 
@@ -288,7 +288,7 @@ def _kill(process: BaseProcess, lane: str) -> None:
             "An option search worker could not be sent its kill",
             extra={"action": "option_search_worker_kill_failed", "lane": lane, "pid": process.pid},
         )
-    process.join(KILLED_WORKER_WAIT_S)
+    process.join(_KILLED_WORKER_WAIT_S)
     if not _has_gone(process):
         logger.error(
             "An option search worker was killed and has not gone",
