@@ -427,6 +427,28 @@ def test_a_fill_fifo_refuses_leaves_nothing_behind_in_the_bots_running_lots() ->
     assert sum(lot.exact_realized_pnl for lot in closed) == Decimal(100)
 
 
+def test_a_refused_read_does_not_leave_a_closed_lot_to_be_counted_twice() -> None:
+    """Buy 1 at $1.00 and sell it at $1.20: one closed lot. Then a read that ends in a fill FIFO refuses, and
+    then the read as it should be, with a second round trip at $1.50.
+
+    The closed lots are the two round trips, once each: (1.20 − 1.00) × 100 + (1.50 − 1.00) × 100 = $70.00.
+    """
+    round_trip = (_contract_fill(OrderSide.BUY, 1, 1.00, ts_ms=1_000), _contract_fill(OrderSide.SELL, 1, 1.20, ts_ms=2_000))
+    again = _contract_fill(OrderSide.BUY, 1, 1.00, ts_ms=3_000)
+    counted_as_shares = _contract_fill(OrderSide.SELL, 1, 1.50, ts_ms=4_000, multiplier=None)
+    sale = _contract_fill(OrderSide.SELL, 1, 1.50, ts_ms=4_000)
+    running = _CachedFifo()
+    running.project(round_trip)
+    with pytest.raises(MoneyInputError, match="open lots count contracts of 100 shares"):
+        running.project((*round_trip, again, counted_as_shares))
+
+    closed, lots, _ = running.project((*round_trip, again, sale))
+
+    assert compute_open_pnl(lots, {}).open_lots == ()
+    assert closed == compute_fifo_pnl([*round_trip, again, sale]).closed_lots
+    assert sum(lot.exact_realized_pnl for lot in closed) == Decimal(70)
+
+
 # ── Budget: what an open position costs ───────────────────────────────────────
 
 
@@ -528,6 +550,24 @@ def test_an_option_entrys_fill_claims_the_same_cash_before_and_after_cash_sees_i
         for cash, seen_before_ms in ((5_000, NOON), (4_700, NOON + 1)):
             money = project_account_money(repo._conn, cash=Decimal(cash), seen_before_ms=seen_before_ms, fees=_NO_FEES)
             assert (money.cash, money.total) == (Decimal(4_700), Decimal(5_000))
+    finally:
+        repo.close()
+
+
+def test_a_fee_reported_on_an_option_fill_is_claimed_as_it_was_charged_not_by_the_multiplier(tmp_path: Path) -> None:
+    """2 contracts fill at $1.50 with a $0.26 fee on the fill. Cash read before the fill was recorded has
+    not paid either: the fill claims $300.00 and the fee $0.26, never $26.00."""
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
+    try:
+        bought = accept_option_order(
+            repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1", reference_price="1.50", fee_provision_cents=9
+        )
+        fill(repo, bought, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=2, price=1.50, fee=0.26)
+        _acknowledge_filled(repo, bought, symbol=AAPL_CALL.symbol, side="buy", quantity=2, price=1.50, order_id="b1")
+
+        unseen = project_account_budget(repo._conn, cash=Decimal(5_000), seen_before_ms=NOON, fees=_NO_FEES)
+
+        assert unseen.order_claims == Decimal("300.26")
     finally:
         repo.close()
 

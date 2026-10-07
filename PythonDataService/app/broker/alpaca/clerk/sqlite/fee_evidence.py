@@ -491,13 +491,13 @@ def _has_option_fill(conn: sqlite3.Connection) -> bool:
     activities, such a fill leaves the fees unresolved, never mispriced
     (ADR 0076 decision 13).
 
-    Asked of the bound orders first: books that bind no order to a contract
-    hold no option fill, and are answered without reading a fill.
+    Asked from the bound orders: books that bind no order to a contract
+    hold no option fill, and are answered without reading a fill. Each
+    bound order is then looked up in the fills by its own index.
     """
-    if conn.execute("SELECT 1 FROM order_contracts LIMIT 1").fetchone() is None:
-        return False
     return conn.execute(
-        "SELECT 1 FROM fills f JOIN order_contracts c ON c.order_ref = f.order_ref LIMIT 1"
+        "SELECT 1 FROM order_contracts c"
+        " WHERE EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = c.order_ref) LIMIT 1"
     ).fetchone() is not None
 
 

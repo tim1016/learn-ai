@@ -254,6 +254,7 @@ def slice_transition(
     quantity: float,
     price: float,
     occurred_at_ms: int,
+    fee: float | None = None,
 ) -> TransitionInput:
     """One exact execution of ``accepted``'s order, in the symbol the broker reported it in."""
     facts = ExecutionSliceFilledFacts(
@@ -262,8 +263,8 @@ def slice_transition(
         side=side,
         slice_qty=quantity,
         slice_price=price,
-        fee=None,
-        fee_fidelity="not_reported",
+        fee=fee,
+        fee_fidelity="not_reported" if fee is None else "reported",
         evidence_source="websocket",
         source_event_at_ms=occurred_at_ms,
     )
@@ -294,13 +295,14 @@ def fill(
     quantity: float,
     price: float,
     occurred_at_ms: int = NOON,
+    fee: float | None = None,
 ) -> str:
     """Fold one execution through the Clerk's own append, and say what it did with it."""
 
     def build() -> TransitionInput:
         return slice_transition(
             repo, accepted, execution_id=execution_id, symbol=symbol, side=side,
-            quantity=quantity, price=price, occurred_at_ms=occurred_at_ms,
+            quantity=quantity, price=price, occurred_at_ms=occurred_at_ms, fee=fee,
         )
 
     def no_conflict() -> TransitionInput:
