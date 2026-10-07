@@ -372,6 +372,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
     "regular_session_only": False,
+    "option_contract": None,
     "option_exit": None,
 }
 
@@ -452,6 +453,11 @@ class ExitAcceptedFacts:
     # being re-priced as an extended-hours limit. Absent (every other EXIT,
     # and every acceptance recorded before it existed) is ``False``.
     regular_session_only: bool = False
+    # The OCC symbol of the option contract this EXIT closes (ADR 0076), read
+    # from the entry it targets. Such an EXIT is always regular-session-only,
+    # and its hold outside the session is told as an option close's, never as
+    # a scheduled end's. Absent for every EXIT in shares.
+    option_contract: str | None = None
     # The quotes read at the exit decision for the option contracts the bot
     # holds (``option_entry.OptionExitFacts``, ADR 0076): what a simulated
     # close is priced from when whichever pass sends it comes to send it.

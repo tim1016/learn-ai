@@ -275,6 +275,37 @@ DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
 SCHEDULED_END_WAITS_FOR_OPEN = "SCHEDULED_END_WAITS_FOR_OPEN"
 
 
+#: The hold of an EXIT that closes an option contract, met outside the regular
+#: session (``ExitAcceptedFacts.option_contract``, ADR 0076). Its own code: it
+#: is no bot's scheduled end, and must not be told as one.
+OPTION_CLOSE_WAITS_FOR_OPEN = "OPTION_CLOSE_WAITS_FOR_OPEN"
+
+
+def option_close_waits_for_open(now_ms: int) -> LegRefusal:
+    """Why the close of an option position is held, and when it can go out: the next regular open.
+
+    A hold, not a failure, exactly as a scheduled end's sale is held: the
+    EXIT keeps custody and the pass re-drives it until the session opens.
+    """
+    return LegRefusal(
+        reason_code=OPTION_CLOSE_WAITS_FOR_OPEN,
+        explanation=(
+            "This closes a position in an option contract. An option order is sent only in regular hours, "
+            "and the market is closed. It waits for the next regular session and goes out at the open as a "
+            "market order; it never goes out after hours."
+        ),
+        next_step="Nothing to do: the Clerk sends it at the next regular open.",
+        available_at_ms=next_redrive_at_ms(not_before_ms=now_ms, policy=ProgramLegPolicy.regular_only()),
+    )
+
+
+def regular_session_hold(facts: ExitAcceptedFacts, now_ms: int) -> LegRefusal:
+    """The hold of a regular-session-only EXIT met outside the session, in the words of what it is."""
+    if facts.option_contract is not None:
+        return option_close_waits_for_open(now_ms)
+    return regular_session_sale_waits_for_open(now_ms)
+
+
 def regular_session_sale_waits_for_open(now_ms: int) -> LegRefusal:
     """Why a regular-session-only sale is held, and when it can go out: the next regular open.
 
@@ -1059,7 +1090,7 @@ def _send_verdict(
         extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms, liveness=liveness,
     )
     if facts.regular_session_only and verdict == "wait":
-        return regular_session_sale_waits_for_open(now_ms)
+        return regular_session_hold(facts, now_ms)
     return verdict
 
 
@@ -1179,7 +1210,9 @@ def _past_its_session(
     """
     if verdict in ("wait", "expired"):
         return True
-    if isinstance(verdict, LegRefusal) and verdict.reason_code == SCHEDULED_END_WAITS_FOR_OPEN:
+    if isinstance(verdict, LegRefusal) and verdict.reason_code in (
+        SCHEDULED_END_WAITS_FOR_OPEN, OPTION_CLOSE_WAITS_FOR_OPEN
+    ):
         return True
     latest = _latest_send(repo, order_ref)
     if latest is None:

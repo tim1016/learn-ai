@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.scheduled_end import end_sales_waiting_for_open
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.contract.models import OrderSide
 from app.options.contract import OptionContract
@@ -599,6 +600,10 @@ async def test_an_exit_decided_after_the_regular_session_is_held_for_the_next_on
     ) is None
     assert dry_run.held() == {SYMBOL: 1.0}
     assert len(dry_run.fills()) == 1, "nothing was sold"
+    # It is told as an option close waiting for the open, and never as a bot that reached its scheduled end.
+    hold = dry_run.repo.last_strategy_transition(strategy_instance_id=SID, transition_kind="EXIT_MARKET_HOLD")
+    assert hold is not None and hold["summary_code"] == "OPTION_CLOSE_WAITS_FOR_OPEN"
+    assert end_sales_waiting_for_open(dry_run.repo) == []
 
     # The next morning, a minute after the open, the account's own pass sends it.
     dry_run.wait(16 * 3_600_000 + 31 * 60_000)

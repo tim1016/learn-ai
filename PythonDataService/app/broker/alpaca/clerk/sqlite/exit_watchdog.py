@@ -93,6 +93,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     recovery_stopped_because,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    option_close_waits_for_open,
     redrive_decision_prefix,
     redrive_episode_token,
     regular_session_sale_waits_for_open,
@@ -175,6 +176,8 @@ class EpisodeAttempt:
     # Its EXIT sells only inside the regular session
     # (``ExitAcceptedFacts.regular_session_only``, #2607).
     regular_session_only: bool = False
+    # Its EXIT closes an option contract (``ExitAcceptedFacts.option_contract``, ADR 0076).
+    closes_an_option: bool = False
 
 
 type OppositeSide = Literal["open", "ended"]
@@ -210,6 +213,11 @@ class _StaleExit:
     def regular_session_only(self) -> bool:
         """The episode's EXIT sells only inside the regular session, so every re-drive of it does too."""
         return any(a.regular_session_only for a in self.attempts)
+
+    @property
+    def closes_an_option(self) -> bool:
+        """The episode's EXIT closes an option contract: its wait for the open is told as that, not as a scheduled end."""
+        return any(a.closes_an_option for a in self.attempts)
 
 
 @dataclass(frozen=True)
@@ -252,6 +260,7 @@ def episode_attempts(
             repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"),
             effect.state == "failed", created.extended_hours, bound, redrive,
             regular_session_only=accepted is not None and accepted.regular_session_only,
+            closes_an_option=accepted is not None and accepted.option_contract is not None,
         ))
     return redrives, tuple(attempts)
 
@@ -339,7 +348,7 @@ def evaluate_recovery_wait(
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
     if stale.regular_session_only and verdict != "send":
-        waits = regular_session_sale_waits_for_open(now_ms)
+        waits = option_close_waits_for_open(now_ms) if stale.closes_an_option else regular_session_sale_waits_for_open(now_ms)
         return RecoveryResult("hold", waits.reason_code, waits.explanation, waits.available_at_ms)
     if stale.opposite_side == "open" and (now_ms < stale.settled_at_ms or verdict != "send"):
         # Past the settle age in the regular session the ordinary failure path

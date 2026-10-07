@@ -210,7 +210,8 @@ def _accept_exit_capture(
         )
         run_id = resolve_run_id(target)
         symbol = entry_order_symbol(repo, target.order_ref)
-        closes_an_option = option_entry_of_order(repo, target.order_ref) is not None
+        option_entry = option_entry_of_order(repo, target.order_ref)
+        closes_an_option = option_entry is not None
         if closes_an_option and recorded is not None and recorded.shape != regular_session_shape(recorded.shape.side):
             raise ValueError(
                 "a position in an option contract is closed by a market order in the regular session; "
@@ -245,6 +246,7 @@ def _accept_exit_capture(
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
             regular_session_only=regular_session_only or closes_an_option,
+            option_contract=None if option_entry is None else option_entry.contract_terms.symbol,
             option_exit=(
                 OptionExitFacts.of(option_exit).to_facts() if closes_an_option and option_exit is not None else None
             ),
