@@ -1033,16 +1033,28 @@ async def _untradable(broker: str, symbol: str) -> PanelRunnerError | None:
     )
 
 
-async def deploy_traded_asset(broker: str, account_id: str, symbol: str, traded_symbol: str) -> DeployTradedAssetView:
+async def deploy_traded_asset(
+    broker: str, account_id: str, symbol: str, traded_symbol: str, *, options: bool = False
+) -> DeployTradedAssetView:
     """What Deploy says about a picked traded asset, before any money is reviewed (#2912).
 
     The same two facts the money review and Deploy act on, so the owner
     reads them while still choosing: whether Alpaca can trade the asset, and
     the warning about what the strategy was never tested on. Picking the
     symbol the bot listens to is picking nothing, and says nothing.
+
+    ``options`` asks about options on ``traded_symbol`` (#2913). Those are
+    something else than its shares even when it is the symbol the bot
+    listens to, so the warning is always said. Whether Alpaca lists a
+    contract on it is the money review's to say, of a contract the rules
+    picked.
     """
     await validate_account(broker, account_id)
     listens_to, trades = normalized_symbol(symbol), normalized_symbol(traded_symbol)
+    if options:
+        return DeployTradedAssetView(
+            warning=UntestedTradedAssetWarning.for_options(listens_to, trades, acceptance_required=False),
+        )
     if trades == listens_to:
         return DeployTradedAssetView()
     untradable = await _untradable(broker, trades)

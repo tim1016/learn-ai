@@ -28,14 +28,18 @@ from app.broker.contract.options import BrokerOptionAccountSnapshot
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.options.contract import OptionContract
-from app.schemas.action_plan import OptionEntryLeg
+from app.schemas.action_plan import OptionEntryLeg, TradedInstrumentView
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import DeploymentBudgetPreview
+from app.schemas.option_deploy import TradesOptions
 from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.services import bot_option_run
+from app.services.bot_binding_repository import alpaca_v1_action_plan
 from app.services.bot_option_run import OptionMarket
 from app.services.bot_start_admission import make_start_request, new_run_binding
-from app.services.broker_v2_panel import budget_deploy, option_deploy
+from app.services.broker_v2_panel import budget_deploy, option_deploy, panel_deploy
+from app.services.option_preview_views import entry_sentence
+from app.services.option_structure_preview import plan_of
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS
@@ -626,3 +630,72 @@ async def test_a_bot_in_shares_has_no_option_review(deploy_app, floor: _Floor, m
 
     assert response.status_code == 200, response.text
     assert response.json()["option_review"] is None
+
+
+# ── what the screens are told of an option bot ──────────────────────────
+
+
+def test_a_bots_row_names_the_structure_it_trades_for_a_list_and_for_a_sentence() -> None:
+    """So a bot that trades options on the symbol it listens to never reads "SPY → SPY"."""
+    spread = plan_of(TradesOptions.model_validate(_SPREAD))
+    custom = plan_of(TradesOptions.model_validate({**_ONE_CALL, "structure": None}))
+
+    named = TradedInstrumentView.of(spread, signal_symbol="SPY")
+    unnamed = TradedInstrumentView.of(custom, signal_symbol="SPY")
+
+    assert named is not None and unnamed is not None
+    assert named.model_dump(mode="json") == {
+        "kind": "option", "symbol": "SPY", "label": "Bull call spread", "in_a_sentence": "a bull call spread on",
+    }
+    assert (unnamed.label, unnamed.in_a_sentence) == ("Custom", "a custom option structure on")
+
+
+def test_a_stock_bots_row_is_written_as_it_was_before_a_structure_had_a_label() -> None:
+    other = TradedInstrumentView.of(alpaca_v1_action_plan("QQQ"), signal_symbol="SPY")
+
+    assert other is not None and other.model_dump(mode="json") == {"kind": "stock", "symbol": "QQQ"}
+    assert TradedInstrumentView.of(alpaca_v1_action_plan("SPY"), signal_symbol="SPY") is None
+
+
+async def test_picking_options_is_warned_of_at_once_even_on_the_symbol_the_bot_listens_to(deploy_app) -> None:
+    app, _registry = deploy_app
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        options = await client.get(f"{_BOTS}/traded-asset", params={"symbol": "SPY", "traded_symbol": "SPY", "options": "true"})
+        shares = await client.get(f"{_BOTS}/traded-asset", params={"symbol": "SPY", "traded_symbol": "SPY"})
+
+    assert options.status_code == 200, options.text
+    warning = options.json()["warning"]
+    assert "no backtest" in warning["headline"] and "options on SPY" in warning["detail"]
+    assert "time" in warning["detail"] and "volatility" in warning["detail"]
+    assert warning["acceptance_label"] is None, "the owner accepts at Confirm, not while still choosing"
+    assert shares.json() == {"refusal": None, "warning": None}
+
+
+def test_deploy_again_of_an_option_bot_carries_its_structure_and_its_sealed_terms() -> None:
+    terms = SealedOptionOrderTerms.model_validate({**_TERMS, "entry_wait_seconds": 7})
+    binding = new_run_binding(
+        make_start_request(
+            broker="alpaca", strategy_instance_id="spy-ema-1", strategy_key="ema_crossover_signal", symbol="SPY",
+            use_rth=True, mode="dry_run", quantity=2, carryover_policy="FORBID", evidence_override=None,
+            action_plan=plan_of(TradesOptions.model_validate(_SPREAD)), exit_terms=DEPLOY_EXIT_TERMS,
+            option_order_terms=terms,
+        ),
+        now_ms=1,
+    )
+
+    choice = panel_deploy._option_choice_of(binding)
+
+    assert choice is not None and choice.order_terms == terms
+    assert (choice.underlying, choice.structure) == ("SPY", "bull_call_spread")
+    assert plan_of(choice) == binding.action_plan, "the same legs make the same plan again"
+    assert panel_deploy._option_choice_of(binding.model_copy(update={
+        "action_plan": alpaca_v1_action_plan("QQQ"), "option_order_terms": None,
+    })) is None
+
+
+def test_money_that_cannot_be_set_aside_is_not_said_to_be_skipped_right_now() -> None:
+    """A red verdict does not pass by itself, so the entry's sentence does not say it would."""
+    red = entry_sentence([], not_as_built=True)
+
+    assert "right now" not in red and "cannot be made" in red
+    assert "right now" in entry_sentence([])

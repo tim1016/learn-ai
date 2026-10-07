@@ -396,8 +396,15 @@ def entry_refusal_views(
     return told
 
 
-def entry_sentence(refusals: Sequence[NotAsBuilt]) -> str:
-    """Whether an entry on these quotes would be skipped, in a sentence."""
+def entry_sentence(refusals: Sequence[NotAsBuilt], *, not_as_built: bool = False) -> str:
+    """Whether an entry on these quotes would be skipped, in a sentence.
+
+    ``not_as_built`` is the verdict's red half: the picks are not the
+    structure built, or its money cannot be set aside. That does not pass by
+    itself, so it is not said to be skipped "right now".
+    """
+    if not_as_built:
+        return "An entry cannot be made on these picks as they are. The verdict says why."
     if not refusals:
         return (
             "Nothing in these picks or their prices would stop an entry right now. An entry is also held to the "

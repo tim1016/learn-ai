@@ -49348,6 +49348,17 @@
         "additionalProperties": false,
         "description": "What a bot trades, when that is not shares of the symbol it listens to (#2912).\n\nA bot's ``symbol`` is its Signal stream: what it listens to. This is on\nits row only when it trades something else, so its presence is the\nserver's one answer to \"does this bot trade something else\". The answer\ncomes from the instrument's type and identity, never from a screen\ncomparing tickers: options on the bot's own symbol are something else.",
         "properties": {
+          "in_a_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In A Sentence"
+          },
           "kind": {
             "enum": [
               "stock",
@@ -49355,6 +49366,17 @@
             ],
             "title": "Kind",
             "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
           },
           "symbol": {
             "title": "Symbol",
@@ -57605,6 +57627,18 @@
               "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Traded Symbol",
               "type": "string"
+            }
+          },
+          {
+            "description": "Ask about options on what was picked, not its shares. Options on the symbol the bot listens to are something else too.",
+            "in": "query",
+            "name": "options",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Ask about options on what was picked, not its shares. Options on the symbol the bot listens to are something else too.",
+              "title": "Options",
+              "type": "boolean"
             }
           },
           {

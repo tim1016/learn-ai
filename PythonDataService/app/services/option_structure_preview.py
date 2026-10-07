@@ -832,7 +832,7 @@ class _Asked:
                         cost_sentence=None if money is None else money.cost_sentence,
                     )
                 ),
-                entry_sentence=entry_sentence(figures.entry_refusals),
+                entry_sentence=entry_sentence(figures.entry_refusals, not_as_built=broken is not None),
             )
         )
 

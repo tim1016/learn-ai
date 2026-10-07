@@ -459,6 +459,20 @@ class TradedInstrumentView(BaseModel):
     kind: Literal["stock", "option"]
     # The stock or ETF traded; for options, the symbol the contracts are on.
     symbol: str
+    # For options, the structure as a list names it ("Bull call spread") and as a sentence takes it
+    # before the symbol ("a bull call spread on"), so no screen reads "SPY → SPY" for an option bot
+    # (#2913). Absent for a stock, whose row is written as it was before these existed.
+    label: str | None = None
+    in_a_sentence: str | None = None
+
+    # No return annotation: the view's published schema stays this model's own fields.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_structure_label(self, handler: SerializerFunctionWrapHandler):
+        view = handler(self)
+        for name in ("label", "in_a_sentence"):
+            if view.get(name) is None:
+                view.pop(name, None)
+        return view
 
     @classmethod
     def of(cls, action_plan: ActionPlan, *, signal_symbol: str) -> TradedInstrumentView | None:
@@ -466,7 +480,17 @@ class TradedInstrumentView(BaseModel):
         if trades_the_signals_shares(action_plan, signal_symbol):
             return None
         instrument = traded_instrument(action_plan)
-        return cls(kind=instrument.kind, symbol=instrument.underlying.upper())
+        if instrument.kind == "stock":
+            return cls(kind=instrument.kind, symbol=instrument.underlying.upper())
+        # The catalogue builds plans, so it imports this module: read where it is used.
+        from app.options.structure_catalogue import in_a_sentence, label
+
+        return cls(
+            kind=instrument.kind,
+            symbol=instrument.underlying.upper(),
+            label=label(action_plan.structure),
+            in_a_sentence=in_a_sentence(action_plan.structure),
+        )
 
 
 def order_symbol(symbol: str, traded: TradedInstrumentView | None) -> str:

@@ -25674,11 +25674,15 @@ export interface components {
          *     comparing tickers: options on the bot's own symbol are something else.
          */
         TradedInstrumentView: {
+            /** In A Sentence */
+            in_a_sentence?: string | null;
             /**
              * Kind
              * @enum {string}
              */
             kind: "stock" | "option";
+            /** Label */
+            label?: string | null;
             /** Symbol */
             symbol: string;
         };
@@ -29558,6 +29562,8 @@ export interface operations {
                 symbol: string;
                 /** @description What the owner picked to trade. */
                 traded_symbol: string;
+                /** @description Ask about options on what was picked, not its shares. Options on the symbol the bot listens to are something else too. */
+                options?: boolean;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
