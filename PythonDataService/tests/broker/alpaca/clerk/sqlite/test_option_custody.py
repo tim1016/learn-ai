@@ -1274,7 +1274,7 @@ def test_a_stock_store_from_before_the_contract_tables_reads_the_same_after_the_
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_noon_clock(), fold_registry=option_fold_registry()
     )
     try:
-        assert reopened._conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == schema.SCHEMA_VERSION == 23
+        assert reopened._conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == schema.SCHEMA_VERSION == 24
         assert _contract_rows(reopened) == {"option_contracts": [], "order_contracts": []}
         assert _records(reopened) == before
         assert (before[0].symbol, before[0].multiplier) == ("SPY", None)

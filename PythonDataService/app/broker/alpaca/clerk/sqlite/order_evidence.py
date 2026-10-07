@@ -13,7 +13,7 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -83,7 +83,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.options import SingleOptionOrderRequest
+from app.broker.contract.options import OptionOrderRequest
 from app.broker.contract.ports import (
     AuthoritativeSubmissionEvidencePort,
     BrokerActivityEvidencePort,
@@ -109,9 +109,11 @@ def submit_absence_grace_ms() -> int:
 __all__ = [
     "UNFILLED_TERMINAL_STATES",
     "BrokerRefusal",
+    "SeveralLegsHaveNoOneSymbol",
     "broker_refusal",
     "entry_never_accepted_durably",
     "entry_order_symbol",
+    "entry_order_symbols",
     "fence_fills_on_terminal_enters",
     "fold_enter_unfilled_if_proven",
     "fold_entry_never_accepted",
@@ -140,7 +142,13 @@ __all__ = [
 
 
 def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
-    """Read an entry's symbol from its immutable acceptance fact."""
+    """Read an entry's symbol from its immutable acceptance fact.
+
+    For an entry in one symbol: shares, or one option contract. An entry of
+    several legs has no one symbol, and is refused by name: a caller that
+    takes one for the whole would act on a part of a structure. Such a
+    caller asks :func:`entry_order_symbols`.
+    """
     transition = repo.first_order_transition(order_ref=order_ref, transition_kind="ENTER_ACCEPTED")
     if transition is None:
         # The shares an option event left have no ENTER: they are in the symbol their bot is
@@ -150,7 +158,29 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
         if left_by_an_event is not None:
             return left_by_an_event
         raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
-    return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
+    symbol = EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
+    if symbol is None:
+        raise SeveralLegsHaveNoOneSymbol(
+            f"entry {order_ref!r} is one order of several legs: it is in each leg's contract, and in no one symbol"
+        )
+    return symbol
+
+
+class SeveralLegsHaveNoOneSymbol(ValueError):
+    """An entry of several legs was asked for the one symbol it is in. It is in one for each leg (ADR 0076)."""
+
+
+def entry_order_symbols(repo: ClerkSqliteRepository, order_ref: str) -> tuple[str, ...]:
+    """Every symbol the entry ``order_ref`` is in: "which entry of this bot opened this contract" is asked of this.
+
+    One symbol for an entry in shares or in one contract, exactly as
+    :func:`entry_order_symbol` reads it. Each leg's contract, in leg order,
+    for an entry of several legs (ADR 0076).
+    """
+    legs = repo.order_legs(order_ref)
+    if legs:
+        return tuple(leg.symbol for leg in legs)
+    return (entry_order_symbol(repo, order_ref),)
 
 
 def _evidence_order_ref(order: BrokerOrder, order_ref: str | None) -> str:
@@ -173,9 +203,25 @@ def working_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str) -
     order is not "uncertain" (its effect operation is progressing normally),
     so :func:`unresolved_order_refs` alone cannot catch it either.
     """
-    return tuple(
-        order.order_ref for order in repo.orders_for_strategy(strategy_instance_id) if is_working_order(order)
+    return _as_the_orders_sent(
+        repo,
+        (order.order_ref for order in repo.orders_for_strategy(strategy_instance_id) if is_working_order(order)),
     )
+
+
+def _as_the_orders_sent(repo: ClerkSqliteRepository, order_refs: Iterable[str]) -> tuple[str, ...]:
+    """``order_refs`` as the orders that were sent, each once, in the order given.
+
+    A leg of an option order of several legs is a row of the books' own
+    (ADR 0076): a broker knows the order by its parent. So a leg that is
+    working, or whose outcome is unknown, is answered by its parent's
+    reference, and the order is counted once however many of its legs are
+    listed. Every other reference is answered as itself.
+    """
+    sent: dict[str, None] = {}
+    for order_ref in order_refs:
+        sent.setdefault(repo.leg_parent(order_ref) or order_ref, None)
+    return tuple(sent)
 
 
 def unresolved_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:
@@ -191,13 +237,16 @@ def unresolved_order_refs(repo: ClerkSqliteRepository, strategy_instance_id: str
     while the order was about to land (#2358). A voided ENTER is terminal and
     never counted.
     """
-    uncertain = tuple(
-        order.order_ref
-        for order in repo.uncertain_orders()
-        if (
-            (effect := repo.effect_operation(order.effect_operation_id)) is not None
-            and effect.strategy_instance_id == strategy_instance_id
-        )
+    uncertain = _as_the_orders_sent(
+        repo,
+        (
+            order.order_ref
+            for order in repo.uncertain_orders()
+            if (
+                (effect := repo.effect_operation(order.effect_operation_id)) is not None
+                and effect.strategy_instance_id == strategy_instance_id
+            )
+        ),
     )
     in_flight = tuple(
         order.order_ref
@@ -1310,7 +1359,7 @@ class BrokerRefusal:
 def broker_refusal(
     repo: ClerkSqliteRepository,
     *,
-    leg: BrokerOrderLeg | SingleOptionOrderRequest,
+    leg: BrokerOrderLeg | OptionOrderRequest,
     error: BrokerError,
 ) -> BrokerRefusal:
     """What the Clerk records when the broker definitively refuses ``leg``.
@@ -1326,7 +1375,7 @@ def broker_refusal(
     The refusal is definitive whatever this read finds, so an unreadable order
     record is logged and the refusal keeps only the broker's words.
     """
-    if not isinstance(error, BrokerOrderNotPermitted) or isinstance(leg, SingleOptionOrderRequest):
+    if not isinstance(error, BrokerOrderNotPermitted) or not isinstance(leg, BrokerOrderLeg):
         # An option order's refusal keeps the broker's words alone: what Alpaca's
         # wash-trade protection does with option contracts has not been seen (#2913).
         return BrokerRefusal(why=str(error), code=error.code)

@@ -106,7 +106,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     RunResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
+from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts, OptionEntry
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     broker_refusal,
     fold_failed,
@@ -124,7 +124,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
-from app.broker.contract.options import SingleOptionOrderRequest
+from app.broker.contract.options import OptionOrderRequest
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
@@ -372,13 +372,15 @@ def _accepted_submission(
 
 
 def _option_enter_identity(
-    *, account_id: str, strategy_instance_id: str, decision_id: str, order: SingleOptionOrderRequest
+    *, account_id: str, strategy_instance_id: str, decision_id: str, order: OptionOrderRequest
 ) -> tuple[str, str, str, str]:
     """The identity one option ENTER decision commits under.
 
     The keys are an ENTER's own: one entry per bot and decision, whatever it
     is in. The payload hashes the order under ``option_order``, never
     ``leg``, so an entry in shares and one in a contract cannot hash alike.
+    The order is one contract's or one of several legs: each is dumped as
+    its own type, so the two cannot hash alike either.
     """
     idempotency_key = f"{strategy_instance_id}:{decision_id}"
     payload_hash = hashlib.sha256(
@@ -402,11 +404,11 @@ def accept_option_enter(
     strategy_instance_id: str,
     decision_id: str,
     lifecycle_run_id: str,
-    entry: OptionEntryFacts,
+    entry: OptionEntry,
     decision_receipt: AtomicDecisionReceipt | None = None,
     envelope: LiveEnvelopeGate | None = None,
 ) -> EnterSubmission:
-    """Reserve + accept one entry in an option contract, entirely local (no broker call).
+    """Reserve + accept one entry in option contracts, entirely local (no broker call).
 
     The sibling of :func:`accept_enter`. It passes the same fences, which
     are one function (:func:`_require_enter_fences`), and then the envelope
@@ -419,12 +421,16 @@ def accept_option_enter(
     money it was admitted on. The fold records the contract's terms and binds
     the order to it in the same transaction, so the order never exists
     without its contract.
+
+    An entry of several legs is still one ENTER, one command, one effect
+    and one order: the parent. Its fold writes a row for each leg under it.
+    What its reservation keeps is whole structures and what one structure
+    sets aside before fees (``_reserved``).
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
     reject_colon("lifecycle_run_id", lifecycle_run_id)
-    if entry.order.limit_price is None:
-        raise ValueError("an option entry is a limit order at its natural price")
+    reserved_quantity, reference_price = _reserved(entry)
 
     idempotency_key, payload_hash, command_id, effect_idempotency_key = _option_enter_identity(
         account_id=account_id,
@@ -432,7 +438,6 @@ def accept_option_enter(
         decision_id=decision_id,
         order=entry.order,
     )
-    limit_price = entry.order.limit_price
 
     def build_transition() -> TransitionInput:
         active = _require_enter_fences(
@@ -444,8 +449,8 @@ def accept_option_enter(
             else require_option_envelope_admission(
                 repo,
                 envelope=envelope,
-                contracts=entry.order.quantity,
-                limit_price=limit_price,
+                reserved_quantity=reserved_quantity,
+                reference_price=reference_price,
                 commitment_cents=entry.money.entry_commitment_cents,
                 fee_provision_cents=entry.money.fee_provision_cents,
                 now_ms=repo.clock(),
@@ -492,6 +497,26 @@ def accept_option_enter(
         decision_receipt=decision_receipt,
     )
     return _accepted_submission(repo, outcome)
+
+
+def _reserved(entry: OptionEntry) -> tuple[int, Decimal]:
+    """What an option entry's reservation keeps: a quantity, and what one of it sets aside before fees.
+
+    One contract's order: contracts, and the limit a share. The claim is
+    then counted with the contract's multiplier, read through the order.
+
+    One order of several legs: whole structures, and the dollars one
+    structure sets aside, requirement plus premium at the limit
+    (``MultiLegOptionEntryFacts.unit_set_aside``). That figure is above
+    zero for a structure that receives its premium too, where the net limit
+    itself is below zero. It is not a price a share, and the claim is
+    counted with no multiplier (``envelope_reservations.entry_cash_claims``).
+    """
+    if isinstance(entry, MultiLegOptionEntryFacts):
+        return entry.units, entry.unit_set_aside
+    if entry.order.limit_price is None:
+        raise ValueError("an option entry is a limit order at its natural price")
+    return entry.order.quantity, entry.order.limit_price
 
 
 async def submit_enter(
@@ -546,16 +571,17 @@ async def submit_accepted_enter(
     repo: ClerkSqliteRepository,
     *,
     accepted: EnterSubmission,
-    leg: BrokerOrderLeg | SingleOptionOrderRequest,
+    leg: BrokerOrderLeg | OptionOrderRequest,
     trade: BrokerTradePort,
     before_submit: Callable[[], EntrySubmissionRefusal | None] | None = None,
 ) -> EnterSubmission:
     """Drive a previously accepted ENTER outside the intake decision segment.
 
     ``leg`` is the instruction the ENTER was accepted with: a leg in shares,
-    or one option order (ADR 0076). Either is sent once under the claim and
-    its answer is folded the same way; which one it is decides only the call
-    the port is given (``ClaimedBrokerIO.submit``).
+    or one option order, of one contract or of several legs (ADR 0076). Each
+    is sent once under the claim and its answer is folded the same way;
+    which one it is decides only the call the port is given
+    (``ClaimedBrokerIO.submit``).
     """
     if not accepted.created:
         return accepted

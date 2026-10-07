@@ -42,8 +42,10 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import order_contract_terms
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, ExitReducingOrderCreatedFacts
-from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_facts
+from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts, OptionEntryFacts, option_entry_facts
+from app.broker.alpaca.clerk.sqlite.option_order_legs import is_multi_leg_parent, leg_parent, order_legs
 from app.broker.alpaca.clerk.sqlite.order_evidence import trade_port_folds_simulated_evidence
+from app.broker.alpaca.clerk.sqlite.order_projection import read_order_details
 from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerOrder
 from app.broker.contract.options import BrokerOptionOrder, SingleOptionOrderRequest
@@ -86,21 +88,71 @@ class AskedOptionOrder:
         return (self.symbol, self.side, self.contracts)
 
 
-def asked_option_order(repo: ClerkSqliteRepository, order_ref: str) -> AskedOptionOrder | None:
-    """What the books asked for under ``order_ref``, or ``None`` for an order that is not in an option contract.
+@dataclass(frozen=True, slots=True)
+class AskedMultiLegOrder:
+    """What the books asked the broker for under the reference of one order of several legs: the parent's."""
 
-    An order is in an option contract when the books bind it to one. What it
-    asked for is on the record that created it: an entry's acceptance, or a
-    reducing order's creation.
+    # Whole structures.
+    units: int
+    # (the contract's OCC symbol, ``buy`` or ``sell``), in the order's own leg order.
+    legs: tuple[tuple[str, str], ...]
+    # ``limit`` or ``market``, and the signed net limit as the exact decimal it was asked at.
+    order_type: str
+    net_limit_price: Decimal | None
+
+    def words(self) -> str:
+        price = "at market" if self.net_limit_price is None else f"at a net limit of {self.net_limit_price}"
+        legs = ", ".join(f"{side} {symbol}" for symbol, side in self.legs)
+        return f"{self.units} of ({legs}) as one order, a {self.order_type} order {price}"
+
+    def what_was_traded(self) -> tuple[int, frozenset[tuple[str, str]]]:
+        """The units, and each leg's contract and side: what an answer must name to be about this order.
+
+        A leg's own quantity is not among them. What a leg says for more
+        than one structure is not yet a recording, so no leg is held to its
+        ratio times the units (ADR 0076 decision 10).
+        """
+        return (self.units, frozenset(self.legs))
+
+
+def asked_option_order(repo: ClerkSqliteRepository, order_ref: str) -> AskedOptionOrder | AskedMultiLegOrder | None:
+    """What the books asked for under ``order_ref``, or ``None`` for an order in shares.
+
+    Three answers. An order the books bind to one contract asked for that
+    contract: on the record that created it, an entry's acceptance or a
+    reducing order's creation. The parent of an order of several legs is
+    bound to no contract and is told by its legs: it asked for them, from
+    the books' own rows of them (ADR 0076). Every other order is in shares.
+
+    A leg's own row is a part of its parent's order and was never asked of
+    a broker by itself: asking about one is the caller's mistake, and is
+    refused by name.
     """
     with repo.write_fence() as conn:
+        legs = order_legs(conn, order_ref)
+        if legs:
+            line = read_order_details(conn, (order_ref,))[order_ref]
+            assert line.quantity is not None and line.order_type is not None, f"parent {order_ref!r} has no order line"
+            return AskedMultiLegOrder(
+                units=int(line.quantity),
+                legs=tuple((leg.symbol, leg.side) for leg in legs),
+                order_type=line.order_type,
+                net_limit_price=_net_limit_asked(repo, order_ref),
+            )
+        if leg_parent(conn, order_ref) is not None:
+            raise ValueError(
+                f"{order_ref!r} is a leg of an order of several legs. A broker is asked about the order that was "
+                "sent, its parent, never about a leg by the books' own reference."
+            )
         if order_contract_terms(conn, order_ref) is None:
             return None
         accepted = repo.first_order_transition(order_ref=order_ref, transition_kind="ENTER_ACCEPTED")
         created = repo.first_order_transition(order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED")
     if accepted is not None:
         entry = option_entry_facts(EnterAcceptedFacts.from_facts_json(accepted["facts_json"]))
-        assert entry is not None, f"entry {order_ref!r} is bound to a contract and was not accepted as an option entry"
+        assert isinstance(entry, OptionEntryFacts), (
+            f"entry {order_ref!r} is bound to a contract and was not accepted as an entry in one contract"
+        )
         return AskedOptionOrder.of_request(entry.order)
     if created is not None:
         reducing = ExitReducingOrderCreatedFacts.from_facts_json(created["facts_json"])
@@ -114,17 +166,38 @@ def asked_option_order(repo: ClerkSqliteRepository, order_ref: str) -> AskedOpti
     raise AssertionError(f"order {order_ref!r} is bound to a contract and no record says what it asked for")
 
 
+def _net_limit_asked(repo: ClerkSqliteRepository, parent_order_ref: str) -> Decimal | None:
+    """The signed net limit the parent ``parent_order_ref`` was asked at, or ``None`` for a market order.
+
+    An entry keeps it in its acceptance. A closing order of several legs is
+    a market order and has none.
+    """
+    accepted = repo.first_order_transition(order_ref=parent_order_ref, transition_kind="ENTER_ACCEPTED")
+    if accepted is None:
+        return None
+    entry = option_entry_facts(EnterAcceptedFacts.from_facts_json(accepted["facts_json"]))
+    assert isinstance(entry, MultiLegOptionEntryFacts), f"parent {parent_order_ref!r} was not accepted as several legs"
+    return entry.net_limit_price
+
+
 def asked_of_a_real_option_order(
     repo: ClerkSqliteRepository, trade: BrokerTradePort, order_ref: str
-) -> AskedOptionOrder | None:
-    """What the books asked a real broker for under ``order_ref``, when it is an order in an option contract.
+) -> AskedOptionOrder | AskedMultiLegOrder | None:
+    """What the books asked the option port for under ``order_ref``, when the option port is what answers about it.
 
-    ``None`` for an order in shares, and for every order of a simulation,
-    whose ledger is read by the one lookup it has.
+    ``None`` for an order in shares. ``None`` too for an order in one
+    contract on a simulation, whose ledger is read by the one lookup it has.
+
+    The parent of an order of several legs is answered on every port, a
+    simulation's included: a parent names no symbol, so only the option
+    reader can state it, with its legs nested under it. No stock reader is
+    ever asked about one.
     """
-    if trade_port_folds_simulated_evidence(trade):
-        return None
-    return asked_option_order(repo, order_ref)
+    if not trade_port_folds_simulated_evidence(trade):
+        return asked_option_order(repo, order_ref)
+    with repo.write_fence() as conn:
+        on_a_simulation_only_a_parent = is_multi_leg_parent(conn, order_ref)
+    return asked_option_order(repo, order_ref) if on_a_simulation_only_a_parent else None
 
 
 async def look_up_by_client_order_id(
@@ -244,6 +317,7 @@ def evidence_of_the_order_asked(answer: BrokerOptionOrder, *, asked: AskedOption
 
 
 __all__ = [
+    "AskedMultiLegOrder",
     "AskedOptionOrder",
     "asked_of_a_real_option_order",
     "asked_option_order",

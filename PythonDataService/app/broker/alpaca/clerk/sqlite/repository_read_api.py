@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.alpaca.clerk.sqlite import reads, writes
+from app.broker.alpaca.clerk.sqlite import option_order_legs, reads, writes
 from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
@@ -693,6 +693,16 @@ class ClerkSqliteRepositoryReadApi:
     def fills_for_order(self: ClerkSqliteRepository, order_ref: str) -> list[dict]:
         with self._write_lock:
             return reads.fills_for_order(self._conn, order_ref)
+
+    def order_legs(self: ClerkSqliteRepository, parent_order_ref: str) -> tuple[option_order_legs.OrderLeg, ...]:
+        """The legs of an option order of several legs, in leg order; empty for every other order (ADR 0076)."""
+        with self._write_lock:
+            return option_order_legs.order_legs(self._conn, parent_order_ref)
+
+    def leg_parent(self: ClerkSqliteRepository, order_ref: str) -> str | None:
+        """The parent of the leg whose own row is ``order_ref``, or ``None`` for an order that is no leg."""
+        with self._write_lock:
+            return option_order_legs.leg_parent(self._conn, order_ref)
 
     def active_execution_price_conflicts(self: ClerkSqliteRepository):
         """Every open ``EXECUTION_PRICE_CONFLICT`` episode (#2460).

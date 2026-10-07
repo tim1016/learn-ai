@@ -201,14 +201,15 @@ def test_a_v22_store_gains_two_empty_tables_and_keeps_every_row(tmp_path: Path) 
 
     schema.migrate_schema(conn, from_version=22)
 
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 23
+    # The chain runs on to the build's own version: schema 24 adds the legs of an order of several legs.
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 24
     assert _contract_tables(conn) == {"option_contracts", "order_contracts"}
     assert {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables} == before
     assert conn.execute("SELECT COUNT(*) FROM option_contracts").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM order_contracts").fetchone()[0] == 0
     assert order_contract_terms(conn, "order-1") is None
     conn.close()
-    assert database_verification.verify_database(db_path, expected_account_id="PA1").schema_version == 23
+    assert database_verification.verify_database(db_path, expected_account_id="PA1").schema_version == 24
 
 
 def _contract_tables(conn: sqlite3.Connection) -> set[str]:

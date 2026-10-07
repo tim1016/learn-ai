@@ -90,6 +90,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OptionEventBookWrites,
     fold_option_position_ended,
 )
+from app.broker.alpaca.clerk.sqlite.option_order_legs import record_order_legs
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import normalized_hold_reason_code
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     account_hold_envelope,
@@ -440,6 +441,10 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
     facts. Its terms are recorded and the order is bound to it here, with the
     order's row, so no option order exists without its contract and a rebuild
     from the mirror rebuilds both.
+
+    An entry of several legs is one order: the row written here is its
+    parent, and ``option_order_legs.record_order_legs`` writes a row for
+    each leg from the same facts, each bound to its own contract.
     """
     facts = EnterAcceptedFacts.from_facts_json(payload["facts_json"])
     _insert_command_row(
@@ -500,13 +505,33 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         (payload["effect_operation_id"], payload["command_id"]),
     )
     if facts.option is not None:
-        from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
+        from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts, option_entry_facts
 
-        contract = OptionEntryFacts.from_facts(facts.option).contract_terms
-        if facts.leg["symbol"] != contract.symbol:
-            raise ValueError("an option ENTER's order line and its contract name different symbols")
-        record_contract_terms(conn, contract, recorded_at_ms=payload["recorded_at_ms"])
-        bind_order_contract(conn, order_ref=payload["order_ref"], symbol=contract.symbol)
+        entry = option_entry_facts(facts)
+        assert entry is not None
+        if isinstance(entry, MultiLegOptionEntryFacts):
+            # One order of several legs (ADR 0076): the row above is the parent, bound to no
+            # contract. Each leg gets a row of its own that its fills land on, bound to its
+            # contract, in this same transaction.
+            if facts.leg != entry.order_line():
+                raise ValueError("an ENTER of several legs is written with the parent's own order line")
+            record_order_legs(
+                conn,
+                parent_order_ref=payload["order_ref"],
+                effect_operation_id=payload["effect_operation_id"],
+                units=entry.units,
+                legs=[
+                    (kept.leg_id, asked, terms)
+                    for kept, asked, terms in zip(entry.legs, entry.order.legs, entry.leg_terms, strict=True)
+                ],
+                recorded_at_ms=payload["recorded_at_ms"],
+            )
+        else:
+            contract = entry.contract_terms
+            if facts.leg["symbol"] != contract.symbol:
+                raise ValueError("an option ENTER's order line and its contract name different symbols")
+            record_contract_terms(conn, contract, recorded_at_ms=payload["recorded_at_ms"])
+            bind_order_contract(conn, order_ref=payload["order_ref"], symbol=contract.symbol)
     if facts.cash_reference_price is not None:
         from app.broker.alpaca.clerk.live_envelope import EnvelopeReservation
         from app.broker.alpaca.clerk.money import normalize_money

@@ -9,6 +9,20 @@ multiplier, the quote each leg was priced from, and the money in exact cents.
 "Exit closes what entry opened" is read from here. The exit never asks the
 plan's rules again: it reads the contract from the entry's own facts.
 
+An entry is one of two types. ``OptionEntryFacts`` is one order of one
+contract, written as it always was. ``MultiLegOptionEntryFacts`` is one
+order of two to four legs: a new type beside it, so no one-leg entry's
+facts, which are hashed into the custody chain, gain a key. Both answer the
+same reads (``legs``, ``leg_terms``, ``units``, ``money``, ``structure``,
+``order_line``), so a caller that takes an ``OptionEntry`` never asks which
+it has. ``the_leg`` and ``contract_terms`` are the one-leg type's alone: code
+that still assumes one leg fails loudly on a structure, and never takes its
+first leg for the whole.
+
+``held_of_entry`` reads what a bot holds of one entry: each leg's contracts
+from the books, signed, and the whole structures they come to
+(``app.options.whole_units``).
+
 Formula: every figure here is ``app/options/entry.py``'s (``prepare_entry``)
   and ``app/broker/alpaca/option_fees.py``'s (the fee provision). This module
   copies them into the entry's facts and computes nothing of its own.
@@ -21,6 +35,7 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.p
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -30,13 +45,20 @@ from app.broker.alpaca.clerk.option_effects import OptionExitEvidence, RecordedQ
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms, order_contract_terms
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, ExitAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.contract.models import OrderType
-from app.broker.contract.options import SingleOptionOrderRequest, closing_order
+from app.broker.alpaca.clerk.sqlite.option_order_legs import multi_leg_parent_line
+from app.broker.contract.models import OrderSide, OrderType
+from app.broker.contract.options import (
+    MultiLegOptionOrderRequest,
+    OptionPositionIntent,
+    SingleOptionOrderRequest,
+    closing_order,
+)
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.entry import PreparedEntry
 from app.options.quotes import HeldQuote
-from app.options.structure import LegPosition, ResolvedLeg, ResolvedStructure
+from app.options.structure import MAX_OPTION_LEGS, LegPosition, ResolvedLeg, ResolvedStructure
+from app.options.whole_units import LegContracts, WholeUnits, in_leg_direction, whole_units
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
@@ -103,6 +125,45 @@ class OptionOrderTermsFacts(BaseModel):
     @property
     def close_terms(self) -> CloseTerms:
         return CloseTerms(**self.model_dump())
+
+
+def _leg_facts(prepared: PreparedEntry) -> tuple[OptionEntryLegFacts, ...]:
+    """Each leg of a prepared entry as its facts keep it, in the structure's own leg order."""
+    return tuple(
+        OptionEntryLegFacts(
+            leg_id=leg.leg_id,
+            contract=leg.contract,
+            position=leg.position,
+            ratio=leg.ratio,
+            multiplier=prepared.size.multiplier,
+            quote=RecordedQuote.of(prepared.quotes[leg.leg_id]),
+        )
+        for leg in prepared.structure.legs
+    )
+
+
+def _money_facts(prepared: PreparedEntry, *, fee_provision_cents: int) -> OptionEntryMoneyFacts:
+    return OptionEntryMoneyFacts(
+        net_entry_premium_cents=prepared.money.net_entry_premium_cents,
+        broker_requirement_cents=prepared.money.broker_requirement_cents,
+        entry_commitment_cents=prepared.money.entry_commitment_cents,
+        loss_at_expiry_cents=prepared.money.loss_at_expiry_cents,
+        fee_provision_cents=fee_provision_cents,
+        round_trip_cost_cents=prepared.round_trip_cost_cents,
+    )
+
+
+def _structure_of(legs: tuple[OptionEntryLegFacts, ...]) -> ResolvedStructure:
+    return ResolvedStructure(
+        legs=tuple(
+            ResolvedLeg(leg_id=leg.leg_id, contract=leg.contract, position=leg.position, ratio=leg.ratio)
+            for leg in legs
+        )
+    )
+
+
+def _leg_terms_of(legs: tuple[OptionEntryLegFacts, ...]) -> tuple[ContractTerms, ...]:
+    return tuple(ContractTerms(symbol=leg.contract.occ_symbol, multiplier=leg.multiplier) for leg in legs)
 
 
 class OptionEntryFacts(BaseModel):
@@ -175,27 +236,10 @@ class OptionEntryFacts(BaseModel):
         """
         return cls(
             order=order,
-            legs=tuple(
-                OptionEntryLegFacts(
-                    leg_id=leg.leg_id,
-                    contract=leg.contract,
-                    position=leg.position,
-                    ratio=leg.ratio,
-                    multiplier=prepared.size.multiplier,
-                    quote=RecordedQuote.of(prepared.quotes[leg.leg_id]),
-                )
-                for leg in prepared.structure.legs
-            ),
+            legs=_leg_facts(prepared),
             units=prepared.size.units,
             net_limit_price=prepared.net_limit_price,
-            money=OptionEntryMoneyFacts(
-                net_entry_premium_cents=prepared.money.net_entry_premium_cents,
-                broker_requirement_cents=prepared.money.broker_requirement_cents,
-                entry_commitment_cents=prepared.money.entry_commitment_cents,
-                loss_at_expiry_cents=prepared.money.loss_at_expiry_cents,
-                fee_provision_cents=fee_provision_cents,
-                round_trip_cost_cents=prepared.round_trip_cost_cents,
-            ),
+            money=_money_facts(prepared, fee_provision_cents=fee_provision_cents),
             leg_gap_limit_percent=leg_gap_limit_percent,
             cost_limit_percent=cost_limit_percent,
             quote_generation=quote_generation,
@@ -231,14 +275,14 @@ class OptionEntryFacts(BaseModel):
         return ContractTerms(symbol=self.the_leg.contract.occ_symbol, multiplier=self.the_leg.multiplier)
 
     @property
+    def leg_terms(self) -> tuple[ContractTerms, ...]:
+        """Each leg's contract as custody counts it, in leg order: one, for this entry."""
+        return _leg_terms_of(self.legs)
+
+    @property
     def structure(self) -> ResolvedStructure:
         """The resolved structure the entry opened, as its exit closes it."""
-        return ResolvedStructure(
-            legs=tuple(
-                ResolvedLeg(leg_id=leg.leg_id, contract=leg.contract, position=leg.position, ratio=leg.ratio)
-                for leg in self.legs
-            )
-        )
+        return _structure_of(self.legs)
 
     def order_line(self) -> dict[str, Any]:
         """The order in the keys a stock leg is written in, for every reader of an order's symbol and quantity.
@@ -269,6 +313,150 @@ class OptionEntryFacts(BaseModel):
         order = closing_order(self.structure, units=int(units))
         assert isinstance(order, SingleOptionOrderRequest) and order.order_type is OrderType.MARKET
         return order
+
+
+class MultiLegOptionEntryFacts(BaseModel):
+    """Everything kept with an accepted option entry of two to four legs. Never edited.
+
+    The sibling of ``OptionEntryFacts``, which is one order of one contract.
+    This is one order of several legs, sent and filled as one: the order as
+    it was asked, each leg in the order's own leg order with the quote it
+    was priced from, and the money for all the units. The net limit is
+    signed: positive is paid, negative is received.
+
+    No entry of several legs predates the cancel time and the terms, so
+    both are always kept.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The order as it was asked: one order of several legs (ADR 0076). Read back from JSON, never from a decoded dict.
+    order: MultiLegOptionOrderRequest
+    # In the order's own leg order.
+    legs: tuple[OptionEntryLegFacts, ...] = Field(min_length=2, max_length=MAX_OPTION_LEGS)
+    # Structures opened.
+    units: int = Field(ge=1)
+    # Dollars a share for one structure: positive is paid, negative is received.
+    net_limit_price: Decimal
+    # For all the units.
+    money: OptionEntryMoneyFacts
+    leg_gap_limit_percent: Decimal
+    cost_limit_percent: Decimal
+    quote_generation: int
+    rechecked_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    admitted_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # When the Clerk asks the broker to cancel what has not filled. The deadline is the entry's, never a leg's.
+    cancel_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    terms: OptionOrderTermsFacts
+
+    @model_validator(mode="after")
+    def _the_order_opens_these_legs_at_this_price(self) -> MultiLegOptionEntryFacts:
+        if self.order.order_type is not OrderType.LIMIT or self.order.net_limit_price != self.net_limit_price:
+            raise ValueError("an entry of several legs is one limit order at the entry's own net price")
+        if self.order.quantity != self.units:
+            raise ValueError(f"the order is for {self.order.quantity} structures and the entry for {self.units}")
+        if len(self.order.legs) != len(self.legs):
+            raise ValueError(f"the order has {len(self.order.legs)} legs and the entry keeps {len(self.legs)}")
+        for asked, kept in zip(self.order.legs, self.legs, strict=True):
+            opens = OrderSide.BUY if kept.position == "long" else OrderSide.SELL
+            if (asked.contract, asked.side, asked.ratio, asked.intent) != (
+                kept.contract, opens, kept.ratio, OptionPositionIntent.OPEN
+            ):
+                raise ValueError(f"the order's leg in {asked.contract.occ_symbol} is not the entry's leg {kept.leg_id!r}")
+        if len({leg.leg_id for leg in self.legs}) != len(self.legs):
+            raise ValueError("each leg of an entry has an id of its own")
+        return self
+
+    @model_validator(mode="after")
+    def _the_deadline_is_the_admission_plus_the_owners_wait(self) -> MultiLegOptionEntryFacts:
+        if self.cancel_at_ms != self.admitted_at_ms + self.terms.entry_wait_ms:
+            raise ValueError("an entry's cancel time is its admission time plus the owner's entry wait")
+        return self
+
+    @classmethod
+    def of(
+        cls,
+        prepared: PreparedEntry,
+        *,
+        order: MultiLegOptionOrderRequest,
+        fee_provision_cents: int,
+        leg_gap_limit_percent: Decimal,
+        cost_limit_percent: Decimal,
+        quote_generation: int,
+        rechecked_at_ms: int,
+        admitted_at_ms: int,
+        terms: CloseTerms,
+    ) -> MultiLegOptionEntryFacts:
+        """The facts of one prepared entry of several legs and the order made of it.
+
+        As for one leg, the wait is counted from ``admitted_at_ms``, the
+        Clerk's own clock.
+        """
+        return cls(
+            order=order,
+            legs=_leg_facts(prepared),
+            units=prepared.size.units,
+            net_limit_price=prepared.net_limit_price,
+            money=_money_facts(prepared, fee_provision_cents=fee_provision_cents),
+            leg_gap_limit_percent=leg_gap_limit_percent,
+            cost_limit_percent=cost_limit_percent,
+            quote_generation=quote_generation,
+            rechecked_at_ms=rechecked_at_ms,
+            admitted_at_ms=admitted_at_ms,
+            cancel_at_ms=admitted_at_ms + terms.entry_wait_ms,
+            terms=OptionOrderTermsFacts.of(terms),
+        )
+
+    def to_facts(self) -> dict[str, Any]:
+        """As the ``option`` key of the entry's facts: JSON's own values, every decimal a string."""
+        return self.model_dump(mode="json")
+
+    @classmethod
+    def from_facts(cls, option: Mapping[str, Any]) -> MultiLegOptionEntryFacts:
+        # Through JSON: the order and its contracts are strict and take no decoded dict.
+        return cls.model_validate_json(canonicalize(option))
+
+    @property
+    def leg_terms(self) -> tuple[ContractTerms, ...]:
+        """Each leg's contract as custody counts it, in leg order."""
+        return _leg_terms_of(self.legs)
+
+    @property
+    def structure(self) -> ResolvedStructure:
+        """The resolved structure the entry opened, as its exit closes it."""
+        return _structure_of(self.legs)
+
+    @property
+    def unit_set_aside(self) -> Decimal:
+        """What one structure sets aside before fees, in dollars: requirement plus premium at the limit.
+
+        Formula: (broker requirement + net entry premium) / units, in whole
+          cents a unit, written as dollars. Above zero for every admitted
+          entry: the money rule refuses a commitment at or below zero.
+        Reference: ADR 0076 decisions 2 and 5.
+        Canonical implementation: ``app/options/requirement.py`` (the two
+          figures); this property only divides them by the units.
+        Validated against: tests/broker/alpaca/clerk/sqlite/test_several_legs_entry.py.
+
+        This is what the entry's reservation keeps where an entry in shares
+        keeps a price a share. It is not a price: nothing multiplies it by a
+        contract's multiplier.
+        """
+        cents, remainder = divmod(self.money.broker_requirement_cents + self.money.net_entry_premium_cents, self.units)
+        if remainder or cents <= 0:
+            raise ValueError(
+                f"an entry of {self.units} structures sets aside a whole number of cents a structure, above zero; "
+                f"its requirement is {self.money.broker_requirement_cents} cents and its premium "
+                f"{self.money.net_entry_premium_cents}"
+            )
+        return Decimal(cents).scaleb(-2)
+
+    def order_line(self) -> dict[str, Any]:
+        """The parent's own order line: no symbol, no side, whole structures, no limit (``multi_leg_parent_line``)."""
+        return multi_leg_parent_line(units=self.units, order_type=self.order.order_type.value)
+
+
+OptionEntry = OptionEntryFacts | MultiLegOptionEntryFacts
 
 
 class OptionExitFacts(BaseModel):
@@ -312,9 +500,17 @@ class OptionExitFacts(BaseModel):
         return None if recorded is None else recorded.held
 
 
-def option_entry_facts(facts: EnterAcceptedFacts) -> OptionEntryFacts | None:
-    """The option part of an entry's acceptance, or ``None`` for an entry in shares."""
-    return None if facts.option is None else OptionEntryFacts.from_facts(facts.option)
+def option_entry_facts(facts: EnterAcceptedFacts) -> OptionEntry | None:
+    """The option part of an entry's acceptance, or ``None`` for an entry in shares.
+
+    Which type it is is told by the order's own shape: an order of several
+    legs has ``legs``, and an order of one contract has none.
+    """
+    if facts.option is None:
+        return None
+    if "legs" in facts.option["order"]:
+        return MultiLegOptionEntryFacts.from_facts(facts.option)
+    return OptionEntryFacts.from_facts(facts.option)
 
 
 def option_exit_facts(facts: ExitAcceptedFacts) -> OptionExitFacts | None:
@@ -322,8 +518,12 @@ def option_exit_facts(facts: ExitAcceptedFacts) -> OptionExitFacts | None:
     return None if facts.option_exit is None else OptionExitFacts.from_facts(facts.option_exit)
 
 
-def option_entry_of_order(repo: ClerkSqliteRepository, entry_order_ref: str) -> OptionEntryFacts | None:
-    """The option entry an ENTRY order was accepted as, or ``None`` when the order is in shares."""
+def option_entry_of_order(repo: ClerkSqliteRepository, entry_order_ref: str) -> OptionEntry | None:
+    """The option entry an ENTRY order was accepted as, or ``None`` when the order is in shares.
+
+    For an entry of several legs the order is the parent. A leg's own row
+    was accepted as nothing: it answers ``None``.
+    """
     transition = repo.first_order_transition(order_ref=entry_order_ref, transition_kind="ENTER_ACCEPTED")
     if transition is None:
         return None
@@ -339,23 +539,100 @@ def order_contract(repo: ClerkSqliteRepository, order_ref: str) -> ContractTerms
 def option_entry_contracts(repo: ClerkSqliteRepository, strategy_instance_id: str) -> tuple[str, ...]:
     """The contracts one bot's own entries opened, newest entry first, by OCC symbol.
 
-    What an EXIT of an option bot is looked for among: the bot's books,
-    never its plan's rules.
+    Every leg's contract, an entry's legs in their order. What an EXIT of
+    an option bot is looked for among: the bot's books, never its plan's
+    rules.
     """
     symbols: list[str] = []
     for order in reversed(repo.entry_orders_for_strategy(strategy_instance_id)):
         entry = option_entry_of_order(repo, order.order_ref)
-        if entry is not None and entry.contract_terms.symbol not in symbols:
-            symbols.append(entry.contract_terms.symbol)
+        for terms in () if entry is None else entry.leg_terms:
+            if terms.symbol not in symbols:
+                symbols.append(terms.symbol)
     return tuple(symbols)
 
 
+@dataclass(frozen=True, slots=True)
+class HeldLeg:
+    """What a bot holds of one leg of an entry, from the books."""
+
+    leg_id: str
+    # The contract's OCC symbol.
+    symbol: str
+    position: LegPosition
+    ratio: int
+    multiplier: int
+    # Signed, from the books: bought above zero, sold below.
+    held: int
+
+
+@dataclass(frozen=True, slots=True)
+class HeldOfEntry:
+    """What a bot holds of one entry: each leg's contracts, and the whole structures they come to."""
+
+    # The entry's own order: the parent of a structure.
+    entry_order_ref: str
+    # In the entry's leg order; one for a one-leg entry.
+    legs: tuple[HeldLeg, ...]
+    whole: WholeUnits
+
+
+def _whole_contracts(quantity: float, *, what: str) -> int:
+    """``quantity`` as a whole number of contracts. Refuses a fraction: the books are then wrong, and nothing is rounded."""
+    if not float(quantity).is_integer():
+        raise ValueError(f"{what} is {quantity!r}: an option contract is held and filled in whole contracts")
+    return int(quantity)
+
+
+def held_of_entry(repo: ClerkSqliteRepository, entry_order_ref: str) -> HeldOfEntry:
+    """What the bot that made the option entry ``entry_order_ref`` holds of its contracts now. Raises for any other order.
+
+    Read from the bot's own positions under the write fence, so every leg
+    is of one moment. A position is by bot and contract: two entries of one
+    bot in one contract are one holding, and are read as one here.
+    """
+    with repo.write_fence():
+        order = repo.order(entry_order_ref)
+        entry = None if order is None else option_entry_of_order(repo, entry_order_ref)
+        if order is None or entry is None:
+            raise ValueError(f"{entry_order_ref!r} is not an entry in option contracts")
+        effect = repo.effect_operation(order.effect_operation_id)
+        assert effect is not None and effect.strategy_instance_id is not None
+        legs = tuple(
+            HeldLeg(
+                leg_id=leg.leg_id,
+                symbol=leg.contract.occ_symbol,
+                position=leg.position,
+                ratio=leg.ratio,
+                multiplier=leg.multiplier,
+                held=_whole_contracts(
+                    repo.position(effect.strategy_instance_id, leg.contract.occ_symbol),
+                    what=f"the position in {leg.contract.occ_symbol}",
+                ),
+            )
+            for leg in entry.legs
+        )
+    return HeldOfEntry(
+        entry_order_ref=entry_order_ref,
+        legs=legs,
+        whole=whole_units([
+            LegContracts(leg_id=leg.leg_id, ratio=leg.ratio, contracts=in_leg_direction(leg.held, leg.position))
+            for leg in legs
+        ]),
+    )
+
+
 __all__ = [
+    "HeldLeg",
+    "HeldOfEntry",
+    "MultiLegOptionEntryFacts",
+    "OptionEntry",
     "OptionEntryFacts",
     "OptionEntryLegFacts",
     "OptionEntryMoneyFacts",
     "OptionExitFacts",
     "OptionOrderTermsFacts",
+    "held_of_entry",
     "option_entry_contracts",
     "option_entry_facts",
     "option_entry_of_order",
