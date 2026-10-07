@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +24,16 @@ from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionRequest, execute_recovery_action
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, ReductionIntent, decide_capability
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import UNEXPLAINED_ORDER_HOLD_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import Capability
+from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.models import BrokerOrderEvent
 from app.services.session_authority import et_minute_of_day_ms
+from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _broker_order_fixture,
     _FakeReadPort,
@@ -235,10 +240,8 @@ async def test_the_other_bot_on_the_account_is_not_held_by_one_bots_option_hold(
     assert decide_capability(paper.repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id="b").allowed
 
 
-async def test_the_shares_an_exercise_left_on_paper_are_offered_to_the_flatten_and_sold_by_it(
-    paper: PaperOptions,  # noqa: F811
-) -> None:
-    """One call struck at 585 is exercised: the bot holds 100 SPY. The owner stops it and flattens."""
+async def _exercised_into_a_hundred_shares(paper: PaperOptions) -> None:  # noqa: F811
+    """One call struck at 585 is exercised: the bot holds 100 SPY at $585.00. The owner then stops it."""
     await _holding_one_call(paper)
     _on_saturday(paper)
     paper.account.settled.add(SYMBOL)
@@ -257,17 +260,83 @@ async def test_the_shares_an_exercise_left_on_paper_are_offered_to_the_flatten_a
     assert option_holds(paper.repo).keys() == {("a", "OPTION_SHARES_HELD")}
     submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
 
-    async def context() -> RecoveryPolicyContext:
-        found = await read_recovery_context(paper.clerk, strategy_instance_id="a")
-        assert found is not None
-        return found
+
+async def _recovery_context(paper: PaperOptions) -> RecoveryPolicyContext:  # noqa: F811
+    found = await read_recovery_context(paper.clerk, strategy_instance_id="a")
+    assert found is not None
+    return found
+
+
+async def test_the_shares_an_exercise_left_on_paper_are_offered_to_the_flatten(paper: PaperOptions) -> None:  # noqa: F811
+    await _exercised_into_a_hundred_shares(paper)
 
     await paper.clerk.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
-    flatten = next(item for item in build_recovery_catalog(await context()) if item.action_id == "prepare_safe_flatten")
+    catalog = build_recovery_catalog(await _recovery_context(paper))
+    flatten = next(item for item in catalog if item.action_id == "prepare_safe_flatten")
 
     assert flatten.available, (flatten.unavailable_reason_code, flatten.unavailable_reason)
     assert flatten.reduction_plan is not None
     assert [(leg.symbol, leg.quantity) for leg in flatten.reduction_plan.legs] == [("SPY", 100.0)]
+
+
+async def test_the_owners_flatten_sells_the_shares_an_exercise_left_at_the_venue_and_the_bot_is_flat(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """No ENTER bought these shares, and the order they were booked on was never at the broker.
+
+    The owner's Flatten sells them all the same: one order, to sell 100 SPY,
+    reaches the venue. Nothing asks the venue about the order the shares
+    were booked on, which it never had. The venue fills the sale at $590.25:
+    100 x (590.25 - 585.00) = $525.00 on the shares, less the $194.00 the
+    call cost. The bot is flat, the hold for the shares ends, and the
+    account agrees.
+    """
+    await _exercised_into_a_hundred_shares(paper)
+    with paper.repo.write_fence() as conn:
+        [shares_order] = [
+            row[0] for row in conn.execute("SELECT order_ref FROM orders WHERE order_ref LIKE '%:os%'")
+        ]
+    monday_morning = et_minute_of_day_ms(date(2026, 9, 21), 10 * 60)
+    paper.clock.value = monday_morning
+    paper.repo.revive_execution_lease()
+    publish_quotes(monday_morning, SPY=590.25)
+    await paper.clerk.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
+    catalog = build_recovery_catalog(await _recovery_context(paper))
+    presented = next(item for item in catalog if item.action_id == "execute_safe_flatten")
+    assert presented.available, (presented.unavailable_reason_code, presented.unavailable_reason)
+
+    sent = await execute_recovery_action(
+        paper.clerk,
+        request=RecoveryExecutionRequest(
+            action_id="execute_safe_flatten", concurrency_token=presented.concurrency_token,
+            execution_ref=presented.execution_ref, reason="owner-flatten",
+        ),
+        current_context=lambda: _recovery_context(paper),
+    )
+
+    # The sale reached the venue: one stock order, for exactly the shares the exercise left.
+    assert [(leg.symbol, leg.side, leg.quantity) for leg in paper.venue.submitted_legs] == [("SPY", "sell", 100.0)]
+    assert shares_order not in paper.venue.lookup_calls and paper.venue.cancel_calls == []
+    [selling] = sent.orders
+    filled = _broker_order_fixture(
+        selling.order_ref, order_id=f"bo-{selling.order_ref}", symbol="SPY", status="filled", side="sell",
+        quantity=100, filled_quantity=100, filled_avg_price=590.25,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(repo=paper.repo, intake=paper.clerk.intake, reconciler=paper.clerk)
+    await sink.record_lifecycle_event(
+        client_order_id=selling.order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=paper.clock(), price=590.25, quantity=100, execution_id="x-a-flatten",
+        ),
+        event_key="execution:x-a-flatten", order=filled, recovery_source=None, recovery_window_limit=None,
+    )
+    paper.account.shares.clear()
+    paper.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
+    after = await paper.pass_()
+
+    assert paper.held() == {}
+    assert fifo(paper.repo, "a").exact_realized_pnl == Decimal("331")
+    assert option_holds(paper.repo) == {} and after.verdict == "clean"
 
 
 # ── an order the Clerk did not place, in a contract a bot holds ──────────────

@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.simulated_option_settlement import (
     SimulatedOutcome,
     SynthesizedOptionSettlement,
 )
-from app.broker.alpaca.clerk.sqlite import fee_evidence, option_events
+from app.broker.alpaca.clerk.sqlite import fee_evidence
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_POSITION_ENDED
@@ -210,10 +210,10 @@ def option_events_holds(repo: ClerkSqliteRepository) -> set[tuple[str | None, st
     return set(option_holds(repo))
 
 
-def test_every_hold_of_the_family_has_words_of_its_own() -> None:
+def test_no_hold_of_the_family_is_named_twice() -> None:
+    """That every hold has words of its own is held where the module is loaded: it would not import without."""
     from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_EVENT_HOLD_REASON_CODES
 
-    assert set(option_events._HOLD_COPY) == set(OPTION_EVENT_HOLD_REASON_CODES)
     assert len(set(OPTION_EVENT_HOLD_REASON_CODES)) == len(OPTION_EVENT_HOLD_REASON_CODES)
 
 
