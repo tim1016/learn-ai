@@ -127,7 +127,7 @@ from app.services.session_authority import (
     declared_session_bounds,
     scheduled_extended_session_bounds,
 )
-from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger, SourceBarLedgerMissingError
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -624,7 +624,7 @@ class _ShadowSettlementBars:
             try:
                 with self._book._evidence.open(account_id) as ledger:
                     bar = ledger.latest_for_symbol(symbol, market_only=market_only, at_or_before_ms=at_or_before_ms)
-            except FileNotFoundError:
+            except (FileNotFoundError, SourceBarLedgerMissingError):
                 logging.getLogger(__name__).warning(
                     "shadow settlement has no retained market ledger",
                     extra={"action": "shadow_settlement_ledger_missing", "account_id": account_id, "symbol": symbol},
