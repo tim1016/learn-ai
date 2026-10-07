@@ -110,3 +110,73 @@ def test_option_bots_read_their_quotes_from_the_supervisor_of_the_clerk_running_
         assert get_option_quotes() is consumer.option_quotes
     finally:
         set_market_liveness_consumer(None)
+
+
+# ---- A page asks on a lease ---------------------------------------------------
+
+
+def _page_wants(strike: dict) -> WatchRequest:
+    return WatchRequest("SPY", LineClass.PREVIEW, scenes._one("call", strike))
+
+
+def test_a_request_on_a_lease_is_gone_when_the_lease_runs_out_and_a_bots_request_is_not() -> None:
+    now = [1_000_000]
+    watch = OptionWatchList(clock=lambda: now[0])
+    bot = WatchRequest("SPY", LineClass.CANDIDATE, scenes._one("call", {"selector": "atm"}), Decimal("585.00"))
+    page = _page_wants({"selector": "atm"})
+    watch.watch("bot-1", bot)
+    watch.watch_on_lease("page-1", page, lease_ms=60_000)
+
+    now[0] += 59_999
+    just_inside = watch.requests()
+    now[0] += 1
+
+    assert just_inside == (bot, page)
+    assert watch.requests() == (bot,)
+    assert watch.on_lease() == ()
+
+
+def test_asking_again_renews_a_lease_and_keeps_when_the_same_request_was_first_asked() -> None:
+    now = [1_000_000]
+    watch = OptionWatchList(clock=lambda: now[0])
+    page = _page_wants({"selector": "atm"})
+
+    first = watch.watch_on_lease("page-1", page, lease_ms=60_000)
+    now[0] += 40_000
+    renewed = watch.watch_on_lease("page-1", _page_wants({"selector": "atm"}), lease_ms=60_000)
+    now[0] += 40_000
+    still_held = watch.requests()
+    changed = watch.watch_on_lease("page-1", _page_wants({"selector": "atm_offset", "offset": 1}), lease_ms=60_000)
+
+    assert (first, renewed) == (1_000_000, 1_000_000)
+    assert still_held == (page,)
+    # A changed request is a new window: its quotes have had no time to arrive.
+    assert changed == 1_080_000
+
+
+def test_a_lease_that_ran_out_starts_again_from_now() -> None:
+    now = [1_000_000]
+    watch = OptionWatchList(clock=lambda: now[0])
+    page = _page_wants({"selector": "atm"})
+    watch.watch_on_lease("page-1", page, lease_ms=60_000)
+
+    now[0] += 60_000
+
+    assert watch.watch_on_lease("page-1", page, lease_ms=60_000) == 1_060_000
+
+
+def test_leases_are_listed_soonest_to_end_first_and_a_plain_request_under_a_leased_key_ends_its_lease() -> None:
+    now = [1_000_000]
+    watch = OptionWatchList(clock=lambda: now[0])
+    page = _page_wants({"selector": "atm"})
+    watch.watch_on_lease("late", page, lease_ms=90_000)
+    watch.watch_on_lease("soon", page, lease_ms=30_000)
+
+    listed = watch.on_lease()
+    watch.watch("soon", page)
+    now[0] += 1_000_000
+
+    assert listed == ("soon", "late")
+    assert watch.requests() == (page,)
+    with pytest.raises(ValueError):
+        watch.watch_on_lease("late", page, lease_ms=0)

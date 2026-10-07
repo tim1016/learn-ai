@@ -1300,6 +1300,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/option-structure-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deploy: what an option structure's rules would pick right now, and what it would cost (#2913)
+         * @description Reads only. It is a POST because the structure being built is its body.
+         */
+        post: operations["preview_option_structure_scoped_api_brokers__broker__accounts__account_id__bots_option_structure_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/option-structures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Deploy: the named option structures the builder offers, with the legs each starts from (#2913) */
+        get: operations["get_option_structure_catalogue_api_brokers__broker__accounts__account_id__bots_option_structures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/traded-asset": {
         parameters: {
             query?: never;
@@ -1982,6 +2019,46 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/bots/end-preview (deploy).
          */
         post: operations["fleet_bot_end_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_end_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/option-structure-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Bot Option Structure Preview
+         * @description Fleet-routed POST /accounts/{account_id}/bots/option-structure-preview (deploy).
+         */
+        post: operations["fleet_bot_option_structure_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_option_structure_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/option-structures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Option Structures Read
+         * @description Fleet-routed GET /accounts/{account_id}/bots/option-structures (deploy).
+         */
+        get: operations["fleet_bot_option_structures_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_option_structures_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -19439,6 +19516,26 @@ export interface components {
          * @enum {string}
          */
         NamedStructure: "long_call" | "long_put" | "bull_call_spread" | "bear_put_spread" | "bull_put_spread" | "bear_call_spread" | "long_straddle" | "long_strangle" | "iron_condor" | "iron_butterfly" | "call_butterfly" | "put_butterfly";
+        /** NamedStructureGroup */
+        NamedStructureGroup: {
+            /** Label */
+            label: string;
+            /** Structures */
+            structures: components["schemas"]["NamedStructureStart"][];
+        };
+        /**
+         * NamedStructureStart
+         * @description One named structure as the builder offers it: what it is, and the legs it starts from.
+         */
+        NamedStructureStart: {
+            /** Description */
+            description: string;
+            /** Label */
+            label: string;
+            /** Legs */
+            legs: components["schemas"]["OptionLegRules"][];
+            structure: components["schemas"]["NamedStructure"];
+        };
         /**
          * NavigateAction
          * @description Move: navigate to another operator page.
@@ -19786,6 +19883,25 @@ export interface components {
             /** Target */
             target?: string | null;
         };
+        /** OptionContractView */
+        OptionContractView: {
+            /**
+             * Expiry Ms
+             * Format: int64
+             */
+            expiry_ms: number;
+            /** Occ Symbol */
+            occ_symbol: string;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Strike */
+            strike: string;
+            /** Underlying */
+            underlying: string;
+        };
         /**
          * OptionEntryLeg
          * @description Option ``ActionEntity`` — Slice 1C.
@@ -19824,6 +19940,339 @@ export interface components {
              * @constant
              */
             kind: "option";
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * OptionLegRules
+         * @description One leg as the owner builds it: an Action Plan option leg without its instrument, which is the
+         *     structure's one underlying.
+         */
+        OptionLegRules: {
+            /** Expiry */
+            expiry: components["schemas"]["MinDteExpiry"] | components["schemas"]["NearestWeeklyExpiry"] | components["schemas"]["SameDayExpiry"] | components["schemas"]["AbsoluteExpiry"];
+            /** Leg Id */
+            leg_id: string;
+            /**
+             * Position
+             * @enum {string}
+             */
+            position: "long" | "short";
+            /** Qty Ratio */
+            qty_ratio: number;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Strike */
+            strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
+        };
+        /**
+         * OptionPreviewAtExpiry
+         * @description Estimates, for the structures asked: every leg held to one shared expiry, never exercised or assigned
+         *     early, settled at its exercise value, before fees. None of them bounds a market exit before expiry.
+         */
+        OptionPreviewAtExpiry: {
+            /** Assumptions Sentence */
+            assumptions_sentence: string;
+            /** Break Even Prices */
+            break_even_prices: string[];
+            /** Estimated */
+            estimated: boolean;
+            /** Gain Cents */
+            gain_cents: number | null;
+            /** Gain Has No Limit */
+            gain_has_no_limit: boolean;
+            /** Gain Holds */
+            gain_holds: components["schemas"]["PriceRangeView"][];
+            /** Loss Cents */
+            loss_cents: number | null;
+            /** Loss Holds */
+            loss_holds: components["schemas"]["PriceRangeView"][];
+            /** Warning Sentence */
+            warning_sentence: string;
+        };
+        /** OptionPreviewDividend */
+        OptionPreviewDividend: {
+            /** Cash Per Share */
+            cash_per_share: number;
+            /**
+             * Ex Ms
+             * Format: int64
+             */
+            ex_ms: number;
+        };
+        /** OptionPreviewLean */
+        OptionPreviewLean: {
+            /** About Flat Below Shares Per Structure */
+            about_flat_below_shares_per_structure: number;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "up" | "down" | "about_flat";
+            /** Gains When Underlying Falls */
+            gains_when_underlying_falls: boolean;
+            /** Net Delta */
+            net_delta: number;
+            /** Sentence */
+            sentence: string;
+            /** Shares */
+            shares: number;
+            /** Shares Per Structure */
+            shares_per_structure: number;
+            /** Warning Sentence */
+            warning_sentence: string | null;
+        };
+        /** OptionPreviewLeg */
+        OptionPreviewLeg: {
+            contract: components["schemas"]["OptionContractView"];
+            /** Delta */
+            delta: number | null;
+            /** Delta Status */
+            delta_status: string;
+            /** Gap Percent Of Mid */
+            gap_percent_of_mid: string;
+            /** Ibkr Delta */
+            ibkr_delta: number | null;
+            /** Implied Volatility */
+            implied_volatility: number | null;
+            /** Leg Id */
+            leg_id: string;
+            /**
+             * Position
+             * @enum {string}
+             */
+            position: "long" | "short";
+            quote: components["schemas"]["OptionPreviewQuote"];
+            /** Ratio */
+            ratio: number;
+        };
+        /**
+         * OptionPreviewMoney
+         * @description What entering would mean in cash, for the structures asked. Whole cents.
+         */
+        OptionPreviewMoney: {
+            /** Broker Requirement Cents */
+            broker_requirement_cents: number;
+            /** Cost Limit Percent */
+            cost_limit_percent: string;
+            /** Cost Sentence */
+            cost_sentence: string;
+            /** Entry Commitment Cents */
+            entry_commitment_cents: number;
+            /** Fee Estimate Cents */
+            fee_estimate_cents: number;
+            /** Fees Sentence */
+            fees_sentence: string;
+            /** Multiplier */
+            multiplier: number;
+            /** Net Entry Premium Cents */
+            net_entry_premium_cents: number;
+            /** Net Entry Premium Per Structure Cents */
+            net_entry_premium_per_structure_cents: number;
+            /** Net Price */
+            net_price: string;
+            /** Over Cost Limit */
+            over_cost_limit: boolean;
+            /**
+             * Premium Is
+             * @enum {string}
+             */
+            premium_is: "paid" | "received" | "nothing";
+            /** Round Trip Cost Cents */
+            round_trip_cost_cents: number;
+            /** Round Trip Cost Percent */
+            round_trip_cost_percent: string;
+            /** Structures */
+            structures: number;
+        };
+        /**
+         * OptionPreviewPricingInputs
+         * @description What the pricing model was given beside the quotes.
+         */
+        OptionPreviewPricingInputs: {
+            /** Dividends */
+            dividends: components["schemas"]["OptionPreviewDividend"][];
+            /** Dividends Known */
+            dividends_known: boolean;
+            /**
+             * Dividends Read Ms
+             * Format: int64
+             */
+            dividends_read_ms: number;
+            /** Dividends Source */
+            dividends_source: string;
+            /** Rate */
+            rate: number;
+            /** Rate Is Default */
+            rate_is_default: boolean;
+            /** Rate Source */
+            rate_source: string;
+        };
+        /**
+         * OptionPreviewQuote
+         * @description A two-sided quote as it was held when it was read: each side with its own age.
+         */
+        OptionPreviewQuote: {
+            /** Ask */
+            ask: string;
+            /** Ask Age Ms */
+            ask_age_ms: number;
+            /** Bid */
+            bid: string;
+            /** Bid Age Ms */
+            bid_age_ms: number;
+        };
+        /**
+         * OptionPreviewVerdict
+         * @description The builder's verdict, in two halves.
+         */
+        OptionPreviewVerdict: {
+            /** Can Be Deployed */
+            can_be_deployed: boolean;
+            /** Deploy Reason Code */
+            deploy_reason_code: string | null;
+            /** Deploy Sentence */
+            deploy_sentence: string;
+            /** Leg Ids */
+            leg_ids: string[];
+            /** Red */
+            red: boolean;
+            /** Resolves As Built */
+            resolves_as_built: boolean | null;
+            /** Resolves Reason Code */
+            resolves_reason_code: string | null;
+            /** Resolves Sentence */
+            resolves_sentence: string;
+        };
+        /** OptionPreviewWatched */
+        OptionPreviewWatched: {
+            /** Line Budget */
+            line_budget: number;
+            /** Lines Held */
+            lines_held: number;
+            /** Lines Open */
+            lines_open: number;
+            /** Lines Refused */
+            lines_refused: number;
+            /** Lines Wanted */
+            lines_wanted: number;
+            /** Ranges */
+            ranges: components["schemas"]["OptionPreviewWatchedRange"][];
+        };
+        /**
+         * OptionPreviewWatchedRange
+         * @description How far the search reached for one kind of contract on one expiry.
+         */
+        OptionPreviewWatchedRange: {
+            /** Contracts */
+            contracts: number;
+            /**
+             * Expiry Ms
+             * Format: int64
+             */
+            expiry_ms: number;
+            /** Highest Strike */
+            highest_strike: string;
+            /** Lowest Strike */
+            lowest_strike: string;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+        };
+        /**
+         * OptionStructureCatalogue
+         * @description The builder's left column: the named structures in their groups. Custom starts from no legs.
+         */
+        OptionStructureCatalogue: {
+            /** Custom Description */
+            custom_description: string;
+            /** Custom Label */
+            custom_label: string;
+            /** Groups */
+            groups: components["schemas"]["NamedStructureGroup"][];
+            /** Max Legs */
+            max_legs: number;
+        };
+        /** OptionStructurePreview */
+        OptionStructurePreview: {
+            /** Ask Again In Ms */
+            ask_again_in_ms: number | null;
+            at_expiry: components["schemas"]["OptionPreviewAtExpiry"] | null;
+            contract: components["schemas"]["OptionContractView"] | null;
+            /** Cost Limit Percent */
+            cost_limit_percent: string;
+            /** Fault */
+            fault: string | null;
+            /** Feed Generation */
+            feed_generation: number | null;
+            /** Gap Limit Percent */
+            gap_limit_percent: string | null;
+            lean: components["schemas"]["OptionPreviewLean"] | null;
+            /** Lean Unknown Sentence */
+            lean_unknown_sentence: string | null;
+            /** Leg Ids */
+            leg_ids: string[];
+            /** Legs */
+            legs: components["schemas"]["OptionPreviewLeg"][];
+            money: components["schemas"]["OptionPreviewMoney"] | null;
+            /** Notice */
+            notice: string | null;
+            /** Preview Sentence */
+            preview_sentence: string;
+            pricing_inputs: components["schemas"]["OptionPreviewPricingInputs"] | null;
+            /**
+             * Quotes Read Ms
+             * Format: int64
+             */
+            quotes_read_ms: number;
+            /** Reason Code */
+            reason_code: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "dividends_unknown" | "not_resolved" | "resolved";
+            structure: components["schemas"]["NamedStructure"] | null;
+            /** Structure Label */
+            structure_label: string;
+            /** Structures */
+            structures: number;
+            /** The Money */
+            the_money: string | null;
+            /** The Money Sentence */
+            the_money_sentence: string | null;
+            /** Underlying */
+            underlying: string;
+            underlying_quote: components["schemas"]["OptionPreviewQuote"] | null;
+            verdict: components["schemas"]["OptionPreviewVerdict"];
+            watched: components["schemas"]["OptionPreviewWatched"] | null;
+        };
+        /** OptionStructurePreviewRequest */
+        OptionStructurePreviewRequest: {
+            /**
+             * Cost Limit Percent
+             * @default 10
+             */
+            cost_limit_percent?: number | string;
+            /** Gap Limit Percent */
+            gap_limit_percent?: number | string | null;
+            /** Legs */
+            legs: components["schemas"]["OptionLegRules"][];
+            /** Listens To */
+            listens_to?: string | null;
+            /** Preview Key */
+            preview_key: string;
+            structure?: components["schemas"]["NamedStructure"] | null;
+            /**
+             * Structures
+             * @default 1
+             */
+            structures?: number;
             /** Underlying */
             underlying: string;
         };
@@ -20523,6 +20972,16 @@ export interface components {
             lookup?: "exact_bar_close" | "next_after_bar_close";
             /** Prediction Set Id */
             prediction_set_id: string;
+        };
+        /**
+         * PriceRangeView
+         * @description Underlying prices from one to another, both included.
+         */
+        PriceRangeView: {
+            /** From Price */
+            from_price: string;
+            /** To Price */
+            to_price: string | null;
         };
         /**
          * PricingCompareRequest
@@ -28475,6 +28934,78 @@ export interface operations {
             };
         };
     };
+    preview_option_structure_scoped_api_brokers__broker__accounts__account_id__bots_option_structure_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionStructurePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionStructurePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_option_structure_catalogue_api_brokers__broker__accounts__account_id__bots_option_structures_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionStructureCatalogue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get: {
         parameters: {
             query: {
@@ -29824,6 +30355,80 @@ export interface operations {
                 "application/json": Record<string, never> | null;
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_option_structure_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_option_structure_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_option_structures_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_option_structures_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

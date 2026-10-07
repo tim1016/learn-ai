@@ -125,3 +125,54 @@ def starting_plan(name: NamedStructure, underlying: str) -> ActionPlan:
         ],
         on_exit=[CloseLegExit(kind="close_leg", entry_leg_id=start.leg_id) for start in starts],
     )
+
+
+# How the builder lays the names out, and the one line it says of each, in the owner's words.
+GROUPS: tuple[tuple[str, tuple[NamedStructure, ...]], ...] = (
+    ("One leg", (NamedStructure.LONG_CALL, NamedStructure.LONG_PUT)),
+    (
+        "Two legs",
+        (
+            NamedStructure.BULL_CALL_SPREAD,
+            NamedStructure.BEAR_PUT_SPREAD,
+            NamedStructure.BULL_PUT_SPREAD,
+            NamedStructure.BEAR_CALL_SPREAD,
+            NamedStructure.LONG_STRADDLE,
+            NamedStructure.LONG_STRANGLE,
+        ),
+    ),
+    (
+        "Three or four",
+        (
+            NamedStructure.CALL_BUTTERFLY,
+            NamedStructure.PUT_BUTTERFLY,
+            NamedStructure.IRON_CONDOR,
+            NamedStructure.IRON_BUTTERFLY,
+        ),
+    ),
+)
+
+_DESCRIPTIONS: dict[NamedStructure, str] = {
+    NamedStructure.LONG_CALL: "Buy a call. You pay up front.",
+    NamedStructure.LONG_PUT: "Buy a put. You pay up front.",
+    NamedStructure.BULL_CALL_SPREAD: "Buy a call, sell a higher call. You pay up front.",
+    NamedStructure.BEAR_PUT_SPREAD: "Buy a put, sell a lower put. You pay up front.",
+    NamedStructure.BULL_PUT_SPREAD: "Sell a put, buy a lower put. You are paid up front.",
+    NamedStructure.BEAR_CALL_SPREAD: "Sell a call, buy a higher call. You are paid up front.",
+    NamedStructure.LONG_STRADDLE: "Buy a call and a put at one strike. You pay up front.",
+    NamedStructure.LONG_STRANGLE: "Buy a put, and a call at a higher strike. You pay up front.",
+    NamedStructure.CALL_BUTTERFLY: "Buy a call, sell two at a higher strike, buy one the same distance higher again.",
+    NamedStructure.PUT_BUTTERFLY: "Buy a put, sell two at a higher strike, buy one the same distance higher again.",
+    NamedStructure.IRON_CONDOR: "Sell a put and a higher call, and buy one further out on each side. You are paid up front.",
+    NamedStructure.IRON_BUTTERFLY: "Sell a put and a call at one strike, and buy one further out on each side. You are paid up front.",
+}
+
+
+def label(name: NamedStructure) -> str:
+    """The name as a screen writes it: "Bull call spread"."""
+    return name.in_words.capitalize()
+
+
+def description(name: NamedStructure) -> str:
+    """What the named structure is, in one line."""
+    return _DESCRIPTIONS[name]
