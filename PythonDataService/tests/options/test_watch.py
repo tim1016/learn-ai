@@ -145,13 +145,17 @@ def test_an_expiry_whose_contracts_are_not_known_yet_is_wanted_and_nothing_of_it
         chain=replace(
             scene.chain,
             listings=tuple(listing for listing in scene.chain.listings if listing.contract.expiry_date != scenes._FRIDAY),
-            expiries=scenes._EXPIRIES,
+            expiries_ms=tuple(option_expiry_anchor_ms(day) for day in scenes._EXPIRIES),
         ),
     )
     plan = scenes._one("call", _AT_THE_MONEY)
 
     assert _window(plan, scene=not_read_yet) == ()
     assert expiries_wanted(plan, scenes._EXPIRIES, scenes._TUESDAY) == {scenes._FRIDAY}
+    # A rule that takes the first expiry far enough out comes to the Friday too. It must not fall through to
+    # the next expiry whose contracts happen to be read.
+    two_days_out = scenes._one("call", _AT_THE_MONEY, expiry={"selector": "min_dte", "days": 2})
+    assert _window(two_days_out, scene=not_read_yet) == ()
     refused = not_read_yet.refusal(plan)
     assert (refused.reason, refused.leg_ids) == (ResolverRefusal.SEARCH_INCOMPLETE, ("only",))
     # The expiry rule still chose among every date the chain names, not only the ones whose contracts are read.

@@ -68,6 +68,7 @@ from app.broker.ibkr.option_chain import (
     occ_root,
 )
 from app.options.contract import OptionContract
+from app.options.expiry import option_expiry_anchor_ms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import Chain, WatchedContract
 from app.options.watch import (
@@ -397,14 +398,14 @@ class OptionQuoteLines:
 
     def _wants(
         self, client: IbkrClient, now: int, money_of: Callable[[str], Decimal | None]
-    ) -> tuple[list[LineWant], dict[str, ListedContract], set[tuple[str, date]]]:
+    ) -> tuple[list[LineWant], dict[str, ListedContract], dict[tuple[str, date], bool]]:
         """Every contract a request wants a line for, the listed contracts they can be asked for under, and
-        the (root, expiry) pairs whose contracts have been read: only those can be asked for, or found
-        unlisted."""
+        the (root, expiry) pairs whose contracts have been read, each with whether that was today: only
+        those can be asked for, and only today's read can find a contract unlisted."""
         today = et_date_at_ms(now)
         wants: list[LineWant] = []
         listed: dict[str, ListedContract] = {}
-        read: set[tuple[str, date]] = set()
+        read: dict[tuple[str, date], bool] = {}
         for request in self._wanted:
             underlying = request.underlying.upper()
             listing = self._listing(underlying, client, today, now)
@@ -421,7 +422,7 @@ class OptionQuoteLines:
                     )
             for expiry, contracts in listing.contracts.items():
                 listed.update(contracts)
-                read.add((occ_root(underlying), expiry))
+                read[occ_root(underlying), expiry] = listing.contracts_read_on.get(expiry) == today
             if request.plan is None or listing.expiries is None:
                 continue
             centre = self._centre(request, underlying, money_of, now)
@@ -461,7 +462,7 @@ class OptionQuoteLines:
         return Chain(
             listings=tuple(listed.listing for contracts in listing.contracts.values() for listed in contracts.values()),
             watched=MappingProxyType(dict(watched)),
-            expiries=listing.expiries,
+            expiries_ms=tuple(option_expiry_anchor_ms(day) for day in listing.expiries),
         )
 
     # ---- the listing ----------------------------------------------------------
@@ -539,7 +540,7 @@ class OptionQuoteLines:
         self,
         plan: LinePlan,
         listed: Mapping[str, ListedContract],
-        read: set[tuple[str, date]],
+        read: Mapping[tuple[str, date], bool],
         client: IbkrClient,
         now: int,
     ) -> None:
@@ -552,11 +553,17 @@ class OptionQuoteLines:
             symbol = contract.occ_symbol
             if symbol in self._refused:
                 continue
-            if (contract.root, contract.expiry_date) not in read:
+            read_today = read.get((contract.root, contract.expiry_date))
+            if read_today is None:
                 without[symbol] = str(NoLine.LISTING_NOT_READ)
             elif symbol not in listed:
-                # A fact of the listing in service, so asked again each pass: the next day's read may list it.
-                without[symbol] = "IBKR does not list this contract in the underlying's own class"
+                # Unlisted is a fact of today's listing, asked again each pass. Yesterday's, still in service
+                # while today's is read, cannot say what was listed overnight.
+                without[symbol] = (
+                    "IBKR does not list this contract in the underlying's own class"
+                    if read_today
+                    else str(NoLine.LISTING_NOT_READ)
+                )
             elif asked >= _MAX_OPENS_PER_PASS or not self._line_backoff.may_try(symbol, now):
                 without[symbol] = str(NoLine.WAITING_TO_BE_ASKED_FOR)
             else:

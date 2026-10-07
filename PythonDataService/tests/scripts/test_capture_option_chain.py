@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from app.options.contract import OptionContract
-from app.options.expiry import option_expiry_date
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteFault, QuoteSide
 from app.options.resolver import Chain, Listing, UnderlyingObservation, WatchedContract, resolve_contracts
 from app.options.watch import LineClass
@@ -46,7 +45,7 @@ def _thawed(kept: dict[str, Any]) -> tuple[Chain, HeldQuote | None]:
             contract: WatchedContract(_thawed_quote(watched["quote"]), watched["vendor_delta"])
             for contract, watched in kept["watched"].items()
         },
-        expiries=tuple(option_expiry_date(expiry_ms) for expiry_ms in kept["expiries_ms"]),
+        expiries_ms=tuple(kept["expiries_ms"]),
     )
     return chain, _thawed_quote(kept["underlying"])
 
@@ -88,7 +87,7 @@ async def test_a_frozen_chain_read_back_gives_the_pick_the_live_one_gave(monkeyp
 
     assert resolution.picked == scene.resolve(plan).picked
     held = lines.chain("SPY")
-    assert (dict(chain.watched), chain.expiries) == (dict(held.watched), held.expiries)
+    assert (dict(chain.watched), chain.expiries_ms) == (dict(held.watched), held.expiries_ms)
     assert set(chain.listings) == set(held.listings)
     assert json.loads(written)["captured_at_ms"] == scene.selection_ms
 
@@ -96,15 +95,17 @@ async def test_a_frozen_chain_read_back_gives_the_pick_the_live_one_gave(monkeyp
 async def test_the_tally_counts_each_second_a_quote_was_usable_stale_or_not_arrived(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Three calls over eight seconds: one ticks every second, one ticked once and went quiet, one never did."""
+    """Four calls over eight seconds: one ticks every second, one ticked once and went quiet, one never did,
+    and one ticks every second with nothing bid, which a bought leg can use and a sold leg cannot."""
     status, lines, ibkr, _ = _watching(monkeypatch, _bot())
     await _settle(status)
-    busy, quiet, silent = (_call(strike).occ_symbol for strike in (585, 584, 583))
+    busy, quiet, silent, no_bid = (_call(strike).occ_symbol for strike in (585, 584, 583, 587))
     ibkr.tick(quiet, bid=1.00, ask=1.02)
     usability = Usability()
 
     for _ in range(8):
         ibkr.tick(busy, bid=4.10, ask=4.14)
+        ibkr.tick(no_bid, bid=-1.0, ask=0.05)
         usability.sample(lines.chain("SPY"), now=ibkr.now, generation=lines.generation, max_age_ms=5_000)
         ibkr.now += 1_000
 
@@ -114,5 +115,8 @@ async def test_the_tally_counts_each_second_a_quote_was_usable_stale_or_not_arri
     assert tally["contracts"][quiet] == {USABLE: 6, str(QuoteFault.STALE): 2}
     assert tally["contracts"][silent] == {NOT_ARRIVED: 8}
     assert (tally["samples"], tally["max_quote_age_ms"]) == (8, 5_000)
-    # Five watched contracts, eight samples each; fourteen of the forty usable.
-    assert tally["usable_share_of_contract_samples"] == 0.35
+    assert tally["contracts"][no_bid] == {USABLE: 8}
+    assert (tally["usable_to_sell"][busy], tally["usable_to_sell"][quiet], tally["usable_to_sell"][no_bid]) == (8, 6, 0)
+    # Five watched contracts, eight samples each: twenty-two of the forty usable to buy, fourteen to sell.
+    assert tally["usable_share_of_contract_samples"] == 0.55
+    assert tally["usable_to_sell_share_of_contract_samples"] == 0.35
