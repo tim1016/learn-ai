@@ -84,6 +84,8 @@ def current_risk_readiness(
                 detail="No daily loss limit is set for this account, so new entries are refused. Set one in Settings.")
         observation = envelope.fresh_observation(now_ms)
         if observation is None:
+            if envelope.custody_is_simulated and envelope.unavailable_reason is not None:
+                return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED, detail=envelope.unavailable_reason)
             return RiskReadiness(reason_code=LIVE_ENVELOPE_UNOBSERVED,
                 detail=f"Alpaca has not confirmed this account's cash and equity recently, so new entries wait. {_NEXT_READING}")
         if observation.risk_revision != revision:

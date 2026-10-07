@@ -27,7 +27,7 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, LIVE_ENVELOPE_UNOBSERVED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionPlanRefused
+from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_COMMITMENT_MISSING, BUDGETS_NOT_SWITCHED_ON
@@ -41,7 +41,7 @@ from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts, option
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _OptionQuoteBoundTradePort
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
-from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerUnavailable
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
@@ -751,7 +751,7 @@ async def test_an_entry_whose_quote_grew_too_old_between_being_taken_and_being_s
     assert (budget.deployments[0].pending_orders, budget.deployments[0].free) == (Decimal("0"), Decimal("1000"))
 
 
-# ── a Live Shadow account takes no option plan ───────────────────────────
+# ── a Live Shadow account takes an option plan ───────────────────────────
 
 SHADOW_ACCOUNT = "shadow:9LIVE0001"
 SHADOW_NOON = et_minute_of_day_ms(DAY, 12 * 60)
@@ -759,7 +759,9 @@ SHADOW_NOON = et_minute_of_day_ms(DAY, 12 * 60)
 
 @pytest.fixture
 def live_shadow(tmp_path: Path) -> Any:
-    ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
+    ports = compose_shadow_ports(
+        live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path, clock=_Clock(SHADOW_NOON)
+    )
     repo = ClerkSqliteRepository.initialize(account_id=SHADOW_ACCOUNT, artifacts_root=tmp_path, clock=_Clock(SHADOW_NOON))
     try:
         yield SqliteAlpacaClerkFacade(
@@ -770,56 +772,49 @@ def live_shadow(tmp_path: Path) -> Any:
         repo.close()
 
 
-def _written(clerk: SqliteAlpacaClerkFacade) -> tuple[int, int, int, int]:
-    repo = clerk.repository
-    return tuple(_rows(repo, table) for table in ("strategy_instances", "commands", "orders", "custody_transitions"))  # type: ignore[return-value]
-
-
-async def test_a_live_shadow_account_refuses_to_register_a_bot_that_trades_options(
+async def test_a_live_shadow_account_registers_a_bot_that_trades_options_under_its_underlying(
     live_shadow: SqliteAlpacaClerkFacade,
 ) -> None:
+    """A Live Shadow sends nothing, so it takes the plan a Dry Run takes. The whole run is
+    ``tests/services/bot_runner/test_option_bot_live_shadow.py``."""
     binding = BrokerBotBinding(
         strategy_instance_id="options-on-shadow", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
         mode="trade", quantity=1, action_plan=BUYS_ONE_CALL, run_id="run-1", created_at_ms=0,
         sealed_account_id=SHADOW_ACCOUNT, exit_terms=TERMS,
     )
-    before = _written(live_shadow)
 
-    with pytest.raises(OptionPlanRefused) as refused:
-        await live_shadow.register_strategy_run(binding)
+    live_shadow.require_option_plan_taken(BUYS_ONE_CALL)
+    await live_shadow.register_strategy_run(binding)
 
-    assert refused.value.reason.value == "OPTION_PLAN_ACCOUNT_NOT_OPEN"
-    assert _written(live_shadow) == before
-    assert live_shadow.repository.strategy_instance("options-on-shadow") is None
+    registered = live_shadow.repository.strategy_instance("options-on-shadow")
+    assert registered is not None and registered["symbol"] == "SPY"
 
 
-@pytest.mark.parametrize("purpose", [EffectPurpose.ENTER, EffectPurpose.EXIT])
-async def test_a_live_shadow_account_refuses_an_option_entry_and_an_option_exit_and_writes_nothing(
-    live_shadow: SqliteAlpacaClerkFacade, purpose: EffectPurpose
-) -> None:
-    before = _written(live_shadow)
-
-    refused = await live_shadow.execute_for_instance(
-        strategy_instance_id="options-on-shadow", run_id="run-1", decision_id="d-1", purpose=purpose,
-        action_plan=BUYS_ONE_CALL, quantity=1,
-        option_entry=_evidence_at(SHADOW_NOON) if purpose is EffectPurpose.ENTER else None,
-    )
-
-    _refused(refused, "OPTION_PLAN_ACCOUNT_NOT_OPEN")
-    assert _written(live_shadow) == before
-    assert await live_shadow._read.list_orders() == []
-
-
-async def test_beneath_those_gates_a_shadow_ports_send_refuses_an_option_order_by_name(
+async def test_beneath_the_clerks_rule_a_shadow_ports_send_fills_an_option_order_from_the_quote_bound_to_it(
     live_shadow: SqliteAlpacaClerkFacade,
 ) -> None:
-    """Whatever let an option order reach the send on a Live Shadow account: a refusal, definitive, not a crash."""
+    """The port fills what the Clerk lets through, in its own book, and the Clerk reads the fill back from there."""
     entry = work_out_option_entry(BUYS_ONE_CALL, evidence=_evidence_at(SHADOW_NOON), units=1, now_ms=SHADOW_NOON)
     assert isinstance(entry, OptionEntryFacts)
     port = _OptionQuoteBoundTradePort(live_shadow._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held)
     io = ClaimedBrokerIO(repo=_Repo(lose_on_call=0), effect_operation_id="op-1", claim_token="tok", trade=port)  # type: ignore[arg-type]
 
-    with pytest.raises(BrokerOptionsNotSupported) as refused:
+    filled = await io.submit(entry.order, client_order_id="ref-1")
+
+    assert (filled.symbol, filled.status, filled.filled_quantity, filled.filled_avg_price) == (SYMBOL, "filled", 1.0, 1.94)
+    assert [event.execution_id for event in filled.events] == ["shadow-execution:ref-1"]
+    assert [order.client_order_id for order in await live_shadow._read.list_orders()] == ["ref-1"]
+
+
+async def test_a_shadow_ports_send_still_refuses_an_option_order_no_quote_was_bound_to(
+    live_shadow: SqliteAlpacaClerkFacade,
+) -> None:
+    """Whatever let an option order reach the send without its quote: a refusal, definitive, and no fill invented."""
+    entry = work_out_option_entry(BUYS_ONE_CALL, evidence=_evidence_at(SHADOW_NOON), units=1, now_ms=SHADOW_NOON)
+    assert isinstance(entry, OptionEntryFacts)
+    io = ClaimedBrokerIO(repo=_Repo(lose_on_call=0), effect_operation_id="op-1", claim_token="tok", trade=live_shadow._trade)  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerOrderRejected) as refused:
         await io.submit(entry.order, client_order_id="ref-1")
 
     assert not isinstance(refused.value, BrokerUnavailable)

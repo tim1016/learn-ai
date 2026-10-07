@@ -60,7 +60,6 @@ from tests.broker.v2panel.test_deploy_option_structure import (
 )
 from tests.broker.v2panel.test_deploy_traded_symbol import _UNTOUCHED, _serve
 from tests.broker.v2panel.test_panel_deploy_live import _live_view
-from tests.broker.v2panel.test_panel_deploy_shadow import _shadow_view
 from tests.services.test_option_structure_preview import _AT_THE_MONEY, Desk, _asking, _from, _leg
 
 _BOTS = f"/api/brokers/alpaca/accounts/{ACCT}/bots"
@@ -200,7 +199,6 @@ async def test_a_budgeted_click_with_no_price_is_refused_under_the_same_name(
     [
         ("a spread", "OPTION_STRUCTURE_NOT_SUPPORTED"),
         ("live with the setting off", option_deploy.LIVE_SWITCHED_OFF),
-        ("a live shadow", option_deploy.LIVE_SHADOW_NOT_BUILT),
         ("a short line budget", "OPTION_WINDOW_OVER_LINE_BUDGET"),
     ],
 )
@@ -216,10 +214,6 @@ async def test_with_quotes_up_a_review_that_something_stops_never_says_the_quote
         _serve(monkeypatch, _live_view)
         books.account_authority_kind = "real_live"
         body["execution_mode"] = "live"
-    elif what == "a live shadow":
-        _serve(monkeypatch, _shadow_view)
-        books.account_authority_kind = "shadow"
-        body["execution_mode"] = "shadow"
     else:
         floor.line_budget = 1
 

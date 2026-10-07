@@ -17,6 +17,7 @@ from typing import Literal, NamedTuple, TypeGuard
 
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_account_id,
+    is_simulated_account_id,
     is_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.recovery_reduction import market_leg_sendable
@@ -179,9 +180,10 @@ class RecoveryPolicyContext:
     # This bot's closing orders whose outcome is unknown and that an operator
     # may settle (#2854); empty for an account-scoped context.
     unknown_exit_orders: tuple[ProjectedUnknownExitOrder, ...] = ()
-    # A Dry Run's positions in option contracts that nothing kept can price a
-    # close of now, each as its contract and the side that closes it
-    # (ADR 0076). Empty on every other account, which keeps no option quotes.
+    # A Dry Run's or a Live Shadow's positions in option contracts that nothing
+    # kept can price a close of now, each as its contract and the side that
+    # closes it (ADR 0076). Empty on every other account, which keeps no
+    # option quotes.
     unpriced_option_closes: tuple[tuple[str, str], ...] = ()
 
 
@@ -1162,7 +1164,7 @@ def _why_an_expired_contract_is_not_ended_yet(
         for ref in uncertainty.evidence_refs
     }
     held_for = expired_contract_hold_ref(symbol) in named_by_its_hold
-    simulated = is_synthetic_account_id(ctx.account_id)
+    simulated = is_simulated_account_id(ctx.account_id)
     if not held_for:
         return (
             "EXPIRED_OPTION_CONTRACT_MAY_STILL_BE_SETTLED",
@@ -1515,7 +1517,7 @@ def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision
     them would go stale under the operator's hands every 15 s with nothing
     about the order changed. A send made again changes the token.
     """
-    simulated = is_synthetic_account_id(ctx.account_id) or is_shadow_account_id(ctx.account_id)
+    simulated = is_simulated_account_id(ctx.account_id) or is_shadow_account_id(ctx.account_id)
     bot_scoped = ctx.strategy_instance_id is not None
     order = (
         ctx.unknown_exit_orders[0]

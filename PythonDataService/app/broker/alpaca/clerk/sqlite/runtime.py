@@ -288,6 +288,10 @@ _BAR_BOUND_AUTHORITIES: Final = frozenset({"synthetic", "shadow"})
 # not `_BAR_BOUND_AUTHORITIES` -- that set is {synthetic, shadow} and means
 # the opposite thing (fills synthesized from evidence).
 _LIVE_MARKET_CLOCK_AUTHORITIES: Final = frozenset({"sqlite", "shadow"})
+# The authorities that fill an option order themselves, from quotes, and send nothing: a Dry Run's
+# and a Live Shadow's (ADR 0076 decision 25). Each takes an option plan, and each has the Clerk's own
+# keeping ask for the lines of what its bots hold.
+_OPTION_PLAN_SIMULATIONS: Final = frozenset({"synthetic", "shadow"})
 # An EXIT reduces the program's own position, so its leg is the opposite side.
 _REDUCING_SIDE: Final = {OrderSide.BUY: OrderSide.SELL, OrderSide.SELL: OrderSide.BUY}
 # A refused entry is dropped, never queued: the bot's next bar decides afresh.
@@ -1065,9 +1069,9 @@ class SqliteAlpacaClerkFacade:
         """The symbol a bot is registered under, or a typed refusal of a plan this account cannot take.
 
         A bot in shares: the symbol its orders are in. A bot in option
-        contracts: their underlying, and only on a Dry Run's or a Paper
-        account and only as one bought call or put (``OptionPlanRefused``
-        otherwise).
+        contracts: their underlying, and only on an account that takes an
+        option plan (``_option_plan_account_refusal``) and only as one
+        bought call or put (``OptionPlanRefused`` otherwise).
         """
         if not is_option_plan(action_plan):
             return _entry_leg(action_plan).instrument.underlying
@@ -1087,9 +1091,9 @@ class SqliteAlpacaClerkFacade:
         self._symbol_to_register(action_plan)
 
     def _option_plan_account_refusal(self, *, only_closes: bool = False) -> str | None:
-        """Why this account takes no option plan, or ``None`` when it does: a Dry Run's and a Paper account do.
+        """Why this account takes no option plan, or ``None`` when it does: a Dry Run's, a Live Shadow and a Paper account do.
 
-        A Live Shadow is refused by name: it is not built. A Live account is
+        A Live Shadow fills from quotes (ADR 0076 decision 25). A Live account is
         refused by name while ``ALPACA_LIVE_OPTION_BOTS_ENABLED`` is off,
         which it is unless a deployment turns it on: nothing about an option
         order has been sent to Alpaca yet, so real money waits for what
@@ -1102,15 +1106,10 @@ class SqliteAlpacaClerkFacade:
         contract bought while the setting was on closes it with the setting
         off. A registration and an ENTER open, and are refused.
         """
-        if self.authority_kind == "synthetic":
+        if self.authority_kind in _OPTION_PLAN_SIMULATIONS:
             return None
         if self.authority_kind == "sqlite" and self._account_mode == "paper":
             return None
-        if self.authority_kind == "shadow":
-            return (
-                "This bot trades option contracts. A Live Shadow does not take an option bot yet: it is not "
-                "built. A Dry Run and a Paper account do."
-            )
         if only_closes or live_option_bots_enabled():
             return None
         return (
@@ -1125,6 +1124,18 @@ class SqliteAlpacaClerkFacade:
         """Whether this authority's orders are filled by a simulation, never sent to a broker."""
         return trade_port_folds_simulated_evidence(self._trade)
 
+    @property
+    def _asks_the_brokers_listing(self) -> bool:
+        """Whether an entry's contract is asked of Alpaca's own listing before the entry is judged.
+
+        A real account asks. So does a Live Shadow, of the live account it
+        rehearses, through its read port: it applies the refusals the Live
+        Clerk would, and a contract Alpaca does not list is one of them
+        (ADR 0076 decision 25). It is a read; a Shadow sends nothing. A Dry
+        Run has no broker to ask.
+        """
+        return self.authority_kind == "shadow" or not self._sends_to_a_simulation
+
     async def _contract_reference_refusal(
         self,
         *,
@@ -1133,7 +1144,7 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         option_entry: OptionEntryEvidence | None,
     ) -> OptionEntryRefused | None:
-        """Why Alpaca's own listing refuses the contract picked for a real account's entry, or ``None``.
+        """Why Alpaca's own listing refuses the contract picked for an entry, or ``None``.
 
         Asked of the broker's contract reference, outside the intake lock,
         before the entry is judged: the contract must be listed, be the one
@@ -1149,7 +1160,8 @@ class SqliteAlpacaClerkFacade:
         entry by name instead of spending the quotes.
 
         The broker is not asked about an entry that is refused here without
-        it. A simulation is not asked: it sends nothing to a broker. Nor is
+        it. A Dry Run's simulation is not asked: it has no broker. A Live
+        Shadow's is, of the live account (``_asks_the_brokers_listing``). Nor is
         a decision sent again, which is answered from its own entry, or
         evidence that does not name a contract for the plan's leg, which is
         refused by name where the entry is worked out. And nor is an entry
@@ -1158,7 +1170,7 @@ class SqliteAlpacaClerkFacade:
         comes back so that it is never taken without its listing if those
         answers have changed by then.
         """
-        if self._sends_to_a_simulation or option_entry is None:
+        if not self._asks_the_brokers_listing or option_entry is None:
             return None
         try:
             leg = the_one_bought_option_leg(action_plan)
@@ -1244,13 +1256,13 @@ class SqliteAlpacaClerkFacade:
 
         One a bot holds, or one an order is working in: the books' own
         answer, in one read whatever their length. None on a Dry Run's
-        account. There the Clerk's own keeping asks for those lines, from
-        the same read of the books, whether a run is alive or not
-        (``held_option_quotes``), so a run that named them too would ask
-        twice. No keeping follows a real account's books, so its bot's run
-        asks here for the lines to have held.
+        account or a Live Shadow's. There the Clerk's own keeping asks for
+        those lines, from the same read of the books, whether a run is alive
+        or not (``held_option_quotes``), so a run that named them too would
+        ask twice. No keeping follows a real account's books, so its bot's
+        run asks here for the lines to have held.
         """
-        if self.authority_kind == "synthetic":
+        if self.authority_kind in _OPTION_PLAN_SIMULATIONS:
             return ()
         return self._repo.option_contracts_to_watch()
 
@@ -1841,16 +1853,17 @@ class SqliteAlpacaClerkFacade:
         is made. The fences are the ones an effect in shares passes, in the
         same order.
 
-        A Dry Run's account and a Paper account take either, and so does a
+        A Dry Run's account, a Live Shadow and a Paper account take either, and so does a
         Live account while its setting is on. With the setting off a Live
         account still takes an EXIT, which closes what its books hold, and
         refuses an ENTER (ADR 0076 decision 24). Every other plan and every
         other account is refused here by name, before anything is written
-        but the refusal. On a Paper account the picked
+        but the refusal. On a Paper account or a Live Shadow the picked
         contract is first asked of Alpaca's own contract reference
         (:meth:`_contract_reference_refusal`), and the entry then rests at
         Alpaca as a limit order: this call returns once it is sent, and what
         it came to is asked for with :meth:`await_entry_outcome`.
+        A Dry Run and a Live Shadow fill inside the send, or end it there unfilled.
         """
 
         def receipt(state: str, order_refs: tuple[str, ...]) -> EffectOperationReceipt:

@@ -261,7 +261,7 @@ class Settings(BaseSettings):
     # each refuse it by name, because no option order from this system has
     # been checked against Alpaca. Turn it on only after the first Paper
     # option orders have been checked there. A Dry Run and a Paper account
-    # never read it, and a Live Shadow takes no option bot either way.
+    # never read it, and a Live Shadow simulates option orders either way.
     #
     # Off stops what opens, never what closes. A contract bought while it
     # was on is still held after it is switched off (or after a restart

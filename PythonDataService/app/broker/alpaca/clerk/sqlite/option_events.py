@@ -137,7 +137,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
-from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.account_authority import is_simulated_account_id
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.simulated_option_settlement import (
@@ -929,7 +929,7 @@ def _raise_hold(
             else "No bot of this account takes a new entry. Reductions and the Flatten stay available.",
         ),
         next_step=_next_step(
-            reason_code, simulated=is_synthetic_account_id(repo.account_id), for_the_account=sid is None,
+            reason_code, simulated=is_simulated_account_id(repo.account_id), for_the_account=sid is None,
             found=next_steps,
         ),
         evidence_refs=tuple(item.ref for item in items),
@@ -2414,7 +2414,7 @@ def _end_at_the_owners_word(
     if not held_now:
         earlier = _last_ending(conn, sid, symbol)
         return (_nothing_held(request) if earlier is None else _booked_ending(earlier)), None
-    if is_synthetic_account_id(repo.account_id):
+    if is_simulated_account_id(repo.account_id):
         return _why_a_simulation_did_not_let_go(settled, symbol), None
     contract = OptionContract.from_occ_symbol(symbol)
     now_ms = repo.clock()
@@ -2573,7 +2573,7 @@ def book_option_events(
             # A read that was not whole ends no hold: a row it did not reach is not a row that is gone.
             held += _sync_holds(repo, conn, holds, codes=(OPTION_EVENTS_NOT_READ_REASON_CODE, *_READ_HOLDS), may_end=whole)
         _sync_shares_held(repo, conn)
-        if is_synthetic_account_id(repo.account_id):
+        if is_simulated_account_id(repo.account_id):
             # A simulated account has no pass on a timer to end an exit's notices once its bot
             # holds nothing (ADR 0076 decision 20). Its simulation is its own broker, and let go
             # of the contract in the step whose record was just booked. So a bot this run's

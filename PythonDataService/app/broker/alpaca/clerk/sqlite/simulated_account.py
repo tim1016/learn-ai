@@ -13,9 +13,10 @@ Canonical implementation: this composition; FIFO and fees retain their existing
 Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py
   (exact ``Fraction`` oracle at a whole-cent boundary for equity and open P&L).
 
-An open option contract has no bars (ADR 0076). A Dry Run marks one it
-bought at the bid of the quote last handed over as the newest held for it
-(``kept_option_quotes``), which is what it could be sold for, and only while
+An open option contract has no bars (ADR 0076). A Dry Run and a Live Shadow
+each mark one they bought at the bid of the quote last handed over as the
+newest held for it in that account (``kept_option_quotes``), which is what
+it could be sold for, and only while
 that hand-over is no older than a share bar may be. A quiet contract's bid
 can stand for minutes, so it is the hand-over that must be fresh, not the
 bid's own receipt. With none, the reading is unavailable, as it is for shares
@@ -40,7 +41,10 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
+from app.broker.alpaca.clerk.account_authority import (
+    shadow_evidence_account_id_for_strategy,
+    simulated_account_named,
+)
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -160,19 +164,18 @@ class SimulatedAccountProjection:
         return KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id)
 
     def _read_kept_option_quotes_ahead(self) -> None:
-        """Read the Dry Run's kept option quotes before the custody lock is taken, never under it.
+        """Read the account's kept option quotes before the custody lock is taken, never under it.
 
         What is kept is then already in memory when a mark is asked for. A
         file that cannot be read is not an error of a reading that marks no
-        contract: the mark itself says so when one is needed.
+        contract: the mark itself says so when one is needed. An account
+        that never kept a quote has no file, and reading it writes none.
         """
-        if not self.repo.account_id.startswith("sim:"):
-            return
         try:
             self._kept_option_quotes().refresh()
         except KeptOptionQuotesUnavailable:
             logger.warning(
-                "the option quotes kept for a Dry Run cannot be read; an open contract cannot be marked",
+                "the option quotes kept for a simulated account cannot be read; an open contract cannot be marked",
                 exc_info=True,
                 extra={"action": "kept_option_quotes_unreadable", "account_id": self.repo.account_id},
             )
@@ -193,8 +196,6 @@ class SimulatedAccountProjection:
         """
         if not long:
             raise SimulationEvidenceUnavailable(f"A sold option position in {symbol} cannot be marked yet.")
-        if not self.repo.account_id.startswith("sim:"):
-            raise SimulationEvidenceUnavailable(f"Only a Dry Run keeps option quotes; {symbol} cannot be marked here.")
         expiry = OptionContract.from_occ_symbol(symbol).expiry_date
         if past_last_session(expiry, at_ms):
             # No feed quotes it again, so waiting brings nothing (ADR 0076).
@@ -207,7 +208,8 @@ class SimulatedAccountProjection:
             kept = self._kept_option_quotes().stated_mark(symbol, at_or_before_ms=at_ms)
         except KeptOptionQuotesUnavailable as exc:
             raise SimulationEvidenceUnavailable(
-                f"The option quotes kept for this Dry Run need repair; {symbol} cannot be marked from them."
+                f"The option quotes kept for this {simulated_account_named(self.repo.account_id)} need repair; "
+                f"{symbol} cannot be marked from them."
             ) from exc
         if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
             raise SimulationEvidenceUnavailable(

@@ -119,12 +119,9 @@ async def test_with_the_setting_on_a_live_entry_passes_the_clerks_fence_and_is_j
     assert one_account.trade.submitted_legs == [], "an option entry is never sent as an order in shares"
 
 
-async def test_a_live_shadow_refuses_an_option_plan_whatever_the_setting_says(
+async def test_a_live_shadow_takes_an_option_plan_whatever_the_setting_says(
     one_account: _OneAccount, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
     for switched_on in (False, True):
         monkeypatch.setattr(settings, _SETTING, switched_on)
-        with pytest.raises(OptionPlanRefused) as refused:
-            _shadow_clerk(one_account).require_option_plan_taken(BUYS_ONE_CALL)
-        assert refused.value.reason.value == "OPTION_PLAN_ACCOUNT_NOT_OPEN"
-        assert "not built" in refused.value.detail and _SETTING not in refused.value.detail
+        _shadow_clerk(one_account).require_option_plan_taken(BUYS_ONE_CALL)

@@ -304,7 +304,7 @@ async def test_on_paper_an_accepted_option_bot_starts_once_alpaca_approves_the_a
 # ── the acknowledgement, by mode ────────────────────────────────────────
 
 
-@pytest.mark.parametrize(("execution_mode", "view_of"), [("paper", None), ("live", _live_view)], ids=["paper", "live"])
+@pytest.mark.parametrize(("execution_mode", "view_of"), [("paper", None), ("shadow", _shadow_view), ("live", _live_view)], ids=["paper", "shadow", "live"])
 async def test_options_on_the_bots_own_symbol_still_need_the_owners_acceptance_where_money_is_at_stake(
     deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, execution_mode: str, view_of: Callable | None
 ) -> None:
@@ -323,8 +323,8 @@ async def test_options_on_the_bots_own_symbol_still_need_the_owners_acceptance_w
 
 @pytest.mark.parametrize(
     ("execution_mode", "view_of", "refused_as"),
-    [("shadow", _shadow_view, option_deploy.LIVE_SHADOW_NOT_BUILT), ("live", _live_view, option_deploy.LIVE_SWITCHED_OFF)],
-    ids=["live-shadow", "live-switched-off"],
+    [("live", _live_view, option_deploy.LIVE_SWITCHED_OFF)],
+    ids=["live-switched-off"],
 )
 async def test_a_mode_that_takes_no_option_bot_is_refused_by_name_before_the_owner_is_asked_to_accept_anything(
     deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, execution_mode: str, view_of: Callable, refused_as: str
@@ -421,18 +421,24 @@ async def test_a_structure_no_plan_can_hold_is_refused_in_the_previews_own_words
     assert share_class["reason_code"] == "OPTION_PREVIEW_SHARE_CLASS_UNDERLYING"
 
 
-async def test_a_live_shadow_takes_no_option_bot_and_says_it_is_not_built(
-    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("live_enabled", [False, True])
+async def test_a_live_shadow_deploys_one_bought_option_whatever_the_live_switch_says(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, live_enabled: bool,
 ) -> None:
     app, registry = deploy_app
     _serve(monkeypatch, _shadow_view)
-    monkeypatch.setattr(settings, "ALPACA_LIVE_OPTION_BOTS_ENABLED", True)
+    monkeypatch.setattr(settings, "ALPACA_LIVE_OPTION_BOTS_ENABLED", live_enabled)
+    await _the_quotes_are_up(floor)
 
-    refusal = await _stopped(app, registry, execution_mode="shadow", traded_asset_acknowledgement=_ACCEPTANCE)
+    response = await _deploy(
+        app, execution_mode="shadow", trades=_ONE_CALL, traded_asset_acknowledgement=_ACCEPTANCE,
+    )
 
-    assert refusal["reason_code"] == option_deploy.LIVE_SHADOW_NOT_BUILT
-    assert "not built" in refusal["message"]
-    assert floor.alpaca.asked == []
+    assert response.status_code == 201, response.text
+    (call,) = registry.deploy_calls
+    assert call["mode"] == "trade"
+    assert call["action_plan"].on_enter[0].instrument.underlying == "SPY"
+    assert "OPTION_DEPLOY_LIVE_SHADOW_NOT_BUILT" not in response.text
 
 
 async def test_a_live_option_deploy_is_refused_by_name_while_the_setting_is_off(

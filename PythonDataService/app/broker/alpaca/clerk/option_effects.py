@@ -38,7 +38,7 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 class OptionEffectRefusal(StrEnum):
     """Why the Clerk took no option effect. A quote's own fault and a structure's own refusal keep their codes."""
 
-    # The account is a Live Shadow's or a Live one: only a Dry Run and a Paper account take an option plan.
+    # The account is a Live one: only a Dry Run, a Live Shadow and a Paper account take an option plan.
     ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
     # The broker's listing of the picked contract could not be read, so the contract was not confirmed.
     CONTRACT_REFERENCE_UNREAD = "OPTION_CONTRACT_REFERENCE_UNREAD"
