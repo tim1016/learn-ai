@@ -129,5 +129,22 @@ describe('GoldenSearchCurveSetComponent', () => {
     if (search === null) throw new Error('the fixture has a search');
     view.fixture.componentRef.setInput('study', study({ results: { ...base.results, search: { ...search, evaluations: search.evaluations + 1 } } }));
     await waitFor(() => expect(service.curveSet).toHaveBeenCalledTimes(2));
+
+    // A later step can make the run the current-settings line is drawn from, so a search's set follows it too.
+    view.fixture.componentRef.setInput('study', study({ results: { ...base.results, evidence: null } }));
+    await waitFor(() => expect(service.curveSet).toHaveBeenCalledTimes(3));
+  });
+
+  it('the fold tests read again as a fold finishes', async () => {
+    const { view, service } = await renderSet('fold_tests');
+    await waitFor(() => expect(service.curveSet).toHaveBeenCalledTimes(1));
+    const base = studyDetail('awaiting_candidate');
+    const validation = base.results.validation;
+    if (validation === null) throw new Error('the fixture has a validation');
+
+    const finished = validation.folds.map((fold) => ({ ...fold, status: 'completed' as const }));
+    view.fixture.componentRef.setInput('study', { ...base, results: { ...base.results, validation: { ...validation, folds: finished } } });
+
+    await waitFor(() => expect(service.curveSet).toHaveBeenCalledTimes(2));
   });
 });

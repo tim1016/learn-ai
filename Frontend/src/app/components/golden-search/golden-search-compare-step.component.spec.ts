@@ -369,6 +369,7 @@ describe('GoldenSearchCompareStepComponent', () => {
 
     const tornado = region('Neighbor tornado');
     expect(within(tornado).getByRole('img').getAttribute('aria-label')).toContain('All-period fit with its one knob moved one step either side; no tested step loses money.');
+    expect(screen.getByText('All-period fit on the development period, with each cost stress and each tested one-step neighbor drawn beside it.')).not.toBeNull();
     fireEvent.click(within(tornado).getByRole('button', { name: 'Show as table' }));
     const steps = within(tornado).getAllByRole('row').slice(1).map((row) => row.textContent ?? '');
     expect(steps[0]).toMatch(/Fast EMA length\s*One below\s*7\s*Tested\s*\+5\.2%\s*-3\.5%/);
@@ -390,6 +391,8 @@ describe('GoldenSearchCompareStepComponent', () => {
 
     expect(region('Neighbor tornado').textContent).toContain('No neighbor audit was recorded for Current settings.');
     expect(region('Cost stress ladder').textContent).toContain('No stress run was recorded for Current settings.');
+    // Its curves panel promises no neighbor either.
+    expect(screen.getByText('Current settings on the development period, with each cost stress drawn beside it.')).not.toBeNull();
   });
 
   it('Keep current settings opens a deliberate second step and records the chosen finish with its reason', async () => {

@@ -60,7 +60,7 @@
         </app-golden-search-panel>
 
         <app-golden-search-curve-set data-span="12" [study]="s" curves="candidate" [candidate]="row.neighborSource.key" chart="candidate-curves"
-          [caption]="row.neighborSource.label + ' on the development period, with each cost stress and each one-step neighbor drawn beside it.'" />
+          [caption]="curvesCaption()" />
 
         <section class="panel" aria-label="Candidate evidence">
           <app-golden-search-evidence-tabs [selected]="row" [details]="detailMap()" [detailsError]="detailsError()" [pairMaps]="pairMaps()" [mapCenter]="mapCenter()"

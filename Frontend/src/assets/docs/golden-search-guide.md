@@ -837,7 +837,7 @@ Does the candidate’s path survive higher costs and a one-step change?
 
 #### What you're looking at
 
-The selected candidate's development run as a bold line. Beside it, in teal, the same settings rerun under each cost stress the plan declared. In light blue, its neighbors: the settings with one searched knob moved one neighbor step down or up and everything else unchanged. Neighbors are drawn only when the study audited them for this candidate. The bold line takes the candidate's own colour, and the current settings are dashed. Beneath, each run's fall from its own peak.
+The selected candidate's development run as a bold line. Beside it, in teal, the same settings rerun under each cost stress the plan declared. In light blue, its neighbors: the settings with one searched knob moved one neighbor step down or up and everything else unchanged. A neighbor is drawn only where the study's neighbor audit tested it for this candidate. The bold line takes the candidate's own colour, and the current settings are dashed. Beneath, each run's fall from its own peak.
 
 #### How to read it
 

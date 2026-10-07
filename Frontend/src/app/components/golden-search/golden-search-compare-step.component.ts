@@ -132,6 +132,13 @@ export class GoldenSearchCompareStepComponent {
     },
     { equal: sameChart },
   );
+  /** What the candidate's curves panel draws: neighbors only where an audit recorded some. */
+  protected readonly curvesCaption = computed(() => {
+    const source = this.selectedRow()?.neighborSource;
+    if (source === undefined) return '';
+    const neighbors = source.neighbors.length > 0 ? ' and each tested one-step neighbor' : '';
+    return `${source.label} on the development period, with each cost stress${neighbors} drawn beside it.`;
+  });
   /** Room for each knob's two bars, and each stress's one. */
   protected readonly tornadoHeight = computed(() => 72 + 40 * (this.selectedRow()?.neighborSource.neighbors.length ?? 0));
   protected readonly stressHeight = computed(() => 44 + 42 * (1 + (this.selectedRow()?.candidate.stress.length ?? 0)));

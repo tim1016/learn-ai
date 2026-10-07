@@ -10,13 +10,18 @@ import { stepCurvesSpec } from './golden-search-step-curves-chart';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateKey, CurveSetKey, StudyDetail } from './golden-search.types';
 
-/** What each set's runs move with, so a panel reads again only when its own step records more. */
+/**
+ * What each set's runs move with, so a panel reads again only when a step that feeds it records more. A
+ * search's set also follows the later steps: its current-settings line can be a run one of them made.
+ */
 function setProgress(study: StudyDetail, curves: CurveSetKey): string {
   const results = study.results;
-  if (curves === 'search') return `${results.search?.evaluations ?? 0}|${results.search?.winner_hash ?? ''}`;
-  if (curves === 'recent') return `${results.recent?.evaluations ?? 0}|${results.recent?.winner_hash ?? ''}`;
-  if (curves === 'fold_tests') return (results.validation?.folds ?? []).map((fold) => fold.status).join();
-  return results.evidence === null ? 'no evidence' : 'evidence';
+  const folds = (results.validation?.folds ?? []).map((fold) => fold.status).join();
+  const evidence = results.evidence === null ? 'no evidence' : 'evidence';
+  if (curves === 'fold_tests') return folds;
+  if (curves === 'candidate') return evidence;
+  const own = results[curves];
+  return `${own?.evaluations ?? 0}|${own?.winner_hash ?? ''}|${folds}|${evidence}`;
 }
 
 /**

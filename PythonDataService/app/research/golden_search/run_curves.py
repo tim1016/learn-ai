@@ -24,13 +24,13 @@ later step asks for again is answered from that first run:
 A step draws one set of runs, each line with a role that says how to draw it:
   search, recent   every point the procedure scored (its group), the winner
                    among them, and the incumbent on the procedure's window —
-                   from the procedure if it scored it, else from whichever
-                   step did; a note says so when no step did
+                   from the procedure if its run kept a curve, else from
+                   whichever step's did; a note says so when none did
   fold_tests       for each fold, its winner's and the incumbent's run on
                    the fold's test window
   candidate        one candidate's development run, its cost-stress runs,
-                   and, when its neighbors were audited, the settings one
-                   neighbor step either side on each searched knob
+                   and the settings one neighbor step either side on each
+                   searched knob that its audit tested
                    (``grid_procedure.neighbor_probes``)
 A named run is found by what it is — settings, window, base costs — never
 by which step asked first, because an earlier step may have scored it. A
@@ -82,7 +82,7 @@ _GROUP_OF_STEP: dict[str, RunGroup] = {"search": "search", "pair_audit": "pair_a
 #: The most curves one read returns: an overlay past this is unreadable, and the page asks again for more.
 MAX_CURVES = 200
 #: The most of a search's other points one step's set returns; a search can score more than a chart can show.
-MAX_OTHER_LINES = 300
+MAX_OTHER_LINES = 100
 
 
 def group_of(record: EvaluationRecord, folds: Mapping[int, FoldWindow]) -> RunGroup:
@@ -317,14 +317,19 @@ def _procedure_lines(row: StudyRow, records: Sequence[EvaluationRecord], step: L
         else:
             lines.append(SetLine(record, "other", "Scored point"))
     notes: list[str] = []
-    if incumbent != winner and not any(line.role == "incumbent" for line in lines):
-        # The procedure started elsewhere (a qualified incumbent is never the seed): take the incumbent's run wherever it was scored.
+    own = next((line for line in lines if line.role == "incumbent"), None)
+    if incumbent != winner and (own is None or not own.record.has_curve):
+        # The procedure started elsewhere (a qualified incumbent is never the seed), or its own run of the
+        # incumbent kept no curve: take the incumbent's run from whichever step kept one on this window.
         window = (int(stored["window"]["start_ms"]), int(stored["window"]["end_ms"]))
         elsewhere = _BaseRuns(records).of(incumbent, window)
-        if elsewhere is not None:
+        if elsewhere is not None and elsewhere.has_curve:
+            lines = [line for line in lines if line is not own]
             lines.append(SetLine(elsewhere, "incumbent", CANDIDATE_LABELS["incumbent"]))
-        else:
+        elif own is None and elsewhere is None:
             notes.append("The current settings were not run on this window, so they have no line here.")
+        else:
+            notes.append("The current settings’ run on this window kept no curve, so they have no line here.")
     return lines, notes
 
 
@@ -348,7 +353,7 @@ def _fold_test_lines(row: StudyRow, records: Sequence[EvaluationRecord], folds: 
 
 
 def _candidate_lines(row: StudyRow, records: Sequence[EvaluationRecord], candidate_key: str, declaration: SearchDeclaration) -> list[SetLine]:
-    """One candidate's development run, its cost-stress runs and, when they were audited, its one-step neighbors."""
+    """One candidate's development run, its cost-stress runs and the one-step neighbors its audit tested."""
     stored = next((item for item in (row.results.get("evidence") or {}).get("candidates", []) if item["key"] == candidate_key), None)
     if stored is None:
         return []
@@ -363,14 +368,13 @@ def _candidate_lines(row: StudyRow, records: Sequence[EvaluationRecord], candida
         stressed = record.scenario != BASE_SCENARIO and record.point_hash == stored["point_hash"]
         if stressed and (record.window_start_ms, record.window_end_ms) == development:
             lines.append(SetLine(record, "stress", scenario_labels.get(record.scenario, record.scenario)))
-    if not stored.get("neighbors_audited"):
-        return lines
-    for plan in row.protocol["knobs"]:
-        if plan["mode"] != "search":
-            continue
-        knob = declaration.knob(plan["name"])
-        for side, probe in zip(("below", "above"), neighbor_probes(declaration, stored["point"], knob.name), strict=True):
-            neighbor = None if probe.point_hash is None else runs.of(probe.point_hash, development)
+    # A neighbor is drawn only where the audit tested it: a nearby point the search happened to score is not an audit.
+    for hood in stored.get("neighbors", []):
+        knob = declaration.knob(hood["knob"])
+        below, _center, above = hood["rows"]
+        probes = neighbor_probes(declaration, stored["point"], knob.name)
+        for side, audited, probe in zip(("below", "above"), (below, above), probes, strict=True):
+            neighbor = None if audited["status"] != "tested" or probe.point_hash is None else runs.of(probe.point_hash, development)
             if neighbor is not None:
                 lines.append(SetLine(neighbor, "neighbor", f"{knob.label} one step {side} ({probe.values[knob.name]:g})"))
     return lines

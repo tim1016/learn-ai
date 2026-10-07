@@ -219,6 +219,31 @@ def test_a_search_that_did_not_score_the_incumbent_draws_it_from_the_step_that_d
     assert recent.notes == ("The current settings were not run on this window, so they have no line here.",)
 
 
+def test_an_incumbent_run_that_kept_no_curve_gives_way_to_one_that_did_and_the_set_says_so_when_none_did() -> None:
+    # The search's own run of the incumbent kept no curve; the evidence's detail run of it did.
+    twinned = [_run("s1", "search", INCUMBENT, has_curve=False), _run("s3", "search", WINNER), _run("c1", "evidence", INCUMBENT, detail=True)]
+    chosen = _chosen(twinned, "search", search=SEARCHED)
+
+    assert [(line.record.evaluation_key, line.role) for line in chosen.lines] == [("s3", "winner"), ("c1", "incumbent")]
+    assert (chosen.notes, chosen.not_recorded) == ((), 0)
+    # A failed run, and no other on the window: no line, and the set says why.
+    failed = _chosen([_run("s1", "search", INCUMBENT, status="failed", has_curve=False), _run("s3", "search", WINNER)], "search", search=SEARCHED)
+    assert [line.role for line in failed.lines] == ["winner"]
+    assert failed.notes == ("The current settings’ run on this window kept no curve, so they have no line here.",)
+
+
+def test_a_named_run_is_a_base_cost_run_and_the_first_that_kept_a_curve() -> None:
+    records = [
+        # A stressed run of the incumbent recorded first is never its line; nor is an earlier run that kept no curve.
+        _run("x-inc", "evidence", INCUMBENT, scenario="slippage_1c"),
+        _run("old", "evidence", INCUMBENT, has_curve=False),
+        _run("c1", "evidence", INCUMBENT, detail=True),
+        _run("s3", "search", WINNER),
+    ]
+
+    assert _drawn(records, "search", search=SEARCHED) == [("s3", "winner", "Winner"), ("c1", "incumbent", "Current settings")]
+
+
 def test_a_search_that_returned_the_incumbent_names_one_line_for_both() -> None:
     kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
     chosen = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
@@ -252,8 +277,12 @@ def test_a_fold_test_set_finds_each_run_by_what_it_is_even_when_another_step_sco
     ]
 
 
-def _evidence(key: str, point: dict[str, Any], *, audited: bool) -> dict[str, Any]:
-    return {"key": key, "point": point, "point_hash": point_hash(STRATEGY, point), "neighbors_audited": audited}
+def _evidence(key: str, point: dict[str, Any], *, below: str | None = None, above: str | None = None) -> dict[str, Any]:
+    """A stored candidate; ``below`` / ``above`` are its gap neighbors' audit statuses, none when it was not audited."""
+    audited = below is not None and above is not None
+    rows = [{"value": 0.0, "status": status, "metrics": None, "reason": None} for status in (below, "center", above)]
+    neighbors = [{"knob": "gap", "rows": rows, "one_sided": False}] if audited else []
+    return {"key": key, "point": point, "point_hash": point_hash(STRATEGY, point), "neighbors_audited": audited, "neighbors": neighbors}
 
 
 def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_wherever_they_were_scored() -> None:
@@ -269,7 +298,7 @@ def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_w
         _run("f-win", "exam", WINNER, detail=True, window_start_ms=300, window_end_ms=400),
         _run("x-inc", "evidence", INCUMBENT, scenario="slippage_1c"),
     ]
-    evidence = {"candidates": [_evidence("all_period", WINNER, audited=True), _evidence("incumbent", INCUMBENT, audited=False)]}
+    evidence = {"candidates": [_evidence("all_period", WINNER, below="tested", above="tested"), _evidence("incumbent", INCUMBENT)]}
 
     assert _drawn(records, "candidate", "all_period", evidence=evidence) == [
         ("s-win", "candidate", "All-period fit"),
@@ -279,8 +308,11 @@ def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_w
     ]
     # The incumbent's neighbors were not audited: the search's nearby points are not passed off as an audit.
     incumbent = _drawn([*records, _run("s-inc", "search", INCUMBENT)], "candidate", "incumbent", evidence=evidence)
-    assert [role for _, role, _ in incumbent] == ["candidate", "stress"]
+    assert incumbent == [("s-inc", "candidate", "Current settings"), ("x-inc", "stress", "Extra 1¢/share slippage")]
     assert _drawn(records, "candidate", "recent", evidence=evidence) == []
+    # The audit ran out of budget before the neighbor below: the search's run of that point is not drawn as its audit.
+    partly = {"candidates": [_evidence("all_period", WINNER, below="untested", above="tested")]}
+    assert [key for key, role, _ in _drawn(records, "candidate", "all_period", evidence=partly) if role == "neighbor"] == ["n-above"]
 
 
 def test_a_set_keeps_every_named_line_spreads_the_others_over_the_search_and_counts_only_completed_runs_without_a_curve() -> None:
