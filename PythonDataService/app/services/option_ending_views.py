@@ -14,7 +14,11 @@ from typing import Any
 
 from app.broker.alpaca.clerk.money import money_context, normalize_money, notional
 from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding
-from app.broker.alpaca.clerk.sqlite.option_event_folds import OptionEnding, OptionPositionEndedFacts
+from app.broker.alpaca.clerk.sqlite.option_event_folds import (
+    OWNER_WORD_ROWS_NOT_BOOKED,
+    OptionEnding,
+    OptionPositionEndedFacts,
+)
 from app.options.contract import OptionContract
 from app.schemas.option_endings import OptionEndingContract, OptionEndingSettlementPrice, OptionEndingView
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
@@ -89,7 +93,9 @@ def describe_option_ending(facts: OptionPositionEndedFacts) -> str:
 
     A simulation's settlement says so, with the underlying's price it read
     and how long before the close that price is from: no broker reported
-    it, and a real account would have ended otherwise.
+    it, and a real account would have ended otherwise. An owner's ending
+    made beside rows of the broker's that could not be booked says that
+    too: the broker did report an end, and these books could not book it.
     """
     ended_by = OptionEnding(facts.ended_by)
     one = facts.contracts == 1
@@ -113,7 +119,12 @@ def describe_option_ending(facts: OptionPositionEndedFacts) -> str:
             f"{price_usd(close_price)} a share{came_to}. That is the simulation's rule, not a broker's.{from_price}"
         )
     if ended_by is OptionEnding.ENDED_BY_OWNER:
-        why = " A simulation had no price to settle it from." if facts.simulated else ""
+        if facts.simulated:
+            why = " A simulation had no price to settle it from."
+        elif (facts.owner_word or {}).get(OWNER_WORD_ROWS_NOT_BOOKED):
+            why = " The broker's record of how it ended could not be booked."
+        else:
+            why = ""
         return f"{what} {was} ended at the owner's word and counted as worth nothing. No settlement could be made.{why}"
     if ended_by is OptionEnding.SOLD_OUTSIDE:
         close_price = Decimal(facts.close_price)

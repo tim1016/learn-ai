@@ -28,14 +28,27 @@ business day to come.
 **At the press** the Clerk looks once more. A Dry Run's simulation is asked
 for its price again, and a price that has come settles the contract by the
 simulation's rule. A real account's option events are read whole, and a row
-that has come is booked in its place. Only when there is still nothing, and
-on a real account the broker holds none of the contract, is it ended at the
-owner's word.
+that has come is booked in its place. Only when there is still nothing to
+book, and on a real account the broker holds none of the contract, is it
+ended at the owner's word.
+
+**A row the rule refused by name does not stand in the way.** The broker's
+row for the contract may have come and been refused by the canonical rule:
+for more contracts than are held, for the other side, for a contract held
+both ways. Nothing of it was booked and nothing will be while the books
+stand, so waiting for it settles nothing. When every row that may be the
+contract's end is such a row, the ending goes ahead, and its record names
+each row and the name it was refused by. Any other row still stands in the
+way: one the rule could book, one it refused under another name (it was
+offered no lot, or the cash is not whole cents), one it never judged, one
+already booked.
 
 **A row that comes afterwards** on a real account is still read for
 ``OWNER_ENDING_LATE_ROW_DAYS`` days. An expiry's row books nothing: the lot
 is closed. An exercise's or an assignment's row holds that bot by name: the
-shares are real and on no bot's books.
+shares are real and on no bot's books. A row the ending's record names is
+no late row: the owner ended the contract knowing of it. Once no bot holds
+the contract it is held for by nobody.
 
 This module is a leaf: the rule's constants, the request and its outcome,
 and the plain reads of the books' own record of such endings.
@@ -49,7 +62,11 @@ from datetime import date
 from typing import Literal
 
 from app.broker.alpaca.clerk.sqlite.option_event_books import booking_key, bookings
-from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_POSITION_ENDED, OptionPositionEndedFacts
+from app.broker.alpaca.clerk.sqlite.option_event_folds import (
+    OPTION_POSITION_ENDED,
+    OWNER_WORD_ROWS_NOT_BOOKED,
+    OptionPositionEndedFacts,
+)
 from app.lean_sidecar.trading_calendar import next_trading_day, session_close_ms_utc
 from app.options.deadlines import last_session_close_ms
 from app.utils.session_anchors import et_date_at_ms
@@ -152,6 +169,19 @@ def owner_ended(conn: sqlite3.Connection, symbol: str) -> dict[str, OptionPositi
     return bookings(conn, owner_ending_key(symbol))
 
 
+def rows_an_owners_ending_named(conn: sqlite3.Connection, symbol: str) -> frozenset[str]:
+    """The reference of each row of the broker's that an owner's ending of one contract names as refused.
+
+    The owner ended the contract knowing of these rows: the ending's own
+    record lists them. Read by the key such endings are booked under.
+    """
+    return frozenset(
+        row["ref"]
+        for ended in owner_ended(conn, symbol).values()
+        for row in (ended.owner_word or {}).get(OWNER_WORD_ROWS_NOT_BOOKED, ())
+    )
+
+
 def recent_owner_endings(conn: sqlite3.Connection, *, since_ms: int) -> list[int]:
     """The expiry date of each contract a real account's owner ended at their word since ``since_ms``.
 
@@ -188,4 +218,5 @@ __all__ = [
     "owner_ending_key",
     "owner_ending_offered_from_ms",
     "recent_owner_endings",
+    "rows_an_owners_ending_named",
 ]

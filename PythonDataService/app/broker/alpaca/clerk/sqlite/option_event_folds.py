@@ -25,7 +25,10 @@ the same transition and the same fold, with its own ending and a record of
 who said so, when, and why no settlement could be made. It is not the
 residue write-off, which leaves the lot open and realises nothing. Only a
 bought contract past its last session is ended this way: a sold one that
-was assigned moved shares, and nobody's word undoes that.
+was assigned moved shares, and nobody's word undoes that. When the broker
+did report the contract's end, in rows the canonical rule refused by name,
+the record names each such row and the name it was refused by, so the money
+trail says the contract was ended beside rows that could not be booked.
 
 **A simulation's booking carries the simulation's record, or it is refused.**
 That record names the price the simulation read and where it came from. The
@@ -79,7 +82,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.options.contract import OptionContract
 from app.options.deadlines import past_last_session
-from app.options.event_allocation import OptionEventKind, expected_share_trade
+from app.options.event_allocation import OptionEventKind, OptionEventRefusal, expected_share_trade
 
 OPTION_POSITION_ENDED = "OPTION_POSITION_ENDED"
 # What the command of a booking is called, and the kind of its effect.
@@ -98,6 +101,19 @@ OPTION_EVENT_CLOSE_EXECUTION_PREFIX = "option-event:close:"
 # sale at a price above zero, and it is charged fees as every simulated option sale is.
 OPTION_EVENT_CASH_EXECUTION_PREFIX = "option-event:cash:"
 OPTION_EVENT_SHARES_EXECUTION_PREFIX = "option-event:shares:"
+# Where an owner's word lists the broker's rows that could not be booked: each with its ``ref``,
+# the name the rule refused it by (``refused_as``) and the rule's own words (``detail``). Left
+# out when no row came.
+OWNER_WORD_ROWS_NOT_BOOKED = "rows_not_booked"
+# The names the canonical rule refuses a row by that an owner's ending may be made beside. Each
+# says the books hold lots of the contract and the row cannot be matched to them, by its count
+# or by its side. A row refused under any other name is no such row: one the rule was offered no
+# lot for, one whose cash is not whole cents, one the broker does not report as executed.
+REFUSALS_AN_ENDING_MAY_NAME = frozenset({
+    OptionEventRefusal.MORE_CONTRACTS_THAN_HELD.value,
+    OptionEventRefusal.WRONG_SIDE.value,
+    OptionEventRefusal.HELD_ON_BOTH_SIDES.value,
+})
 
 
 def closed_by_an_option_event(execution_id: str) -> bool:
@@ -202,7 +218,8 @@ class OptionPositionEndedFacts:
     # expiry signed for the other side, a lot closed before the row was read.
     notes: list[dict[str, str]] | None = None
     # For a contract ended at the owner's word: operator, reason, said_at_ms and
-    # why_no_settlement. Left out of every other ending.
+    # why_no_settlement, and ``rows_not_booked`` when the broker's rows for the contract
+    # were refused by name. Left out of every other ending.
     owner_word: dict[str, Any] | None = None
 
     def to_facts_json(self) -> str:
@@ -306,6 +323,28 @@ def _require_the_owners_word(
         raise ValueError(
             f"{contract.occ_symbol} still trades: only a contract past its last session is ended at the owner's word"
         )
+    if OWNER_WORD_ROWS_NOT_BOOKED in word:
+        _require_the_rows_an_ending_names(facts, word[OWNER_WORD_ROWS_NOT_BOOKED])
+
+
+def _require_the_rows_an_ending_names(facts: OptionPositionEndedFacts, rows: object) -> None:
+    """Refuse an owner's ending whose list of the broker's rows that could not be booked is not whole.
+
+    Each row is named by its reference and by the name it was refused by,
+    one of the three an ending may be made beside
+    (``REFUSALS_AN_ENDING_MAY_NAME``). A simulation's ending names none: no
+    broker reports a simulated account's option events.
+    """
+    if facts.simulated:
+        raise ValueError("a simulation's ending names no row of a broker's: none reports a simulated account's events")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("an owner's ending that names rows that could not be booked names at least one")
+    for row in rows:
+        ref, refused_as = (row.get("ref"), row.get("refused_as")) if isinstance(row, dict) else (None, None)
+        if not isinstance(ref, str) or not ref.strip() or refused_as not in REFUSALS_AN_ENDING_MAY_NAME:
+            raise ValueError(
+                "each row an owner's ending names carries its reference and the name the rule refused it by"
+            )
 
 
 def _require_the_figures_the_contract_gives(
@@ -562,6 +601,8 @@ __all__ = [
     "OPTION_EVENT_SHARES_EXECUTION_PREFIX",
     "OPTION_EVENT_SHARE_ORDER_ROLE",
     "OPTION_POSITION_ENDED",
+    "OWNER_WORD_ROWS_NOT_BOOKED",
+    "REFUSALS_AN_ENDING_MAY_NAME",
     "OptionEnding",
     "OptionEventBookWrites",
     "OptionPositionEndedFacts",

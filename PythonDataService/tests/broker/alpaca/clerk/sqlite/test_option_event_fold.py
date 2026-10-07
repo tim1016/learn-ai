@@ -430,6 +430,16 @@ _THE_OWNERS_WORD = {
     "why_no_settlement": "The broker reported no activity for the contract and holds none of it.",
 }
 _ENDED_BY_OWNER = {"ended_by": "ended_by_owner", "owner_word": _THE_OWNERS_WORD}
+# A row of the broker's the rule refused by name, as an owner's ending made beside it names it.
+_A_REFUSED_ROW = {
+    "ref": "option-activity:exp-1", "refused_as": "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+    "detail": "3 of AAPL230721C00150000 were expired on 2023-07-21, and the lots open then hold 2.",
+}
+
+
+def _beside(rows: Any) -> dict[str, Any]:
+    """An owner's ending whose word names ``rows`` as the broker's rows that could not be booked."""
+    return {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, "rows_not_booked": rows}}
 
 
 def _an_owner_endings_record(**changes: Any) -> dict[str, Any]:
@@ -509,6 +519,23 @@ async def test_an_owners_ending_closes_the_lot_at_nothing_so_what_it_cost_is_the
             _LAST_SESSION_CLOSE, "counted as worth nothing",
             id="a simulation's ending whose record is of a settlement in cash",
         ),
+        pytest.param(_beside([]), _LAST_SESSION_CLOSE, "names at least one", id="a list of refused rows that names none"),
+        pytest.param(
+            _beside([{**_A_REFUSED_ROW, "ref": " "}]), _LAST_SESSION_CLOSE, "carries its reference",
+            id="a refused row with no reference",
+        ),
+        pytest.param(
+            _beside([{**_A_REFUSED_ROW, "refused_as": "OPTION_EVENT_UNREADABLE"}]), _LAST_SESSION_CLOSE,
+            "the name the rule refused it by", id="a row the rule did not refuse by name",
+        ),
+        pytest.param(
+            _beside([{**_A_REFUSED_ROW, "refused_as": "OPTION_EVENT_CASH_NOT_WHOLE_CENTS"}]), _LAST_SESSION_CLOSE,
+            "the name the rule refused it by", id="a row the rule refused under a name no ending is made beside",
+        ),
+        pytest.param(
+            {**_beside([_A_REFUSED_ROW]), "simulated": True, "simulation": _an_owner_endings_record()},
+            _LAST_SESSION_CLOSE, "names no row of a broker's", id="a simulation's ending that names a broker's row",
+        ),
     ],
 )
 async def test_the_fold_refuses_an_owners_ending_that_is_not_whole_and_writes_nothing(
@@ -520,6 +547,21 @@ async def test_the_fold_refuses_an_owners_ending_that_is_not_whole_and_writes_no
             repo.append_transition(_as_for_bot_b(facts, observed_at_ms=observed_at_ms, **changes))
 
         assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()
+
+
+async def test_an_owners_ending_made_beside_rows_the_rule_refused_is_booked_with_those_rows_on_its_record(
+    tmp_path: Path,
+) -> None:
+    """The control for the four refusals above: one thing differs from each, and this is booked."""
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        repo.append_transition(_as_for_bot_b(facts, observed_at_ms=_LAST_SESSION_CLOSE, **_beside([_A_REFUSED_ROW])))
+
+        assert held(repo, "bot-b") == {} and fifo(repo, "bot-b").exact_realized_pnl == Decimal("-388")
+        [ended] = [json.loads(row["facts_json"]) for row in bookings(repo) if row["strategy_instance_id"] == "bot-b"]
+        assert ended["owner_word"]["rows_not_booked"] == [_A_REFUSED_ROW]
     finally:
         repo.close()
 
