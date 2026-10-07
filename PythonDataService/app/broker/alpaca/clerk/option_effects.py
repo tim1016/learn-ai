@@ -5,8 +5,8 @@ contract was picked by the resolver from quotes. So the caller hands over the
 facts the pick stands on, and the Clerk works out the money from them itself:
 
 - with an ENTER, ``OptionEntryEvidence``: the contract picked for each leg,
-  its listed multiplier, the quote read just before the hand-over, and the
-  bot's two limits;
+  its listed multiplier, the quote read just before the hand-over, the
+  bot's two limits, and the owner's order terms;
 - with an EXIT, ``OptionExitEvidence``: the quotes read at the exit decision
   for what the bot holds, each named by its contract. An EXIT may come
   without it.
@@ -14,21 +14,22 @@ facts the pick stands on, and the Clerk works out the money from them itself:
 Neither carries a price, a commitment or a fee. Those are the Clerk's to
 compute (``app.options.entry.prepare_entry``, ``app.broker.alpaca.option_fees``).
 
-Today the Clerk takes one shape of option plan, on one kind of account: a
-single bought call or put, in a Dry Run. Every other plan is refused by name
+Today the Clerk takes one shape of option plan: a single bought call or put,
+in a Dry Run or on a Paper account. Every other plan is refused by name
 here, before anything is written.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.options.contract import OptionContract
+from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -37,8 +38,10 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 class OptionEffectRefusal(StrEnum):
     """Why the Clerk took no option effect. A quote's own fault and a structure's own refusal keep their codes."""
 
-    # The account is not a Dry Run's: nothing about option orders has been shown on a real account.
-    ACCOUNT_NOT_SIMULATED = "OPTION_PLAN_NEEDS_A_DRY_RUN"
+    # The account is a Live Shadow's or a Live one: only a Dry Run and a Paper account take an option plan.
+    ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
+    # The broker's listing of the picked contract could not be read, so the contract was not confirmed.
+    CONTRACT_REFERENCE_UNREAD = "OPTION_CONTRACT_REFERENCE_UNREAD"
     # The plan has a sold leg, several legs, or a leg of more than one contract a structure.
     STRUCTURE_NOT_SUPPORTED = "OPTION_STRUCTURE_NOT_SUPPORTED"
     # An ENTER came with no picked contracts and no quotes.
@@ -149,6 +152,9 @@ class OptionEntryEvidence:
     leg_gap_limit_percent: Decimal
     # The most opening and closing at once may cost, as a percent of the entry commitment.
     cost_limit_percent: Decimal
+    # The owner's order terms: how long the entry waits for its fill before the Clerk
+    # cancels what is left, and how long before a close its position is closed.
+    terms: CloseTerms = field(default_factory=CloseTerms)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

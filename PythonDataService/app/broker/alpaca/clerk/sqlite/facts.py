@@ -251,6 +251,41 @@ class EnterAcceptedFacts:
 
 
 @dataclass(frozen=True)
+class EntrySettledFacts:
+    """How a strategy was settled on one option entry, recorded once on the ENTER's own timeline (ADR 0076).
+
+    ``settlement`` is ``entered`` or ``discarded``. ``standing`` is where the
+    entry stood when the Clerk answered (``entry_outcome.EntryStanding``),
+    with the whole structures asked for and filled then. ``until_ms`` is how
+    long the caller was willing to wait, and ``settled_at_ms`` the Clerk's
+    clock when it answered. A replay reads this record, never the books as
+    they stand later: what was answered is what the strategy acted on.
+    """
+
+    settlement: str
+    standing: str
+    units_asked: int
+    units_filled: int
+    until_ms: int
+    settled_at_ms: int
+
+    def __post_init__(self) -> None:
+        if self.settlement not in ("entered", "discarded"):
+            raise ValueError(f"an entry is settled as entered or discarded; got {self.settlement!r}")
+        for name in ("units_asked", "units_filled", "until_ms", "settled_at_ms"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} is a whole number, zero or more; got {value!r}")
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> EntrySettledFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class UnknownOutcomeNotice:
     """What the operator is told about an order whose outcome is unknown for a reason other than a lost answer (#2854).
 

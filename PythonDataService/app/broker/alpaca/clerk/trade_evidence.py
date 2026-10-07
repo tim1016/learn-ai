@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_execution_price_conflict,
     fold_order_acknowledgement,
     fold_order_evidence,
+    withhold_fill_the_order_cannot_hold,
     withhold_unnamed_order,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
@@ -48,7 +49,8 @@ UNEXPLAINED_TRADE_UPDATE_REASON_CODE = UNEXPLAINED_ORDER_HOLD_REASON_CODE
 # ``withheld_order``: a frame about our own order missing its id, status,
 # symbol or side, or naming values the adapter could not read; nothing of
 # it is applied, and its effect folds unknown like a lost response (#2643,
-# #2648).
+# #2648). So is a frame whose fill the books cannot hold: one in another
+# symbol than the contract its order trades (ADR 0076).
 TradeUpdateDisposition = Literal[
     "order_event", "unexplained_order", "unfoldable_order", "withheld_order"
 ]
@@ -232,11 +234,29 @@ class SqliteTradeUpdateEvidenceSink:
             ):
                 return "withheld_order"
 
-            if (
+            recovered_total = (
                 recovery_source == "closed_orders_window"
                 and event.event_type in {"fill", "partial_fill"}
                 and event.execution_id is None
+            )
+            # A frame whose fill the books would refuse to write folds as a lost
+            # one too, and never raises out of the sink: a fill in another symbol
+            # than the contract its order trades, or a fraction of a contract (ADR 0076).
+            carried_fill = (
+                (exact_slice.quantity or 0.0) if exact_slice is not None
+                else order.filled_quantity if recovered_total
+                else None
+            )
+            if carried_fill is not None and withhold_fill_the_order_cannot_hold(
+                self._repo,
+                effect_operation_id=owner.effect_operation_id,
+                order=order,
+                order_ref=order_ref,
+                quantity=carried_fill,
             ):
+                return "withheld_order"
+
+            if recovered_total:
                 # REST order snapshots carry only cumulative order economics.
                 # Preserve them through the explicitly labelled recovery fold;
                 # do not invent an execution ID just to enter the websocket path.

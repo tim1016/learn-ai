@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
-from datetime import date
+from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
+from app.broker.alpaca import adapter as alpaca_adapter
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite import schema
@@ -31,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import (
     BrokerActivity,
     BrokerOrder,
@@ -38,10 +41,13 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.broker.contract.options import BrokerOptionContract, BrokerOptionOrder, OptionOrderRequest
+from app.options.contract import OptionContract
 from app.schemas.exit_terms import ExitTerms
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.session_clock import pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.documented_examples import documented
 
 
 @pytest.fixture
@@ -238,6 +244,16 @@ class _FakeTradePort:
     assertion. ``submitted_legs`` records each submitted leg for that check.
     ``lookup_absent`` models a broker that definitively has no order for the
     exact client order id, which is how a never-accepted submit reads.
+
+    **Option orders (#2913).** The port also takes one option order, as a
+    venue that rests it would: the order is kept in ``option_orders`` in the
+    shape Alpaca's documentation shows for one
+    (``tests/fixtures/alpaca_documented/``), and every answer is read from
+    that payload by the adapter's own strict reader, so the double cannot
+    answer in a shape the real port could not. A test moves the venue with
+    ``option_order_fills`` and ``option_order_ends``, and sets what goes
+    wrong next through the ``option_*`` and ``cancel_*`` attributes. Nothing
+    here was recorded from Alpaca.
     """
 
     def __init__(
@@ -252,6 +268,24 @@ class _FakeTradePort:
         self.submitted_legs: list[BrokerOrderLeg] = []
         self.cancel_calls: list[str] = []
         self.lookup_calls: list[str] = []
+        # The venue's option orders, by client order id, each as Alpaca's documented payload.
+        self.option_orders: dict[str, dict[str, Any]] = {}
+        self.submitted_option_orders: list[OptionOrderRequest] = []
+        self.option_submit_calls: list[str] = []
+        self.option_lookup_calls: list[str] = []
+        # Raised by the next option submits before anything lands: a refusal, or an outage.
+        self.option_submit_error: Exception | None = None
+        # The order lands at the venue and the answer never comes back.
+        self.option_answer_lost = False
+        # Raised by every option lookup while set.
+        self.option_lookup_error: Exception | None = None
+        # Raised by every cancel while set; the order is left as it was.
+        self.cancel_error: Exception | None = None
+        # The venue takes a cancel and goes on showing the order working.
+        self.cancel_is_slow = False
+        # The venue's clock for the times it stamps; each stamp is later than the last.
+        self.venue_clock: Callable[[], int] = lambda: 1_700_000_001_000
+        self._last_venue_stamp_ms = 0
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.submit_calls.append(client_order_id)
@@ -264,8 +298,64 @@ class _FakeTradePort:
 
     async def cancel(self, order_id: str) -> None:
         self.cancel_calls.append(order_id)
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        if self.cancel_is_slow:
+            return
+        for payload in self.option_orders.values():
+            if payload["id"] == order_id and payload["status"] in _WORKING_OPTION_ORDER_STATUSES:
+                payload.update(status="canceled", canceled_at=self._venue_stamp())
+                payload["updated_at"] = payload["canceled_at"]
+
+    async def submit_option_order(self, order: OptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
+        self.option_submit_calls.append(client_order_id)
+        self.submitted_option_orders.append(order)
+        if self.option_submit_error is not None:
+            raise self.option_submit_error
+        self.option_orders[client_order_id] = documented_option_order_payload(
+            order, client_order_id=client_order_id, at=self._venue_stamp()
+        )
+        if self.option_answer_lost:
+            raise BrokerUnavailable("the venue took the order and its answer was lost", broker="alpaca")
+        return alpaca_adapter.from_alpaca_option_order(self.option_orders[client_order_id])
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        self.option_lookup_calls.append(client_order_id)
+        if self.option_lookup_error is not None:
+            raise self.option_lookup_error
+        payload = self.option_orders.get(client_order_id)
+        return None if payload is None else alpaca_adapter.from_alpaca_option_order(payload)
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        if self.option_lookup_error is not None:
+            raise self.option_lookup_error
+        payload = next((held for held in self.option_orders.values() if held["id"] == order_id), None)
+        return None if payload is None else alpaca_adapter.from_alpaca_option_order(payload)
+
+    def option_order_fills(self, client_order_id: str, *, contracts: int, average_price: str) -> None:
+        """The venue has now filled ``contracts`` of the order in all, at ``average_price`` a share."""
+        payload = self.option_orders[client_order_id]
+        stamp = self._venue_stamp()
+        whole = contracts == int(payload["qty"])
+        payload.update(
+            filled_qty=str(contracts), filled_avg_price=average_price, updated_at=stamp,
+            status="filled" if whole else "partially_filled", filled_at=stamp if whole else None,
+        )
+
+    def option_order_ends(self, client_order_id: str, status: str = "canceled") -> None:
+        """The venue ended the order by itself: cancelled, expired or rejected, with whatever had filled."""
+        stamp = self._venue_stamp()
+        self.option_orders[client_order_id].update(
+            status=status, updated_at=stamp, **({f"{status}_at": stamp} if status in ("canceled", "expired") else {})
+        )
+
+    def _venue_stamp(self) -> str:
+        self._last_venue_stamp_ms = max(self.venue_clock(), self._last_venue_stamp_ms + 1)
+        return datetime.fromtimestamp(self._last_venue_stamp_ms / 1000, tz=UTC).isoformat().replace("+00:00", "Z")
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        # An option order is looked up by the option read, which reads strictly (ADR 0076).
+        assert client_order_id not in self.option_orders, "the stock lookup was asked about an option order"
         self.lookup_calls.append(client_order_id)
         if self._lookup_absent:
             # Definitive absence: the broker has no order for this exact
@@ -276,17 +366,54 @@ class _FakeTradePort:
         )
 
 
+_WORKING_OPTION_ORDER_STATUSES = frozenset({"new", "accepted", "pending_new", "partially_filled", "pending_cancel"})
+
+
+def documented_option_order_payload(order: OptionOrderRequest, *, client_order_id: str, at: str) -> dict[str, Any]:
+    """Alpaca's documented answer to one option order, with this order's own values in it.
+
+    Every key is the documented example's (``OptionOrderResponse``); none is
+    added. The order has just been taken: ``new``, nothing filled.
+    """
+    payload = dict(documented("option_orders", "documented_responses.json")["OptionOrderResponse"])
+    payload.update(
+        id=str(uuid5(NAMESPACE_URL, client_order_id)), client_order_id=client_order_id,
+        symbol=order.contract.occ_symbol, qty=str(order.quantity), side=order.side.value,
+        type=order.order_type.value, order_type=order.order_type.value,
+        limit_price=None if order.limit_price is None else format(order.limit_price, "f"),
+        status="new", filled_qty="0", filled_avg_price=None, filled_at=None,
+        created_at=at, submitted_at=at, updated_at=at,
+    )
+    return payload
+
+
+def documented_option_listing(contract: OptionContract, **changes: Any) -> BrokerOptionContract:
+    """Alpaca's documented listing of one contract, as an active standard listing of ``contract``."""
+    payload = dict(documented("option_contracts", "documented_contracts.json")["reference_example"])
+    payload.update(
+        symbol=contract.occ_symbol, root_symbol=contract.root, underlying_symbol=contract.root,
+        expiration_date=contract.expiry_date.isoformat(), type=contract.right, strike_price=str(contract.strike),
+    )
+    payload.update(changes)
+    return alpaca_adapter.from_alpaca_option_contract(payload)
+
+
 class _FakeReadPort:
-    """A minimal ``BrokerReadPort`` double — only list_orders/list_positions."""
+    """A minimal ``BrokerReadPort`` double — list_orders/list_positions, and the option contracts it lists."""
 
     def __init__(
         self,
         *,
         orders: list[BrokerOrder] | None = None,
         positions: list[BrokerPosition] | None = None,
+        option_contracts: dict[str, BrokerOptionContract] | None = None,
     ) -> None:
         self._orders = orders or []
         self._positions = positions or []
+        self._option_contracts = option_contracts or {}
+
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        return self._option_contracts.get(contract.occ_symbol)
 
     async def list_orders(
         self, *, status: str | None = None, limit: int | None = None, after_ms: int | None = None

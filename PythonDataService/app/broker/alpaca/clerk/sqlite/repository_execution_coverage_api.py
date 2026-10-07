@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ContractTermsConflict,
+    order_contract_terms,
+    require_fill_in_its_orders_contract,
+)
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     CHAIN_TOTAL_PROVEN_TRANSITION,
     ORDER_TOTAL_PROVEN_RESOLUTION_KIND,
@@ -512,13 +517,17 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 raise ExecutionCoverageResolutionUnavailable(
                     "The selected historical conflict no longer has complete Clerk ownership evidence."
                 )
+            # An order in an option contract trades that contract, and its bot is
+            # registered under the underlying: the execution to recover is in the
+            # order's own contract (ADR 0076).
+            bound = order_contract_terms(self._conn, conflict.order_ref)
             return HistoricalExecutionRecoveryTarget(
                 uncertainty_id=uncertainty_id,
                 strategy_instance_id=conflict.strategy_instance_id,
                 order_ref=conflict.order_ref,
                 execution_id=conflict.conflict_execution_id,
                 observed_at_ms=uncertainty["observed_at_ms"],
-                symbol=strategy["symbol"],
+                symbol=strategy["symbol"] if bound is None else bound.symbol,
                 exact_is_quarantined=exact_is_quarantined,
                 cumulative=cumulative[0],
                 order=order,
@@ -664,6 +673,17 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 )
             exact = proof.exact_execution
             cumulative = proof.cumulative
+            try:
+                # Asked before anything is written: an execution that is not in its
+                # order's contract is a refusal to its caller, never an error raised
+                # out of the fold that would have written it (ADR 0076).
+                require_fill_in_its_orders_contract(
+                    self._conn, order_ref=conflict.order_ref, symbol=exact.symbol, quantity=exact.slice_qty
+                )
+            except ContractTermsConflict as exc:
+                raise ExecutionCoverageResolutionUnavailable(
+                    f"The exact execution cannot take the recovered fill's place: {exc}."
+                ) from exc
             facts = ExecutionCoverageResolvedFacts(
                 uncertainty_id=uncertainty_id,
                 account_id=self.account_id,

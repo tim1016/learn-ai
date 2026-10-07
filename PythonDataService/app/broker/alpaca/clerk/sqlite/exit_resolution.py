@@ -218,14 +218,24 @@ A leg that could not be sent, a broker refusal, or an unfilled extended-hours
 limit stays visible. The separate observed recovery status explains current
 eligibility; the failed order itself promises no future send time."""
 
-_OPTION_CLOSE_NOT_TAKEN_NEXT_STEP = (
-    "The Clerk tries the close again in regular hours after a fresh recovery check. Or flatten it yourself "
-    "once a quote of the contract with something bid has been kept."
-)
-"""What the operator can do about an option position a refused close left open (ADR 0076).
+_OPTION_CLOSE_RETRIED = "The Clerk tries the close again in regular hours after a fresh recovery check."
 
-Never "flatten with a priced limit": an option position is closed by a market
-order in the regular session, and takes no limit."""
+
+def _option_close_not_taken_next_step(repo: ClerkSqliteRepository) -> str:
+    """What the operator can do about an option position a refused close left open (ADR 0076).
+
+    Never "flatten with a priced limit": an option position is closed by a
+    market order in the regular session, and takes no limit. A Dry Run's
+    close is priced from a quote kept for the contract, so its Flatten
+    waits for one with something bid. A real account's close is a market
+    order the broker fills, and waits for no quote of ours.
+    """
+    if repo.account_id.startswith("sim:"):
+        return (
+            f"{_OPTION_CLOSE_RETRIED} Or flatten it yourself once a quote of the contract with something bid "
+            "has been kept."
+        )
+    return f"{_OPTION_CLOSE_RETRIED} Or flatten it yourself from the bot's page, in regular hours."
 
 PROGRAM_EXIT_SESSION_ENDED = LegRefusal(
     reason_code="PROGRAM_EXIT_SESSION_ENDED",
@@ -283,6 +293,14 @@ def redriven_episode_token(decision_id: str) -> str | None:
         return None
     token, _, _attempt = decision_id.removeprefix(EXIT_REDRIVE_DECISION_PREFIX).rpartition("-")
     return token or None
+#: Why an entry is cancelled when nothing says otherwise: an EXIT, or a stopped
+#: run's cleanup, must prove the entry ended before anything else is done.
+ENTRY_TERMINAL_PROOF = "EXIT_ENTRY_TERMINAL_PROOF"
+#: Why a resting option entry is cancelled: the owner's entry wait ran out (ADR 0076).
+ENTRY_WAIT_ENDED = "ENTRY_WAIT_ENDED"
+#: Why a resting option entry is cancelled whatever is left of its wait: its Clerk closed (ADR 0076).
+ENTRY_CLERK_CLOSED = "ENTRY_CLERK_CLOSED"
+
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.
 DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
@@ -412,7 +430,9 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
     a contract still trading, is ``None``.
 
     The position stays on the books. Settling an expired contract at its
-    exercise value is not built; the words say so.
+    exercise value is not built, for a Dry Run or for a real account, whose
+    broker settles it on its own side where these books do not yet read it;
+    the words say so of either.
     """
     contract_symbol = symbol.upper()
     if not is_option_contract_symbol(contract_symbol):
@@ -424,8 +444,8 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
         reason_code=OPTION_CONTRACT_EXPIRED,
         explanation=(
             f"{contract_symbol} expired on {expiry.isoformat()}. Its last session is over, or ends within "
-            "seconds, so no order can close it and none was sent. The position is still on the books: a "
-            "Dry Run does not yet settle an expired contract at its exercise value."
+            "seconds, so no order can close it and none was sent. The position is still on the books: an "
+            "expired contract is not yet settled here at its exercise value."
         ),
         next_step=_EXPIRED_CONTRACT_NEXT_STEP,
     )
@@ -534,11 +554,21 @@ async def cancel_and_prove_owned_entry(
     entry_order_ref: str,
     trade: BrokerTradePort,
     off_loop: OffLoop | None = None,
+    reason: str = ENTRY_TERMINAL_PROOF,
+    say_once: bool = False,
 ) -> OrderResource:
     """Cancel one exact owned ENTRY under its current durable custodian.
 
     ``off_loop`` moves each synchronous repository run onto a worker thread
     (#1993); the default keeps the pre-#1993 inline behavior.
+
+    ``reason`` is why the cancel is asked for, recorded on the order's
+    ``ORDER_CANCEL_REQUESTED`` the first time one is written for it.
+
+    ``say_once`` is for a caller that asks again on a short timer (the
+    deadline keeper, ADR 0076): a cancel still uncertain for the reason the
+    books already hold is not recorded again (:func:`_cancel_already_uncertain`).
+    Every other caller records each uncertain attempt, as before.
     """
     run = off_loop if off_loop is not None else run_inline
     entry = await run(lambda: repo.order(entry_order_ref))
@@ -563,6 +593,8 @@ async def cancel_and_prove_owned_entry(
             repo,
             effect_operation_id=effect_operation_id,
             order=entry,
+            reason=reason,
+            say_once=say_once,
             broker=broker,
             run=claim_scoped(run),
         )
@@ -1977,7 +2009,8 @@ async def _cancel_and_prove_order(
     *,
     effect_operation_id: str,
     order: OrderResource,
-    reason: str = "EXIT_ENTRY_TERMINAL_PROOF",
+    reason: str = ENTRY_TERMINAL_PROOF,
+    say_once: bool = False,
     broker: ClaimedBrokerIO,
     run: OffLoop,
 ) -> bool:
@@ -2017,6 +2050,8 @@ async def _cancel_and_prove_order(
     if isinstance(observed, BrokerError) or observed is None:
 
         def _fold_cancel_uncertain() -> None:
+            if say_once and _cancel_already_uncertain(repo, order, looked_up=None):
+                return
             fold_uncertain(
                 repo,
                 effect_operation_id=effect_operation_id,
@@ -2044,7 +2079,9 @@ async def _cancel_and_prove_order(
         refreshed = repo.order(order.order_ref)
         assert refreshed is not None
         if not _is_terminal(refreshed.broker_state):
-            if cancel_error is not None:
+            if cancel_error is not None and not (
+                say_once and _cancel_already_uncertain(repo, order, looked_up=refreshed)
+            ):
                 fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order.order_ref,
                                why=str(cancel_error), transition_kind="ORDER_CANCEL_UNCERTAIN")
             return False
@@ -2053,6 +2090,37 @@ async def _cancel_and_prove_order(
         return not repo.order_fills_short_of_broker_cumulative(order.order_ref)
 
     return await run(_fold_observed_entry)
+
+
+_UNCERTAIN_KINDS = frozenset({"ORDER_CANCEL_UNCERTAIN", "ORDER_SUBMIT_UNCERTAIN"})
+
+
+def _cancel_already_uncertain(
+    repo: ClerkSqliteRepository, order: OrderResource, *, looked_up: OrderResource | None
+) -> bool:
+    """Whether the books already say this order's cancel is uncertain, and this attempt adds nothing to that.
+
+    ``order`` is the order as it stood before the attempt. ``looked_up`` is
+    the order after this attempt's lookup was folded, or ``None`` when the
+    lookup itself failed.
+
+    A cancel asked for again every second would otherwise write a record
+    every second for as long as the broker refused it or could not be
+    reached. Nothing is lost by saying it once: the first record stands, and
+    the order stays on the worklist until a lookup shows it ended.
+
+    - The lookup failed: nothing new when the last thing recorded of the
+      order is already that its outcome is uncertain.
+    - The lookup answered and the cancel was refused: nothing new when a
+      cancel of this order was already recorded uncertain and the broker
+      still shows the state it showed before.
+    """
+    if not repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_CANCEL_UNCERTAIN"):
+        return False
+    if looked_up is not None:
+        return looked_up.broker_state == order.broker_state
+    last = repo.last_order_transition(order_ref=order.order_ref)
+    return last is not None and last["transition_kind"] in _UNCERTAIN_KINDS
 
 
 def _prove_never_accepted_durably(
@@ -2391,7 +2459,7 @@ async def _observe_by_broker_order_id(
     another client order id is an error, never this order's state.
     """
     assert reducing.broker_order_id is not None
-    observed = await broker.observe_broker_order(reducing.broker_order_id)
+    observed = await broker.observe_broker_order(reducing.broker_order_id, order_ref=reducing.order_ref)
     if isinstance(observed, BrokerOrder) and observed.client_order_id != reducing.client_order_id:
         return BrokerError(
             f"broker order {reducing.broker_order_id!r} carries "
@@ -2581,9 +2649,13 @@ async def _submit_reducing_order(
         # a no-submit world binds the price it fills at, or nothing goes out.
         # No order sent before to a real broker is refused here: a real port
         # binds every recovery, and refuses a run-end close on its first send.
-        if option_close is not None:
-            # A close of an option contract is priced from a quote, never a
-            # bar, whatever made the EXIT: the newest kept for the contract.
+        if option_close is not None and not trade_port_folds_simulated_evidence(broker.trade):
+            # A real account's close is a market order the broker fills: it needs no
+            # quote of ours, as a stock decision's sale needs no bar (ADR 0076).
+            bound, why = True, ""
+        elif option_close is not None:
+            # A simulated close of an option contract is priced from a quote, never
+            # a bar, whatever made the EXIT: the newest kept for the contract.
             bound = broker.bind_option_close_quotes(
                 reducing.client_order_id,
                 symbol=facts.symbol,
@@ -2837,10 +2909,9 @@ def option_close_not_taken(
     """Why a failed EXIT's close of an option contract was not taken, or ``None`` for a reduction in shares (ADR 0076).
 
     Read from the EXIT's own fold, as :func:`flatten_send_refusal` is, so
-    the Flatten that failed and a retry of it are told the same thing. No
-    broker is asked about an option order today: the Clerk itself or a
-    Dry Run's simulation would not take it, and the recorded reason is in
-    the refuser's own words.
+    the Flatten that failed and a retry of it are told the same thing. The
+    Clerk itself, a Dry Run's simulation or a Paper account's broker may
+    have refused it, and the recorded reason is in the refuser's own words.
 
     A contract that expired keeps its own code and its own next step,
     which sends the operator to no retry: none can work. Any other is
@@ -3191,8 +3262,8 @@ def _fold_submit_refused(
     assert effect is not None
     held = repo.position(effect.strategy_instance_id, created.symbol)
     closes_an_option = is_option_contract_symbol(created.symbol.upper())
-    # No broker is named for an option order: it is refused by the Clerk
-    # itself or by a simulation (ADR 0076), and the recorded reason says which.
+    # Who refused an option order is not named here: the Clerk itself, a simulation, or a
+    # Paper account's broker (ADR 0076). The recorded reason says which, in the refuser's words.
     reason = "The closing order was not taken." if closes_an_option else "The reducing order did not reach the broker."
     if not position_quantity_is_nonzero(held):
         fold_failed(
@@ -3232,7 +3303,7 @@ def _fold_submit_refused(
                 "held. The broker's reason is on the order's evidence."
             )
         ),
-        next_step=_OPTION_CLOSE_NOT_TAKEN_NEXT_STEP if closes_an_option else _REDRIVE_NEXT_STEP,
+        next_step=_option_close_not_taken_next_step(repo) if closes_an_option else _REDRIVE_NEXT_STEP,
     )
 
 
@@ -3684,6 +3755,9 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
 
 
 __all__ = [
+    "ENTRY_CLERK_CLOSED",
+    "ENTRY_TERMINAL_PROOF",
+    "ENTRY_WAIT_ENDED",
     "attested_absent_exit_episodes",
     "cancel_and_prove_owned_entry",
     "flatten_send_refusal",
