@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_args
 
 import httpx
@@ -46,6 +47,8 @@ from app.broker.alpaca.clerk.fleet_boot import (
     start_heartbeat,
     stop_heartbeat,
 )
+from app.broker.alpaca.clerk.sqlite.lane_quiet import observe_account_quiet
+from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
 from app.broker.fleet.confirmation import (
     confirmation_evidence_path,
     read_confirmation_evidence,
@@ -76,7 +79,19 @@ from app.broker.fleet.provider import (
 from app.broker.fleet.records import StoredLifecycleState
 from app.broker.fleet.routing import CommandEnvelope, LaneRouter
 from app.broker.v2panel.vocabulary import ACTION_IDS, QUIESCE_ACTION_IDS
-from app.schemas.broker_v2_panel import PanelQuiesceActionRequest
+from app.schemas.broker_v2_panel import PanelActionResult, PanelQuiesceActionRequest
+from app.services.broker_v2_panel.action_execution_service import IdempotencyStore
+from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
+from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (  # noqa: F401
+    PaperOptions,
+    paper,
+)
+from tests.broker.alpaca.clerk.sqlite.test_option_owner_ending import (
+    MONDAY_CLOSE,
+    _at,
+    _gone_at_the_broker_with_no_record,
+    _offered,
+)
 from tests.broker.fleet.conftest import FrozenClock
 
 from .test_a2_alpaca_lane import _await_beat_at, _RealServer
@@ -325,6 +340,9 @@ def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -
     # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs it to answer quiet), or
     # settles a closing order whose outcome is unknown on the Clerk's own
     # reads of the broker (#2854: a lane holding one cannot answer quiet; it
+    # sends no order and requires no active run), or ends an expired option
+    # contract that nothing will settle (#2913: the write-off is never
+    # offered for one, so this is what lets such a lane answer quiet; it
     # sends no order and requires no active run).
     assert quiesce & set(get_args(RecoveryActionId)) == {
         "stop_bot_decisions",
@@ -332,6 +350,7 @@ def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -
         "execute_safe_flatten",
         "reconcile_now",
         "discharge_attributed_residue",
+        "end_expired_option",
         "settle_unknown_exit_order",
     }
     # Rewrites fill evidence and can lift a hold a running bot is under.
@@ -421,6 +440,103 @@ async def test_a_draining_lane_routes_the_panels_cancel_verified_working_orders(
         delivered_body = delivery.bodies[0]
         assert isinstance(delivered_body, dict)
         assert delivered_body["action_id"] == "cancel_verified_working_orders"
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+class _PaperLane:
+    """Stands in for the HTTP hop to the lane, and for nothing behind it.
+
+    What the coordinator delivers is read by the quiesce route's own
+    request schema and run by the executor every panel action shares, on the
+    lane's real Clerk and its real books.
+    """
+
+    def __init__(self, account: PaperOptions, presented: RecoveryCapability) -> None:
+        self._account = account
+        self._presented = presented
+        self.results: list[PanelActionResult | None] = []
+
+    async def deliver(self, request) -> DeliveryResult:
+        posted = PanelQuiesceActionRequest.model_validate(request.json_body)
+        result = await execute_sqlite_panel_action(
+            "alpaca",
+            self._account.repo.account_id,
+            "a",
+            request=posted,
+            panel=SimpleNamespace(revision=posted.revision),
+            action=SimpleNamespace(
+                action_id=self._presented.action_id,
+                label=self._presented.label,
+                concurrency_token=self._presented.concurrency_token,
+            ),
+            availability_error=None,
+            facade=self._account.clerk,
+            store=IdempotencyStore(wait_timeout_s=0),
+            operator_identity=OPERATOR,
+        )
+        self.results.append(result)
+        return DeliveryResult(status_code=200, headers={}, body=b"{}")
+
+
+async def test_a_draining_lane_ends_its_bots_expired_option_contract_and_can_then_answer_quiet(
+    control_dir: Path,
+    clock: FrozenClock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """A lane is drained while its bot holds an option contract that expired and that nothing settles (#2913).
+
+    The broker holds none of it and has reported nothing of how it ended.
+    The lane's books still hold it, so the lane cannot answer quiet, and the
+    write-off is never offered for an expired contract. The owner's ending
+    is what is offered: it travels on the quiesce operation, the lane ends
+    the contract, and after its next pass the account answers quiet. The
+    acknowledgement of an option-event notice stays refused while draining.
+    """
+    await _gone_at_the_broker_with_no_record(paper)
+    _at(paper, MONDAY_CLOSE)
+    stranded = await observe_account_quiet(paper.repo, paper.account)
+    assert stranded is not None and not stranded.account_flat
+    assert not (await _offered(paper.clerk, "a", "discharge_attributed_residue")).available
+    presented = await _offered(paper.clerk, "a", "end_expired_option")
+    assert presented.available
+
+    service = _service(control_dir, clock)
+    try:
+        _provisioned, _root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        service.drain_clerk(clerk_id=boot.clerk_id)
+        lane = _PaperLane(paper, presented)
+        router = LaneRouter(service=service, delivery_for=lambda broker, session: lane)
+
+        for acknowledgement in ("custody_bot_option_event_hold_ack", "custody_option_event_hold_ack"):
+            with pytest.raises(ClerkUnreachable, match="draining"):
+                await _route(router, boot.clerk_id, _operation(acknowledgement), key=f"ack-{acknowledgement}")
+        await _route(
+            router,
+            boot.clerk_id,
+            _operation("bot_panel_quiesce_action"),
+            key="end-1",
+            body={
+                "action_id": "end_expired_option",
+                "revision": 1,
+                "concurrency_token": presented.concurrency_token,
+                "reason": "nothing will settle it",
+            },
+        )
+
+        [ended] = lane.results
+        assert ended is not None and ended.applied and ended.action_id == "end_expired_option"
+        assert paper.held() == {}
+        # The lane's next pass finds the books and the broker agreeing, which ends the drift it had found.
+        assert (await paper.pass_()).verdict == "clean"
+        quiet = await observe_account_quiet(paper.repo, paper.account)
+        assert quiet is not None
+        assert (quiet.broker_work_ended, quiet.account_flat, quiet.intents_resolved) == (True, True, True)
         await close_fleet_lane(boot)
     finally:
         service.close()

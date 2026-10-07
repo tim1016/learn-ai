@@ -37076,6 +37076,7 @@
               "execute_safe_flatten",
               "reconcile_now",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order"
             ],
             "title": "Action Id",

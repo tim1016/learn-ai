@@ -21057,7 +21057,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue" | "settle_unknown_exit_order";
+            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
