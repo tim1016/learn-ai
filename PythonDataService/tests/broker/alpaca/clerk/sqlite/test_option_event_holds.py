@@ -165,14 +165,95 @@ async def test_a_row_not_reported_as_executed_is_held_for_and_matched_to_nothing
         repo.close()
 
 
-async def test_an_event_in_a_contract_nobody_holds_is_held_account_wide(tmp_path: Path) -> None:
+async def test_an_event_in_a_contract_a_bot_traded_and_holds_no_more_is_held_account_wide(tmp_path: Path) -> None:
+    """The books recorded the contract and say nobody holds it. The broker says a position in it ended."""
     repo = _one_bot(tmp_path)
+    holds_option(repo, "bot-a", CALL, contracts=-1)
+    holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
     account = _FakeReadPort()
     try:
-        await _read(repo, account, _expiry(symbol=OTHER_CALL))
+        await _read(repo, account, _expiry())
 
         assert option_holds(repo).keys() == {(None, "OPTION_EVENT_CONTRACT_NOT_HELD")}
         assert bookings(repo) == []
+    finally:
+        repo.close()
+
+
+HAND_TRADED = "MSFT230721C00300000"
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param([{"kind": "expiry", "symbol": HAND_TRADED}], id="it expired"),
+        pytest.param(
+            [{"kind": "exercise", "symbol": HAND_TRADED}, {"kind": "shares", "shares": 100}],
+            id="it was exercised, with its share trade",
+        ),
+    ],
+)
+async def test_an_event_in_a_contract_the_books_never_recorded_holds_nobody(
+    tmp_path: Path, rows: list[dict[str, Any]], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The owner traded an option by hand in the same account, and the Clerk never saw its order.
+
+    Its end concerns no bot: no bot can hold a contract the books never
+    recorded. So nothing is booked and nobody is held, the option bot and
+    the stock bot alike. It is logged, and the read after it finds the same.
+    """
+    made = {
+        "expiry": lambda row: _expiry(symbol=row["symbol"]),
+        "exercise": lambda row: _exercise(symbol=row["symbol"]),
+        "shares": lambda row: _share_trade(row["shares"], symbol="MSFT", price="300", net_amount="-30000"),
+    }
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"option-bot": "AAPL", "stock-bot": "SPY"})
+    holds_option(repo, "option-bot", CALL, contracts=1)
+    account = _FakeReadPort()
+    written = repo.last_custody_sequence()
+    try:
+        with caplog.at_level("INFO", logger=option_events.logger.name):
+            await _read(repo, account, *(made[row["kind"]](row) for row in rows))
+        await _read(repo, account, *(made[row["kind"]](row) for row in rows))
+
+        assert option_holds(repo) == {} and bookings(repo) == []
+        assert repo.last_custody_sequence() == written
+        assert decide_capability(repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id="stock-bot").allowed
+        assert _entry_refused_for(repo, "option-bot") not in option_events.OPTION_EVENT_HOLD_REASON_CODES
+        assert any(
+            getattr(record, "action", None) == "option_event_in_a_contract_never_recorded"
+            and getattr(record, "symbol", None) == HAND_TRADED
+            for record in caplog.records
+        )
+    finally:
+        repo.close()
+
+
+async def test_an_event_for_more_than_a_hand_bought_holding_the_books_saw_part_of_holds_nobody(
+    tmp_path: Path,
+) -> None:
+    """The owner bought two by hand. The Clerk saw the order for one of them. Both expired.
+
+    The row is for more than the books know of, in a contract no bot ever
+    traded. That is the owner's own holding and no bot's.
+    """
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+    from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture
+
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"option-bot": "AAPL"})
+    holds_option(repo, "option-bot", CALL, contracts=1)
+    observe_external_order(
+        repo,
+        order=_broker_order_fixture(
+            "by-hand-1", order_id="alpaca-by-hand-1", symbol=HAND_TRADED, status="filled", side="buy", quantity=1,
+            filled_quantity=1, filled_avg_price=1.5,
+        ),
+    )
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(symbol=HAND_TRADED, qty="-2"))
+
+        assert option_holds(repo) == {} and bookings(repo) == []
     finally:
         repo.close()
 
@@ -707,17 +788,18 @@ async def test_a_read_goes_back_to_the_oldest_row_an_open_hold_names(tmp_path: P
 
     repo = _one_bot(tmp_path)
     account = _FakeReadPort()
+    unreadable = _expiry(symbol="MSFT230721C00300000", qty="-0.5", date="2023-07-21")
     try:
-        await _read(repo, account, _expiry(symbol=OTHER_CALL, date="2023-07-21"))
-        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+        await _read(repo, account, unreadable)
+        assert (None, "OPTION_EVENT_UNREADABLE") in option_holds(repo)
         later(repo, 30 * 86_400_000)
         holds_option(repo, "bot-b", "AAPL230915C00150000", contracts=1)
         holds_option(repo, "bot-a", CALL, contracts=-1)
 
-        await _read(repo, account, _expiry(symbol=OTHER_CALL, date="2023-07-21"))
+        await _read(repo, account, unreadable)
 
         assert account.option_events.reads[-1] == et_midnight_ms(date(2023, 7, 21))
-        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+        assert (None, "OPTION_EVENT_UNREADABLE") in option_holds(repo)
     finally:
         repo.close()
 

@@ -44,6 +44,11 @@ one lot for outside orders the books recorded in that contract. A bot whose
 lots and whose attributed position disagree (the owner wrote the position
 off) is offered none.
 
+**An event in a contract the books never recorded holds nobody.** No bot can
+hold such a contract: it is the owner's own trade in the same account. The
+event is logged and the batch goes on. An exercise's shares then show as
+the pass's drift, as a hand trade's always have.
+
 **When the books count an event as having happened.** One millisecond before
 the close of the last session on or before the row's date, and never before
 the newest lot it takes. So an expiry falls inside its own session's P&L,
@@ -1109,6 +1114,19 @@ def _book_events(
             try:
                 allocation = allocation_of(event, multiplier=100 if terms is None else terms.multiplier, lots=lots)
             except OptionEventRefused as refused:
+                if terms is None:
+                    # No bot can hold a contract the books never recorded: this is the owner's own
+                    # trade in the same account. It concerns no bot's books, so nobody is held. The
+                    # shares of an exercise show as the pass's drift, as a hand trade's always have.
+                    logger.info(
+                        "an option event in a contract the books never recorded is no bot's; nothing is booked",
+                        extra={
+                            "action": "option_event_in_a_contract_never_recorded", "account_id": account_id,
+                            "symbol": symbol, "activity_id": event.activity_id, "kind": event.kind.value,
+                            "position_change": event.position_change, "refused": refused.reason.value,
+                        },
+                    )
+                    continue
                 wrote_off = (
                     _bots_that_wrote_it_off(conn, books, event)
                     if refused.reason is OptionEventRefusal.CONTRACT_NOT_HELD
