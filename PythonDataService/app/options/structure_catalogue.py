@@ -5,9 +5,11 @@ and none is read after that: a deployed plan carries its own rules. What a
 name fixes is in ``app.options.named_structures``; what its picked contracts
 must look like is in ``app.options.structure_check``.
 
-Each structure hangs on one leg picked by delta, and places the others a
+Most structures hang on one leg picked by delta and place the others a
 dollar distance from it, so the shape holds wherever the price is. The
-exceptions are the strangle, whose two legs are each picked by delta.
+strangle and the iron condor each pick two legs by delta, a put and a call
+out of the money, and their shape holds while those two deltas land on
+either side of the price.
 """
 
 from __future__ import annotations

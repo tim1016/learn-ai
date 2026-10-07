@@ -80,9 +80,10 @@ A plan's legs are rules, and independent rules can land on a shape nobody meant.
   | Call or put butterfly | lower wing, body, upper wing, strikes rising; wings the same width |
 
 - **The name is part of the plan** (ADR 0012's amendment). A plan with no name is Custom and gets the first check only.
-- **A failure is a typed refusal** that names the rule and the legs. At an entry it skips the entry; in a preview it is the verdict.
+- **A failure is a typed refusal** that names the rule and the legs. At an entry it skips the entry; in a preview it is the verdict. Its reasons are spelled as the money's are (`OPTION_STRUCTURE_…`), so one screen and one stored entry read both.
+- **A share-class ticker is not handled yet.** A contract is on the plan's underlying when its root is the plan's ticker letter for letter, and `BRK.B` is written `BRKB` in a contract symbol. Such a plan's picks are refused until the broker's contract reference says which roots are whose.
 - **Not asked here:** whether the loss is bounded, which the requirement answers (decision 3), and whether Alpaca lists each contract as standard and tradable, which waits for its contract reference.
-- **Where a named structure starts** is a separate list: the legs and rules the builder fills in. Each hangs on one leg picked by delta (0.50 at the money, 0.30 out of it) with the others $5 away, all on the nearest weekly expiry. Those are starting values the owner changes; a deployed plan carries its own.
+- **Where a named structure starts** is a separate list: the legs and rules the builder fills in. Most hang on one leg picked by delta with the others a dollar distance from it; the strangle and the iron condor pick two legs by delta, a put and a call out of the money. Every value is a starting point the owner changes, and a deployed plan carries its own. **The values themselves are provisional.** Only the bull call spread's (delta 0.50, $5 above, the nearest weekly expiry) come from the builder's design (#2915); the 0.30 delta for a leg out of the money and the other eleven starts await the owner's word.
 
 ## Where it lives
 

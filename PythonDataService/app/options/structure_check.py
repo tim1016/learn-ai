@@ -13,7 +13,8 @@ Two questions, asked in order:
     no contract twice, and every sold leg covered by a bought leg of its
     kind that lasts as long.
 ``require_named_shape``  for a plan that carries a structure's name, whether
-    the contracts have that structure's shape.
+    the contracts have that structure's shape. A plan with no name is asked
+    nothing.
 
 Whether the loss is bounded is the money's question
 (``app.options.requirement``), and whether the broker lists each contract is
@@ -37,34 +38,36 @@ _THOUSANDTHS_PER_DOLLAR = 1000
 
 
 class StructureRefusal(StrEnum):
+    """Why picked contracts are not the structure the plan means. Spelled as the money's refusals are."""
+
     # The picked contracts are not the plan's legs: one missing, one extra, or one of another kind.
-    NOT_THE_PLANS_LEGS = "not_the_plans_legs"
+    NOT_THE_PLANS_LEGS = "OPTION_STRUCTURE_NOT_THE_PLANS_LEGS"
     # Two legs came to one contract.
-    SAME_CONTRACT = "same_contract"
+    SAME_CONTRACT = "OPTION_STRUCTURE_SAME_CONTRACT"
     # No bought leg of a sold leg's kind lasts as long as it does.
-    SOLD_LEG_NOT_COVERED = "sold_leg_not_covered"
+    SOLD_LEG_NOT_COVERED = "OPTION_STRUCTURE_SOLD_LEG_NOT_COVERED"
     # The legs are not what the named structure is made of.
-    NOT_MADE_AS_NAMED = "not_made_as_named"
+    NOT_MADE_AS_NAMED = "OPTION_STRUCTURE_NOT_MADE_AS_NAMED"
     # A named structure's legs expire on more than one date.
-    MORE_THAN_ONE_EXPIRY = "more_than_one_expiry"
+    MORE_THAN_ONE_EXPIRY = "OPTION_STRUCTURE_MORE_THAN_ONE_EXPIRY"
     # The strikes are not in the order the name means, or not equal where it means them equal.
-    STRIKES_NOT_AS_NAMED = "strikes_not_as_named"
+    STRIKES_NOT_AS_NAMED = "OPTION_STRUCTURE_STRIKES_NOT_AS_NAMED"
     # A butterfly's two wings are not the same distance from its body.
-    WINGS_UNEVEN = "wings_uneven"
+    WINGS_UNEVEN = "OPTION_STRUCTURE_WINGS_UNEVEN"
     # A structure named for paying premium would not pay any.
-    PREMIUM_NOT_PAID = "premium_not_paid"
+    PREMIUM_NOT_PAID = "OPTION_STRUCTURE_PREMIUM_NOT_PAID"
     # A structure named for receiving premium would not receive any.
-    PREMIUM_NOT_RECEIVED = "premium_not_received"
+    PREMIUM_NOT_RECEIVED = "OPTION_STRUCTURE_PREMIUM_NOT_RECEIVED"
     # A spread would receive as much as its width or more, which no real market pays.
-    CREDIT_NOT_UNDER_WIDTH = "credit_not_under_width"
+    CREDIT_NOT_UNDER_WIDTH = "OPTION_STRUCTURE_CREDIT_NOT_UNDER_WIDTH"
 
 
 class StructureRefused(ValueError):
-    """The picked contracts are not the structure the plan means. Names the rule and the legs."""
+    """A typed refusal from the structure's shape rules. Names the rule and the legs."""
 
-    def __init__(self, refusal: StructureRefusal, leg_ids: tuple[str, ...], message: str) -> None:
-        super().__init__(message)
-        self.refusal = refusal
+    def __init__(self, reason: StructureRefusal, leg_ids: tuple[str, ...], detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
         self.leg_ids = leg_ids
 
 
@@ -75,6 +78,12 @@ def resolved_structure(plan: ActionPlan, picked: Mapping[str, OptionContract]) -
     structure cannot differ from what was declared. Refuses picks that are
     not the plan's legs, two legs on one contract, and a sold leg with no
     bought leg of its kind that lasts as long.
+
+    A contract is on the plan's underlying when its root is the plan's
+    ticker, letter for letter. A ticker with a share class (``BRK.B``) is
+    written without the dot in a contract symbol, so its picks are refused
+    here until the broker's contract reference says which roots are whose
+    (#2913).
     """
     legs = [leg for leg in plan.on_enter if isinstance(leg, OptionEntryLeg)]
     if not legs:
@@ -138,12 +147,18 @@ def _require_sold_legs_covered(structure: ResolvedStructure) -> None:
                 )
 
 
-def require_named_shape(name: NamedStructure, structure: ResolvedStructure, *, net_price: Decimal) -> None:
-    """Refuse a resolved structure that does not have the shape ``name`` means.
+def require_named_shape(plan: ActionPlan, structure: ResolvedStructure, *, net_price: Decimal) -> None:
+    """Refuse a resolved structure that does not have the shape ``plan``'s name means.
 
-    ``net_price`` is the structure's price per share as it would be sent,
-    positive when paid: some names mean premium paid, others received.
+    A plan with no name is Custom: it has no shape to hold, and nothing is
+    asked. The name is read from the plan here so that no caller decides
+    whether the check applies. ``net_price`` is the structure's price per
+    share as it would be sent, positive when paid: some names mean premium
+    paid, others received.
     """
+    name = plan.structure
+    if name is None:
+        return
     require_everyday(net_price, what="a net price")
     if not is_made_as_named(name, (LegKind(leg.position, leg.contract.right, leg.ratio) for leg in structure.legs)):
         raise StructureRefused(
@@ -225,7 +240,9 @@ def _require_credit_under_width(
 ) -> None:
     _require_received(name, structure, net_price)
     width_thousandths = higher.contract.strike_thousandths - lower.contract.strike_thousandths
-    if -net_price * _THOUSANDTHS_PER_DOLLAR >= width_thousandths:
+    # In whole numbers, so the comparison is exact whatever precision the caller's decimal context has.
+    paid, per = net_price.as_integer_ratio()
+    if -paid * _THOUSANDTHS_PER_DOLLAR >= width_thousandths * per:
         raise StructureRefused(
             StructureRefusal.CREDIT_NOT_UNDER_WIDTH,
             (lower.leg_id, higher.leg_id),

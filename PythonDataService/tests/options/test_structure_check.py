@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
 
 from app.options.contract import OptionContract
-from app.options.named_structures import NamedStructure
+from app.options.named_structures import LegKind, NamedStructure, is_made_as_named
 from app.options.structure_catalogue import starting_plan
 from app.options.structure_check import StructureRefusal, StructureRefused, require_named_shape, resolved_structure
 from app.schemas.action_plan import ActionPlan, DeltaStrike
@@ -54,8 +54,9 @@ _AS_NAMED: dict[NamedStructure, tuple[dict[str, str], str]] = {
 def _check(name: NamedStructure, *, net_price: str | None = None, **changed_picks: str) -> None:
     """Resolve the named structure's starting plan to its as-named contracts, with some changed, and check it."""
     picks, as_named_price = _AS_NAMED[name]
-    structure = resolved_structure(starting_plan(name, "SPY"), _picked(**(picks | changed_picks)))
-    require_named_shape(name, structure, net_price=Decimal(net_price or as_named_price))
+    plan = starting_plan(name, "SPY")
+    structure = resolved_structure(plan, _picked(**(picks | changed_picks)))
+    require_named_shape(plan, structure, net_price=Decimal(net_price or as_named_price))
 
 
 @pytest.mark.parametrize("name", list(NamedStructure))
@@ -122,6 +123,13 @@ def test_contracts_with_a_named_structures_shape_pass_as_it(name: NamedStructure
             StructureRefusal.PREMIUM_NOT_RECEIVED,
             ("short_put", "long_put"),
             id="a bull put spread that would cost money to open",
+        ),
+        pytest.param(
+            NamedStructure.BULL_PUT_SPREAD,
+            {"net_price": "0"},
+            StructureRefusal.PREMIUM_NOT_RECEIVED,
+            ("short_put", "long_put"),
+            id="a bull put spread that would receive nothing",
         ),
         pytest.param(
             NamedStructure.BULL_PUT_SPREAD,
@@ -201,6 +209,20 @@ def test_contracts_with_a_named_structures_shape_pass_as_it(name: NamedStructure
             id="an iron butterfly whose bought put is above the middle",
         ),
         pytest.param(
+            NamedStructure.IRON_BUTTERFLY,
+            {"long_call": "C580"},
+            StructureRefusal.STRIKES_NOT_AS_NAMED,
+            ("short_call", "long_call"),
+            id="an iron butterfly whose bought call is below the middle",
+        ),
+        pytest.param(
+            NamedStructure.IRON_BUTTERFLY,
+            {"net_price": "0.50"},
+            StructureRefusal.PREMIUM_NOT_RECEIVED,
+            ("long_put", "short_put", "short_call", "long_call"),
+            id="an iron butterfly that would cost money to open",
+        ),
+        pytest.param(
             NamedStructure.CALL_BUTTERFLY,
             {"upper_wing": "C595"},
             StructureRefusal.WINGS_UNEVEN,
@@ -222,7 +244,7 @@ def test_contracts_without_the_named_shape_are_refused_by_rule_and_leg(
     with pytest.raises(StructureRefused) as refused:
         _check(name, **changes)
 
-    assert refused.value.refusal is refusal
+    assert refused.value.reason is refusal
     assert sorted(refused.value.leg_ids) == sorted(names_legs)
     assert name.in_words in str(refused.value) or refusal is StructureRefusal.SAME_CONTRACT
 
@@ -230,12 +252,13 @@ def test_contracts_without_the_named_shape_are_refused_by_rule_and_leg(
 def test_a_named_structure_has_one_expiry() -> None:
     """A bought call that outlives the sold one covers it, so the legs are a structure; they are not a bull call spread."""
     picks = _picked(short_call="C590") | {"long_call": _contract("C585", expiry=_A_MONTH_LATER)}
-    structure = resolved_structure(starting_plan(NamedStructure.BULL_CALL_SPREAD, "SPY"), picks)
+    plan = starting_plan(NamedStructure.BULL_CALL_SPREAD, "SPY")
+    structure = resolved_structure(plan, picks)
 
     with pytest.raises(StructureRefused) as refused:
-        require_named_shape(NamedStructure.BULL_CALL_SPREAD, structure, net_price=Decimal("4.00"))
+        require_named_shape(plan, structure, net_price=Decimal("4.00"))
 
-    assert refused.value.refusal is StructureRefusal.MORE_THAN_ONE_EXPIRY
+    assert refused.value.reason is StructureRefusal.MORE_THAN_ONE_EXPIRY
 
 
 def test_a_covering_leg_that_expires_first_does_not_cover() -> None:
@@ -244,13 +267,13 @@ def test_a_covering_leg_that_expires_first_does_not_cover() -> None:
     with pytest.raises(StructureRefused) as refused:
         resolved_structure(starting_plan(NamedStructure.BULL_CALL_SPREAD, "SPY"), picks)
 
-    assert refused.value.refusal is StructureRefusal.SOLD_LEG_NOT_COVERED
+    assert refused.value.reason is StructureRefusal.SOLD_LEG_NOT_COVERED
     assert refused.value.leg_ids == ("short_call",)
 
 
-def test_cover_is_counted_contract_for_contract_among_those_that_last() -> None:
-    """Two calls sold for January; of the two bought, only one lasts until then."""
-    plan = ActionPlan.model_validate(
+def _custom_calls(**legs: tuple[str, int]) -> ActionPlan:
+    """A plan with no name, of call legs: each leg id with its side and ratio."""
+    return ActionPlan.model_validate(
         {
             "on_enter": [
                 {
@@ -260,26 +283,63 @@ def test_cover_is_counted_contract_for_contract_among_those_that_last() -> None:
                     "qty_ratio": ratio,
                     "right": "call",
                     "strike": {"selector": "atm_offset", "offset": offset},
-                    "expiry": {"selector": "min_dte", "days": days},
+                    "expiry": {"selector": "min_dte", "days": 30},
                 }
-                for leg_id, position, ratio, offset, days in (
-                    ("sold", "short", 2, 5, 30),
-                    ("lasting", "long", 1, 0, 30),
-                    ("short_lived", "long", 1, 10, 7),
-                )
+                for offset, (leg_id, (position, ratio)) in enumerate(legs.items())
             ],
-            "on_exit": [{"kind": "close_leg", "entry_leg_id": leg_id} for leg_id in ("sold", "lasting", "short_lived")],
+            "on_exit": [{"kind": "close_leg", "entry_leg_id": leg_id} for leg_id in legs],
         }
     )
+
+
+def test_cover_is_counted_contract_for_contract_among_those_that_last() -> None:
+    """Two calls sold for January; of the two bought, only one lasts until then."""
+    plan = _custom_calls(sold=("short", 2), lasting=("long", 1), short_lived=("long", 1))
     january = {"sold": _contract("C590", expiry=_A_MONTH_LATER), "lasting": _contract("C585", expiry=_A_MONTH_LATER)}
 
     with pytest.raises(StructureRefused) as refused:
         resolved_structure(plan, january | {"short_lived": _contract("C595")})
     covered = resolved_structure(plan, january | {"short_lived": _contract("C595", expiry=_A_MONTH_LATER)})
 
-    assert refused.value.refusal is StructureRefusal.SOLD_LEG_NOT_COVERED
+    assert refused.value.reason is StructureRefusal.SOLD_LEG_NOT_COVERED
     assert refused.value.leg_ids == ("sold",)
     assert len(covered.legs) == 3
+
+
+def test_two_sold_legs_cannot_both_lean_on_the_one_bought_leg_that_lasts() -> None:
+    """Two January calls sold in two legs. One bought January call covers one of them, not each in turn."""
+    plan = _custom_calls(sold_low=("short", 1), sold_high=("short", 1), lasting=("long", 1), short_lived=("long", 1))
+    picks = {
+        "sold_low": _contract("C590", expiry=_A_MONTH_LATER),
+        "sold_high": _contract("C595", expiry=_A_MONTH_LATER),
+        "lasting": _contract("C585", expiry=_A_MONTH_LATER),
+        "short_lived": _contract("C580"),
+    }
+
+    with pytest.raises(StructureRefused) as refused:
+        resolved_structure(plan, picks)
+
+    assert refused.value.reason is StructureRefusal.SOLD_LEG_NOT_COVERED
+
+
+def test_each_sold_leg_is_covered_by_a_bought_leg_that_lasts_as_long_as_it_does() -> None:
+    """A December call and a January call sold; one bought for each. The January one covers either,
+    so it is spent on the January sale and the December one on the other."""
+    plan = _custom_calls(sold_near=("short", 1), sold_far=("short", 1), bought_near=("long", 1), bought_far=("long", 1))
+    picks = {
+        "sold_near": _contract("C590"),
+        "sold_far": _contract("C590", expiry=_A_MONTH_LATER),
+        "bought_near": _contract("C585"),
+        "bought_far": _contract("C585", expiry=_A_MONTH_LATER),
+    }
+
+    assert len(resolved_structure(plan, picks).legs) == 4
+
+
+def test_one_bought_leg_of_two_contracts_covers_two_sold_legs() -> None:
+    plan = _custom_calls(sold_low=("short", 1), sold_high=("short", 1), bought=("long", 2))
+
+    assert len(resolved_structure(plan, _picked(sold_low="C590", sold_high="C595", bought="C585")).legs) == 3
 
 
 @pytest.mark.parametrize(
@@ -301,24 +361,64 @@ def test_picks_that_are_not_the_plans_legs_are_refused(picks: dict[str, OptionCo
     with pytest.raises(StructureRefused) as refused:
         resolved_structure(starting_plan(NamedStructure.BULL_CALL_SPREAD, "spy"), picks)
 
-    assert refused.value.refusal is StructureRefusal.NOT_THE_PLANS_LEGS
+    assert refused.value.reason is StructureRefusal.NOT_THE_PLANS_LEGS
     assert refused.value.leg_ids == names_legs
 
 
-def test_a_structure_is_not_checked_against_a_name_it_is_not_made_as() -> None:
+def test_a_structure_is_not_checked_against_the_name_of_another_plan() -> None:
     structure = resolved_structure(starting_plan(NamedStructure.LONG_CALL, "SPY"), _picked(long_call="C585"))
 
     with pytest.raises(StructureRefused) as refused:
-        require_named_shape(NamedStructure.BULL_CALL_SPREAD, structure, net_price=Decimal("3.10"))
+        require_named_shape(starting_plan(NamedStructure.BULL_CALL_SPREAD, "SPY"), structure, net_price=Decimal("3.10"))
 
-    assert refused.value.refusal is StructureRefusal.NOT_MADE_AS_NAMED
+    assert refused.value.reason is StructureRefusal.NOT_MADE_AS_NAMED
+
+
+@pytest.mark.parametrize(
+    ("name", "legs"),
+    [
+        pytest.param(
+            NamedStructure.LONG_STRADDLE,
+            (LegKind("long", "call", 1), LegKind("long", "call", 1), LegKind("long", "put", 1)),
+            id="a straddle with a second call",
+        ),
+        pytest.param(
+            NamedStructure.CALL_BUTTERFLY,
+            (LegKind("long", "call", 1), LegKind("short", "call", 2)),
+            id="a butterfly with one wing",
+        ),
+        pytest.param(
+            NamedStructure.CALL_BUTTERFLY,
+            (LegKind("long", "call", 1), LegKind("short", "call", 1), LegKind("long", "call", 1)),
+            id="a butterfly whose body is one contract",
+        ),
+    ],
+)
+def test_a_named_structure_is_its_legs_counted_not_only_their_kinds(name: NamedStructure, legs: tuple[LegKind, ...]) -> None:
+    assert not is_made_as_named(name, legs)
+
+
+def test_a_plan_with_no_name_is_asked_nothing_about_its_shape() -> None:
+    """Custom: a call bought above the one sold is covered, and no name says which way round it goes."""
+    plan = _custom_calls(sold=("short", 1), bought=("long", 1))
+    structure = resolved_structure(plan, _picked(sold="C585", bought="C590"))
+
+    require_named_shape(plan, structure, net_price=Decimal("-1.50"))
 
 
 def test_a_shape_is_not_judged_on_a_price_it_cannot_be_exact_about() -> None:
-    structure = resolved_structure(starting_plan(NamedStructure.LONG_CALL, "SPY"), _picked(long_call="C585"))
+    plan = starting_plan(NamedStructure.LONG_CALL, "SPY")
+    structure = resolved_structure(plan, _picked(long_call="C585"))
 
     with pytest.raises(ValueError, match="exact decimal"):
-        require_named_shape(NamedStructure.LONG_CALL, structure, net_price=3.10)  # type: ignore[arg-type]
+        require_named_shape(plan, structure, net_price=3.10)  # type: ignore[arg-type]
+
+
+def test_a_credit_a_cent_under_the_width_passes_whatever_precision_the_caller_counts_in() -> None:
+    """$4.99 for a five-dollar spread is under its width. Rounded to two digits it would read $5.00."""
+    with localcontext() as two_digits:
+        two_digits.prec = 2
+        _check(NamedStructure.BULL_PUT_SPREAD, net_price="-4.99")
 
 
 # Where a rule by delta lands in these tests: at the money for 0.50, ten dollars out of it for 0.30.
@@ -354,4 +454,4 @@ def test_every_starting_plan_comes_to_the_structure_it_is_named_for(name: NamedS
     structure = resolved_structure(plan, picked)
 
     assert plan.structure is name
-    require_named_shape(name, structure, net_price=Decimal("-1.00" if name in _RECEIVES_PREMIUM else "1.00"))
+    require_named_shape(plan, structure, net_price=Decimal("-1.00" if name in _RECEIVES_PREMIUM else "1.00"))
