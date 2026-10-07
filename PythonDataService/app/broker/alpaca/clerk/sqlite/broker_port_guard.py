@@ -338,16 +338,6 @@ class GuardedBrokerTradePort:
             return settle(after_ms=after_ms)
         return settle(after_ms=after_ms, at_the_owners_word=at_the_owners_word)
 
-    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
-        """Hand a simulation the newest quotes held for its contracts. A vendor's port keeps none.
-
-        It reaches no broker: the simulation writes them beside its own
-        orders, so it is not fenced.
-        """
-        keep = getattr(self._inner, "keep_option_quotes", None)
-        if callable(keep):
-            keep(quotes)
-
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id. Not fenced: a ledger read."""
         read = getattr(self._inner, "synthesized_option_fills", None)

@@ -194,6 +194,24 @@ async def test_books_holding_more_contracts_than_the_entry_asked_for_are_unknown
     assert settlement_for(outcome) is EntrySettlement.ENTERED
 
 
+@pytest.mark.parametrize("ended_as", ["canceled", "expired"])
+async def test_books_holding_more_than_was_asked_on_an_order_that_did_not_end_filled_are_unknown_never_part_filled(
+    paper: PaperOptions, ended_as: str  # noqa: F811
+) -> None:
+    """An ended order with something filled reads part filled, which is proven. Two of one is no such outcome."""
+    order_ref = await paper.resting()
+    paper.venue.option_order_ends(order_ref, ended_as)
+
+    # Two executions of one contract each arrive on an order that asked for one and did not end filled.
+    await paper.stream_execution(order_ref, contracts=1, price="1.94", execution_id="x-1")
+    await paper.stream_execution(order_ref, contracts=1, price="1.94", execution_id="x-2")
+
+    outcome = paper.outcome(order_ref)
+    assert paper.order_state(order_ref) == ended_as
+    assert (outcome.units_asked, outcome.units_filled) == (1, 2)
+    assert outcome.standing is EntryStanding.OUTCOME_UNKNOWN and not outcome.proven
+
+
 @pytest.mark.parametrize("ended_as", ["expired", "rejected", "canceled"])
 async def test_an_order_alpaca_ended_by_itself_is_unfilled_or_part_filled_by_what_it_had_filled(
     paper: PaperOptions, ended_as: str  # noqa: F811

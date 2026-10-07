@@ -470,6 +470,22 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.DEPLOY,
             account=True,
         ),
+        # The Deploy form's two option reads (#2913). The preview is a POST that reads only: the
+        # structure being built is its body. It asks the broker nothing and changes nothing.
+        _op(
+            "bot_option_structures_read",
+            "GET",
+            "/accounts/{account_id}/bots/option-structures",
+            capability=Capability.DEPLOY,
+            account=True,
+        ),
+        _op(
+            "bot_option_structure_preview",
+            "POST",
+            "/accounts/{account_id}/bots/option-structure-preview",
+            capability=Capability.DEPLOY,
+            account=True,
+        ),
         _op(
             "bot_panel_read",
             "GET",

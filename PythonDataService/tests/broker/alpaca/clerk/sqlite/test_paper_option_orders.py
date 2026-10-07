@@ -25,7 +25,6 @@ from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.entry_outcome import (
     ENTRY_OUTCOME_LIMIT_PAST,
     ENTRY_OUTCOME_LIMIT_TOO_FAR,
-    MAX_ENTRY_OUTCOME_WAIT_MS,
     EntryOutcomeWaitRefused,
     EntrySettlement,
     EntryStanding,
@@ -292,11 +291,21 @@ async def test_a_lookup_that_fails_leaves_the_outcome_unknown_and_the_whole_comm
     assert len(paper.venue.option_submit_calls) == 1
 
 
-_ANOTHER_ORDER = [
-    {"symbol": "SPY260918C00590000"}, {"qty": "5"}, {"side": "sell"},
-    # The same contracts at another limit, or at no limit at all, are another order too.
-    {"limit_price": "1.95"}, {"type": "market", "order_type": "market", "limit_price": None},
+_ANOTHER_ORDER = [{"symbol": "SPY260918C00590000"}, {"qty": "5"}, {"side": "sell"}]
+# Our own order, stated with another limit or as another kind of order: (what the answer says, kind, limit).
+_OTHER_TERMS = [
+    pytest.param({"limit_price": "1.95"}, "limit", "1.95", id="another limit"),
+    pytest.param({"type": "market", "order_type": "market", "limit_price": None}, "market", None, id="another kind"),
 ]
+
+
+def _other_terms_logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str | None, str, str | None]]:
+    """Each time an answer was taken though it stated other terms: (kind sent, limit sent, kind stated, limit stated)."""
+    return [
+        (record.asked_order_type, record.asked_limit_price, record.answered_order_type, record.answered_limit_price)
+        for record in caplog.records
+        if getattr(record, "action", None) == "option_order_answer_states_other_terms"
+    ]
 
 
 @pytest.mark.parametrize("changed", _ANOTHER_ORDER)
@@ -325,14 +334,48 @@ async def test_the_sends_own_answer_about_another_order_states_no_outcome(
     assert paper.set_aside_cents() == ONE_CONTRACT_SET_ASIDE
 
 
-async def test_an_answer_that_writes_the_same_limit_another_way_is_the_order_asked_for(paper: PaperOptions) -> None:  # noqa: F811
+@pytest.mark.parametrize(("stated", "stated_kind", "stated_limit"), _OTHER_TERMS)
+async def test_the_sends_own_answer_that_states_another_limit_or_kind_is_taken_and_both_values_are_logged(
+    paper: PaperOptions, stated: dict[str, str | None], stated_kind: str, stated_limit: str | None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """It is our order, by the id we sent it under, and what it filled is real."""
+    real_send = paper.venue.submit_option_order
+
+    async def send_answered_with_other_terms(order: SingleOptionOrderRequest, *, client_order_id: str) -> object:
+        await real_send(order, client_order_id=client_order_id)
+        paper.venue.option_orders[client_order_id].update(
+            stated, filled_qty="1", filled_avg_price="1.94", status="filled"
+        )
+        return alpaca_adapter.from_alpaca_option_order(paper.venue.option_orders[client_order_id])
+
+    monkeypatch.setattr(paper.venue, "submit_option_order", send_answered_with_other_terms)
+
+    with caplog.at_level("WARNING"):
+        sent = await paper.enter()
+
+    # The answer is taken: the books show the order where Alpaca says it stands.
+    [order_ref] = sent.child_order_refs
+    assert paper.order_state(order_ref) == "filled"
+    assert ("limit", "1.94", stated_kind, stated_limit) in _other_terms_logged(caplog)
+    # A send's answer carries no execution. The pass's lookup of the order counts what it filled.
+    await paper.pass_()
+    assert paper.held() == {SYMBOL: 1.0} and paper.outcome(order_ref).standing is EntryStanding.FILLED
+
+
+async def test_an_answer_that_writes_the_same_limit_another_way_is_the_order_asked_for(
+    paper: PaperOptions, caplog: pytest.LogCaptureFixture  # noqa: F811
+) -> None:
     order_ref = await paper.resting()
     paper.venue.option_orders[order_ref].update(limit_price="1.940")
     paper.wait(WAIT_MS)
 
-    await paper.round()
+    with caplog.at_level("WARNING"):
+        await paper.round()
 
     assert paper.outcome(order_ref).standing is EntryStanding.UNFILLED
+    # 1.940 is 1.94: nothing is said to differ.
+    assert _other_terms_logged(caplog) == []
 
 
 @pytest.mark.parametrize("changed", _ANOTHER_ORDER)
@@ -348,6 +391,50 @@ async def test_an_answer_about_another_order_states_no_outcome(paper: PaperOptio
     assert paper.held() == {} and paper.order_state(order_ref) == "new"
     assert paper.outcome(order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
     assert paper.set_aside_cents() == ONE_CONTRACT_SET_ASIDE
+
+
+@pytest.mark.parametrize(("stated", "stated_kind", "stated_limit"), _OTHER_TERMS)
+async def test_a_lookup_that_states_another_limit_or_kind_for_our_order_is_taken_and_both_values_are_logged(
+    paper: PaperOptions, stated: dict[str, str | None], stated_kind: str, stated_limit: str | None,  # noqa: F811
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    order_ref = await paper.resting()
+    paper.venue.option_orders[order_ref].update(stated, filled_qty="1", filled_avg_price="1.94", status="filled")
+    paper.wait(WAIT_MS)
+
+    with caplog.at_level("WARNING"):
+        await paper.round()
+
+    # What the order filled is real: the bot holds it, and the entry has ended.
+    assert paper.held() == {SYMBOL: 1.0} and paper.order_state(order_ref) == "filled"
+    assert paper.outcome(order_ref).standing is EntryStanding.FILLED
+    assert ("limit", "1.94", stated_kind, stated_limit) in _other_terms_logged(caplog)
+
+
+async def test_a_filled_entry_whose_lookup_states_another_limit_is_still_closed_by_the_bots_exit(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Refusing that answer left the EXIT unknown for good: no close was ever sent, and no operator action settled it."""
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    # From here on Alpaca's lookup of that order states a limit of 1.95 where 1.94 was sent.
+    paper.venue.option_orders[order_ref].update(limit_price="1.95")
+
+    sold = await paper.exit()
+
+    assert sold.state not in (EffectOperationState.REJECTED, EffectOperationState.UNCERTAIN), sold.explanation
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != order_ref)
+    assert paper.venue.option_submit_calls == [order_ref, closing_ref]
+    assert paper.venue.submitted_option_orders[-1] == SingleOptionOrderRequest(
+        contract=CALL, side=OrderSide.SELL, intent=OptionPositionIntent.CLOSE, quantity=1, order_type=OrderType.MARKET,
+    )
+
+    await paper.stream_fill(closing_ref, contracts=1, filled_in_all=1, price="1.90", execution_id="x-2")
+    await paper.pass_()
+
+    assert paper.held() == {}
+    assert paper.repo.active_exit_for_strategy("a") is None
+    assert [u["reason_code"] for u in paper.repo.active_uncertainties()] == []
 
 
 def test_one_option_orders_answer_becomes_the_order_evidence_the_books_take() -> None:
@@ -369,12 +456,17 @@ def test_one_option_orders_answer_becomes_the_order_evidence_the_books_take() ->
     assert evidence.events == []
     asked = AskedOptionOrder("AAPL250620C00100000", "buy", 2, "limit", Decimal("10.00"))
     assert evidence_of_the_order_asked(answer, asked=asked) == evidence
+    # Another contract, side or count is another order. Another limit or kind is ours, stated differently.
     for another in (
-        replace(asked, contracts=3), replace(asked, limit_price=Decimal("10.01")),
-        replace(asked, order_type="market"), replace(asked, order_type="market", limit_price=None),
+        replace(asked, contracts=3), replace(asked, side="sell"), replace(asked, symbol="AAPL250620C00105000"),
     ):
         with pytest.raises(BrokerEvidenceUnavailable):
             evidence_of_the_order_asked(answer, asked=another)
+    for same_order in (
+        replace(asked, limit_price=Decimal("10.01")), replace(asked, order_type="market"),
+        replace(asked, order_type="market", limit_price=None),
+    ):
+        assert evidence_of_the_order_asked(answer, asked=same_order) == evidence
 
 
 def test_a_multi_leg_answer_is_not_yet_evidence_of_anything() -> None:
@@ -489,6 +581,30 @@ async def test_a_closing_order_alpaca_shows_only_by_its_own_id_is_still_read_as_
 
     assert paper.order_state(closing_ref) == "filled"
     assert paper.held() == {} and paper.venue.lookup_calls == []
+
+
+@pytest.mark.parametrize(
+    "said", [{"symbol": "SPY260918C00590000"}, {"side": "buy"}, {"qty": "5", "filled_qty": "5"}],
+    ids=["another contract", "the other side", "another count"],
+)
+async def test_a_closing_order_alpaca_shows_only_by_its_own_id_is_held_to_the_order_asked(
+    paper: PaperOptions, said: dict[str, str]  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != order_ref)
+    # Alpaca has the close only by its own id, filled, and what it says there is not the order sent.
+    paper.venue.option_order_fills(closing_ref, contracts=1, average_price="1.90")
+    shown = paper.venue.option_orders.pop(closing_ref)
+    shown.update(said)
+    paper.venue.option_orders["shown-by-its-own-id-only"] = shown
+
+    await paper.pass_()
+
+    # Nothing of it is counted: the close is not called filled, and the bot still holds its contract.
+    assert paper.order_state(closing_ref) == "new" and paper.repo.fills_for_order(closing_ref) == []
+    assert paper.held() == {SYMBOL: 1.0}
 
 
 async def test_an_exit_while_the_entry_still_rests_cancels_it_first_and_closes_only_what_filled(paper: PaperOptions) -> None:  # noqa: F811
@@ -783,14 +899,19 @@ async def test_the_wait_holds_the_clerks_intake_lock_only_while_it_reads_never_w
 # ── the limit a wait is asked with ───────────────────────────────────────
 
 
-async def test_a_wait_asked_to_run_longer_than_a_day_is_refused_by_name(paper: PaperOptions) -> None:  # noqa: F811
+# The furthest limit a wait is taken with, written out: a daily bar's next close is three days on over a
+# weekend and more over a holiday.
+A_WEEK_MS = 7 * 24 * 60 * 60 * 1000
+
+
+async def test_a_wait_asked_to_run_longer_than_a_week_is_refused_by_name_for_an_unproven_entry(paper: PaperOptions) -> None:  # noqa: F811
     await paper.resting(decision="d-1")
 
     with pytest.raises(EntryOutcomeWaitRefused) as refused:
         # Under a limit of its own: a wait that was taken after all would never end on this test's clock.
         await asyncio.wait_for(
             paper.clerk.await_entry_outcome(
-                strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + MAX_ENTRY_OUTCOME_WAIT_MS + 1
+                strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + A_WEEK_MS + 1
             ),
             timeout=2,
         )
@@ -799,13 +920,32 @@ async def test_a_wait_asked_to_run_longer_than_a_day_is_refused_by_name(paper: P
     assert "ENTRY_SETTLED" not in [kind for kind, _summary, _facts in paper.log()]
 
 
+async def test_a_wait_asked_to_run_exactly_a_week_is_taken(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting(decision="d-1")
+
+    async def the_order_fills_during_the_first_pause(_seconds: float) -> None:
+        await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+
+    paper.clerk._outcome_pause = the_order_fills_during_the_first_pause
+
+    settled = await asyncio.wait_for(
+        paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + A_WEEK_MS),
+        timeout=2,
+    )
+
+    assert (settled.settlement, settled.standing, settled.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
+
+
+@pytest.mark.parametrize("behind_the_clock_ms", [1, 0], ids=["a millisecond past", "the clock's own moment"])
 async def test_a_wait_asked_with_a_limit_already_past_is_refused_for_an_unproven_entry_and_never_answered_entered(
-    paper: PaperOptions,  # noqa: F811
+    paper: PaperOptions, behind_the_clock_ms: int  # noqa: F811
 ) -> None:
     order_ref = await paper.resting(decision="d-1")
 
     with pytest.raises(EntryOutcomeWaitRefused) as refused:
-        await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() - 1)
+        await paper.clerk.await_entry_outcome(
+            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() - behind_the_clock_ms
+        )
 
     assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_PAST
     assert paper.outcome(order_ref).standing is EntryStanding.WORKING
@@ -822,6 +962,45 @@ async def test_a_limit_already_past_still_answers_an_entry_that_is_proven_or_was
 
     assert (proven.settlement, proven.standing, proven.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
     assert again == proven
+
+
+async def test_a_limit_too_far_ahead_still_answers_an_entry_that_is_already_proven(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting(decision="d-1")
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+
+    proven = await asyncio.wait_for(
+        paper.clerk.await_entry_outcome(
+            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + A_WEEK_MS + 1
+        ),
+        timeout=2,
+    )
+
+    assert (proven.settlement, proven.standing, proven.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
+
+
+@pytest.mark.parametrize(
+    "limit_from_the_clock_ms", [A_WEEK_MS + 1, 10 * A_WEEK_MS, 0, -1, -60_000],
+    ids=["a week and a millisecond ahead", "ten weeks ahead", "the clock's own moment", "a millisecond past", "a minute past"],
+)
+async def test_an_entry_settled_before_is_answered_from_its_record_whatever_the_limit_says(
+    paper: PaperOptions, limit_from_the_clock_ms: int  # noqa: F811
+) -> None:
+    order_ref = await paper.resting(decision="d-1")
+    paper.clerk._outcome_pause = patiently(paper)
+    settled = await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + 5_000)
+    # Settled as entered while its order still works: recorded, and not proven.
+    assert (settled.standing, settled.recorded) == (EntryStanding.WORKING, True)
+    assert paper.outcome(order_ref).standing is EntryStanding.WORKING
+
+    again = await asyncio.wait_for(
+        paper.clerk.await_entry_outcome(
+            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + limit_from_the_clock_ms
+        ),
+        timeout=2,
+    )
+
+    assert again == settled
+    assert len([kind for kind, _summary, _facts in paper.log() if kind == "ENTRY_SETTLED"]) == 1
 
 
 # ── the owner's order terms, where the Clerk takes them ──────────────────
@@ -902,6 +1081,17 @@ async def test_any_other_order_term_longer_than_a_session_is_refused_by_name(pap
 
     _refused(refused, "OPTION_ENTRY_EVIDENCE_INCOMPLETE")
     assert paper.venue.option_submit_calls == []
+
+
+@pytest.mark.parametrize(
+    "term", ["cancel_allowance_ms", "entry_margin_ms", "expiry_close_lead_ms", "sold_leg_close_lead_ms"]
+)
+async def test_an_order_term_of_exactly_a_session_is_taken(paper: PaperOptions, term: str) -> None:  # noqa: F811
+    # Ten days before the contract expires, so no cutoff is counted back from these terms today.
+    sent = await paper.enter(evidence=paper.evidence(terms=CloseTerms(**{term: MAX_ORDER_TERM_MS})))
+
+    assert sent.state is EffectOperationState.SUBMITTED, sent.explanation
+    assert len(paper.venue.option_submit_calls) == 1
 
 
 async def test_a_proven_outcome_is_recorded_even_after_the_run_stopped(paper: PaperOptions) -> None:  # noqa: F811

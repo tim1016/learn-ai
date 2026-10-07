@@ -662,16 +662,6 @@ class SyntheticBroker(OptionOrdersNotTaken):
         """How each option order this world answered was priced, by client order id."""
         return {} if self._ledger is None else self._ledger.option_fills()
 
-    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
-        """Keep the newest quote the caller holds for each contract, by OCC symbol.
-
-        A later close and the account's mark of an open contract are priced
-        from what is kept here.
-        """
-        if self._kept_quotes is None:
-            return
-        self._kept_quotes.keep_all(quotes, kept_at_ms=self._clock())
-
     def bind_option_entry_quote(
         self, client_order_id: str, *, symbol: str, quote: HeldQuote, multiplier: int
     ) -> None:

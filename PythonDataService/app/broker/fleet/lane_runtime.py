@@ -32,6 +32,7 @@ from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUT
 from app.broker.fleet.delivery import lane_forward_is_authorized
 from app.broker.fleet.errors import flat_refusal_body
 from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
+from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
 from app.config import fleet_settings
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
@@ -44,6 +45,8 @@ _SAFE_METHODS = frozenset({"GET", "HEAD"})
 _COMPATIBILITY_ROUTE_FAMILIES = RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
 _MAX_FLUSH_ATTEMPTS = 3
+# The fleet's own internal reads that are spelled POST and change nothing.
+_INTERNAL_POST_READS = frozenset({INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH})
 logger = logging.getLogger(__name__)
 
 
@@ -180,6 +183,8 @@ def _requires_command_capacity(method: str, path: str) -> bool:
     ``combined``-role process mounts both the coordinator's internal surface
     and the clerk lane runtime, so it must keep drawing from the read pool
     like the GET it behaves as, not the POST it happens to be spelled as.
+    The read of the rate and the dividends an option is priced with
+    (``INTERNAL_OPTION_MODEL_INPUTS_PATH``, #2913) is the same kind of POST.
 
     A handful of provider-declared operations are also POST reads (a plan,
     a preview, a check) that this coarse split conservatively routes to the
@@ -190,7 +195,7 @@ def _requires_command_capacity(method: str, path: str) -> bool:
     """
     if method in _SAFE_METHODS:
         return False
-    return path != INTERNAL_HISTORY_BATCH_PATH
+    return path not in _INTERNAL_POST_READS
 
 
 def compatibility_route_family(method: str, path: str) -> str | None:

@@ -1,4 +1,4 @@
-"""Golden parity for the American option pricer against QuantLib (AM-001, AM-002, AM-003)."""
+"""Golden parity for the American option pricer against QuantLib (AM-001 to AM-005)."""
 
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ from golden_support.registry import default as registry  # noqa: E402
 
 from app.options.american import (  # noqa: E402
     DEFAULT_TREE_STEPS,
+    AmericanDailyDecay,
     AmericanIvStatus,
     AmericanValue,
     CashDividend,
+    american_daily_decay,
     american_implied_volatility,
     american_value,
 )
@@ -192,3 +194,122 @@ def test_a_price_the_second_engine_computed_with_dividends_is_solved_back_to_its
         equal_nan=False,
         err_msg="delta",
     )
+
+
+def _assert_decay_close(
+    decays: list[AmericanDailyDecay | None], expected: list[dict[str, Any]], *, atol: float, group: str = ""
+) -> None:
+    """The decay, and the two prices it was worked from, against the reference engine's."""
+    assert all(decay is not None for decay in decays)
+    # Every contract here has over a day and a minute left, so both prices are the model's.
+    assert not any(decay.later_price_is_exercise_value for decay in decays)
+    for field in ("decay", "price_now", "price_a_day_later"):
+        np.testing.assert_allclose(
+            [getattr(decay, field) for decay in decays],
+            [case[field] for case in expected],
+            atol=atol,
+            rtol=0,
+            equal_nan=False,
+            err_msg=f"{group} {field}".strip(),
+        )
+
+
+def test_a_days_decay_without_dividends_matches_the_difference_of_two_quantlib_tree_prices() -> None:
+    """AM-004: QuantLib's price of the same contract 24 hours on, less its price now.
+
+    Each price is the same tree as QuantLib's, step for step, so on these
+    cases the difference holds the strict default: the largest gap measured
+    is 4.7e-10, at a day and fifteen minutes to expiry, and 8.9e-11 with a
+    day and two hours or more. That is these cases' figure, not a bound:
+    another contract a day and fifteen minutes out was measured at 1.6e-9.
+    The cases whose later price is a day or less from expiry are the
+    sensitive ones, for the reason AM-001's test gives.
+    """
+    tolerance = registry.get("AM-004").tolerance
+    assert (tolerance.atol, tolerance.rtol) == (1e-9, 0)
+    cases = _cases("AM-004")
+    decays = [american_daily_decay(**_without_dividends(case["input"])) for case, _ in cases]
+
+    _assert_decay_close(decays, [expected for _, expected in cases], atol=tolerance.atol)
+    assert {decay.cash_gone_ex for decay in decays} == {0.0}
+
+
+# AM-005 is the second engine's decay: its price of the same contract a day on, less its price now,
+# with cash dividends. As with AM-002 the gap is this tree's own discretization error, not rounding,
+# and no engine pinned here builds this tree with cash dividends. Every figure below is a gap
+# measured on this fixture's 100 cases. None is a bound on the tree: the attribution records a call
+# outside the fixture that is 2e-2 out at 401 steps.
+# Largest gap in the decay over the 100 cases, as the tree's steps rise:
+#     401 steps: 8.1e-3      1,009: 8.9e-4      2,003: 9.4e-4      4,001: 2.2e-4
+# At 2,003 steps one figure holds the decay and its two prices: 2e-3, twice the 9.5e-4 measured and
+# twice what AM-002 holds one price to at 2,001. Half of the cases are within 2e-6 there.
+# At the default 401 steps half of the cases are within 1e-5 and a few are far out, so each group
+# of cases is held to about twice its own largest gap, in the decay or in either of its prices:
+#     group                                  decay     price now   a day later   held to
+#     30 days, no dividend                   1.3e-4    2.5e-4      2.4e-4        5e-4
+#     30 days, ex on day 12                  8.0e-4    8.1e-4      8.5e-4        2e-3
+#     7 days, ex on day 3                    6.7e-4    8.9e-4      3.8e-4        2e-3
+#     60 days, ex on day 1 and day 40        1.3e-3    1.5e-3      1.3e-3        3e-3
+#     30 days, ex on day 1                   5.0e-3    5.0e-3      2.6e-4        1e-2
+#     60 days, ex on day 2                   8.1e-3    7.2e-4      8.0e-3        1e-2
+# The last two keep the looser figure because one of their two prices is a day before an ex-date:
+# the price now when the stock goes ex on day 1, the later price when it goes ex on day 2. This tree
+# is at its coarsest there for a call in the money. That is the tree's step error against another
+# method's answer, the accepted divergence ADR 0076 decision 6 grants this tree with dividends. It
+# is not a figure loosened to pass: at 2,003 steps the same two groups are within 1e-3. The day-2
+# group is held to 1e-2, 1.2 times its gap, and not to twice it: 1e-2 is the most this fixture has
+# been held to, and adding its worst kind of case did not raise it.
+# What these tolerances tell apart: holding the quoted price across an ex-date moves the 32 cases
+# that go ex inside the day by 6.4e-2 to 1.75, and leaving the other dividends where they were, not
+# a day nearer, moves 29 of 60 cases by over 2e-3, up to 6.2e-2. What they do not: taking off the
+# dividend's present value in place of the cash in full moves the later price by at most 2.2e-4.
+# tests/options/test_american_daily_decay.py pins that choice directly.
+# The step counts are prime. An ex-date exactly on a tree step is counted before or after that step
+# by the last bit of the two times, and at AM-002's 2,001 steps, 69 to the day over 29 days, every
+# whole day of a 29-day span is on one. A prime count over the days to expiry has no whole day on a step.
+_FINE_DECAY_TREE_STEPS = 2003
+_FINE_TREE_DECAY_ATOL = 2e-3
+_DEFAULT_STEPS_DECAY_ATOL_BY_GROUP = {
+    "30d_no_dividend": 5e-4,
+    "30d_ex_on_day_12": 2e-3,
+    "7d_ex_on_day_3": 2e-3,
+    "60d_ex_inside_the_day_and_on_day_40": 3e-3,
+    "30d_ex_inside_the_day": 1e-2,
+    "60d_ex_on_day_2": 1e-2,
+}
+
+
+def _decays_with_dividends(steps: int) -> tuple[list[AmericanDailyDecay | None], list[dict[str, Any]]]:
+    cases = _cases("AM-005")
+    decays = [american_daily_decay(**_with_its_dividends(case["input"]), steps=steps) for case, _ in cases]
+    return decays, [expected for _, expected in cases]
+
+
+def _group(case: dict[str, Any]) -> str:
+    """The group a case of AM-005 belongs to: its name up to the volatility."""
+    return case["case"].split("_vol")[0]
+
+
+def test_a_days_decay_with_cash_dividends_matches_the_second_engines_difference() -> None:
+    """AM-005 at 2,003 steps, with the dividend that goes ex inside the day taken off the stock price."""
+    decays, expected = _decays_with_dividends(_FINE_DECAY_TREE_STEPS)
+
+    _assert_decay_close(decays, expected, atol=_FINE_TREE_DECAY_ATOL)
+    assert [decay.cash_gone_ex for decay in decays] == [case["cash_gone_ex"] for case in expected]
+
+
+def test_a_days_decay_at_the_default_step_count_stays_close_to_the_second_engine_group_by_group() -> None:
+    """AM-005 at the step count a bot prices with, each group of cases held to its own figure."""
+    decays, expected = _decays_with_dividends(DEFAULT_TREE_STEPS)
+    cases_of: dict[str, list[int]] = {}
+    for index, case in enumerate(expected):
+        cases_of.setdefault(_group(case), []).append(index)
+
+    assert cases_of.keys() == _DEFAULT_STEPS_DECAY_ATOL_BY_GROUP.keys()
+    for group, atol in _DEFAULT_STEPS_DECAY_ATOL_BY_GROUP.items():
+        _assert_decay_close(
+            [decays[index] for index in cases_of[group]],
+            [expected[index] for index in cases_of[group]],
+            atol=atol,
+            group=group,
+        )

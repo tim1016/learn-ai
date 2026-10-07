@@ -1,10 +1,11 @@
 """The option quotes a simulated account was handed, kept so a later fill or mark can be priced from them.
 
 A Dry Run has no option market of its own. What it knows of a contract's
-price is the quotes its Clerk was handed: with an entry, with an exit
-decision, and whenever the runner passes on the newest one it holds for a
-contract the bot holds. Each is appended here, beside the account's
-simulated orders, with both sides' receipt times as they arrived.
+price is the quotes kept for it: an entry's as its order is sent, an exit
+decision's as its close is priced, and the mark the Clerk's own keeping
+states of each contract a bot holds (``held_option_quotes``). Each is
+appended here, beside the account's simulated orders, with both sides'
+receipt times as they arrived.
 
 Two questions are asked of what is kept, and they are not the same:
 
@@ -15,16 +16,22 @@ Two questions are asked of what is kept, and they are not the same:
 - **What was last stated to be the newest held, and when?** By when it was
   handed over. The simulated account marks an open contract from it. A quiet
   contract's bid can stand unchanged for minutes: its receipt time grows old
-  while it is still the bid, and each hand-over says so again.
+  while it is still the bid, and each hand-over says so again. The row
+  keeps the receipt times as they were, so a close priced from it knows
+  the quote's true age.
 
 So a hand-over is written every time, even of a quote already kept
 (``keep``). A quote the Clerk hands back from its own durable facts, in case
 this file was lost, says nothing of what is current: it is written as of its
-own receipt (``restore``).
+own receipt (``restore``). So is what a held contract's line shows while one
+of its sides has still to arrive, which the Clerk's keeping puts back: it is
+the newest quote by receipt, and never a mark: the account's reading passes
+over a quote with one side (``stated_mark``).
 
 Nothing here judges a quote. Whether one is usable for a decision is
-``app.options.quotes.quote_fault``'s to say, and how a fill is priced from
-one is ``app.options.simulated_fill``'s.
+``app.options.quotes.quote_fault``'s to say, whether one may be stated as a
+held contract's mark is ``held_option_quotes.mark_fault``'s, and how a fill
+is priced from one is ``app.options.simulated_fill``'s.
 
 **What is kept is bounded.** A hand-over every few seconds would otherwise
 grow the file without end, and every reader would pay for all of it. So the
@@ -322,16 +329,19 @@ class KeptOptionQuotes:
         """
         self._append([(symbol, quote, kept_at_ms) for symbol, quote in quotes.items()], now_ms=kept_at_ms)
 
-    def restore(self, symbol: str, quote: HeldQuote) -> None:
-        """Put back a quote the caller holds durably, if it is not kept: as of its own receipt, never as of now.
+    def restore(self, symbol: str, quote: HeldQuote, *, now_ms: int | None = None) -> None:
+        """Put back a quote the caller holds, if it is not kept: as of its own receipt, never as of now.
 
         Its receipt says nothing of what time it is, and may be ahead of
-        the clock. So putting one back never cuts the file: the next
-        hand-over does, as of its own clock.
+        the clock. So putting one back cuts the file only for a caller that
+        says what time it is, having seen the quote was received by then
+        (``now_ms``): the Clerk's keeping, which puts back what a line
+        shows many times a day. With none, the next hand-over cuts, as of
+        its own clock.
         """
         times = receipt_times(quote)
         if times:
-            self._append([(symbol, quote, max(times))], now_ms=None)
+            self._append([(symbol, quote, max(times))], now_ms=now_ms)
 
     def _append(self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None) -> None:
         said = [(symbol, RecordedQuote.of(quote), kept_at_ms) for symbol, quote, kept_at_ms in statements if receipt_times(quote)]
@@ -428,6 +438,28 @@ class KeptOptionQuotes:
             and (with_side is None or getattr(row.quote, with_side) is not None)
         ]
         return max(candidates, key=lambda row: (row.kept_at_ms, row.seq), default=None)
+
+    def stated_mark(self, symbol: str, *, at_or_before_ms: int) -> KeptOptionQuote | None:
+        """The quote a bought contract is marked from at an instant, before its freshness is asked.
+
+        The whole quote most lately handed over as the newest held, no
+        later than the instant. A quote with one side is passed over. It
+        states nothing: a line's quote put back while its other side was
+        still to arrive is the line's last word for a close, and it neither
+        is a mark nor ends the one stated before it, which stands for as
+        long as any statement does.
+
+        A cut keeps the last statement of each side. So it keeps the last
+        whole one, unless a quote with only a bid and one with only an ask
+        were both put back after it. The contract then has no mark until the
+        next whole quote is stated: a missing mark, never a wrong one.
+        """
+        whole = [
+            row
+            for row in self._kept_for(symbol)
+            if row.kept_at_ms <= at_or_before_ms and row.quote.bid is not None and row.quote.ask is not None
+        ]
+        return max(whole, key=lambda row: (row.kept_at_ms, row.seq), default=None)
 
 
 __all__ = [

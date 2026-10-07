@@ -299,6 +299,8 @@ def redriven_episode_token(decision_id: str) -> str | None:
 ENTRY_TERMINAL_PROOF = "EXIT_ENTRY_TERMINAL_PROOF"
 #: Why a resting option entry is cancelled: the owner's entry wait ran out (ADR 0076).
 ENTRY_WAIT_ENDED = "ENTRY_WAIT_ENDED"
+#: Why a resting option entry is cancelled whatever is left of its wait: its Clerk closed (ADR 0076).
+ENTRY_CLERK_CLOSED = "ENTRY_CLERK_CLOSED"
 
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.
@@ -3764,6 +3766,7 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
 
 
 __all__ = [
+    "ENTRY_CLERK_CLOSED",
     "ENTRY_TERMINAL_PROOF",
     "ENTRY_WAIT_ENDED",
     "attested_absent_exit_episodes",

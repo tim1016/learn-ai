@@ -338,6 +338,31 @@ async def test_production_factory_selects_the_configured_paper_status_source(
     assert calls == [(url, "test-control")]
 
 
+def test_only_a_clerk_that_makes_its_own_ibkr_pass_has_option_quotes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Option contracts are quoted by the supervisor's own pass. A Clerk that reads its status from a shared
+    source never makes that pass, so it offers no option quotes: a page is told there are none, not that a
+    feed which will never come up is down."""
+    from app.broker.alpaca.config import AlpacaSettings
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control")
+
+    def clerk(**alpaca: str) -> AlpacaMarketLivenessConsumer:
+        return AlpacaMarketLivenessConsumer.for_alpaca(
+            read=_Read(),  # type: ignore[arg-type]
+            settings=AlpacaSettings(api_key_id="paper-key", api_secret_key="paper-secret", mode="paper", **alpaca),
+            store=MarketLivenessStore(),
+            journal=CaptureJournal(capture_dir=tmp_path / "capture"),
+        )
+
+    shared = clerk(market_status_upstream_url="http://status-owner:8000/api/brokers/alpaca/market-status-snapshot")
+
+    assert shared.option_quotes is None
+    assert clerk().option_quotes is not None
+
+
 async def test_production_factory_uses_ibkr_without_an_alpaca_data_subscription(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

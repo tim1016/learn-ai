@@ -101,8 +101,8 @@ def _wait_until(account: _DryRun, at_ms: int) -> None:
 
 
 def _hand_over(account: _DryRun, bid: str, ask: str, *, age_ms: int = 200) -> None:
-    """The runner passes the Clerk the newest quote it holds for the contract."""
-    account.clerk.keep_option_quotes({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
+    """The newest quote held for the contract is stated as its mark, as the Clerk's keeping states it."""
+    account.hand_over({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
 
 
 def _an_ask_alone(account: _DryRun, ask: str, *, age_ms: int = 200) -> HeldQuote:
@@ -306,7 +306,7 @@ async def test_an_older_bid_sells_nothing_once_a_newer_quote_has_no_bid_and_the_
     dry_run.wait(20_000)
     _hand_over(dry_run, "2.00", "2.06")
     dry_run.wait(20_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _an_ask_alone(dry_run, "2.10")})
+    dry_run.hand_over({SYMBOL: _an_ask_alone(dry_run, "2.10")})
     await _stop(dry_run)
 
     await dry_run.clerk.reconcile_once()
@@ -448,7 +448,7 @@ async def test_a_quote_stamped_after_the_clerks_clock_gets_no_flatten_offered(dr
     await _stop(dry_run)
     await dry_run.clerk.reconcile_once()
     dry_run.wait(30_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() + 60_000)})
+    dry_run.hand_over({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() + 60_000)})
 
     await _flatten_not_offered(dry_run, "OPTION_EXIT_UNPRICED")
 
@@ -868,7 +868,7 @@ async def test_a_bid_handed_over_just_before_the_last_close_marks_nothing_from_t
     today = EXPIRES_ON_THE_ENTRY_DAY.occ_symbol
     await dry_run.enter(dry_run.evidence(picked={LEG: EXPIRES_ON_THE_ENTRY_DAY}))
     dry_run.wait(ENTRY_DAY_CLOSE - 30_000 - dry_run.clock())
-    dry_run.clerk.keep_option_quotes({today: _quote("2.10", "2.16", received_ms=dry_run.clock() - 200)})
+    dry_run.hand_over({today: _quote("2.10", "2.16", received_ms=dry_run.clock() - 200)})
 
     while_it_traded = dry_run.account_reading()
     dry_run.wait(29_999)
@@ -1249,8 +1249,8 @@ async def test_a_quote_stamped_after_the_clerks_own_clock_prices_no_close(dry_ru
     """A quote from a minute ahead is not a price the close could have met. The newest one by now is used."""
     await dry_run.enter(dry_run.evidence())
     dry_run.wait(60_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.20", "2.26", received_ms=dry_run.clock() - 500)})
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("9.00", "9.06", received_ms=dry_run.clock() + 60_000)})
+    dry_run.hand_over({SYMBOL: _quote("2.20", "2.26", received_ms=dry_run.clock() - 500)})
+    dry_run.hand_over({SYMBOL: _quote("9.00", "9.06", received_ms=dry_run.clock() + 60_000)})
 
     closed = await dry_run.exit(None)
 

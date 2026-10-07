@@ -42,13 +42,24 @@ deadline, then no more often than the idle wake, however often the keeper
 wakes for other entries. That pause is kept in memory only. It is not a
 list of what is due: forget it, and an entry is asked about one round
 sooner. A cancel that keeps failing the same way writes one record, not
-one a round. A nudge from the facade, sent when it accepts an option entry,
-ends the sleep at once. The nudge carries no meaning: lost, the idle wake
+one a round, while the keeper works alone; with passes running and the
+lookup failing it is written again after each pass (ADR 0076 decision 19).
+A nudge from the facade, sent when it accepts an option entry, ends the
+sleep at once. The nudge carries no meaning: lost, the idle wake
 and the pass still find the entry.
 
 **It always stops.** A stop that lands inside a broker call can surface as
 another error, because the claim is renewed after the call. The loop asks
 whether its task is being cancelled whenever it catches anything, and ends.
+
+**A Clerk that closes makes one last round** (:meth:`DeadlineKeeper.last_round`).
+It cancels and proves every entry on the worklist, whatever is left of its
+wait: an order left at the broker by a Clerk that has closed has nobody to
+cancel it at its deadline. It is the same step, handed the whole worklist.
+It has a few seconds and no more, so a broker that does not answer cannot
+hold the process's shutdown. What is not proven by then is left as any
+unproven cancel is left, and the next start finishes it. No other step of
+a round runs in it: a closing Clerk sends no new order.
 
 The keeper evaluates no reason's age policy, and no reason gains a clock
 from it.
@@ -70,6 +81,7 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
     RestingEntry,
     WaitEndedRound,
     being_cancelled,
+    cancel_every_resting_entry,
     cancel_resting_entries,
     resting_entries,
 )
@@ -93,6 +105,8 @@ IDLE_WAKE_MS = 5_000
 UNPROVEN_RETRY_MS = 1_000
 # For how long past a deadline it retries that often, before falling back to the idle wake.
 UNPROVEN_RETRY_WINDOW_MS = 10_000
+# The longest a closing Clerk's last round may take: a broker that does not answer must not hold the shutdown.
+LAST_ROUND_LIMIT_MS = 3_000
 
 
 def _retry_after_ms(entry: RestingEntry, now_ms: int) -> int:
@@ -255,9 +269,42 @@ class DeadlineKeeper:
         with suppress(asyncio.CancelledError):
             await task
 
+    async def last_round(self) -> None:
+        """The round a closing Clerk makes: cancel and prove every resting entry, due or not (ADR 0076 decision 19).
+
+        The keeper's own task is ended first, so no round of its own holds
+        an entry's claim. Then the whole worklist is handed to the step
+        every round uses, the oldest deadline first, with the reason that
+        the Clerk closed. An entry an EXIT owns is not on the worklist, as
+        in any round.
+
+        The round has ``LAST_ROUND_LIMIT_MS`` and no more. What it stops in
+        the middle of stays on the books as it is: asked for, or uncertain.
+        The next start's stopped-run step, or its keeper's first round,
+        finishes it. Nothing is raised, because a closing Clerk must still
+        close its books. What each entry came to is logged by the step.
+        """
+        await self.stop()
+        try:
+            async with asyncio.timeout(LAST_ROUND_LIMIT_MS / 1000):
+                await cancel_every_resting_entry(self._repo, trade=self._trade, off_loop=self._off_loop)
+        except TimeoutError:
+            logger.warning(
+                "the closing Clerk's last round ran out of time; what is not proven is left for the next start",
+                extra={"action": "deadline_keeper_last_round_out_of_time", "account_id": self._repo.account_id},
+            )
+        except Exception:
+            # A stop of the closing itself is not caught here and ends it. Anything else must not
+            # keep the books from being closed: the next start reads them and acts on what is left.
+            logger.exception(
+                "the closing Clerk's last round failed; what is not proven is left for the next start",
+                extra={"action": "deadline_keeper_last_round_failed", "account_id": self._repo.account_id},
+            )
+
 
 __all__ = [
     "IDLE_WAKE_MS",
+    "LAST_ROUND_LIMIT_MS",
     "UNPROVEN_RETRY_MS",
     "UNPROVEN_RETRY_WINDOW_MS",
     "DeadlineKeeper",
