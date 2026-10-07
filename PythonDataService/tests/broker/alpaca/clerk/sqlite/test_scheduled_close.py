@@ -984,8 +984,11 @@ async def test_a_contract_no_longer_held_when_the_notice_is_written_is_not_named
     assert named == () and _notice(paper) is None
 
 
+@pytest.mark.parametrize(
+    "its_facts", [pytest.param("raise", id="cannot be read back"), pytest.param("none", id="are not an option entry's")]
+)
 async def test_a_bot_whose_entry_cannot_be_read_keeps_its_notice_and_the_other_bot_is_still_served(
-    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, its_facts: str  # noqa: F811
 ) -> None:
     unreadable = await _holds_one_call(paper, "a")
     paper.wait(1_000)
@@ -998,9 +1001,11 @@ async def test_a_bot_whose_entry_cannot_be_read_keeps_its_notice_and_the_other_b
     as_kept = scheduled_close_module.option_entry_of_order
 
     def cannot_read_a(repo: object, order_ref: str) -> object:
-        if order_ref == unreadable:
+        if order_ref != unreadable:
+            return as_kept(repo, order_ref)
+        if its_facts == "raise":
             raise ValueError("this entry's facts cannot be read back")
-        return as_kept(repo, order_ref)
+        return None
 
     monkeypatch.setattr(scheduled_close_module, "option_entry_of_order", cannot_read_a)
     written = paper.repo.last_custody_sequence()

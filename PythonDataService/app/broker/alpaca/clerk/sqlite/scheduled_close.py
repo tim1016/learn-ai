@@ -302,8 +302,6 @@ async def drive_scheduled_closes(
     run = off_loop if off_loop is not None else run_inline
     now_ms = repo.clock()
     read = await run(lambda: held_contracts(repo, now_ms))
-    if not read.held and not read.noticed:
-        return ScheduledCloseRound()
     at_once = asyncio.Semaphore(MAX_CLOSES_AT_ONCE)
 
     async def one(item: HeldContract) -> _Done | None:
@@ -324,6 +322,7 @@ async def drive_scheduled_closes(
             raise answer
     done = [answer for answer in answers if answer is not None]
     missed: tuple[tuple[str, str], ...] = ()
+    # The lock is taken only when a notice may have to be written or ended.
     if read.noticed or any(item.missed is not None for item in read.held):
         missed = await intake.off_loop(_record_missed_closes, repo, read, now_ms)
     return ScheduledCloseRound(
