@@ -35,6 +35,8 @@ from app.options.structure import ResolvedLeg, ResolvedStructure
 from tests.options import test_resolver as scenes
 
 _ONE = EntrySize(multiplier=100, units=1)
+# The underlying's price every leg here was priced against: SPY's mid in the resolver's scenes.
+_SPOT = 585.11
 
 
 def _lost(per_share: float, *, cash_gone_ex: float = 0.0) -> LegDecay:
@@ -74,8 +76,8 @@ def test_a_bought_spread_loses_what_its_bought_leg_loses_less_what_its_sold_leg_
     -0.50 + 0.30 = -0.20 a share, which is $20.00 a structure, and $60.00 for three."""
     decays = {"bought": _lost(-0.50), "sold": _lost(-0.30)}
 
-    one = structure_daily_decay(_SPREAD, _ONE, decays)
-    three = structure_daily_decay(_SPREAD, EntrySize(multiplier=100, units=3), decays)
+    one = structure_daily_decay(_SPREAD, _ONE, decays, underlying_price=_SPOT)
+    three = structure_daily_decay(_SPREAD, EntrySize(multiplier=100, units=3), decays, underlying_price=_SPOT)
 
     assert one.estimated and one.why_not is None and one.legs_without == ()
     _close(one.per_share, -0.20)
@@ -90,7 +92,7 @@ def test_an_iron_condor_gains_with_a_day_what_its_sold_legs_lose_less_what_its_b
     -0.20 + 0.35 + 0.40 - 0.25 = +0.30 a share, $30.00 a structure gained."""
     decays = {"long_put": _lost(-0.20), "short_put": _lost(-0.35), "short_call": _lost(-0.40), "long_call": _lost(-0.25)}
 
-    seen = structure_daily_decay(_CONDOR, _ONE, decays)
+    seen = structure_daily_decay(_CONDOR, _ONE, decays, underlying_price=_SPOT)
 
     _close(seen.per_share, 0.30)
     _close(seen.per_structure, 30.00)
@@ -100,7 +102,7 @@ def test_an_iron_condor_gains_with_a_day_what_its_sold_legs_lose_less_what_its_b
 def test_a_sold_leg_gains_what_its_contract_loses() -> None:
     sold = _structure(("sold", "short", "call", 590, 1))
 
-    _close(structure_daily_decay(sold, _ONE, {"sold": _lost(-0.30)}).total, 30.00)
+    _close(structure_daily_decay(sold, _ONE, {"sold": _lost(-0.30)}, underlying_price=_SPOT).total, 30.00)
 
 
 def test_a_legs_ratio_and_the_contracts_own_multiplier_both_count() -> None:
@@ -110,7 +112,7 @@ def test_a_legs_ratio_and_the_contracts_own_multiplier_both_count() -> None:
     )
     decays = {"lower": _lost(-0.10), "body": _lost(-0.45), "upper": _lost(-0.12)}
 
-    seen = structure_daily_decay(butterfly, EntrySize(multiplier=10, units=2), decays)
+    seen = structure_daily_decay(butterfly, EntrySize(multiplier=10, units=2), decays, underlying_price=_SPOT)
 
     _close(seen.per_share, 0.68)
     _close(seen.per_structure, 6.80)
@@ -121,7 +123,7 @@ def test_a_position_that_gains_with_a_day_is_shown_gaining_and_never_held_at_zer
     """A put deep in the money ahead of an ex-date gains the interest on its strike: +0.035 a share was measured."""
     bought_put = _structure(("deep", "long", "put", 600, 1))
 
-    seen = structure_daily_decay(bought_put, _ONE, {"deep": _lost(0.035)})
+    seen = structure_daily_decay(bought_put, _ONE, {"deep": _lost(0.035)}, underlying_price=_SPOT)
 
     _close(seen.total, 3.50)
     assert seen.total > 0
@@ -137,7 +139,7 @@ def test_one_leg_with_no_figure_leaves_the_structure_with_none_for_that_legs_rea
         "long_call": LegDecay(None, DecayNotEstimated.NOT_PRICED, "another reason, later in the structure"),
     }
 
-    seen = structure_daily_decay(_CONDOR, _ONE, decays)
+    seen = structure_daily_decay(_CONDOR, _ONE, decays, underlying_price=_SPOT)
 
     assert not seen.estimated
     assert (seen.per_share, seen.per_structure, seen.total) == (None, None, None)
@@ -151,9 +153,41 @@ def test_a_structure_priced_on_inputs_nobody_checked_has_no_decay_for_any_leg() 
     assert (seen.estimated, seen.why_not, seen.legs_without) == (False, DecayNotEstimated.INPUTS_NOT_KNOWN, ("bought", "sold"))
 
 
-def test_a_sold_call_whose_figure_counts_a_dividend_going_ex_inside_the_day_is_named() -> None:
-    """The stock goes ex $1.75 inside the day. Every leg's later price is at the stock less that. Only for the
-    sold call is that fall a gain the seller may never see: a call in the money is exercised before the ex-date."""
+_SOLD_580_BOUGHT_590 = _structure(("sold", "short", "call", 580, 1), ("bought", "long", "call", 590, 1))
+_GOING_EX = {"sold": _lost(-1.20, cash_gone_ex=1.75), "bought": _lost(-0.70, cash_gone_ex=1.75)}
+
+
+def test_a_sold_call_in_the_money_with_cash_going_ex_inside_the_day_is_named() -> None:
+    """The stock goes ex $1.75 inside the day and the 580 call was sold with the stock at 585.11. A call in the
+    money can be exercised before the ex-date, and the seller then never sees the fall the figure counts."""
+    seen = structure_daily_decay(_SOLD_580_BOUGHT_590, _ONE, _GOING_EX, underlying_price=_SPOT)
+
+    assert seen.sold_calls_in_the_money_at_an_ex_date == ("sold",)
+    # The figure is the sum it always is: +1.20 - 0.70 = +0.50 a share.
+    _close(seen.total, 50.00)
+
+
+@pytest.mark.parametrize(
+    ("price", "named"),
+    [
+        pytest.param(580.01, ("sold",), id="a cent in the money"),
+        pytest.param(580.0, (), id="at the money exactly"),
+        pytest.param(579.99, (), id="a cent out of the money"),
+        pytest.param(540.0, (), id="far out of the money"),
+    ],
+)
+def test_a_sold_call_is_named_only_while_its_strike_is_below_the_price(price: float, named: tuple[str, ...]) -> None:
+    """The model counts no fall by the dividend for a call at or out of the money, so there is nothing to warn
+    of. The figure does not turn on the price handed in: only the naming does."""
+    seen = structure_daily_decay(_SOLD_580_BOUGHT_590, _ONE, _GOING_EX, underlying_price=price)
+
+    assert seen.sold_calls_in_the_money_at_an_ex_date == named
+    _close(seen.total, 50.00)
+
+
+def test_only_a_sold_call_is_named_never_a_bought_call_or_a_put_however_deep_in_the_money() -> None:
+    """An iron condor with the stock above every strike: the sold call and the bought call are both in the
+    money, and both puts are out of it. Only the sold call can be assigned."""
     decays = {
         "long_put": _lost(0.60, cash_gone_ex=1.75),
         "short_put": _lost(0.90, cash_gone_ex=1.75),
@@ -161,24 +195,77 @@ def test_a_sold_call_whose_figure_counts_a_dividend_going_ex_inside_the_day_is_n
         "long_call": _lost(-0.70, cash_gone_ex=1.75),
     }
 
-    seen = structure_daily_decay(_CONDOR, _ONE, decays)
+    above_every_strike = structure_daily_decay(_CONDOR, _ONE, decays, underlying_price=610.0)
+    below_every_strike = structure_daily_decay(_CONDOR, _ONE, decays, underlying_price=560.0)
 
-    assert seen.sold_calls_counting_a_dividend == ("short_call",)
-    # 0.60 - 0.90 + 1.20 - 0.70 = +0.20 a share.
-    _close(seen.total, 20.00)
+    assert above_every_strike.sold_calls_in_the_money_at_an_ex_date == ("short_call",)
+    assert below_every_strike.sold_calls_in_the_money_at_an_ex_date == ()
+    # 0.60 - 0.90 + 1.20 - 0.70 = +0.20 a share, wherever the stock is.
+    _close(above_every_strike.total, 20.00)
+    _close(below_every_strike.total, 20.00)
 
 
 def test_with_no_dividend_going_ex_inside_the_day_no_sold_call_is_named() -> None:
-    decays = {"bought": _lost(-0.50), "sold": _lost(-0.30)}
+    decays = {"sold": _lost(-1.20), "bought": _lost(-0.70)}
 
-    assert structure_daily_decay(_SPREAD, _ONE, decays).sold_calls_counting_a_dividend == ()
+    seen = structure_daily_decay(_SOLD_580_BOUGHT_590, _ONE, decays, underlying_price=_SPOT)
+
+    assert seen.sold_calls_in_the_money_at_an_ex_date == ()
+
+
+@pytest.mark.parametrize("no_price", [0.0, -585.11, float("nan"), float("inf")])
+def test_the_price_the_legs_were_priced_against_is_a_number_above_zero(no_price: float) -> None:
+    with pytest.raises(ValueError, match="above zero"):
+        structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50), "sold": _lost(-0.30)}, underlying_price=no_price)
+
+
+def test_a_dividend_going_ex_inside_the_day_takes_about_itself_off_a_call_deep_in_the_money_and_nothing_off_one_out_of_it() -> None:
+    """What the warning's words stand on, measured with the pricer itself: SPY at 585.11, 3.2 days to expiry,
+    a volatility of 0.20, a rate of 0.045, $1.75 going ex. Each call's decay with the ex-date 23 hours off,
+    inside the day, less its decay with the ex-date 25 hours off, outside it.
+
+    Deep in the money the call falls by most of the dividend. At or out of the money it does not move, because
+    its price now already has the dividend taken off. So the fall counted for a sold call is "up to" the
+    dividend, and is never more.
+    """
+    hour_ms = ONE_DAY_MS // 24
+
+    def moved(strike: int) -> float:
+        def decay_with_the_ex_date(hours_off: int) -> float:
+            worked = american_daily_decay(
+                spot=_SPOT,
+                strike=float(strike),
+                years_to_expiry=years_from_ms(ONE_DAY_MS * 32 // 10),
+                rate=0.045,
+                volatility=0.20,
+                right="call",
+                dividends=(CashDividend(years_from_ms(hours_off * hour_ms), 1.75),),
+            )
+            assert worked is not None
+            return worked.decay
+
+        return decay_with_the_ex_date(23) - decay_with_the_ex_date(25)
+
+    np.testing.assert_allclose(moved(540), -1.60, atol=5e-3, rtol=0, equal_nan=False)
+    np.testing.assert_allclose(moved(575), -0.74, atol=5e-3, rtol=0, equal_nan=False)
+    for strike in (580, 585, 590, 595):
+        np.testing.assert_allclose(moved(strike), 0.0, atol=0.02, rtol=0, equal_nan=False)
+    # Never more than the dividend, at any strike.
+    assert all(-1.75 <= moved(strike) <= 0.02 for strike in (540, 560, 570, 575, 580, 585, 590, 595))
+
+
+def test_a_structures_decay_is_a_figure_or_a_reason_and_never_both_or_neither() -> None:
+    with pytest.raises(ValueError, match="never both"):
+        decay.StructureDecay(None, None, None)
+    with pytest.raises(ValueError, match="never both"):
+        decay.StructureDecay(-0.2, -20.0, -20.0, why_not=DecayNotEstimated.NOT_PRICED)
 
 
 def test_a_decay_for_a_leg_the_structure_does_not_have_or_none_for_one_it_has_is_the_callers_mistake() -> None:
     with pytest.raises(ValueError, match="one decay for each of the legs"):
-        structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50)})
+        structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50)}, underlying_price=_SPOT)
     with pytest.raises(ValueError, match="one decay for each of the legs"):
-        structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50), "sold": _lost(-0.30), "third": _lost(-0.1)})
+        structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50), "sold": _lost(-0.30), "third": _lost(-0.1)}, underlying_price=_SPOT)
 
 
 def test_a_legs_decay_is_a_figure_or_a_reason_and_never_both_or_neither() -> None:

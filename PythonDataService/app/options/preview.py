@@ -84,8 +84,6 @@ class PickedLeg:
     # Whether its gap is wider than the owner's limit, so that an entry would be skipped. None: not judged,
     # because the picks are not the plan's legs and no entry could be made of them.
     over_gap_limit: bool | None = None
-    # What the next 24 hours take from its contract, per share, or why that is not estimated. None: not asked.
-    daily_decay: LegDecay | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +127,6 @@ def _picked_legs(
     *,
     model_is_known: bool,
     over_gap_limit: frozenset[str] | None,
-    daily_decay: Mapping[str, LegDecay] | None,
 ) -> tuple[PickedLeg, ...]:
     evidence = {leg.leg_id: leg for leg in resolution.evidence.legs}
     legs = []
@@ -150,7 +147,6 @@ def _picked_legs(
                 priced=pick.priced if model_is_known else None,
                 vendor_delta=pick.vendor_delta,
                 over_gap_limit=None if over_gap_limit is None else leg.leg_id in over_gap_limit,
-                daily_decay=None if daily_decay is None else daily_decay[leg.leg_id],
             )
         )
     return tuple(legs)
@@ -197,7 +193,9 @@ def structure_figures(
     ``daily_decay`` is each pick's decay as the search worked it out
     (``app.options.decay.picks_daily_decay``), by leg id. Nothing is priced
     here. Handed none on a model that is known, the figures carry no decay
-    at all: nobody asked for one.
+    at all: nobody asked for one. Only the structure's decay is carried. A
+    leg's own is its contract's figure, a share, unsigned by the leg's side,
+    and is shown to nobody.
     """
     if not model_is_known:
         daily_decay = None
@@ -217,7 +215,6 @@ def structure_figures(
         resolution,
         model_is_known=model_is_known,
         over_gap_limit=None if structure is None else worked.legs_over_gap_limit,
-        daily_decay=daily_decay,
     )
     refusals = _refusals_in_an_entrys_order(worked)
     not_as_built = next((refusal for refusal in refusals if refusal.reason not in _SKIPPED_FOR_NOW), None)
@@ -243,13 +240,24 @@ def structure_figures(
         at_expiry=None if money is None else at_expiry(structure, size, net_price=worked.net_price),
         lean=lean(structure, size, deltas) if without_delta is None else None,
         lean_unknown_leg_id=without_delta,
-        decay=_decay(structure, size, daily_decay, model_is_known=model_is_known),
+        decay=_decay(
+            structure, size, daily_decay, model_is_known=model_is_known, priced_against=resolution.evidence.model_spot
+        ),
     )
 
 
 def _decay(
-    structure: ResolvedStructure, size: EntrySize, daily_decay: Mapping[str, LegDecay] | None, *, model_is_known: bool
+    structure: ResolvedStructure,
+    size: EntrySize,
+    daily_decay: Mapping[str, LegDecay] | None,
+    *,
+    model_is_known: bool,
+    priced_against: float | None,
 ) -> StructureDecay | None:
     if not model_is_known:
         return decay_not_estimated(structure, DecayNotEstimated.INPUTS_NOT_KNOWN)
-    return None if daily_decay is None else structure_daily_decay(structure, size, daily_decay)
+    if daily_decay is None:
+        return None
+    if priced_against is None:
+        raise ValueError("each pick's decay was priced against the underlying's mid, and this resolution has none")
+    return structure_daily_decay(structure, size, daily_decay, underlying_price=priced_against)

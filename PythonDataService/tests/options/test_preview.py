@@ -6,11 +6,13 @@ that matter set by hand so that every expected figure can be worked out.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from fractions import Fraction
 
 import pytest
 
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.american import AmericanIvStatus
 from app.options.decay import DecayNotEstimated, LegDecay, picks_daily_decay
 from app.options.entry import prepare_entry
@@ -24,6 +26,7 @@ from app.options.preview import (
     structure_figures,
 )
 from app.options.requirement import StructureMoneyRefusal, StructureMoneyRefused
+from app.options.resolver import DividendOn
 from app.options.structure_check import StructureRefusal
 from app.schemas.action_plan import ActionPlan
 
@@ -282,9 +285,11 @@ def test_every_structure_asked_for_is_counted() -> None:
 
 
 def test_the_structures_decay_is_its_legs_own_bought_less_sold_for_every_structure_asked() -> None:
-    shown = _figures(_spread(), units=3, with_decay=True, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    markets = {"c585": ("4.08", "4.12"), "c590": ("2.18", "2.22")}
+    shown = _figures(_spread(), units=3, with_decay=True, **markets)
 
-    bought, sold = (leg.daily_decay.worked.decay for leg in shown.legs)
+    # Each pick's own decay, worked out apart from the same resolution: the bought call's, then the sold call's.
+    bought, sold = (leg.worked.decay for leg in picks_daily_decay(_resolved(_spread(), **markets)).values())
     assert bought < 0 and sold < 0
     assert shown.decay.per_share == pytest.approx(bought - sold, abs=1e-12, rel=0)
     assert shown.decay.per_structure == pytest.approx(100 * (bought - sold), abs=1e-9, rel=0)
@@ -293,7 +298,7 @@ def test_the_structures_decay_is_its_legs_own_bought_less_sold_for_every_structu
     assert shown.decay.total < 0
 
 
-def test_a_leg_with_no_decay_leaves_the_structure_with_none_and_the_other_legs_figure_beside_it() -> None:
+def test_a_leg_with_no_decay_leaves_the_structure_with_none() -> None:
     """The 590 call quoted far above anything a volatility explains: no volatility, so no decay for it."""
     shown = _figures(_spread(), with_decay=True, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
 
@@ -301,7 +306,6 @@ def test_a_leg_with_no_decay_leaves_the_structure_with_none_and_the_other_legs_f
         False, DecayNotEstimated.NO_VOLATILITY, ("short_call",),
     )
     assert (shown.decay.per_share, shown.decay.total) == (None, None)
-    assert shown.legs[0].daily_decay.worked.decay < 0
 
 
 def test_inputs_that_are_not_known_show_no_decay_even_when_one_was_worked_out() -> None:
@@ -310,7 +314,7 @@ def test_inputs_that_are_not_known_show_no_decay_even_when_one_was_worked_out() 
 
     assert (shown.decay.estimated, shown.decay.why_not) == (False, DecayNotEstimated.INPUTS_NOT_KNOWN)
     assert shown.decay.legs_without == ("long_call", "short_call")
-    assert [leg.daily_decay for leg in shown.legs] == [None, None]
+    assert (shown.decay.per_share, shown.decay.total) == (None, None)
 
 
 def test_figures_nobody_asked_a_decay_for_carry_none_and_picks_that_are_no_structure_have_none_either() -> None:
@@ -323,8 +327,36 @@ def test_a_decay_handed_in_for_the_wrong_legs_is_the_callers_mistake() -> None:
     resolution = _resolved(plan)
     one_leg_only = {"long_call": LegDecay(None, DecayNotEstimated.NOT_PRICED)}
 
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="one decay for each of the legs"):
         structure_figures(
             plan, resolution, units=1, leg_gap_limit_percent=Decimal(8), cost_limit_percent=Decimal(10),
             fee_provision=lambda *_: 0, model_is_known=True, daily_decay=one_leg_only,
         )
+
+
+@pytest.mark.parametrize(
+    ("sold_strike", "named"),
+    [
+        pytest.param(585.0, ("sold",), id="sold at 585 with the stock at 585.11: in the money by eleven cents"),
+        pytest.param(586.0, (), id="sold at 586: out of the money"),
+    ],
+)
+def test_a_sold_call_is_named_at_an_ex_date_by_the_price_the_picks_were_priced_against(
+    sold_strike: float, named: tuple[str, ...]
+) -> None:
+    """$1.75 goes ex at tomorrow's open, inside the day. The picks are priced against SPY's mid of 585.11, and
+    that is the price a sold call is in the money by."""
+    going_ex = (DividendOn(ex_ms=session_open_ms_utc(scenes._WEDNESDAY), cash=1.75),)
+    plan = scenes._plan(
+        scenes._leg("sold", "call", {"selector": "absolute", "strike": sold_strike}, position="short"),
+        scenes._leg("bought", "call", {"selector": "absolute", "strike": 590.0}),
+    )
+    resolution = scenes._scene(model=replace(scenes._MODEL, dividends=going_ex)).resolve(plan)
+
+    shown = structure_figures(
+        plan, resolution, units=1, leg_gap_limit_percent=Decimal(8), cost_limit_percent=Decimal(10),
+        fee_provision=lambda *_: 0, model_is_known=True, daily_decay=picks_daily_decay(resolution),
+    )
+
+    assert resolution.evidence.model_spot == 585.11
+    assert shown.decay.estimated and shown.decay.sold_calls_in_the_money_at_an_ex_date == named

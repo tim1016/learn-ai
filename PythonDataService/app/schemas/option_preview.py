@@ -104,6 +104,7 @@ class OptionStructurePreviewRequest(BaseModel):
     legs: Annotated[list[OptionLegRules], Field(max_length=_MAX_LEGS_ASKED)]
     structures: Annotated[int, Field(ge=1, le=100)] = 1
     # The widest bid-ask gap a leg may have, as a percent of its mid. An entry with a leg quoted wider is skipped.
+    # A request says a number or leaves the field out, which is the limit an owner starts from. Null is neither.
     gap_limit_percent: _GapLimitPercent = DEFAULT_LEG_GAP_LIMIT_PERCENT
     # The most opening and closing at once may cost, as a percent of what the entry sets aside.
     cost_limit_percent: _CostLimitPercent = DEFAULT_COST_LIMIT_PERCENT
@@ -188,10 +189,6 @@ class OptionPreviewLeg(BaseModel):
     delta_status_sentence: str
     # IBKR's own delta, when it sent one. Beside ours, never used.
     ibkr_delta: float | None
-    # What the next 24 hours take from one share of this contract, by this system's own model: below zero
-    # for a contract that loses value with a day. The contract's own figure, whichever side the leg takes.
-    # None when it is not estimated; ``decay`` says why.
-    daily_decay: float | None
 
 
 class OptionPreviewLegAsked(BaseModel):
@@ -267,6 +264,8 @@ class OptionPreviewSketchPoint(BaseModel):
     price: Decimal
     # Above zero is gained, below zero lost, for the structures asked.
     result_cents: int
+    # The same amount written out in dollars, to label the point as it is: "$306.00" gained, "-$194.00" lost.
+    result_usd: str
 
 
 class OptionPreviewAtExpiry(BaseModel):
@@ -286,7 +285,8 @@ class OptionPreviewAtExpiry(BaseModel):
     gain_holds: list[PriceRangeView]
     # To the nearest cent.
     break_even_prices: list[Decimal]
-    # The three lines above as the server says them. None when nothing is estimated.
+    # The three lines above as the server says them. None when nothing is estimated. When no price brings a
+    # gain, ``gain_sentence`` says that the entry loses at every price, and ``gain_cents`` is zero.
     loss_sentence: str | None
     gain_sentence: str | None
     break_even_sentence: str | None
@@ -320,7 +320,8 @@ class OptionPreviewDecay(BaseModel):
     direction: Literal["loses", "gains", "neither"] | None
     sentence: str
     assumptions_sentence: str
-    # Said when a sold call's figure counts a dividend going ex inside the day: a gain early assignment takes.
+    # Said when a sold call is in the money now and the underlying goes ex-dividend inside the day: the figure
+    # counts that call's fall, by up to the dividend, as a gain, and early assignment would take it away.
     warning_sentence: str | None
     # Said when the underlying goes ex within a few days: the figure is rougher then.
     near_ex_date_sentence: str | None
@@ -345,7 +346,8 @@ class OptionPreviewOrderTerms(BaseModel):
     entry_wait_seconds: int
     cost_limit_percent: Decimal
     expiry_close_lead_minutes: int
-    # Where the expiry-day close falls against the hour Alpaca says it may sell an expiring position in.
+    # Where the expiry-day close falls against the hour Alpaca's documentation says it may sell an expiring
+    # position in, taking that hour to end when the session closes. The sentence says that it takes it so.
     expiry_close_sentence: str
     # How the bot's orders go, in one line: "Limit in, market out · gap up to 8% a leg · wait 20 s".
     orders_sentence: str
@@ -535,20 +537,32 @@ class NamedStructureGroup(BaseModel):
 
 
 class OptionValueBounds(BaseModel):
-    """What a number typed into a box may be: the range the server holds it to. A form can refuse a number
-    outside it before asking. A number that reaches the preview all the same is refused in words."""
+    """What may be typed into a box: the range the server holds it to. A form can refuse a value outside it
+    before asking. One that reaches the preview all the same is refused in words.
+
+    A box uses one pair of ends, never both. A box that takes a number uses
+    ``min`` and ``max``, exact decimals, and its ``min_ms`` and ``max_ms``
+    are null. A box that takes a date (a rule value whose ``unit`` is
+    ``date``) uses ``min_ms`` and ``max_ms``: the first and the last date
+    it takes, each as that date's 16:00 New York anchor in ``int64 ms UTC``,
+    to be shown in the date-only New York mode. Its ``min`` and ``max`` are
+    null, which there does not mean "no bound".
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # None: no bound on that side.
+    # A number's ends. None: no bound on that side.
     min: Decimal | None
-    # False: the number must be above ``min``, not at it.
+    # False: the value must be above the lower end, not at it.
     min_included: bool
     max: Decimal | None
     max_included: bool
-    # The finest step it is taken in: 1 for a whole number. None: any number.
+    # A date's ends. None for a box that takes a number.
+    min_ms: EpochMs | None
+    max_ms: EpochMs | None
+    # The finest step a number is taken in: 1 for a whole number. None: any number, or a date.
     step: Decimal | None
-    # The range in words: "above 0 and below 1".
+    # The range in words: "a number above 0 and below 1", "a date from Jan 1, 2000 to Dec 31, 2099".
     sentence: str
 
 
@@ -562,7 +576,8 @@ class OptionRuleValue(BaseModel):
     unit: Literal["delta", "strikes", "dollars", "percent", "days", "date"]
     # The unit as a screen writes it beside the box.
     unit_label: str
-    # A ``date`` is bounded as its 16:00 New York anchors.
+    # A ``date`` is bounded by two moments, ``bounds.min_ms`` and ``bounds.max_ms``. Every other unit is
+    # bounded by two numbers, ``bounds.min`` and ``bounds.max``.
     bounds: OptionValueBounds
 
 
@@ -629,6 +644,8 @@ class OptionPercentTerm(BaseModel):
     bounds: OptionValueBounds
     # What the term does, for the "(i)" beside it.
     help: str
+    # Why the range is what it is, in a sentence to show with the range. None: the range needs no reason.
+    range_reason: str | None
 
 
 class OptionWholeNumberTerm(BaseModel):
@@ -639,6 +656,7 @@ class OptionWholeNumberTerm(BaseModel):
     default: int
     bounds: OptionValueBounds
     help: str
+    range_reason: str | None
 
 
 class OptionOrderTermDefaults(BaseModel):
@@ -664,8 +682,9 @@ class OptionOrderTermNotes(BaseModel):
     entries_sentence: str
     exits_sentence: str
     hours_sentence: str
-    # What Alpaca's own page says it may do to an expiring position. Not verified on the account. A preview's
-    # ``order_terms.expiry_close_sentence`` says where the owner's own close falls against it.
+    # What Alpaca's documentation says it may do to an expiring position, said as that: it has not been seen
+    # on the account, and the sentence says so. A preview's ``order_terms.expiry_close_sentence`` says where
+    # the owner's own close falls against it.
     alpaca_sentence: str
 
 

@@ -10,6 +10,11 @@ The plan's rules, the resolver and the structure check name a leg by its id,
 in quotes, because an id is what they are handed. ``legs_by_number`` turns
 what they said into the builder's words. Their own words are not changed at
 the source: an entry's refusal is kept with the entry as it was said.
+
+**Money is said in dollars, and a number nobody meant is said by its
+length.** The money's own refusal counts in cents, and a rule with no top
+says back whatever number it was given. ``in_the_builders_words`` is the one
+translation every such sentence passes through on its way to a screen.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from typing import assert_never
 
 from app.options.american import AmericanIvStatus
 from app.options.bounds import Bounds, BoundsFault
+from app.options.contract import symbol_expiry_range_ms
 from app.options.expiry import option_expiry_date
 from app.schemas.action_plan import (
     AbsoluteExpiry,
@@ -40,8 +46,8 @@ from app.schemas.action_plan import (
 from app.schemas.option_preview import OptionLegRules
 
 _CENT = Decimal("0.01")
-# The most of a number an owner typed that is said back. More than this is not a number anyone meant.
-_MOST_SAID_BACK = 24
+# The longest a number is said back whole. A longer one is not a number anyone meant, and is said by its length.
+_MOST_SAID_BACK = 15
 
 
 def sentence(text: str) -> str:
@@ -71,15 +77,40 @@ def plural(count: int, one: str) -> str:
     return f"{count:,} {one}{'' if count == 1 else 's'}"
 
 
+def _by_its_length(written: str) -> str:
+    """A number too long to say back, said by how long it is. ``written`` is the number as it was written."""
+    digits = written.lstrip("+-")
+    if digits.isdigit():
+        return f"a {'negative ' if written.startswith('-') else ''}number of {len(digits):,} digits"
+    return f"a number {len(written):,} characters long"
+
+
 def said_back(typed: object) -> str:
-    """What an owner typed, as it is said back to them: cut short when it is too long to be a number anyone meant."""
+    """What an owner typed, as it is said back to them: whole, or by its length when it is too long to be a
+    number anyone meant."""
     text = str(typed)
-    return text if len(text) <= _MOST_SAID_BACK else f"{text[: _MOST_SAID_BACK - 3]}..."
+    return text if len(text) <= _MOST_SAID_BACK else _by_its_length(text)
+
+
+def counted(count: int, one: str) -> str:
+    """A count an owner set with what it counts: "3 strikes", "1 day". One too long to have been meant is
+    said by its length: "a number of 401 digits of strikes"."""
+    written = str(count)
+    if len(written) <= _MOST_SAID_BACK:
+        return plural(count, one)
+    return f"{_by_its_length(written)} of {one}s"
 
 
 def expiry_in_words(expiry: date) -> str:
     """A date as a contract's name writes it: "Oct 9 '26"."""
     return f"{expiry:%b} {expiry.day} '{expiry:%y}"
+
+
+def fixed_dates_taken_in_words() -> str:
+    """The dates a fixed expiry may be, first to last, each with its year in full: "a date from Jan 1, 2000
+    to Dec 31, 2099". The two ends are the first and last date a contract symbol can write."""
+    first, last = (option_expiry_date(anchor) for anchor in symbol_expiry_range_ms())
+    return f"a date from {first:%b} {first.day}, {first.year} to {last:%b} {last.day}, {last.year}"
 
 
 def age_in_words(age_ms: int) -> str:
@@ -94,7 +125,7 @@ def age_in_words(age_ms: int) -> str:
 
 
 def bounds_in_words(bounds: Bounds) -> str:
-    """A range as a sentence takes it: "a number above 0 and below 1", "a whole number from 1 to 300"."""
+    """A range as a sentence takes it: "a number above 0 and below 1", "a whole number from 1 to 30"."""
     low = None if bounds.lowest is None else plain(bounds.lowest)
     high = None if bounds.highest is None else plain(bounds.highest)
     whole = bounds.step == 1
@@ -113,12 +144,12 @@ def bounds_in_words(bounds: Bounds) -> str:
     return f"{'a whole number' if whole else 'a number'}{span}{finer}"
 
 
-def out_of_range_sentence(what: str, typed: object, bounds: Bounds, fault: BoundsFault, *, takes: str | None = None) -> str:
+def out_of_range_sentence(what: str, typed: object, bounds: Bounds, fault: BoundsFault) -> str:
     """Why a number is refused: what it was for, what was given, and what is taken. ``what`` begins the
     sentence: "Leg 2: Delta target"."""
     if fault == "finer" and bounds.step != 1:
         return f"{what} was given {said_back(typed)}. It is taken no finer than {plain(bounds.step or Decimal(0))}."
-    return f"{what} was given {said_back(typed)}. It takes {takes or bounds_in_words(bounds)}."
+    return f"{what} was given {said_back(typed)}. It takes {bounds_in_words(bounds)}."
 
 
 # ---- a leg, by its place ------------------------------------------------------------------------
@@ -160,12 +191,34 @@ def legs_by_number(text: str, order: Sequence[str]) -> str:
     return _SEVERAL_LEGS.sub(paired, said)
 
 
+_AN_AMOUNT_IN_CENTS = re.compile(r"(-?\d+) cents\b")
+# A whole number of more digits than are said back. Not the digits after a decimal point, which are a fraction's.
+_A_NUMBER_NOBODY_MEANT = re.compile(rf"(?<![\d.])[+-]?\d{{{_MOST_SAID_BACK + 1},}}(?!\.?\d)")
+
+
+def in_the_builders_words(text: str, order: Sequence[str]) -> str:
+    """A sentence from the plan's rules, the resolver, the structure check or the money, as the builder says it.
+
+    Each leg it quotes by id is named by its place (``legs_by_number``).
+    Each amount it gives in cents is written out in dollars: "-3958800
+    cents" becomes "-$39,588.00". Each number longer than anyone meant is
+    said by its length. Nothing else in the sentence is touched.
+    """
+    said = legs_by_number(text, order)
+    said = _AN_AMOUNT_IN_CENTS.sub(lambda found: usd(int(found[1])), said)
+    return _A_NUMBER_NOBODY_MEANT.sub(lambda found: _by_its_length(found[0]), said)
+
+
+def places_in_words(numbers: Sequence[int], *, first: str = "Leg") -> str:
+    """Legs by their places, as a sentence begins with them: "Leg 2", "Legs 2 and 3", "Legs 1, 2 and 3"."""
+    if len(numbers) == 1:
+        return f"{first} {numbers[0]}"
+    return f"{first}s {', '.join(str(number) for number in numbers[:-1])} and {numbers[-1]}"
+
+
 def leg_names(leg_ids: Sequence[str], order: Sequence[str]) -> str:
     """Legs by their places, as a sentence begins with them: "Leg 2", "Legs 2 and 3"."""
-    numbers = [str(order.index(leg_id) + 1) for leg_id in leg_ids]
-    if len(numbers) == 1:
-        return f"Leg {numbers[0]}"
-    return f"Legs {', '.join(numbers[:-1])} and {numbers[-1]}"
+    return places_in_words([order.index(leg_id) + 1 for leg_id in leg_ids])
 
 
 # ---- a leg's rules ------------------------------------------------------------------------------
@@ -184,7 +237,7 @@ def _strike_in_words(rule: StrikeSelector, order: Sequence[str]) -> str:
         case AtmOffsetStrike(offset=offset):
             if offset == 0:
                 return "at the money"
-            return f"{plural(abs(offset), 'strike')} {'above' if offset > 0 else 'below'} the money"
+            return f"{counted(abs(offset), 'strike')} {'above' if offset > 0 else 'below'} the money"
         case AbsoluteStrike(strike=strike):
             return f"the {plain(strike)} strike"
         case DeltaStrike(target=target, tolerance_delta=within):
@@ -207,7 +260,7 @@ def _strike_in_words(rule: StrikeSelector, order: Sequence[str]) -> str:
 def _expiry_in_words(rule: ExpirySelector) -> str:
     match rule:
         case MinDteExpiry(days=days):
-            return f"at least {plural(days, 'day')} out"
+            return f"at least {counted(days, 'day')} out"
         case NearestWeeklyExpiry():
             return "nearest weekly"
         case SameDayExpiry():

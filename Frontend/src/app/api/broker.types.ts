@@ -20017,6 +20017,8 @@ export interface components {
             help: string;
             /** Label */
             label: string;
+            /** Range Reason */
+            range_reason: string | null;
             /** Unit Label */
             unit_label: string;
         };
@@ -20131,8 +20133,6 @@ export interface components {
         /** OptionPreviewLeg */
         OptionPreviewLeg: {
             contract: components["schemas"]["OptionContractView"];
-            /** Daily Decay */
-            daily_decay: number | null;
             /** Delta */
             delta: number | null;
             /** Delta Status */
@@ -20297,6 +20297,8 @@ export interface components {
             price: string;
             /** Result Cents */
             result_cents: number;
+            /** Result Usd */
+            result_usd: string;
         };
         /**
          * OptionPreviewVerdict
@@ -20586,18 +20588,30 @@ export interface components {
         };
         /**
          * OptionValueBounds
-         * @description What a number typed into a box may be: the range the server holds it to. A form can refuse a number
-         *     outside it before asking. A number that reaches the preview all the same is refused in words.
+         * @description What may be typed into a box: the range the server holds it to. A form can refuse a value outside it
+         *     before asking. One that reaches the preview all the same is refused in words.
+         *
+         *     A box uses one pair of ends, never both. A box that takes a number uses
+         *     ``min`` and ``max``, exact decimals, and its ``min_ms`` and ``max_ms``
+         *     are null. A box that takes a date (a rule value whose ``unit`` is
+         *     ``date``) uses ``min_ms`` and ``max_ms``: the first and the last date
+         *     it takes, each as that date's 16:00 New York anchor in ``int64 ms UTC``,
+         *     to be shown in the date-only New York mode. Its ``min`` and ``max`` are
+         *     null, which there does not mean "no bound".
          */
         OptionValueBounds: {
             /** Max */
             max: string | null;
             /** Max Included */
             max_included: boolean;
+            /** Max Ms */
+            max_ms: number | null;
             /** Min */
             min: string | null;
             /** Min Included */
             min_included: boolean;
+            /** Min Ms */
+            min_ms: number | null;
             /** Sentence */
             sentence: string;
             /** Step */
@@ -20612,6 +20626,8 @@ export interface components {
             help: string;
             /** Label */
             label: string;
+            /** Range Reason */
+            range_reason: string | null;
             /** Unit Label */
             unit_label: string;
         };

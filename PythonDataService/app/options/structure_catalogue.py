@@ -329,6 +329,8 @@ class OrderTermStart:
     bounds: Bounds
     # What the term does, for the "(i)" beside it.
     help: str
+    # Why the range is what it is, in a sentence, where it is narrower than the term's own meaning asks.
+    range_reason: str | None = None
 
 
 def order_term_starts(terms: CloseTerms | None = None) -> dict[str, OrderTermStart]:
@@ -349,6 +351,7 @@ def order_term_starts(terms: CloseTerms | None = None) -> dict[str, OrderTermSta
             Decimal(order_terms.entry_wait_seconds(terms)),
             order_terms.ENTRY_WAIT_SECONDS,
             "How long an entry order waits for its fill. What has not filled by then is cancelled.",
+            range_reason=order_terms.ENTRY_WAIT_RANGE_REASON,
         ),
         "cost_limit_percent": OrderTermStart(
             "Whole-structure cost",
@@ -374,11 +377,12 @@ ENTRIES_SENTENCE = (
 )
 EXITS_SENTENCE = "Exits are market orders. A market order has no price limit."
 HOURS_SENTENCE = "Regular hours only."
-# How long before expiry Alpaca's Trading API page says it may act on a position itself. Not verified on the account.
+# How long before expiry Alpaca's Trading API page says it may act on a position itself. Its words are
+# "will sell-out the position within 1 hour before expiry". Not verified on the account (#2913).
 ALPACA_SELL_OUT_WINDOW_MINUTES = 60
 ALPACA_SENTENCE = (
-    "Alpaca says that when an account cannot afford to exercise an expiring position it sells the position "
-    "itself, within 1 hour before expiry."
+    "Alpaca's documentation says that when an account cannot afford to exercise an expiring position, Alpaca "
+    "will sell the position itself within 1 hour before expiry. This has not yet been seen on this account."
 )
 
 
@@ -388,9 +392,20 @@ def orders_in_a_line(*, gap_limit_percent: Decimal, entry_wait_seconds: int) -> 
 
 
 def expiry_close_sentence(lead_minutes: int) -> str:
-    """Where the owner's expiry-day close falls against the hour Alpaca names."""
+    """Where the owner's expiry-day close falls against the hour Alpaca names.
+
+    The owner's close is counted back from the session's close, a half
+    day's included. Alpaca's hour is counted back from "expiry", and nothing
+    here says the two are one moment: the comparison is made for an hour
+    that ends at the session's close, and says so.
+    """
     if lead_minutes > ALPACA_SELL_OUT_WINDOW_MINUTES:
-        return f"A close {lead_minutes} minutes before the session closes comes before that hour begins."
-    if lead_minutes == ALPACA_SELL_OUT_WINDOW_MINUTES:
-        return f"A close {lead_minutes} minutes before the session closes comes as that hour begins."
-    return f"A close {lead_minutes} minutes before the session closes is inside that hour."
+        falls = "comes before that hour begins"
+    elif lead_minutes == ALPACA_SELL_OUT_WINDOW_MINUTES:
+        falls = "comes as that hour begins"
+    else:
+        falls = "is inside that hour"
+    return (
+        f"A close {lead_minutes} minutes before the session closes {falls}, if the hour ends when the session "
+        'closes. Alpaca\'s own words are "before expiry".'
+    )

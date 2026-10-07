@@ -323,6 +323,14 @@ def test_an_entry_refused_for_a_wide_leg_never_reads_the_fee_provision_it_was_ha
     with pytest.raises(ValueError, match="a fee provision is a whole number of cents") as mistake:
         _prepared(_bought_spread(), picked=picked, quotes=tight, fee_provision_cents=-1)
     assert not isinstance(mistake.value, StructureMoneyRefused)
+    # A provision handed over as nothing is the same mistake, found at the same point, and is told in the
+    # money's own words: an entry keeps no second copy of them.
+    with pytest.raises(LegGapOverLimit):
+        _prepared(_bought_spread(), picked=picked, quotes=wide, fee_provision_cents=None)
+    with pytest.raises(ValueError, match="a fee provision is a whole number of cents") as nothing:
+        _prepared(_bought_spread(), picked=picked, quotes=tight, fee_provision_cents=None)
+    assert not isinstance(nothing.value, StructureMoneyRefused)
+    assert str(nothing.value) == str(mistake.value).replace("-1", "None")
 
 
 def test_an_entry_whose_money_is_refused_is_refused_for_that_whatever_crossing_its_markets_would_cost() -> None:

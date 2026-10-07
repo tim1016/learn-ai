@@ -49,9 +49,9 @@ from app.services.option_model_inputs import ModelInputsRead
 from app.services.option_preview_words import (
     delta_status_sentence,
     dollars,
+    in_the_builders_words,
     leg_asked_in_words,
     leg_names,
-    legs_by_number,
     plural,
     sentence,
     usd,
@@ -129,7 +129,6 @@ def _gap_sentence(leg: PickedLeg, percent: Decimal, limit: Decimal) -> str:
 def leg_view(leg: PickedLeg, now: int, *, number: int, gap_limit_percent: Decimal) -> OptionPreviewLeg:
     """``number`` is the leg's place in the request, counted from one."""
     gap = rounded(leg.gap_percent_of_mid)
-    worked = None if leg.daily_decay is None else leg.daily_decay.worked
     return OptionPreviewLeg(
         leg_id=leg.leg_id,
         number=number,
@@ -145,7 +144,6 @@ def leg_view(leg: PickedLeg, now: int, *, number: int, gap_limit_percent: Decima
         delta_status="inputs_not_known" if leg.priced is None else str(leg.priced.status),
         delta_status_sentence=delta_status_sentence(None if leg.priced is None else leg.priced.status),
         ibkr_delta=leg.vendor_delta,
-        daily_decay=None if worked is None else worked.decay,
     )
 
 
@@ -258,6 +256,22 @@ def at_expiry_view(figures: StructureFigures, underlying: str) -> OptionPreviewA
     loss_cents = figures.money.loss_at_expiry_cents
     assert loss_cents is not None
     even_at = [rounded(price) for price in seen.break_evens]
+    # The gain is held at zero where it is defined, so "up to $0.00" is said of a structure that never gains
+    # and of one that only loses. It only loses when no price brings it level: no break-even, and every point
+    # of its line below zero. The highest result is at a strike, which is on the line, or at a price of zero
+    # alone, which would be a break-even.
+    loses_at_every_price = bool(
+        seen.gain_cents == 0
+        and not seen.break_evens
+        and seen.sketch
+        and all(point.result_cents < 0 for point in seen.sketch)
+    )
+    if seen.gain_cents is None:
+        gain_sentence = f"The gain has no limit as {underlying} rises."
+    elif loses_at_every_price:
+        gain_sentence = f"No gain at any price of {underlying}: at expiry it loses at every price."
+    else:
+        gain_sentence = f"Gain up to {usd(seen.gain_cents)}, with {underlying} {where_in_words(seen.gain_holds)}."
     return OptionPreviewAtExpiry(
         estimated=True,
         loss_cents=loss_cents,
@@ -267,11 +281,7 @@ def at_expiry_view(figures: StructureFigures, underlying: str) -> OptionPreviewA
         gain_holds=[PriceRangeView(from_price=held.low, to_price=held.high) for held in seen.gain_holds],
         break_even_prices=even_at,
         loss_sentence=f"Lose up to {usd(loss_cents)}, with {underlying} {where_in_words(seen.loss_holds)}.",
-        gain_sentence=(
-            f"The gain has no limit as {underlying} rises."
-            if seen.gain_cents is None
-            else f"Gain up to {usd(seen.gain_cents)}, with {underlying} {where_in_words(seen.gain_holds)}."
-        ),
+        gain_sentence=gain_sentence,
         break_even_sentence=(
             f"Even with {underlying} at {' and at '.join(str(price) for price in even_at)}."
             if even_at
@@ -284,7 +294,10 @@ def at_expiry_view(figures: StructureFigures, underlying: str) -> OptionPreviewA
         warning_sentence=warning,
         loss_usd=usd(loss_cents),
         gain_usd=None if seen.gain_cents is None else usd(seen.gain_cents),
-        sketch=[OptionPreviewSketchPoint(price=point.price, result_cents=point.result_cents) for point in seen.sketch],
+        sketch=[
+            OptionPreviewSketchPoint(price=point.price, result_cents=point.result_cents, result_usd=usd(point.result_cents))
+            for point in seen.sketch
+        ],
     )
 
 
@@ -302,6 +315,8 @@ def decay_view(
         "weekend three of them pass before the next session."
     )
     if seen.total is None:
+        # A decay with no figure says why: ``StructureDecay`` is never made without one or the other.
+        assert seen.why_not is not None
         first = order.index(seen.legs_without[0]) + 1
         why = {
             DecayNotEstimated.INPUTS_NOT_KNOWN: f"the dividends for {underlying} are not known, so nothing is priced.",
@@ -309,7 +324,7 @@ def decay_view(
             DecayNotEstimated.NOT_PRICED: (
                 f"the model has no price for leg {first} a day from now. That is usual on a contract's last full day."
             ),
-        }[seen.why_not or DecayNotEstimated.NOT_PRICED]
+        }[seen.why_not]
         return OptionPreviewDecay(
             estimated=False,
             reason_code=str(seen.why_not),
@@ -332,12 +347,13 @@ def decay_view(
     else:
         direction, said = "neither", "Neither gains nor loses with a day, to the cent."
     warning = None
-    if seen.sold_calls_counting_a_dividend:
-        sold = seen.sold_calls_counting_a_dividend
+    if seen.sold_calls_in_the_money_at_an_ex_date:
+        sold = seen.sold_calls_in_the_money_at_an_ex_date
+        one = len(sold) == 1
         warning = (
-            f"{leg_names(sold, order)} {'is a sold call' if len(sold) == 1 else 'are sold calls'}, and {underlying} "
-            "goes ex-dividend inside the day. This figure counts the call falling by about the dividend as a gain. "
-            "A sold call in the money is often assigned just before that, and the gain is then not had."
+            f"{leg_names(sold, order)} {'is a sold call' if one else 'are sold calls'} in the money, and {underlying} "
+            f"goes ex-dividend inside the day. This figure counts {'that call' if one else 'each such call'}'s fall, "
+            "by up to the dividend, as a gain. A call like that may be assigned early, which takes the gain away."
         )
     return OptionPreviewDecay(
         estimated=True,
@@ -375,7 +391,7 @@ def entry_refusal_views(
         elif refusal.reason == StructureMoneyRefusal.COST_OVER_LIMIT and cost_sentence is not None:
             said = cost_sentence
         else:
-            said = sentence(legs_by_number(refusal.detail, order))
+            said = sentence(in_the_builders_words(refusal.detail, order))
         told.append(OptionPreviewEntryRefusal(reason_code=refusal.reason, leg_ids=list(refusal.leg_ids), sentence=said))
     return told
 

@@ -34,11 +34,22 @@ It is never held at zero. A put deep in the money ahead of an ex-date gains
 with a day, by the interest on its strike, and a structure can gain too.
 
 A dividend going ex inside the day is taken off the stock's price a day
-later, in full (``app.options.american``). A call then falls by about the
-dividend, and for a sold call that fall is counted here as a gain. It is a
-gain the seller often does not get: a call in the money is commonly
-exercised just before the ex-date, and the sold leg is assigned. Such a leg
-is named, so that whoever shows the figure can say so.
+later, in full (``app.options.american``). What that does to a call depends
+on where its strike is. A call deep in the money falls by about the
+dividend. A call at or out of the money hardly moves: its price now already
+has the dividend taken off. Measured at a price of 585.11, 3.2 days from
+expiry, a volatility of 0.20, a rate of 0.045 and $1.75 going ex in 23 hours
+against 25, the ex-date inside the day moved the decay by -1.60 a share at a
+strike of 540, by -0.74 at 575, and by two cents or less from 580 up
+(tests/options/test_decay.py).
+
+For a sold call that fall is counted here as a gain, of up to the dividend.
+It is a gain the seller may not get: a call in the money can be exercised
+just before the ex-date, and the sold leg is then assigned. So a sold call
+that is in the money now, with cash going ex inside the day, is named, and
+whoever shows the figure can say so. A sold call at or out of the money is
+not named: the model counts no such fall for it. The figure is the same
+either way. Only the naming turns on where the strike is.
 
 Near an ex-date each contract's figure is rougher than elsewhere: the tree
 is coarsest when the later price sits a day or so before the ex-date
@@ -154,8 +165,13 @@ class StructureDecay:
     why_not: DecayNotEstimated | None = None
     # The legs with no figure, in the structure's order, when it is not estimated.
     legs_without: tuple[str, ...] = ()
-    # The sold calls whose figure counts a dividend going ex inside the day: a gain that early assignment takes.
-    sold_calls_counting_a_dividend: tuple[str, ...] = ()
+    # The sold calls that are in the money now while cash goes ex inside the day. The figure counts each one's
+    # fall, by up to the dividend, as a gain, and early assignment would take that gain away.
+    sold_calls_in_the_money_at_an_ex_date: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (self.total is None) == (self.why_not is None):
+            raise ValueError("a structure's decay is a figure or a reason it has none, and never both")
 
     @property
     def estimated(self) -> bool:
@@ -168,14 +184,20 @@ def decay_not_estimated(structure: ResolvedStructure, why: DecayNotEstimated) ->
 
 
 def structure_daily_decay(
-    structure: ResolvedStructure, size: EntrySize, leg_decays: Mapping[str, LegDecay]
+    structure: ResolvedStructure, size: EntrySize, leg_decays: Mapping[str, LegDecay], *, underlying_price: float
 ) -> StructureDecay:
     """The daily decay of ``size`` structures, from each leg's contract decay per share, by leg id.
 
     A bought leg counts its contract's decay as it is, a sold leg turned
     about. Every leg must have an answer handed in; one whose answer is "no
     figure" leaves the structure with none, for that leg's reason.
+
+    ``underlying_price`` is the price each leg's decay was worked against.
+    It moves no figure. It says which sold calls are in the money now, with
+    a strike below it, and so are named when cash goes ex inside the day.
     """
+    if not (math.isfinite(underlying_price) and underlying_price > 0):
+        raise ValueError(f"the underlying's price is a number above zero; got {underlying_price!r}")
     leg_ids = {leg.leg_id for leg in structure.legs}
     if set(leg_decays) != leg_ids:
         raise ValueError(f"expected one decay for each of the legs {sorted(leg_ids)}; got {sorted(leg_decays)}")
@@ -183,22 +205,24 @@ def structure_daily_decay(
     if without:
         return StructureDecay(None, None, None, why_not=leg_decays[without[0]].why_not, legs_without=without)
     terms = []
-    counting_a_dividend = []
+    in_the_money_at_an_ex_date = []
     for leg in structure.legs:
         worked = leg_decays[leg.leg_id].worked
         assert worked is not None
         if not math.isfinite(worked.decay):
             raise ValueError(f"the decay of leg {leg.leg_id!r} must be a finite number; got {worked.decay!r}")
         terms.append((1 if leg.position == "long" else -1) * leg.ratio * worked.decay)
-        if leg.position == "short" and leg.contract.right == "call" and worked.cash_gone_ex > 0:
-            counting_a_dividend.append(leg.leg_id)
+        is_a_sold_call = leg.position == "short" and leg.contract.right == "call"
+        # The strike as the pricer was handed it, against the price it was handed.
+        if is_a_sold_call and worked.cash_gone_ex > 0 and float(leg.contract.strike) < underlying_price:
+            in_the_money_at_an_ex_date.append(leg.leg_id)
     per_share = math.fsum(terms)
     per_structure = size.multiplier * per_share
     return StructureDecay(
         per_share=per_share,
         per_structure=per_structure,
         total=size.units * per_structure,
-        sold_calls_counting_a_dividend=tuple(counting_a_dividend),
+        sold_calls_in_the_money_at_an_ex_date=tuple(in_the_money_at_an_ex_date),
     )
 
 

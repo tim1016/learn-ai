@@ -301,16 +301,19 @@ def prepare_entry(
     )
     if worked.refusals:
         raise worked.refusals[0]
-    if worked.money is None:
-        # Only a provision that was handed over as nothing gets here; said as the money says it.
-        raise ValueError(f"a fee provision is a whole number of cents, zero or more; got {fee_provision_cents!r}")
     assert worked.structure is not None and worked.size is not None and worked.net_price is not None
+    money = worked.money
+    if money is None:
+        # Only a provision that was handed over as nothing gets here, and the money refuses it in its own words.
+        money = entry_money(
+            worked.structure, worked.size, net_price=worked.net_price, fee_provision_cents=fee_provision_cents
+        )
     assert worked.round_trip_cost_cents is not None
     return PreparedEntry(
         structure=worked.structure,
         size=worked.size,
         net_limit_price=worked.net_price,
-        money=worked.money,
+        money=money,
         round_trip_cost_cents=worked.round_trip_cost_cents,
         quotes=dict(quotes),
     )

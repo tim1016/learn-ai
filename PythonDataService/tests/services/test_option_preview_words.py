@@ -20,10 +20,13 @@ from app.services.option_preview_words import (
     bounds_in_words,
     delta_status_sentence,
     dollars,
+    fixed_dates_taken_in_words,
+    in_the_builders_words,
     leg_asked_in_words,
     leg_names,
     legs_by_number,
     out_of_range_sentence,
+    places_in_words,
     plain,
     said_back,
 )
@@ -94,6 +97,74 @@ def test_legs_are_listed_by_their_places_one_or_several() -> None:
     assert leg_names(["alpha"], _ORDER) == "Leg 2"
     assert leg_names(["leg_3", "zulu"], _ORDER) == "Legs 3 and 1"
     assert leg_names(["zulu", "alpha", "leg_3"], _ORDER) == "Legs 1, 2 and 3"
+    assert places_in_words([2, 4]) == "Legs 2 and 4"
+
+
+# ---- Money in dollars, and a number nobody meant by its length ---------------------------------------------
+
+
+def test_an_amount_a_refusal_gives_in_cents_is_said_in_dollars_with_its_sign() -> None:
+    """The money's own refusal, as an entry keeps it. An owner reads dollars."""
+    as_the_money_says_it = "Requirement 0 cents plus premium -3958800 cents is not above zero; the prices do not belong together."
+
+    said = in_the_builders_words(as_the_money_says_it, _ORDER)
+
+    assert "$0.00" in said and "-$39,588.00" in said
+    assert "cents" not in said and "3958800" not in said
+
+
+def test_one_sentence_gets_all_three_translations_and_nothing_else_in_it_moves() -> None:
+    said = in_the_builders_words("leg 'alpha' would set aside 19410 cents for SPY261009C00585000 at 1791302400000", _ORDER)
+
+    assert said == "leg 2 would set aside $194.10 for SPY261009C00585000 at 1791302400000"
+
+
+@pytest.mark.parametrize(
+    ("as_its_source_says_it", "carries", "never"),
+    [
+        pytest.param(
+            f"leg 'zulu' asks for the strike +{10**400} from the money; the chain lists no such call",
+            ["leg 1", "401 digits"], ["0000000000000000"], id="steps beyond counting",
+        ),
+        pytest.param(
+            f"leg 'zulu' asks for the strike -{10**20} from the money", ["negative", "21 digits"], ["0000000000000000"],
+            id="steps below, beyond counting",
+        ),
+        pytest.param(
+            f"leg 'alpha' asks for an expiry {10**30} or more days after 2026-10-06", ["leg 2", "31 digits", "2026-10-06"],
+            ["0000000000000000"], id="days beyond counting",
+        ),
+    ],
+)
+def test_a_number_longer_than_anyone_meant_is_said_by_its_length_wherever_a_sentence_carries_it(
+    as_its_source_says_it: str, carries: list[str], never: list[str]
+) -> None:
+    said = in_the_builders_words(as_its_source_says_it, _ORDER)
+
+    assert all(part in said for part in carries), said
+    assert not any(part in said for part in never), said
+    assert len(said) < 120
+
+
+@pytest.mark.parametrize(
+    "left_alone",
+    [
+        "leg asks for a delta of 0.30000000000000004; the nearest is 0.2999999999999999889",
+        "SPY261009C00585000 was received at 1791302400000 and holds 123456789012345 contracts",
+        "the quote is 1234567890123456.25 wide",
+    ],
+    ids=["the digits after a decimal point", "a contract code, a time and a number of fifteen digits", "a long number with a fraction"],
+)
+def test_a_number_that_is_not_a_long_whole_number_is_left_as_it_was(left_alone: str) -> None:
+    assert in_the_builders_words(left_alone, _ORDER) == left_alone
+
+
+def test_the_dates_a_fixed_expiry_may_be_are_said_first_to_last_with_their_years_in_full() -> None:
+    """"Jan 1 '00 to Dec 31 '99" reads as backwards. A year in full does not."""
+    said = fixed_dates_taken_in_words()
+
+    assert said.index("2000") < said.index("2099")
+    assert "'00" not in said and "'99" not in said
 
 
 # ---- A leg's rules --------------------------------------------------------------------------------------
@@ -122,6 +193,9 @@ def _leg(strike: dict[str, Any], expiry: dict[str, Any] | None = None, **leg: An
         pytest.param({"selector": "percent", "percent": -3.0, "tolerance_percent": 1.0}, ["3%", "below", "within 1%"], ["above"], id="a percent below"),
         pytest.param({"selector": "atm"}, ["at the money"], [], id="at the money"),
         pytest.param({"selector": "absolute", "strike": 452.5}, ["452.5"], [], id="one named strike"),
+        pytest.param({"selector": "atm_offset", "offset": 10**400}, ["401 digits", "above"], ["0000000000000000"], id="steps beyond counting"),
+        pytest.param({"selector": "atm_offset", "offset": -(10**400)}, ["401 digits", "below"], ["0000000000000000"], id="steps below, beyond counting"),
+        pytest.param({"selector": "atm_offset", "offset": 10**14}, ["100,000,000,000,000 strikes"], ["digits"], id="fifteen digits are still said whole"),
     ],
 )
 def test_a_legs_strike_rule_is_said_with_its_own_numbers_and_which_way_it_goes(
@@ -137,6 +211,7 @@ def test_a_legs_strike_rule_is_said_with_its_own_numbers_and_which_way_it_goes(
     ("expiry", "carries"),
     [
         pytest.param({"selector": "min_dte", "days": 7}, "7 days", id="at least a week out"),
+        pytest.param({"selector": "min_dte", "days": 10**400}, "401 digits", id="days beyond counting, said by their length"),
         pytest.param({"selector": "min_dte", "days": 1}, "1 day ", id="at least a day out"),
         pytest.param({"selector": "nearest_weekly"}, "weekly", id="the nearest weekly"),
         pytest.param({"selector": "same_day"}, "same day", id="the same day"),
@@ -204,9 +279,29 @@ def test_a_number_refused_is_said_back_with_what_it_was_for_and_what_is_taken() 
     assert "2.5" in not_whole and "whole number" in not_whole
 
 
-def test_a_number_too_long_to_have_been_meant_is_not_said_back_whole() -> None:
-    assert said_back("1e999999999") == "1e999999999"
-    assert len(said_back("9" * 5_000)) == 24 and said_back("9" * 5_000).endswith("...")
+def test_a_number_of_fifteen_characters_or_fewer_is_said_back_as_it_was_typed() -> None:
+    assert [said_back(typed) for typed in ("1e999999999", "-1e999999999", 2.5, 150, "123456789012345", "-0.000001")] == [
+        "1e999999999", "-1e999999999", "2.5", "150", "123456789012345", "-0.000001",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("typed", "length"),
+    [
+        pytest.param("9" * 5_000, "5,000 digits", id="five thousand nines"),
+        pytest.param(10**400, "401 digits", id="a whole number of 401 digits"),
+        pytest.param("1234567890123456", "16 digits", id="one digit too long"),
+        pytest.param(-(10**20), "21 digits", id="as long below nothing"),
+        pytest.param("3.33333333333333333", "19 characters", id="a long fraction, by its characters"),
+        pytest.param("1e" + "9" * 40, "42 characters", id="a long exponent, by its characters"),
+    ],
+)
+def test_a_number_too_long_to_have_been_meant_is_said_by_its_length_and_never_whole(typed: object, length: str) -> None:
+    said = said_back(typed)
+
+    assert length in said and len(said) < 40
+    assert str(typed)[:16] not in said
+    assert ("negative" in said) is str(typed).startswith("-")
 
 
 # ---- Numbers, as an owner writes them ----------------------------------------------------------------------

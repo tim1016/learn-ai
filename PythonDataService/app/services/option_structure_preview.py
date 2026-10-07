@@ -27,14 +27,19 @@ would be refused come from the one function an entry is prepared by
 cost limit. The contracts are picked under the entry cutoff the owner's own
 entry wait and expiry-day close make.
 
-**Its figures are good for a minute.** They are a reading of one moment.
-Past ``FIGURES_GOOD_FOR_MS`` a page shows when the quotes were read in their
-place, or asks again.
+**Its figures are good for a minute, counted from the read.** They are a
+reading of one moment: the second read of the supervisor, which comes after
+the rate and the dividends were looked up and so up to a few seconds after
+the ask. Past ``FIGURES_GOOD_FOR_MS`` from that read a page shows when the
+quotes were read in their place, or asks again. The minute says how long the
+figures may be shown as they are. It does not say an entry could be made on
+them: an entry needs quotes no older than five seconds.
 
-**A leg is named by its place.** Every sentence here that came from the
-plan's rules, the resolver or the structure check names a leg by its id;
-each is turned into the builder's "leg 2" on its way out
-(``app.services.option_preview_words.legs_by_number``).
+**A leg is named by its place, and money is said in dollars.** Every
+sentence here that came from the plan's rules, the resolver, the structure
+check or the money names a leg by its id and counts in cents; each is turned
+into the builder's words on its way out
+(``app.services.option_preview_words.in_the_builders_words``).
 
 The supervisor is read on the event loop, where its callbacks write, and
 nothing here holds the loop for long. The lookups of the rate and the
@@ -84,13 +89,14 @@ from app.options.structure_catalogue import (
 )
 from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, NoLine, WindowContract, expiries_wanted, watched_window
-from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg
+from app.schemas.action_plan import ActionPlan, DeltaStrike, LegDistanceStrike, OptionEntryLeg
 from app.schemas.option_preview import (
     OptionPreviewAtExpiry,
     OptionPreviewDecay,
     OptionPreviewEntryRefusal,
     OptionPreviewLean,
     OptionPreviewLeg,
+    OptionPreviewLegAsked,
     OptionPreviewMoney,
     OptionPreviewOrderTerms,
     OptionPreviewVerdict,
@@ -101,7 +107,7 @@ from app.schemas.option_preview import (
     PreviewState,
 )
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead, off_the_loop
-from app.services.option_preview_out_of_range import OutOfRange
+from app.services.option_preview_out_of_range import OutOfRange, RequestSaidBack
 from app.services.option_preview_views import (
     at_expiry_view,
     contract_view,
@@ -115,7 +121,15 @@ from app.services.option_preview_views import (
     pricing_inputs_view,
     quote_view,
 )
-from app.services.option_preview_words import age_in_words, expiry_in_words, leg_names, legs_by_number, plural, sentence
+from app.services.option_preview_words import (
+    age_in_words,
+    expiry_in_words,
+    in_the_builders_words,
+    leg_names,
+    places_in_words,
+    plural,
+    sentence,
+)
 from app.services.option_search import PreviewSearches, ResolutionWithDecay, SearchAsk, SearchNotRun
 from app.services.option_watch import OptionWatchList
 from app.utils.session_anchors import et_date_at_ms
@@ -126,8 +140,10 @@ if TYPE_CHECKING:
 
 # How long a page's request for quotes stands after its last ask.
 PREVIEW_LEASE_MS = 60_000
-# How long a preview's figures may be shown as they are. As long as the page's request for quotes stands
-# after one ask: past that nothing is holding the quotes the figures were read from.
+# How long a preview's figures may be shown as they are, counted from the read of the quotes they stand on.
+# The same length as a page's hold on its quote lines, which is counted from the ask. The read comes after
+# the ask, by as long as the rate and the dividends took to look up, so the figures' minute ends that much
+# after the hold does.
 FIGURES_GOOD_FOR_MS = PREVIEW_LEASE_MS
 # How long after a window is first asked for its quotes are said to be arriving. After that, a quote that
 # has not come is reported as what it is.
@@ -201,8 +217,27 @@ def plan_of(request: OptionStructurePreviewRequest) -> ActionPlan:
 
 
 def _the_plans_own_words(refused: ValidationError) -> str:
-    said = [str(error["msg"]).removeprefix("Value error, ") for error in refused.errors(include_url=False)]
-    return " ".join(sentence(text) for text in said)
+    """What the plan's rules said of the legs, a sentence a rule, each said once.
+
+    One of those rules is a pattern a leg's id must match, and its own words
+    are the pattern, which is no sentence. It is said by the leg's place: a
+    plan's legs and its exits are in the request's order.
+    """
+    said: list[str] = []
+    for error in refused.errors(include_url=False):
+        where = error["loc"]
+        # The leg's own id, where it is entered and where it is closed. Not the id of a leg its strike is measured from.
+        about_an_id = error["type"] == "string_pattern_mismatch" and "strike" not in where
+        if about_an_id and where[-1:] in (("leg_id",), ("entry_leg_id",)) and isinstance(where[1], int):
+            text = (
+                f"Leg {where[1] + 1} has an id a plan cannot carry. The page makes each leg's id: this is its "
+                "mistake, and nothing you set."
+            )
+        else:
+            text = sentence(str(error["msg"]).removeprefix("Value error, "))
+        if text not in said:
+            said.append(text)
+    return " ".join(said)
 
 
 def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
@@ -533,15 +568,114 @@ class _Found:
     entry_sentence: str | None = None
 
 
+def _answer(
+    said_back: RequestSaidBack,
+    found: _Found,
+    *,
+    now: int,
+    order_terms: OptionPreviewOrderTerms | None,
+    legs_asked: list[OptionPreviewLegAsked],
+) -> OptionStructurePreview:
+    """One answer: what was found, beside the parts of the request every answer says back.
+
+    ``now`` is when the ask was taken up: what an answer with no reading of
+    the supervisor is stamped with. ``order_terms`` and ``legs_asked`` are a
+    request's own terms and legs said back. A request refused before it
+    stood has none to say back.
+    """
+    reading = found.reading
+    read_ms = now if reading is None else reading.now
+    with_figures = found.state == "resolved"
+    return OptionStructurePreview(
+        state=found.state,
+        reason_code=found.reason_code,
+        notice=found.notice,
+        fault=found.fault,
+        leg_ids=list(found.leg_ids),
+        contract=None if found.contract is None else contract_view(found.contract),
+        ask_again_in_ms=found.ask_again_in_ms,
+        underlying=said_back.underlying,
+        structure=said_back.structure,
+        structure_label=label(said_back.structure),
+        structure_in_a_sentence=in_a_sentence(said_back.structure),
+        structures=said_back.structures,
+        gap_limit_percent=said_back.gap_limit_percent,
+        cost_limit_percent=said_back.cost_limit_percent,
+        order_terms=order_terms,
+        legs_asked=legs_asked,
+        quotes_read_ms=read_ms,
+        feed_generation=None if reading is None else reading.feed.generation,
+        oldest_quote_age_ms=found.oldest_quote_age_ms,
+        quotes_read_sentence=(
+            None
+            if found.oldest_quote_age_ms is None
+            else f"IBKR live quotes. The oldest of them was {age_in_words(found.oldest_quote_age_ms)} old when they were read."
+        ),
+        # Counted from the read of the quotes, not from when the ask was taken up.
+        figures_good_until_ms=read_ms + FIGURES_GOOD_FOR_MS if with_figures else None,
+        figures_good_for_ms=FIGURES_GOOD_FOR_MS if with_figures else None,
+        figures_stale_sentence=(
+            f"These figures are from quotes read more than {age_in_words(FIGURES_GOOD_FOR_MS)} ago. "
+            "Refresh to read them again."
+            if with_figures
+            else None
+        ),
+        underlying_quote=None if reading is None else quote_view(reading.underlying_quote, reading.now),
+        the_money=None if reading is None else reading.money,
+        the_money_sentence=(
+            None
+            if reading is None
+            else f"Strikes are counted from {said_back.underlying}'s live mid quote, {reading.money}. "
+            "A bot counts from the close of the bar it decided on."
+        ),
+        verdict=found.verdict,
+        legs=list(found.legs),
+        money=found.money,
+        at_expiry=found.at_expiry,
+        lean=found.lean,
+        lean_unknown_sentence=found.lean_unknown_sentence,
+        decay=found.decay,
+        entry_refusals=list(found.entry_refusals),
+        entry_sentence=found.entry_sentence,
+        watched=None if reading is None else _watched_view(reading),
+        pricing_inputs=None if found.inputs is None else pricing_inputs_view(found.inputs),
+        preview_sentence="A preview. The bot picks again at every entry.",
+    )
+
+
+def _cannot_be_deployed(
+    reason: PreviewReason,
+    why: str,
+    *,
+    leg_ids: tuple[str, ...] = (),
+    cannot: str = "This structure cannot be deployed.",
+) -> _Found:
+    """What an answer finds of a structure that is refused before anything is resolved for it."""
+    return _Found(
+        state="plan_refused",
+        reason_code=str(reason),
+        notice=why,
+        leg_ids=leg_ids,
+        verdict=OptionPreviewVerdict(
+            can_be_deployed=False,
+            deploy_sentence=f"{cannot} {why}",
+            deploy_reason_code=str(reason),
+            resolves_as_built=None,
+            resolves_sentence="Nothing is resolved for a structure that cannot be deployed.",
+            resolves_reason_code=None,
+            leg_ids=list(leg_ids),
+            red=True,
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _Asked:
-    """What was asked, and the parts of every answer that do not depend on what was found."""
+    """A request that stood, and the parts of every answer to it that do not depend on what was found."""
 
     request: OptionStructurePreviewRequest
     # When the ask was taken up: what an answer with no reading of the supervisor is stamped with.
     now: int
-    # False for a request with a number outside its range: its legs and its terms are not said back as asked.
-    in_range: bool = True
 
     @property
     def order(self) -> list[str]:
@@ -549,80 +683,27 @@ class _Asked:
         return [leg.leg_id for leg in self.request.legs]
 
     def said(self, text: str) -> str:
-        """A sentence that came from the plan's rules, the resolver or the structure check, with its legs
-        named by their places."""
-        return legs_by_number(text, self.order)
+        """A sentence that came from the plan's rules, the resolver, the structure check or the money, in the
+        builder's words: its legs named by their places, and its money in dollars."""
+        return in_the_builders_words(text, self.order)
 
     def _answer(self, found: _Found) -> OptionStructurePreview:
-        request, reading = self.request, found.reading
-        read_ms = self.now if reading is None else reading.now
-        with_figures = found.state == "resolved"
-        return OptionStructurePreview(
-            state=found.state,
-            reason_code=found.reason_code,
-            notice=found.notice,
-            fault=found.fault,
-            leg_ids=list(found.leg_ids),
-            contract=None if found.contract is None else contract_view(found.contract),
-            ask_again_in_ms=found.ask_again_in_ms,
-            underlying=request.underlying,
-            structure=request.structure,
-            structure_label=label(request.structure),
-            structure_in_a_sentence=in_a_sentence(request.structure),
-            structures=request.structures,
-            gap_limit_percent=request.gap_limit_percent,
-            cost_limit_percent=request.cost_limit_percent,
-            order_terms=(
-                OptionPreviewOrderTerms(
-                    gap_limit_percent=request.gap_limit_percent,
-                    entry_wait_seconds=request.entry_wait_seconds,
-                    cost_limit_percent=request.cost_limit_percent,
-                    expiry_close_lead_minutes=request.expiry_close_lead_minutes,
-                    expiry_close_sentence=expiry_close_sentence(request.expiry_close_lead_minutes),
-                    orders_sentence=orders_in_a_line(
-                        gap_limit_percent=request.gap_limit_percent, entry_wait_seconds=request.entry_wait_seconds
-                    ),
-                )
-                if self.in_range
-                else None
+        request = self.request
+        return _answer(
+            RequestSaidBack.of(request),
+            found,
+            now=self.now,
+            order_terms=OptionPreviewOrderTerms(
+                gap_limit_percent=request.gap_limit_percent,
+                entry_wait_seconds=request.entry_wait_seconds,
+                cost_limit_percent=request.cost_limit_percent,
+                expiry_close_lead_minutes=request.expiry_close_lead_minutes,
+                expiry_close_sentence=expiry_close_sentence(request.expiry_close_lead_minutes),
+                orders_sentence=orders_in_a_line(
+                    gap_limit_percent=request.gap_limit_percent, entry_wait_seconds=request.entry_wait_seconds
+                ),
             ),
-            legs_asked=legs_asked_view(request) if self.in_range else [],
-            quotes_read_ms=read_ms,
-            feed_generation=None if reading is None else reading.feed.generation,
-            oldest_quote_age_ms=found.oldest_quote_age_ms,
-            quotes_read_sentence=(
-                None
-                if found.oldest_quote_age_ms is None
-                else f"IBKR live quotes. The oldest of them was {age_in_words(found.oldest_quote_age_ms)} old when they were read."
-            ),
-            figures_good_until_ms=read_ms + FIGURES_GOOD_FOR_MS if with_figures else None,
-            figures_good_for_ms=FIGURES_GOOD_FOR_MS if with_figures else None,
-            figures_stale_sentence=(
-                f"These figures are from quotes read more than {age_in_words(FIGURES_GOOD_FOR_MS)} ago. "
-                "Refresh to read them again."
-                if with_figures
-                else None
-            ),
-            underlying_quote=None if reading is None else quote_view(reading.underlying_quote, reading.now),
-            the_money=None if reading is None else reading.money,
-            the_money_sentence=(
-                None
-                if reading is None
-                else f"Strikes are counted from {request.underlying}'s live mid quote, {reading.money}. "
-                "A bot counts from the close of the bar it decided on."
-            ),
-            verdict=found.verdict,
-            legs=list(found.legs),
-            money=found.money,
-            at_expiry=found.at_expiry,
-            lean=found.lean,
-            lean_unknown_sentence=found.lean_unknown_sentence,
-            decay=found.decay,
-            entry_refusals=list(found.entry_refusals),
-            entry_sentence=found.entry_sentence,
-            watched=None if reading is None else _watched_view(reading),
-            pricing_inputs=None if found.inputs is None else pricing_inputs_view(found.inputs),
-            preview_sentence="A preview. The bot picks again at every entry.",
+            legs_asked=legs_asked_view(request),
         )
 
     def _verdict(
@@ -655,31 +736,9 @@ class _Asked:
         )
 
     def plan_refused(
-        self,
-        reason: PreviewReason,
-        why: str,
-        *,
-        leg_ids: tuple[str, ...] = (),
-        cannot: str = "This structure cannot be deployed.",
+        self, reason: PreviewReason, why: str, *, leg_ids: tuple[str, ...] = ()
     ) -> OptionStructurePreview:
-        return self._answer(
-            _Found(
-                state="plan_refused",
-                reason_code=str(reason),
-                notice=why,
-                leg_ids=leg_ids,
-                verdict=OptionPreviewVerdict(
-                    can_be_deployed=False,
-                    deploy_sentence=f"{cannot} {why}",
-                    deploy_reason_code=str(reason),
-                    resolves_as_built=None,
-                    resolves_sentence="Nothing is resolved for a structure that cannot be deployed.",
-                    resolves_reason_code=None,
-                    leg_ids=list(leg_ids),
-                    red=True,
-                ),
-            )
-        )
+        return self._answer(_cannot_be_deployed(reason, why, leg_ids=leg_ids))
 
     def without_figures(
         self, plan: ActionPlan, why: _NoFigures, inputs: ModelInputsRead | None = None
@@ -712,7 +771,11 @@ class _Asked:
     ) -> OptionStructurePreview:
         request, name = self.request, plan.structure
         broken = figures.not_as_built
-        if broken is None:
+        if broken is None and figures.entry_refusals:
+            # A leg quoted too wide, or a cost over its limit: flagged, not red, and never said to be enterable.
+            comes_to = "every leg comes to a contract" if name is None else f"it resolves to {with_its_article(name)}"
+            resolves = f"Right now {comes_to}, but an entry would be skipped. The reasons are listed with the entry."
+        elif broken is None:
             resolves = (
                 "Right now every leg comes to a contract, and the structure can be entered."
                 if name is None
@@ -779,13 +842,15 @@ def preview_of_numbers_out_of_range(
 ) -> OptionStructurePreview:
     """The answer to a request whose numbers are outside their ranges: what cannot be deployed, and why, box
     by box. Nothing is resolved for it, and whatever quote lines its page held are given back."""
-    watch.unwatch(_KEY_PREFIX + refused.request.preview_key)
-    return _Asked(refused.request, clock(), in_range=False).plan_refused(
+    watch.unwatch(_KEY_PREFIX + refused.said_back.preview_key)
+    found = _cannot_be_deployed(
         PreviewReason.VALUE_OUT_OF_RANGE,
         " ".join(refused.sentences),
         leg_ids=refused.leg_ids,
         cannot="This cannot be deployed as it is.",
     )
+    # The request did not stand, so its rules and its terms are not said back as if they did.
+    return _answer(refused.said_back, found, now=clock(), order_terms=None, legs_asked=[])
 
 
 async def preview_option_structure(
@@ -819,15 +884,32 @@ async def preview_option_structure(
             PreviewReason.SHARE_CLASS_UNDERLYING,
             f"Options on a ticker with a share class, such as {request.underlying}, are not handled yet.",
         )
-    twice = sorted({number for number, leg_id in enumerate(asked.order, start=1) if asked.order.count(leg_id) > 1})
-    if twice:
+    shared = [leg_id for leg_id in dict.fromkeys(asked.order) if asked.order.count(leg_id) > 1]
+    if shared:
         watch.unwatch(key)
-        shared = [leg.leg_id for leg in request.legs if asked.order.count(leg.leg_id) > 1]
+        # Each id that was given twice, with the places of the legs that were given it.
+        told = [
+            f"{places_in_words([number for number, given in enumerate(asked.order, start=1) if given == leg_id])} "
+            "were given one id."
+            for leg_id in shared
+        ]
         return asked.plan_refused(
-            PreviewReason.LEGS_SHARE_AN_ID,
-            f"Legs {', '.join(str(number) for number in twice[:-1])} and {twice[-1]} were given one id. "
-            "Each leg has an id of its own.",
-            leg_ids=tuple(dict.fromkeys(shared)),
+            PreviewReason.LEGS_SHARE_AN_ID, f"{' '.join(told)} Each leg has an id of its own.", leg_ids=tuple(shared)
+        )
+    adrift = [
+        leg.leg_id
+        for leg in request.legs
+        if isinstance(leg.strike, LegDistanceStrike) and leg.strike.leg_id not in asked.order
+    ]
+    if adrift:
+        # The plan refuses this too, and names the missing leg by an id nobody was shown. Said here by place.
+        watch.unwatch(key)
+        one = len(adrift) == 1
+        return asked.plan_refused(
+            PreviewReason.PLAN_REFUSED,
+            f"{leg_names(adrift, asked.order)} {'measures its strike' if one else 'measure their strikes'} from a leg "
+            "that is not in this structure. Choose the leg to measure from again.",
+            leg_ids=tuple(adrift),
         )
     try:
         plan = plan_of(request)

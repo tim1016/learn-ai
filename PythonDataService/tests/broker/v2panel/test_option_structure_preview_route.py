@@ -396,6 +396,23 @@ async def test_a_request_that_is_not_a_preview_request_is_refused_as_malformed(d
     assert response.status_code == 422, response.text
 
 
+async def test_a_gap_limit_left_out_is_the_one_the_catalogue_starts_from_and_a_gap_limit_of_null_is_malformed(
+    deploy_app,
+) -> None:
+    """A request says a number or leaves the field out. Left out, a leg's gap is judged by the limit an owner
+    starts from, as the catalogue gives it. Null is neither: it was once "not judged", and is no longer taken."""
+    app, _registry = deploy_app
+    starts_at = (await _get(app, f"{_BOTS}/option-structures")).json()["order_terms"]["gap_limit_percent"]["default"]
+    left_out = {name: value for name, value in _SPREAD.items() if name != "gap_limit_percent"}
+
+    taken = await _post(app, left_out)
+    with_null = await _post(app, {**_SPREAD, "gap_limit_percent": None})
+
+    assert "gap_limit_percent" not in left_out and taken.status_code == 200, taken.text
+    assert taken.json()["gap_limit_percent"] == taken.json()["order_terms"]["gap_limit_percent"] == starts_at == "8"
+    assert with_null.status_code == 422, with_null.text
+
+
 @pytest.mark.parametrize("no_number", ["NaN", "Infinity", "-Infinity"])
 async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_is_never_an_error(
     deploy_app, no_number: str
@@ -430,7 +447,9 @@ async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_
         pytest.param({"gap_limit_percent": "1e999000"}, ["1e999000", "100"], [], id="a gap limit that would write out to a megabyte"),
         pytest.param({"gap_limit_percent": "7.1234567"}, ["7.1234567", "0.000001"], [], id="a gap limit as fine"),
         pytest.param({"gap_limit_percent": "0"}, ["above 0"], [], id="a gap limit of nothing"),
-        pytest.param({"entry_wait_seconds": 0}, ["1 to 300"], [], id="an entry that waits for nothing"),
+        pytest.param({"entry_wait_seconds": 0}, ["1 to 30", "50 seconds"], [], id="an entry that waits for nothing"),
+        pytest.param({"entry_wait_seconds": 31}, ["31", "1 to 30", "50 seconds"], [], id="a wait a second longer than an owner may choose"),
+        pytest.param({"entry_wait_seconds": 300}, ["300", "1 to 30"], [], id="the longest wait the Clerk itself would take"),
         pytest.param({"entry_wait_seconds": 2.5}, ["2.5", "whole number"], [], id="an entry wait that is no whole number"),
         pytest.param({"expiry_close_lead_minutes": 391}, ["391", "0 to 390"], [], id="a close before the session opens"),
         pytest.param(
@@ -456,7 +475,7 @@ async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_
         ),
         pytest.param(
             {"legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "absolute", "expiration_ms": 10**30}}]},
-            ["Leg 1", "'99"], ["long_call"], id="a date past any a symbol can write",
+            ["Leg 1", "2000", "2099"], ["long_call"], id="a date past any a symbol can write",
         ),
         pytest.param(
             {"structures": 101, "legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "min_dte", "days": 0}}]},
@@ -586,8 +605,11 @@ def _either_side(bounds: dict[str, Any]) -> tuple[list[Decimal], list[Decimal]]:
     return inside, outside
 
 
-def _as_json(number: Decimal, *, text: bool) -> Any:
-    """A percent an owner sets travels as text. Every other number travels as a number."""
+def _as_json(number: Decimal | str, *, text: bool) -> Any:
+    """A percent an owner sets travels as text. Every other number travels as a number. A number handed in as
+    text is sent as that text, whatever the box: a page can send one, and JSON has no number that large."""
+    if isinstance(number, str):
+        return number
     if text:
         return str(number)
     return int(number) if number == number.to_integral_value() and abs(number) < 10**15 else float(number)
@@ -597,8 +619,9 @@ def _leg_with(strike: dict[str, Any], expiry: dict[str, Any], *, leg_id: str = "
     return {"leg_id": leg_id, "position": "long", "qty_ratio": qty, "right": "call", "strike": strike, "expiry": expiry}
 
 
-async def _boxes(app) -> list[tuple[str, dict[str, Any], Any]]:
-    """Every number the catalogue gives a range for: what to call it, its range, and how to ask with it typed in."""
+async def _boxes(app, *, with_the_date: bool = False) -> list[tuple[str, dict[str, Any], Any]]:
+    """Every number the catalogue gives a range for: what to call it, its range, and how to ask with it typed in.
+    The fixed date is a box too, and is left out unless asked for: its range is two moments, not two numbers."""
     catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
     weekly = {"selector": "nearest_weekly"}
     by_delta = {"selector": "delta", "target": 0.30}
@@ -619,7 +642,7 @@ async def _boxes(app) -> list[tuple[str, dict[str, Any], Any]]:
 
             boxes.append((f"{rule['selector']} {box}", rule[box]["bounds"], typed))
     for rule in catalogue["expiry_rules"]:
-        if rule["value"] is None or rule["value"]["unit"] == "date":
+        if rule["value"] is None or (rule["value"]["unit"] == "date" and not with_the_date):
             continue
 
         def typed(number: Decimal, rule=rule) -> dict[str, Any]:
@@ -716,6 +739,70 @@ async def test_what_the_catalogue_says_of_a_number_is_what_the_server_does_with_
     assert taken + refused == 14 * len(_A_SPREAD_OF_NUMBERS) and taken >= 100 and refused >= 100
 
 
+_TOO_LARGE_TO_WRITE_OUT = ["1e999999999", "-1e999999999", "1e1000000", "-1e1000000"]
+_TOO_SMALL_TO_WRITE_OUT = ["1e-999999999", "1e-1000000"]
+
+
+async def test_a_number_written_as_text_with_a_huge_exponent_is_refused_or_answered_in_words_in_every_box(
+    deploy_app,
+) -> None:
+    """Numbers a page can send as text and no JSON number can be: too large, or too small, for anything to
+    round or write out. Typed into each of the fifteen boxes. None is an error: a box with no top once failed
+    on these.
+
+    One too large is a malformed request or is refused in words as out of range, and is never taken. One too
+    small is nothing to a box that holds a float, which reads it as zero: taken where zero is in the box's
+    range, refused in words where it is not.
+    """
+    app, _registry = deploy_app
+    boxes = await _boxes(app, with_the_date=True)
+    answered = {"in words": 0, "malformed": 0, "read as nothing": 0}
+
+    for what, _bounds, typed in boxes:
+        for number in _TOO_LARGE_TO_WRITE_OUT + _TOO_SMALL_TO_WRITE_OUT:
+            response = await _post(app, typed(number))
+            assert response.status_code in (200, 422), (what, number, response.status_code, response.text[:300])
+            if response.status_code == 422:
+                answered["malformed"] += 1
+                continue
+            seen = response.json()
+            if seen["state"] == "no_quote_source":
+                # A structure the plan takes, on a Clerk with no quote source to resolve it against.
+                assert number in _TOO_SMALL_TO_WRITE_OUT and seen["verdict"]["can_be_deployed"], (what, number)
+                answered["read as nothing"] += 1
+                continue
+            assert (seen["state"], seen["reason_code"]) == ("plan_refused", _OUT_OF_RANGE), (what, number, seen["notice"])
+            assert seen["notice"] and seen["verdict"]["red"] and len(seen["notice"]) < 400, (what, number)
+            answered["in words"] += 1
+
+    # Seven of the strike rules', two of the expiry rules', a leg's quantity, the structures, four terms.
+    assert len(boxes) == 15
+    assert sum(answered.values()) == 15 * 6
+    # Each answer happens: a box with a top or a bottom says so, and one with neither has nothing to say.
+    assert answered["in words"] >= 40 and answered["malformed"] >= 6 and answered["read as nothing"] >= 1
+
+
+async def test_a_number_as_text_in_a_box_with_no_top_is_malformed_above_it_and_refused_in_words_below_its_bottom(
+    deploy_app,
+) -> None:
+    """Steps from the money have no top and no bottom, and days out have a bottom of one and no top. These are
+    the two boxes where nothing stops a huge number before its step is read."""
+    app, _registry = deploy_app
+
+    async def asked(strike: dict[str, Any], expiry: dict[str, Any]) -> httpx.Response:
+        return await _post(app, {"preview_key": "page-0001", "underlying": "SPY", "legs": [_leg_with(strike, expiry)]})
+
+    weekly, at_the_money = {"selector": "nearest_weekly"}, {"selector": "atm"}
+    for huge in ("1e999999999", "-1e999999999", "1e1000000"):
+        assert (await asked({"selector": "atm_offset", "offset": huge}, weekly)).status_code == 422, huge
+    for huge in ("1e999999999", "1e1000000"):
+        assert (await asked(at_the_money, {"selector": "min_dte", "days": huge})).status_code == 422, huge
+    below = await asked(at_the_money, {"selector": "min_dte", "days": "-1e999999999"})
+    assert below.status_code == 200, below.text
+    assert (below.json()["reason_code"], below.json()["leg_ids"]) == (_OUT_OF_RANGE, ["this_leg"])
+    assert "-1e999999999" in below.json()["notice"] and "1 or more" in below.json()["notice"]
+
+
 async def test_a_fixed_date_is_taken_from_the_first_to_the_last_a_contract_symbol_can_carry(deploy_app) -> None:
     app, _registry = deploy_app
     catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
@@ -729,8 +816,8 @@ async def test_a_fixed_date_is_taken_from_the_first_to_the_last_a_contract_symbo
         assert response.status_code == 200, response.text
         return response.json()
 
-    # What the catalogue serves is the two anchors, and they are the ends of what is taken.
-    assert (int(bounds["min"]), int(bounds["max"])) == (
+    # What the catalogue serves is the two anchors, as moments, and they are the ends of what is taken.
+    assert (bounds["min_ms"], bounds["max_ms"]) == (
         option_expiry_anchor_ms(date(2000, 1, 1)), option_expiry_anchor_ms(date(2099, 12, 31)),
     )
     assert bounds["min_included"] and bounds["max_included"] and bounds["step"] is None
@@ -738,7 +825,50 @@ async def test_a_fixed_date_is_taken_from_the_first_to_the_last_a_contract_symbo
     for day in (date(1999, 12, 31), date(2100, 1, 1)):
         seen = await asked(day)
         assert (seen["state"], seen["reason_code"], seen["leg_ids"]) == ("plan_refused", _OUT_OF_RANGE, ["this_leg"])
-        assert "Leg 1" in seen["notice"] and "'00" in seen["notice"] and "'99" in seen["notice"]
+        # The range reads forwards, with its years in full: "'00 to '99" reads as backwards.
+        assert "Leg 1" in seen["notice"] and seen["notice"].index("2000") < seen["notice"].index("2099")
+        assert "'00" not in seen["notice"] and "'99" not in seen["notice"]
+
+
+def _every_range(served: Any, found: list[tuple[str, dict[str, Any]]] | None = None, under: str = "") -> list[tuple[str, dict[str, Any]]]:
+    """Every range in the served catalogue, with the name of what holds it."""
+    found = [] if found is None else found
+    if isinstance(served, dict):
+        if "bounds" in served:
+            found.append((f"{under}:{served.get('unit', '')}", served["bounds"]))
+        for name, part in served.items():
+            if name.endswith("_bounds"):
+                found.append((name, part))
+            else:
+                _every_range(part, found, name)
+    elif isinstance(served, list):
+        for part in served:
+            _every_range(part, found, under)
+    return found
+
+
+async def test_a_time_in_the_served_catalogue_is_a_number_of_milliseconds_and_never_text(deploy_app) -> None:
+    """The fixed date's range is two moments. They are served as JSON numbers, ``int64 ms UTC``, in fields of
+    their own. A number's range is served as exact decimals, in text, and carries no moment. No range is served
+    both ways, and none carries a moment in a field that takes text."""
+    app, _registry = deploy_app
+
+    ranges = _every_range((await _get(app, f"{_BOTS}/option-structures")).json())
+
+    of_dates = [bounds for name, bounds in ranges if name.endswith(":date")]
+    of_numbers = [bounds for name, bounds in ranges if not name.endswith(":date")]
+    # Seven strike boxes, days out, the fixed date, a leg's quantity, the structures and four terms.
+    assert (len(of_dates), len(of_numbers)) == (1, 14)
+    (dates,) = of_dates
+    assert (type(dates["min_ms"]), type(dates["max_ms"])) == (int, int)
+    assert 0 < dates["min_ms"] < dates["max_ms"] <= 253_402_300_799_999
+    assert (dates["min"], dates["max"], dates["step"]) == (None, None, None)
+    assert "2000" in dates["sentence"] and "2099" in dates["sentence"]
+    for bounds in of_numbers:
+        assert (bounds["min_ms"], bounds["max_ms"]) == (None, None), bounds
+        assert all(end is None or isinstance(end, str) for end in (bounds["min"], bounds["max"], bounds["step"])), bounds
+    # Nothing in the whole catalogue is text that reads as a moment in milliseconds.
+    assert str(dates["min_ms"]) not in (await _get(app, f"{_BOTS}/option-structures")).text.replace(f': {dates["min_ms"]}', "").replace(f':{dates["min_ms"]}', "")
 
 
 async def test_the_range_of_each_order_term_is_the_one_the_terms_own_module_states(deploy_app) -> None:
@@ -759,6 +889,24 @@ async def test_the_range_of_each_order_term_is_the_one_the_terms_own_module_stat
         assert Decimal(served["step"]) == bounds.step and served["sentence"], name
         # Where a term starts is inside what it may be.
         assert bounds.fault(Decimal(str(terms[name]["default"]))) is None, name
+
+
+async def test_the_entry_wait_is_offered_from_one_to_thirty_seconds_with_the_reason_it_is_no_longer(deploy_app) -> None:
+    """Narrower than the Clerk's own five minutes. The catalogue says why beside the range, and a wait refused
+    for being outside it is told the same reason."""
+    app, _registry = deploy_app
+
+    terms = (await _get(app, f"{_BOTS}/option-structures")).json()["order_terms"]
+
+    wait = terms["entry_wait_seconds"]
+    assert (wait["bounds"]["min"], wait["bounds"]["max"], wait["bounds"]["step"], wait["default"]) == ("1", "30", "1", 20)
+    assert wait["range_reason"] == order_terms.ENTRY_WAIT_RANGE_REASON and "50 seconds" in wait["range_reason"]
+    # The other three ranges need no reason beside them.
+    assert [terms[name]["range_reason"] for name in terms if name != "entry_wait_seconds"] == [None, None, None]
+    taken = await _post(app, {**_SPREAD, "entry_wait_seconds": 30})
+    refused = await _post(app, {**_SPREAD, "entry_wait_seconds": 31})
+    assert (taken.json()["state"], taken.json()["order_terms"]["entry_wait_seconds"]) == ("no_quote_source", 30)
+    assert refused.json()["reason_code"] == _OUT_OF_RANGE and wait["range_reason"] in refused.json()["notice"]
 
 
 async def test_a_rule_with_no_bound_on_a_side_says_so_and_takes_a_number_of_any_size_there(
@@ -811,6 +959,10 @@ async def test_the_catalogue_names_each_structure_two_ways_and_says_what_how_tel
     assert all(notes.values()) and len(set(notes.values())) == 4
     # An exit has no price limit, and the owner is told so in as many words.
     assert "no price limit" in notes["exits_sentence"] and "limit" in notes["entries_sentence"]
+    # What Alpaca may do near expiry is its documentation's word, in its own terms, and is said to be unseen
+    # on this account. It is not said as a thing this system has watched happen.
+    assert "documentation" in notes["alpaca_sentence"] and "before expiry" in notes["alpaca_sentence"]
+    assert "not yet been seen" in notes["alpaca_sentence"]
 
 
 def test_a_pages_search_goes_to_this_processs_preview_lane_and_never_to_the_lane_a_bots_entry_uses() -> None:

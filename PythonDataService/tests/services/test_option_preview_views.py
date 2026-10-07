@@ -7,7 +7,7 @@ from fractions import Fraction
 
 import pytest
 
-from app.options.at_expiry import AtExpiry, PriceRange
+from app.options.at_expiry import AtExpiry, PriceRange, ResultAt
 from app.options.decay import DecayNotEstimated, StructureDecay
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA, Lean, LeanDirection
 from app.options.named_structures import NamedStructure
@@ -84,6 +84,64 @@ def test_a_payoff_that_is_level_everywhere_is_said_to_hold_at_any_price() -> Non
     assert [(held.from_price, held.to_price) for held in seen.loss_holds] == [(Decimal(0), None)]
     for said in (seen.loss_sentence, seen.gain_sentence):
         assert "any price" in said and "or above" not in said and "at 0" not in said
+
+
+def _line(*points: tuple[int, int]) -> tuple[ResultAt, ...]:
+    return tuple(ResultAt(Decimal(price), cents) for price, cents in points)
+
+
+def test_a_structure_that_gains_at_no_price_is_said_to_lose_at_every_price_and_not_to_gain_up_to_nothing() -> None:
+    """The 585 call bought and the 590 sold for $5.50 a share, on a spread $5 wide: -$550.00 at 585 and below,
+    -$50.00 at 590 and above. The gain is held at zero where it is defined, and the line is not."""
+    above_590 = (PriceRange(Decimal(590), None),)
+    paid_too_much = AtExpiry(
+        gain_cents=0, gain_holds=above_590, loss_holds=(PriceRange(Decimal(0), Decimal(585)),), break_evens=(),
+        sketch=_line((583, -55_000), (585, -55_000), (590, -5_000), (592, -5_000)),
+    )
+
+    seen = at_expiry_view(_figures(at_expiry=paid_too_much), "SPY")
+
+    assert "every price" in seen.gain_sentence and "$0.00" not in seen.gain_sentence
+    # The figure keeps the definition it has. Only the words say what a gain of nothing means here.
+    assert (seen.gain_cents, seen.gain_usd, seen.gain_has_no_limit) == (0, "$0.00", False)
+    assert "590" not in seen.gain_sentence
+
+
+@pytest.mark.parametrize(
+    ("break_evens", "sketch"),
+    [
+        pytest.param((Fraction(590),), _line((583, -50_000), (585, -50_000), (590, 0), (592, 0)), id="level at nothing from 590 up: it breaks even there"),
+        pytest.param((), _line((583, 0), (585, 0), (592, 0)), id="worth the same everywhere: it loses nowhere"),
+        pytest.param((Fraction(0),), _line((583, -200), (585, -300), (592, -300)), id="even only with the stock at nothing"),
+    ],
+)
+def test_a_gain_of_nothing_that_some_price_reaches_is_still_said_as_a_gain_of_nothing(
+    break_evens: tuple[Fraction, ...], sketch: tuple[ResultAt, ...]
+) -> None:
+    """Held at zero is not the same as never reached. Where some price brings the entry level, it does not lose
+    at every price, and is not said to."""
+    reached = AtExpiry(
+        gain_cents=0, gain_holds=(PriceRange(Decimal(590), None),), loss_holds=(PriceRange(Decimal(0), Decimal(585)),),
+        break_evens=break_evens, sketch=sketch,
+    )
+
+    seen = at_expiry_view(_figures(at_expiry=reached), "SPY")
+
+    assert "every price" not in seen.gain_sentence and "$0.00" in seen.gain_sentence
+
+
+def test_each_point_of_the_line_at_expiry_comes_in_cents_and_written_out_in_dollars() -> None:
+    drawn = AtExpiry(
+        gain_cents=30_600, gain_holds=(PriceRange(Decimal(590), None),), loss_holds=(PriceRange(Decimal(0), Decimal(585)),),
+        break_evens=(Fraction("586.94"),), sketch=_line((583, -19_400), (585, -19_400), (587, 600), (590, 30_600), (592, 123_456_700)),
+    )
+
+    seen = at_expiry_view(_figures(at_expiry=drawn), "SPY")
+
+    assert [(point.price, point.result_cents, point.result_usd) for point in seen.sketch] == [
+        (Decimal(583), -19_400, "-$194.00"), (Decimal(585), -19_400, "-$194.00"), (Decimal(587), 600, "$6.00"),
+        (Decimal(590), 30_600, "$306.00"), (Decimal(592), 123_456_700, "$1,234,567.00"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -223,13 +281,31 @@ def test_each_reason_a_decay_is_not_estimated_has_words_of_its_own_and_names_a_l
     assert (seen.near_ex_date_sentence, seen.warning_sentence) == (None, None)
 
 
-def test_sold_calls_that_count_a_dividend_are_named_by_their_places_one_or_several() -> None:
-    one = decay_view(_decayed(20.0, sold_calls_counting_a_dividend=("second",)), "SPY", _ORDER, goes_ex_soon=True)
-    two = decay_view(_decayed(20.0, sold_calls_counting_a_dividend=("second", "third")), "SPY", _ORDER, goes_ex_soon=True)
+def test_sold_calls_in_the_money_at_an_ex_date_are_named_by_their_places_one_or_several() -> None:
+    one = decay_view(_decayed(20.0, sold_calls_in_the_money_at_an_ex_date=("second",)), "SPY", _ORDER, goes_ex_soon=True)
+    two = decay_view(
+        _decayed(20.0, sold_calls_in_the_money_at_an_ex_date=("second", "third")), "SPY", _ORDER, goes_ex_soon=True
+    )
 
     assert "Leg 2 " in one.warning_sentence and "Legs 2 and 3" in two.warning_sentence
     assert one.warning_sentence != two.warning_sentence and "second" not in two.warning_sentence
     assert one.near_ex_date_sentence and "3 days" in one.near_ex_date_sentence
+    # A call at the money falls by nothing and one deep in it by the whole dividend. Neither is "about" it.
+    for warning in (one.warning_sentence, two.warning_sentence):
+        assert "up to the dividend" in warning and "about the dividend" not in warning
+
+
+def test_a_decay_whose_legs_are_named_out_of_the_order_of_their_ids_names_them_by_their_places() -> None:
+    """The request's first leg is "zulu" and its second "alpha": a place is not an order of names."""
+    order = ["zulu", "alpha"]
+
+    not_priced = decay_view(
+        _decayed(None, why_not=DecayNotEstimated.NO_VOLATILITY, legs_without=("alpha",)), "SPY", order, goes_ex_soon=False
+    )
+    warned = decay_view(_decayed(20.0, sold_calls_in_the_money_at_an_ex_date=("zulu",)), "SPY", order, goes_ex_soon=True)
+
+    assert "leg 2" in not_priced.sentence and "leg 1" not in not_priced.sentence
+    assert "Leg 1 " in warned.warning_sentence and "Leg 2" not in warned.warning_sentence
 
 
 def test_figures_with_no_structure_have_no_decay_to_show() -> None:
@@ -259,6 +335,24 @@ def test_each_refusal_an_entry_would_meet_is_said_in_the_builders_words_under_it
     assert "Leg 2" in by_gap and "8.50%" in by_gap and "8%" in by_gap and "only" not in by_gap
     # The cost is said as it is said beside the money, not in the entry's cents.
     assert by_cost == "The cost, said once."
+    # The limit a refusal names is the owner's own, whatever it is.
+    (_, at_six, _) = entry_refusal_views(figures, ["first", "only"], gap_limit_percent=Decimal("6.25"), cost_sentence="x")
+    assert "6.25%" in at_six.sentence and "8%" not in at_six.sentence
+
+
+def test_money_that_cannot_be_set_aside_is_refused_in_dollars_and_never_in_cents() -> None:
+    """Sold for more than the structure could ever owe: the money's own refusal counts in cents."""
+    refused = NotAsBuilt(
+        str(StructureMoneyRefusal.COMMITMENT_NOT_POSITIVE), (),
+        "Requirement 0 cents plus premium -3958800 cents is not above zero; the prices do not belong together.",
+    )
+
+    (told,) = entry_refusal_views(
+        _figures(entry_refusals=(refused,), money=None), ["first"], gap_limit_percent=Decimal(8), cost_sentence=None
+    )
+
+    assert told.reason_code == StructureMoneyRefusal.COMMITMENT_NOT_POSITIVE
+    assert "-$39,588.00" in told.sentence and "$0.00" in told.sentence and "cents" not in told.sentence
 
 
 def test_whether_an_entry_would_be_skipped_is_said_three_ways() -> None:

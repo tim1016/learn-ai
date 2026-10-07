@@ -34554,6 +34554,17 @@
             "title": "Label",
             "type": "string"
           },
+          "range_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Reason"
+          },
           "unit_label": {
             "title": "Unit Label",
             "type": "string"
@@ -34564,7 +34575,8 @@
           "unit_label",
           "default",
           "bounds",
-          "help"
+          "help",
+          "range_reason"
         ],
         "title": "OptionPercentTerm",
         "type": "object"
@@ -34942,17 +34954,6 @@
           "contract": {
             "$ref": "#/components/schemas/OptionContractView"
           },
-          "daily_decay": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daily Decay"
-          },
           "delta": {
             "anyOf": [
               {
@@ -35051,8 +35052,7 @@
           "implied_volatility",
           "delta_status",
           "delta_status_sentence",
-          "ibkr_delta",
-          "daily_decay"
+          "ibkr_delta"
         ],
         "title": "OptionPreviewLeg",
         "type": "object"
@@ -35354,11 +35354,16 @@
           "result_cents": {
             "title": "Result Cents",
             "type": "integer"
+          },
+          "result_usd": {
+            "title": "Result Usd",
+            "type": "string"
           }
         },
         "required": [
           "price",
-          "result_cents"
+          "result_cents",
+          "result_usd"
         ],
         "title": "OptionPreviewSketchPoint",
         "type": "object"
@@ -36162,7 +36167,7 @@
           },
           "entry_wait_seconds": {
             "default": 20,
-            "maximum": 300.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Entry Wait Seconds",
             "type": "integer"
@@ -36295,7 +36300,7 @@
       },
       "OptionValueBounds": {
         "additionalProperties": false,
-        "description": "What a number typed into a box may be: the range the server holds it to. A form can refuse a number\noutside it before asking. A number that reaches the preview all the same is refused in words.",
+        "description": "What may be typed into a box: the range the server holds it to. A form can refuse a value outside it\nbefore asking. One that reaches the preview all the same is refused in words.\n\nA box uses one pair of ends, never both. A box that takes a number uses\n``min`` and ``max``, exact decimals, and its ``min_ms`` and ``max_ms``\nare null. A box that takes a date (a rule value whose ``unit`` is\n``date``) uses ``min_ms`` and ``max_ms``: the first and the last date\nit takes, each as that date's 16:00 New York anchor in ``int64 ms UTC``,\nto be shown in the date-only New York mode. Its ``min`` and ``max`` are\nnull, which there does not mean \"no bound\".",
         "properties": {
           "max": {
             "anyOf": [
@@ -36312,6 +36317,20 @@
             "title": "Max Included",
             "type": "boolean"
           },
+          "max_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Ms"
+          },
           "min": {
             "anyOf": [
               {
@@ -36326,6 +36345,20 @@
           "min_included": {
             "title": "Min Included",
             "type": "boolean"
+          },
+          "min_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Ms"
           },
           "sentence": {
             "title": "Sentence",
@@ -36348,6 +36381,8 @@
           "min_included",
           "max",
           "max_included",
+          "min_ms",
+          "max_ms",
           "step",
           "sentence"
         ],
@@ -36372,6 +36407,17 @@
             "title": "Label",
             "type": "string"
           },
+          "range_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Reason"
+          },
           "unit_label": {
             "title": "Unit Label",
             "type": "string"
@@ -36382,7 +36428,8 @@
           "unit_label",
           "default",
           "bounds",
-          "help"
+          "help",
+          "range_reason"
         ],
         "title": "OptionWholeNumberTerm",
         "type": "object"
