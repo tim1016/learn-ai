@@ -14,6 +14,7 @@ from app.broker.contract.option_events import (
     BrokerOptionActivityUnreadable,
     BrokerOptionEventActivity,
     BrokerOptionEventEvidence,
+    BrokerOptionEventResume,
     BrokerOptionShareTradeActivity,
     OptionActivityStatus,
     allocation_of,
@@ -30,7 +31,7 @@ from app.options.event_allocation import (
     expected_share_trade,
 )
 from app.options.expiry import option_expiry_anchor_ms
-from app.utils.session_anchors import et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_midnight_ms
 
 _OBSERVED = 1_700_000_000_000
 _CALL = OptionContract.from_occ_symbol("QS240301C00004500")
@@ -89,8 +90,23 @@ def _bought(owner: str, contracts: int, *, opened: date, sequence: int, contract
 def test_an_activity_carries_its_date_and_its_whole_contracts() -> None:
     event = _event()
 
-    assert event.activity_date == _ASSIGNED_ON
+    assert event.activity_date_ms == et_midnight_ms(_ASSIGNED_ON)
     assert event.contracts == 3
+
+
+def _handed_out(activity: BrokerOptionEventActivity | BrokerOptionShareTradeActivity) -> dict[str, Any]:
+    """Every value an activity gives a caller: its fields, and what its class works out from them."""
+    worked_out = [name for name, member in vars(type(activity)).items() if isinstance(member, property)]
+    return {name: getattr(activity, name) for name in (*type(activity).model_fields, *worked_out)}
+
+
+def test_an_activitys_date_travels_as_milliseconds_and_in_no_second_form() -> None:
+    """The date is ``activity_date_ms``. A calendar date beside it would be a second form of one time."""
+    for activity in (_event(), _share_trade()):
+        handed_out = _handed_out(activity)
+
+        assert handed_out["activity_date_ms"] == et_midnight_ms(_ASSIGNED_ON)
+        assert [name for name, value in handed_out.items() if isinstance(value, date)] == []
 
 
 @pytest.mark.parametrize(
@@ -147,17 +163,17 @@ def test_an_expiry_is_dated_on_its_contracts_expiry_date_or_after(day: date) -> 
         kind=OptionEventKind.EXPIRED, activity_type="OPEXP", position_change=-1, activity_date_ms=et_midnight_ms(day)
     )
 
-    assert event.activity_date == day
+    assert event.activity_date_ms == et_midnight_ms(day)
 
 
 def test_an_assignment_or_an_exercise_may_come_before_the_expiry_date() -> None:
     """An American option can be exercised, and so assigned, on any day it is open."""
     early = et_midnight_ms(date(2024, 2, 20))
 
-    assert _event(activity_date_ms=early).activity_date == date(2024, 2, 20)
+    assert _event(activity_date_ms=early).activity_date_ms == early
     assert _event(
         kind=OptionEventKind.EXERCISED, activity_type="OPEXC", position_change=-1, activity_date_ms=early
-    ).activity_date == date(2024, 2, 20)
+    ).activity_date_ms == early
 
 
 @pytest.mark.parametrize("net_amount", [Decimal("-450"), Decimal("0.01")])
@@ -182,18 +198,94 @@ def test_an_activity_has_no_field_the_contract_does_not_name() -> None:
         _event(description="Option Assignment")
 
 
+# ── Nothing is read as a number, a price or a kind that is not one ──────────
+
+
+@pytest.mark.parametrize("position_change", [True, 1.0, "1", Decimal("1")], ids=["a boolean", "a float", "text", "a decimal"])
+def test_a_count_of_contracts_is_a_whole_number_and_nothing_else_is_read_as_one(position_change: Any) -> None:
+    with pytest.raises(ValidationError):
+        _event(position_change=position_change)
+
+
+@pytest.mark.parametrize("shares", [True, -300.0, "-300", Decimal("-300")], ids=["a boolean", "a float", "text", "a decimal"])
+def test_a_count_of_shares_is_a_whole_number_and_nothing_else_is_read_as_one(shares: Any) -> None:
+    with pytest.raises(ValidationError):
+        _share_trade(shares=shares)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"price": 4.5}, {"price": "4.5"}, {"price": 4}, {"net_amount": 1350}, {"net_amount": 1350.0}, {"net_amount": "1350"}],
+    ids=["a float price", "a price in text", "a whole-number price", "whole-number cash", "float cash", "cash in text"],
+)
+def test_a_share_trades_money_is_an_exact_decimal_or_it_is_refused(changes: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _share_trade(**changes)
+
+
+@pytest.mark.parametrize("net_amount", [0, 0.0, "0", False], ids=["a whole number", "a float", "text", "a boolean"])
+def test_an_events_cash_is_an_exact_decimal_or_it_is_refused(net_amount: Any) -> None:
+    with pytest.raises(ValidationError):
+        _event(net_amount=net_amount)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"kind": "assigned"}, {"status": "executed"}, {"contract": "QS240301C00004500"}, {"activity_id": 7}, {"group_id": 7}],
+    ids=["a kind in text", "a status in text", "a contract as its symbol", "an id that is a number", "a group id that is a number"],
+)
+def test_a_kind_a_status_and_a_contract_are_handed_over_as_what_they_are(changes: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _event(**changes)
+    if "kind" not in changes and "contract" not in changes:
+        with pytest.raises(ValidationError):
+            _share_trade(**changes)
+
+
+# ── Every time is inside the range the domain admits ────────────────────────
+
+_TIMES_OUT_OF_RANGE = [-1, MAX_TIMESTAMP_MS + 1, 2**63 - 1, True, 1_700_000_000_000.0, "1700000000000"]
+_TIMES_OUT_OF_RANGE_IDS = ["before 1970", "past year 9999", "the int64 limit", "a boolean", "a float", "text"]
+
+
+@pytest.mark.parametrize("field", ["observed_at_ms", "created_at_ms"])
+@pytest.mark.parametrize("instant", _TIMES_OUT_OF_RANGE, ids=_TIMES_OUT_OF_RANGE_IDS)
+def test_a_time_on_an_activity_is_whole_milliseconds_inside_the_domains_range(field: str, instant: Any) -> None:
+    with pytest.raises(ValidationError):
+        _event(**{field: instant})
+    with pytest.raises(ValidationError):
+        _share_trade(**{field: instant})
+
+
+@pytest.mark.parametrize("instant", [0, MAX_TIMESTAMP_MS], ids=["the epoch", "the last admitted millisecond"])
+def test_the_ends_of_the_domains_range_are_inside_it(instant: int) -> None:
+    for activity in (
+        _event(observed_at_ms=instant, created_at_ms=instant),
+        _share_trade(observed_at_ms=instant, created_at_ms=instant),
+    ):
+        assert (activity.observed_at_ms, activity.created_at_ms) == (instant, instant)
+
+
+def test_an_activity_date_past_the_domains_range_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        _event(activity_date_ms=MAX_TIMESTAMP_MS + 1)
+    with pytest.raises(ValidationError):
+        _unreadable(activity_date_ms=MAX_TIMESTAMP_MS + 1)
+
+
 # ── Whether a read explains the window ──────────────────────────────────────
 
 
-def _unreadable() -> BrokerOptionActivityUnreadable:
-    return BrokerOptionActivityUnreadable(
-        broker="alpaca",
-        activity_id="20240301000000000::4bd8c683-0b2c-489f-9df9-1243ff621648",
-        activity_type="OPEXP",
-        activity_date_ms=et_midnight_ms(_ASSIGNED_ON),
-        symbol="QS240301P00000500",
-        reason="Alpaca field 'qty' must be a whole number other than zero; got '-0.5'",
-    )
+def _unreadable(**changes: Any) -> BrokerOptionActivityUnreadable:
+    fields: dict[str, Any] = {
+        "broker": "alpaca",
+        "activity_id": "20240301000000000::4bd8c683-0b2c-489f-9df9-1243ff621648",
+        "activity_type": "OPEXP",
+        "activity_date_ms": et_midnight_ms(_ASSIGNED_ON),
+        "symbol": "QS240301P00000500",
+        "reason": "Alpaca field 'qty' must be a whole number other than zero; got '-0.5'",
+    }
+    return BrokerOptionActivityUnreadable(**{**fields, **changes})
 
 
 def test_a_complete_walk_with_every_row_read_is_a_whole_read() -> None:
@@ -202,12 +294,46 @@ def test_a_complete_walk_with_every_row_read_is_a_whole_read() -> None:
     assert evidence.read_whole is True
 
 
+def _resume(**changes: Any) -> BrokerOptionEventResume:
+    fields: dict[str, Any] = {
+        "page_token": "20240301000000000::fee-0299",
+        "last_page_oldest_ms": et_midnight_ms(_ASSIGNED_ON),
+    }
+    return BrokerOptionEventResume(**{**fields, **changes})
+
+
 def test_a_walk_that_did_not_reach_the_windows_start_is_not_a_whole_read() -> None:
-    evidence = BrokerOptionEventEvidence(
-        events=(_event(),), share_trades=(), history_complete=False, next_page_token="20240301000000000::fee-0299"
-    )
+    evidence = BrokerOptionEventEvidence(events=(_event(),), share_trades=(), history_complete=False, resume=_resume())
 
     assert evidence.read_whole is False
+
+
+def test_a_resume_cannot_be_made_from_the_cursor_alone() -> None:
+    """A cursor without the time the walk had reached would start the order check again from nothing."""
+    with pytest.raises(ValidationError, match="last_page_oldest_ms"):
+        BrokerOptionEventResume(page_token="20240301000000000::fee-0299")
+    with pytest.raises(ValidationError, match="page_token"):
+        BrokerOptionEventResume(last_page_oldest_ms=et_midnight_ms(_ASSIGNED_ON))
+
+
+def test_a_resume_says_so_when_the_last_page_proved_no_order() -> None:
+    assert _resume(last_page_oldest_ms=None).last_page_oldest_ms is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"page_token": ""}, {"page_token": 299}, *({"last_page_oldest_ms": instant} for instant in _TIMES_OUT_OF_RANGE)],
+    ids=["a blank cursor", "a cursor that is a number", *_TIMES_OUT_OF_RANGE_IDS],
+)
+def test_a_resume_holds_a_cursor_and_a_time_inside_the_domains_range(changes: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _resume(**changes)
+
+
+def test_a_resume_survives_being_written_down_and_read_back() -> None:
+    """A poller keeps it between calls. What it reads back is what the walk handed out."""
+    for resume in (_resume(), _resume(last_page_oldest_ms=None)):
+        assert BrokerOptionEventResume.model_validate_json(resume.model_dump_json()) == resume
 
 
 def test_one_unreadable_row_means_the_read_is_not_whole_however_complete_the_walk() -> None:

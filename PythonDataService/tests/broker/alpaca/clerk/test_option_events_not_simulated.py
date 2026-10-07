@@ -16,10 +16,11 @@ from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
-from app.broker.contract.option_events import BrokerOptionEventEvidence
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 
 _AFTER_MS = 1_709_269_200_000
 _NONE_AND_COMPLETE = BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
+_RESUME = BrokerOptionEventResume(page_token="a-token", last_page_oldest_ms=_AFTER_MS)
 
 
 class _LiveRead:
@@ -33,7 +34,9 @@ class _LiveRead:
     def capabilities(self) -> Any:
         return ALPACA_LIVE_CAPABILITIES
 
-    async def read_option_event_activities(self, *, after_ms: int, page_token: str | None = None) -> str:
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> str:
         self.option_event_reads += 1
         return "the live account's option events"
 
@@ -52,6 +55,8 @@ async def test_a_shadow_world_reports_none_of_the_live_accounts_option_events_as
     evidence = await ports.read.read_option_event_activities(after_ms=_AFTER_MS)
 
     assert evidence == _NONE_AND_COMPLETE
+    # A resume it never issued changes nothing: there is no walk of its own to go on with.
+    assert await ports.read.read_option_event_activities(after_ms=_AFTER_MS, resume=_RESUME) == _NONE_AND_COMPLETE
     assert live.option_event_reads == 0
 
 
@@ -59,4 +64,4 @@ async def test_the_simulations_answer_reaches_a_caller_through_the_clerks_guarde
     simulation = SyntheticBroker(account_id="sim:options-1")
     read, _trade = guard_broker_ports(read=simulation, trade=simulation, intake=ReentrantAsyncLock())
 
-    assert await read.read_option_event_activities(after_ms=_AFTER_MS, page_token="a-token") == _NONE_AND_COMPLETE
+    assert await read.read_option_event_activities(after_ms=_AFTER_MS, resume=_RESUME) == _NONE_AND_COMPLETE

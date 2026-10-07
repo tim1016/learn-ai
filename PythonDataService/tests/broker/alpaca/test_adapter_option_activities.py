@@ -20,6 +20,7 @@ from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.option_events import (
     BrokerOptionEventActivity,
+    BrokerOptionEventResume,
     BrokerOptionShareTradeActivity,
     OptionActivityStatus,
     share_trade_disagreements,
@@ -91,7 +92,6 @@ def test_the_documented_exercise_maps_every_field() -> None:
     assert event.status is OptionActivityStatus.EXECUTED
     # A date becomes 00:00 New York time on it, once, here.
     assert event.activity_date_ms == et_midnight_ms(date(2023, 7, 21))
-    assert event.activity_date == date(2023, 7, 21)
     # The contract is parsed from the symbol, and spells back to it.
     assert event.contract == OptionContract.from_occ_symbol("AAPL230721C00150000")
     assert event.contract.occ_symbol == "AAPL230721C00150000"
@@ -110,7 +110,7 @@ def test_the_documented_assignment_takes_from_a_sold_position() -> None:
     assert isinstance(event, BrokerOptionEventActivity)
     assert event.activity_type == "OPASN"
     assert event.kind is OptionEventKind.ASSIGNED
-    assert event.activity_date == date(2023, 7, 1)
+    assert event.activity_date_ms == et_midnight_ms(date(2023, 7, 1))
     assert event.contract.occ_symbol == "AAPL230721C00150000"
     assert event.position_change == 2
     assert event.contracts == 2
@@ -123,7 +123,7 @@ def test_the_documented_expiry_removes_a_bought_position() -> None:
     assert isinstance(event, BrokerOptionEventActivity)
     assert event.activity_type == "OPEXP"
     assert event.kind is OptionEventKind.EXPIRED
-    assert event.activity_date == date(2023, 7, 21)
+    assert event.activity_date_ms == et_midnight_ms(date(2023, 7, 21))
     assert event.position_change == -2
     assert event.contracts == 2
 
@@ -136,7 +136,7 @@ def test_the_documented_share_trade_names_the_underlying_with_shares_price_and_c
     assert trade.activity_id == "20190801011955195::5f596936-6f23-4cef-bdf1-3806aae57dbf"
     assert trade.activity_type == "OPTRD"
     assert trade.status is OptionActivityStatus.EXECUTED
-    assert trade.activity_date == date(2023, 7, 1)
+    assert trade.activity_date_ms == et_midnight_ms(date(2023, 7, 1))
     # The stock, not the contract.
     assert trade.underlying_symbol == "AAPL"
     # 200 shares delivered at $150 for $30,000 received.
@@ -175,6 +175,22 @@ def test_a_half_dollar_strike_and_price_are_read_exactly() -> None:
     assert (trade.shares, trade.price, trade.net_amount) == (100, Decimal("6.5"), Decimal("-650"))
 
 
+def test_a_figure_alpaca_writes_as_a_number_reaches_the_model_as_the_exact_type_it_declares() -> None:
+    """The pages print every figure as text. The models take no float, so the adapter must not hand one over."""
+    event = from_alpaca_option_activity(
+        _row("broker_api", "exercising_call", qty=-1.0, net_amount=0.0), observed_at_ms=_OBSERVED
+    )
+    trade = from_alpaca_option_activity(
+        _row("broker_api", "exercising_call", 1, qty=100.0, price=6.5, net_amount=-650), observed_at_ms=_OBSERVED
+    )
+
+    assert isinstance(event, BrokerOptionEventActivity)
+    assert isinstance(trade, BrokerOptionShareTradeActivity)
+    assert (event.position_change, type(event.position_change), event.net_amount) == (-1, int, Decimal("0"))
+    assert (trade.shares, type(trade.shares)) == (100, int)
+    assert (trade.price, trade.net_amount) == (Decimal("6.5"), Decimal("-650"))
+
+
 @pytest.mark.parametrize(
     ("written", "day"),
     [("2023-07-21", date(2023, 7, 21)), ("2024-03-01", date(2024, 3, 1)), ("2024-11-03", date(2024, 11, 3))],
@@ -184,7 +200,6 @@ def test_an_activitys_date_is_new_york_midnight_in_summer_and_in_winter(written:
     event = from_alpaca_option_activity(_assignment(date=written, symbol="AAPL241220C00150000"), observed_at_ms=_OBSERVED)
 
     assert event.activity_date_ms == et_midnight_ms(day)
-    assert event.activity_date == day
 
 
 def test_what_the_reference_adds_to_a_row_is_read_when_it_is_there() -> None:
@@ -196,7 +211,7 @@ def test_what_the_reference_adds_to_a_row_is_read_when_it_is_there() -> None:
     assert event.group_id == "5c5f5a3a-0d0c-4b2a-9b9d-0f8d2f0c6a11"
     # 04:15 New York on the 2nd, the morning after the date the row carries.
     assert event.created_at_ms == 1_688_285_704_650
-    assert event.activity_date == date(2023, 7, 1)
+    assert event.activity_date_ms == et_midnight_ms(date(2023, 7, 1))
 
 
 def test_an_event_that_states_no_cash_reads_as_stating_none() -> None:
@@ -317,7 +332,7 @@ def test_an_expiry_dated_before_its_contract_expires_is_refused() -> None:
 def test_an_expiry_reported_after_the_expiry_date_is_read() -> None:
     event = from_alpaca_option_activity(_expiry(date="2023-07-22"), observed_at_ms=_OBSERVED)
 
-    assert event.activity_date == date(2023, 7, 22)
+    assert event.activity_date_ms == et_midnight_ms(date(2023, 7, 22))
 
 
 def test_an_expiry_is_read_with_either_sign() -> None:
@@ -532,8 +547,8 @@ async def test_an_activity_dated_before_the_window_is_left_out() -> None:
     evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
 
     # The exercise and its share trade are dated 2024-02-27.
-    assert [event.activity_date for event in evidence.events] == [date(2024, 3, 1), date(2024, 3, 1)]
-    assert [trade.activity_date for trade in evidence.share_trades] == [date(2024, 3, 1)]
+    assert [event.activity_date_ms for event in evidence.events] == [_FRIDAY, _FRIDAY]
+    assert [trade.activity_date_ms for trade in evidence.share_trades] == [_FRIDAY]
 
 
 async def test_an_activity_dated_on_the_day_the_window_starts_is_kept_whatever_the_hour() -> None:
@@ -543,7 +558,7 @@ async def test_an_activity_dated_on_the_day_the_window_starts_is_kept_whatever_t
 
     evidence = await broker.read_option_event_activities(after_ms=one_minute_before_the_close)
 
-    assert [event.activity_date for event in evidence.events] == [date(2024, 3, 1), date(2024, 3, 1)]
+    assert [event.activity_date_ms for event in evidence.events] == [_FRIDAY, _FRIDAY]
 
 
 async def test_a_row_that_cannot_be_read_whole_is_listed_as_unreadable_and_the_rest_are_still_read() -> None:
@@ -833,16 +848,27 @@ async def test_a_full_page_is_followed_from_its_last_rows_id_until_a_short_page(
     assert client.asked == [(_PAGE, None), (_PAGE, first_page[-1]["id"])]
     assert [event.activity_id for event in evidence.events] == [_QS_ROWS[0]["id"], _QS_ROWS[2]["id"]]
     assert evidence.history_complete is True
-    assert evidence.next_page_token is None
+    assert evidence.resume is None
+
+
+def _full_pages(*days: str) -> dict[str | None, list[Any]]:
+    """One full page of fee rows for each date given, each asked for by the last id of the page before it."""
+    pages: dict[str | None, list[Any]] = {}
+    token: str | None = None
+    for page_number, day in enumerate(days):
+        page = _fees(day, _PAGE, start=page_number * _PAGE)
+        pages[token] = page
+        token = page[-1]["id"]
+    return pages
+
+
+def _last_id(pages: dict[str | None, list[Any]]) -> str:
+    """The id that asks for the page after the last one in ``pages``."""
+    return list(pages.values())[-1][-1]["id"]
 
 
 async def test_a_walk_that_runs_out_of_pages_is_not_complete_and_says_where_to_resume() -> None:
-    pages: dict[str | None, list[Any]] = {}
-    token: str | None = None
-    for page_number in range(4):
-        page = _fees("2024-03-01", _PAGE, start=page_number * _PAGE)
-        pages[token] = page
-        token = page[-1]["id"]
+    pages = _full_pages("2024-03-01", "2024-03-01", "2024-03-01", "2024-03-01")
     broker, client = _broker(pages)
 
     evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
@@ -851,17 +877,86 @@ async def test_a_walk_that_runs_out_of_pages_is_not_complete_and_says_where_to_r
     assert [asked_token for _limit, asked_token in client.asked] == [None, pages[None][-1]["id"], "20240301000000000::fee-0199"]
     assert evidence.history_complete is False
     assert evidence.read_whole is False
-    assert evidence.next_page_token == "20240301000000000::fee-0299"
+    # Where to go on from, and the oldest time the third page placed: the next page is held to it.
+    assert evidence.resume == BrokerOptionEventResume(
+        page_token="20240301000000000::fee-0299", last_page_oldest_ms=_FRIDAY
+    )
 
 
-async def test_a_walk_is_resumed_from_the_token_the_last_one_gave() -> None:
-    broker, client = _broker({"20240301000000000::fee-0299": [_QS_ROWS[2]]})
+async def test_a_resumed_walk_goes_on_from_where_the_last_call_stopped_and_completes() -> None:
+    pages = _full_pages("2024-03-01", "2024-03-01", "2024-03-01")
+    broker, client = _broker({**pages, _last_id(pages): [_QS_ROWS[2]]})
+    stopped = await broker.read_option_event_activities(after_ms=_FRIDAY)
 
-    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY, page_token="20240301000000000::fee-0299")
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY, resume=stopped.resume)
 
-    assert client.asked == [(_PAGE, "20240301000000000::fee-0299")]
+    # The second call asks for the fourth page and no page it was already given.
+    assert [asked_token for _limit, asked_token in client.asked][3:] == ["20240301000000000::fee-0299"]
     assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
     assert evidence.history_complete is True
+    assert evidence.resume is None
+
+
+async def test_a_resumed_page_newer_than_the_page_before_it_refuses_the_read() -> None:
+    """Three pages dated the 29th, then a row dated March 1st: out of order, though a call's page bound lies between."""
+    window = et_midnight_ms(date(2024, 2, 26))
+    pages = _full_pages("2024-02-29", "2024-02-29", "2024-02-29")
+    broker, _client = _broker({**pages, _last_id(pages): [_QS_ROWS[2]]})
+    stopped = await broker.read_option_event_activities(after_ms=window)
+    assert stopped.resume is not None
+    assert stopped.resume.last_page_oldest_ms == et_midnight_ms(date(2024, 2, 29))
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="not newest-first"):
+        await broker.read_option_event_activities(after_ms=window, resume=stopped.resume)
+
+
+async def test_a_resumed_walk_is_proven_by_its_first_page_when_the_page_before_it_crossed_the_windows_start() -> None:
+    """The third page reaches back past the window, and the call stops there. The next page confirms it, alone."""
+    newest = _full_pages("2024-03-01", "2024-03-01")
+    crossing = [*_fees("2024-03-01", 50, start=200), *_fees("2024-02-29", _PAGE - 50, start=250)]
+    confirming = _fees("2024-02-28", _PAGE, start=300)
+    broker, client = _broker(
+        {
+            **newest,
+            _last_id(newest): crossing,
+            crossing[-1]["id"]: confirming,
+            confirming[-1]["id"]: [{"must": "not be read"}],
+        }
+    )
+    stopped = await broker.read_option_event_activities(after_ms=_FRIDAY)
+    assert stopped.history_complete is False
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY, resume=stopped.resume)
+
+    assert [asked_token for _limit, asked_token in client.asked][3:] == [crossing[-1]["id"]]
+    assert evidence.history_complete is True
+
+
+async def test_a_resumed_walk_is_not_proven_by_a_page_that_only_reached_the_windows_first_day() -> None:
+    """The third page ends on the day the window starts, which is not past it. Rows of that day may lie further back."""
+    newest = _full_pages("2024-03-01", "2024-03-01", "2024-03-01")
+    fourth = _fees("2024-03-01", _PAGE, start=300)
+    broker, client = _broker({**newest, _last_id(newest): fourth, fourth[-1]["id"]: [_QS_ROWS[2]]})
+    stopped = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY, resume=stopped.resume)
+
+    # The fourth page does not end the walk; the event on the fifth is found.
+    assert [asked_token for _limit, asked_token in client.asked][3:] == [_last_id(newest), fourth[-1]["id"]]
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
+    assert evidence.history_complete is True
+
+
+async def test_a_walk_that_stops_on_a_page_with_an_undated_row_says_that_page_proved_no_order() -> None:
+    """A row with no date cannot be placed, so its page gives the next one nothing to be held to, as within a call."""
+    newest = _full_pages("2024-03-01", "2024-03-01")
+    undated = _row("broker_api", "put_expiration", date=...)
+    third = [*_fees("2024-03-01", _PAGE - 1, start=200), undated]
+    broker, _client = _broker({**newest, _last_id(newest): third})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert evidence.resume == BrokerOptionEventResume(page_token=undated["id"], last_page_oldest_ms=None)
 
 
 async def test_the_window_is_proven_by_the_page_after_the_one_that_crossed_its_start() -> None:
@@ -894,3 +989,5 @@ async def test_a_cursor_that_does_not_move_ends_the_walk_as_incomplete() -> None
 
     assert len(client.asked) == 2
     assert evidence.history_complete is False
+    # Nothing to go on from: the same cursor would ask for the same page.
+    assert evidence.resume is None

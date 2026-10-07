@@ -1,9 +1,9 @@
 """Which lots an assignment, an exercise or an expiry takes, and what each owner's books then show.
 
 Every figure is a whole number of contracts, shares or cents, so every
-comparison is exact. The shares and cash are held to the pairs of activities
-Alpaca publishes (``tests/fixtures/alpaca_documented/option_activities``):
-documentation, not recordings.
+comparison is exact. These are hand-derived cases. The shares and cash of the
+events Alpaca's pages document are held by golden fixture ``OEV-001``
+(``tests/fixtures/test_option_event_allocation_fixture.py``).
 """
 
 from __future__ import annotations
@@ -26,11 +26,10 @@ from app.options.event_allocation import (
     OptionEventKind,
     OptionEventRefusal,
     OptionEventRefused,
-    ShareTrade,
     allocate_option_event,
     expected_share_trade,
 )
-from tests.broker.alpaca.documented_examples import documented
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _NY = ZoneInfo("America/New_York")
 _CALL = OptionContract.from_occ_symbol("AAPL230721C00150000")
@@ -572,6 +571,21 @@ def test_a_lot_belongs_to_a_named_owner() -> None:
         _lot("  ", 1)
 
 
+@pytest.mark.parametrize(
+    "opened",
+    [-1, MAX_TIMESTAMP_MS + 1, 2**63 - 1, True, 1_689_000_000_000.0, "1689000000000"],
+    ids=["before 1970", "past year 9999", "the int64 limit", "a boolean", "a float", "text"],
+)
+def test_a_lots_opening_time_is_whole_milliseconds_inside_the_domains_range(opened: Any) -> None:
+    with pytest.raises(ValueError, match="opening time"):
+        HeldOptionLot(owner="bot-a", contract=_CALL, quantity=1, opened_at_ms=opened, sequence=0)
+
+
+@pytest.mark.parametrize("opened", [0, MAX_TIMESTAMP_MS], ids=["the epoch", "the last admitted millisecond"])
+def test_a_lot_may_be_opened_at_either_end_of_the_domains_range(opened: int) -> None:
+    assert _lot("bot-a", 1, opened=opened).opened_at_ms == opened
+
+
 # ── Every allocation, whatever the lots ─────────────────────────────────────
 
 
@@ -741,59 +755,3 @@ def test_the_lots_assigned_are_the_same_whichever_row_is_matched_first() -> None
             assert _ended_and_expired(lots, order) == by_hand
     # The sweep holds books of two, three and four rows: up to twenty-four orders each.
     assert rows_in_a_book == {2, 3, 4}
-
-
-# ── Held to what Alpaca publishes ───────────────────────────────────────────
-
-_KIND_OF_ALPACA_CODE = {"OPEXC": OptionEventKind.EXERCISED, "OPASN": OptionEventKind.ASSIGNED}
-_DOCUMENTED = documented("option_activities", "documented_activities.json")
-# Each pair of rows Alpaca publishes: the event, and the share trade it says the event created.
-_DOCUMENTED_PAIRS = {
-    f"{product}/{heading}": rows
-    for product, examples in _DOCUMENTED.items()
-    for heading, rows in examples.items()
-    if len(rows) == 2
-}
-# The Trading API page's exercised calls carry "price": "90", against its own
-# sentence ("a per-share amount of $150 (strike price)") and its own net
-# amount (-30000 for 200 shares). The shares and the cash are still held to it.
-_PRICE_ALPACA_PRINTS_AGAINST_ITS_OWN_TEXT = {"trading_api/option_exercise": Decimal("90")}
-
-
-def test_alpaca_publishes_six_pairs_of_an_event_and_its_share_trade() -> None:
-    assert sorted(_DOCUMENTED_PAIRS) == [
-        "broker_api/call_assignment",
-        "broker_api/exercising_call",
-        "broker_api/exercising_put",
-        "broker_api/put_assignment",
-        "trading_api/option_assignment",
-        "trading_api/option_exercise",
-    ]
-
-
-@pytest.mark.parametrize("name", sorted(_DOCUMENTED_PAIRS))
-def test_the_share_trade_of_each_documented_event_is_the_one_alpaca_publishes(name: str) -> None:
-    event, share_trade = _DOCUMENTED_PAIRS[name]
-    contract = OptionContract.from_occ_symbol(event["symbol"])
-
-    trade = expected_share_trade(
-        _KIND_OF_ALPACA_CODE[event["activity_type"]], contract, contracts=abs(int(event["qty"])), multiplier=100
-    )
-
-    assert isinstance(trade, ShareTrade)
-    assert trade.root == share_trade["symbol"]
-    assert trade.shares == int(share_trade["qty"])
-    assert trade.cash_cents == Decimal(share_trade["net_amount"]) * 100
-    printed_price = Decimal(share_trade["price"])
-    assert printed_price == _PRICE_ALPACA_PRINTS_AGAINST_ITS_OWN_TEXT.get(name, trade.price)
-    assert trade.price == contract.strike
-
-
-@pytest.mark.parametrize("name", ["trading_api/otm_option_expiry", "broker_api/call_expiration", "broker_api/put_expiration"])
-def test_a_documented_expiry_comes_with_no_share_trade(name: str) -> None:
-    product, heading = name.split("/")
-    (event,) = _DOCUMENTED[product][heading]
-
-    contract = OptionContract.from_occ_symbol(event["symbol"])
-
-    assert expected_share_trade(OptionEventKind.EXPIRED, contract, contracts=abs(int(event["qty"])), multiplier=100) is None

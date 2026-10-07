@@ -30,10 +30,12 @@ Reference: Alpaca, "Non-Trade Activities for Option Events",
   underlying stock at the strike price", and a put's seller has "the
   obligation to buy".
 Canonical implementation: this file.
-Validated against: tests/options/test_event_allocation.py, which holds the
-  shares and cash to every pair of activities Alpaca publishes
-  (tests/fixtures/alpaca_documented/option_activities) and to hand-derived
-  cases, bit-exact.
+Validated against: tests/fixtures/test_option_event_allocation_fixture.py, on
+  golden fixture OEV-001 (tests/fixtures/golden/option-events/OEV-001): the
+  shares, the price and the cash of every exercise, assignment and expiry
+  Alpaca's two pages document, bit-exact. Which lots are taken is this
+  repo's rule and is on no page; hand-derived cases hold it in
+  tests/options/test_event_allocation.py.
 
 What is Alpaca's documented behaviour, and what is not:
 
@@ -44,6 +46,12 @@ What is Alpaca's documented behaviour, and what is not:
 - **Documented only for the Broker API, another product:** that an exercised
   put sells the shares and an assigned put buys them. It is also what a put
   means, and it is used here on that footing.
+- **Where the Trading API page contradicts itself, an accepted divergence:**
+  its example of the exercised calls prints a share price of 90 on a strike
+  of 150, against the sentence under it and against its own net amount
+  (-30000 for 200 shares). The strike is the price here. OEV-001 records
+  what the page prints beside what its sentence and net amount give, and
+  the fixture's test names the 90 as the one printed value not matched.
 - **The contract's standard meaning, on no page:** that a contract moves
   ``m`` shares when its multiplier is not 100. The multiplier here is both
   the shares a contract delivers and what its strike is multiplied by, which
@@ -85,7 +93,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from app.options.contract import OptionContract
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 # A strike is in thousandths of a dollar; ten of them make a cent.
 _THOUSANDTHS_PER_CENT = 10
@@ -137,6 +145,14 @@ def _require_whole(name: str, value: object, *, at_least: int) -> None:
         raise ValueError(f"{name} must be a whole number, {at_least} or more; got {value!r}")
 
 
+def _require_an_instant(name: str, value: object) -> None:
+    """Refuse a time that is not ``int64`` ms UTC inside the range the domain admits."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TIMESTAMP_MS:
+        raise ValueError(
+            f"{name} must be a whole number of milliseconds from 0 to {MAX_TIMESTAMP_MS}; got {value!r}"
+        )
+
+
 def _require_a_change(position_change: object) -> None:
     if isinstance(position_change, bool) or not isinstance(position_change, int) or position_change == 0:
         raise ValueError(
@@ -153,7 +169,7 @@ class HeldOptionLot:
     contract: OptionContract
     # Contracts still open: bought is positive, sold is negative, never zero.
     quantity: int
-    # When the lot was opened, ``int64`` ms UTC.
+    # When the lot was opened, ``int64`` ms UTC, from 0 to ``MAX_TIMESTAMP_MS``.
     opened_at_ms: int
     # The lot's place in the books' own record, lower is earlier. It breaks a
     # tie between lots opened in the same millisecond, and with the owner it
@@ -165,7 +181,7 @@ class HeldOptionLot:
             raise ValueError(f"a lot belongs to a named owner; got {self.owner!r}")
         if isinstance(self.quantity, bool) or not isinstance(self.quantity, int) or self.quantity == 0:
             raise ValueError(f"an open lot holds a whole number of contracts, never zero; got {self.quantity!r}")
-        _require_whole("a lot's opening time", self.opened_at_ms, at_least=0)
+        _require_an_instant("a lot's opening time", self.opened_at_ms)
         _require_whole("a lot's sequence", self.sequence, at_least=0)
 
 

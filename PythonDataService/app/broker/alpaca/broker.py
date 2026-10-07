@@ -52,6 +52,7 @@ from app.broker.contract.option_events import (
     BrokerOptionActivityUnreadable,
     BrokerOptionEventActivity,
     BrokerOptionEventEvidence,
+    BrokerOptionEventResume,
     BrokerOptionShareTradeActivity,
 )
 from app.broker.contract.options import (
@@ -713,7 +714,7 @@ class AlpacaBroker:
         return BrokerActivityEvidence(activities=activities, history_complete=False, next_page_token=page_token)
 
     async def read_option_event_activities(
-        self, *, after_ms: int, page_token: str | None = None
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
     ) -> BrokerOptionEventEvidence:
         """Read the account's assignments, exercises and expiries, with the share trades they created.
 
@@ -729,8 +730,16 @@ class AlpacaBroker:
         on. The walk is ``read_activity_evidence``'s: newest first or it
         raises ``BrokerEvidenceUnavailable``, a bounded number of pages a
         call, complete on a short page or on the dated page after the one
-        that crossed the window's start, and otherwise resumed from
-        ``next_page_token``.
+        that crossed the window's start, and otherwise resumed from the
+        evidence's ``resume``.
+
+        A resumed call goes on as the same walk. ``resume`` carries the
+        cursor and the oldest time placed on the last page read, so the
+        first page of this call is held to the page before it exactly as a
+        later page of one call is: a row newer than that time refuses the
+        read as not newest-first, and a page that follows one which crossed
+        the window's start proves the window. It is for the same
+        ``after_ms`` as the read it came from.
 
         Each option activity is read whole or listed under ``unreadable``
         with the reason, never read in part. A row of any kind whose id, code
@@ -746,17 +755,24 @@ class AlpacaBroker:
         share_trades: dict[str, BrokerOptionShareTradeActivity] = {}
         unreadable: dict[str, BrokerOptionActivityUnreadable] = {}
 
-        def evidence(*, history_complete: bool, next_page_token: str | None = None) -> BrokerOptionEventEvidence:
+        def evidence(
+            *, history_complete: bool, resume: BrokerOptionEventResume | None = None
+        ) -> BrokerOptionEventEvidence:
             return BrokerOptionEventEvidence(
                 events=tuple(events.values()),
                 share_trades=tuple(share_trades.values()),
                 unreadable=tuple(unreadable.values()),
                 history_complete=history_complete,
-                next_page_token=next_page_token,
+                resume=resume,
             )
 
-        previous_page_oldest_ms: int | None = None
-        boundary_crossed_on_previous_page = False
+        # A resumed walk starts where the last call's loop stood, not from nothing.
+        page_token = None if resume is None else resume.page_token
+        previous_page_oldest_ms = None if resume is None else resume.last_page_oldest_ms
+        # The page before crossed the window's start when its oldest row is dated before it.
+        boundary_crossed_on_previous_page = (
+            previous_page_oldest_ms is not None and et_date_at_ms(previous_page_oldest_ms) < since
+        )
         for _ in range(_ACTIVITY_MAX_PAGES):
             payloads = await self._client.list_non_trade_activities(limit=_ACTIVITY_PAGE_SIZE, page_token=page_token)
             page = _placed_activities(payloads)
@@ -784,7 +800,10 @@ class AlpacaBroker:
             if next_token == page_token:
                 return evidence(history_complete=False)
             page_token = next_token
-        return evidence(history_complete=False, next_page_token=page_token)
+        return evidence(
+            history_complete=False,
+            resume=BrokerOptionEventResume(page_token=page_token, last_page_oldest_ms=previous_page_oldest_ms),
+        )
 
     async def list_assets(
         self,

@@ -88,7 +88,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
-from app.broker.contract.option_events import BrokerOptionEventEvidence
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import BrokerOptionAccountSnapshot, BrokerOptionContract
 from app.broker.contract.ports import BrokerReadPort
 from app.engine.live.order_identity import (
@@ -661,7 +661,7 @@ class ShadowAccountReadPort:
         )
 
     async def read_option_event_activities(
-        self, *, after_ms: int, page_token: str | None = None
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
     ) -> BrokerOptionEventEvidence:
         """None, and that is all of them: positions here are the shadow book's, and it holds no option.
 
@@ -669,7 +669,7 @@ class ShadowAccountReadPort:
         positions the live account holds. They are not passed through as
         events of a book that never held those contracts.
         """
-        del after_ms, page_token
+        del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
 
     async def list_assets(

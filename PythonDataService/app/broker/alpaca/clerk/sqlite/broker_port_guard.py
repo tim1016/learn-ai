@@ -26,7 +26,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
-from app.broker.contract.option_events import BrokerOptionEventEvidence
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -135,10 +135,10 @@ class GuardedBrokerReadPort:
         )
 
     async def read_option_event_activities(
-        self, *, after_ms: int, page_token: str | None = None
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
     ) -> BrokerOptionEventEvidence:
         self._assert_unfenced("read_option_event_activities")
-        return await self._inner.read_option_event_activities(after_ms=after_ms, page_token=page_token)
+        return await self._inner.read_option_event_activities(after_ms=after_ms, resume=resume)
 
     async def list_assets(
         self,

@@ -16,8 +16,14 @@ which serves each one as Markdown at its own address plus ``.md``. With it,
 the pages are read from files named as ``PAGES`` names them, so a run can be
 repeated against the same reading. No Alpaca account, key or API is touched.
 
-The attribution file beside the fixtures is written by hand and carries the
-date the pages were read; re-running this does not change it.
+The same run writes golden fixture ``OEV-001``
+(``tests/fixtures/golden/option-events/OEV-001/v1``): each documented event
+as an input, and the share trade Alpaca prints beside it as the output. It
+is written from the pages too, and this never imports
+``app.options.event_allocation``, the rule the fixture holds.
+
+The attribution files beside the fixtures are written by hand and carry the
+date the pages were read; re-running this does not change them.
 """
 
 from __future__ import annotations
@@ -26,14 +32,19 @@ import argparse
 import json
 import logging
 import re
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from app.utils.session_anchors import et_midnight_ms
 from scripts.fixture_generators.alpaca_documented_option_examples import DESTINATION, DOCS_ROOT, FETCH_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
+
+GOLDEN_DESTINATION = Path(__file__).parents[2] / "tests/fixtures/golden/option-events/OEV-001/v1"
 
 # Page path → the file name a saved copy is read from.
 PAGES: dict[str, str] = {
@@ -57,6 +68,19 @@ _BROKER_API_HEADINGS = (
 
 # Every option activity code Alpaca's pages use begins with these two letters.
 _OPTION_CODE = re.compile(r"^OP[A-Z]+$")
+
+# The codes of the three events, as the words this repo knows each by, and of the share trade one creates.
+_EVENT_KIND = {"OPEXC": "exercised", "OPASN": "assigned", "OPEXP": "expired"}
+_SHARE_TRADE_CODE = "OPTRD"
+# The shares a standard contract delivers. No page states it as a rule; every
+# documented pair is held to it below before a file is written.
+_STANDARD_MULTIPLIER = 100
+# The sentence the Trading API page puts under its exercise and its assignment.
+_STATED_TRADE = re.compile(
+    r"applicable to (?P<contracts>\d+) contracts, and the corresponding trade \(OPTRD\) represents "
+    r"(?P<shares>\d+) of the underlying shares being (?P<way>purchased|sold) "
+    r"at a per-share amount of \$(?P<price>\d+(?:\.\d+)?) \(strike price\)"
+)
 
 _HEADING = re.compile(r"^#{1,4}\s+(?P<title>.+?)\s*$", re.MULTILINE)
 # A fence may carry a label after its language ("```json JSON").
@@ -107,6 +131,95 @@ def _activities_by_heading(page: str, wanted: tuple[str, ...]) -> dict[str, list
     return {name: examples[name] for name in wanted}
 
 
+def _stated_trades(page: str, wanted: tuple[str, ...]) -> dict[str, re.Match[str]]:
+    """The sentence under each wanted heading that states its share trade in words, where the page has one."""
+    headings = [(match.start(), _slug(match["title"])) for match in _HEADING.finditer(page)]
+    stated: dict[str, re.Match[str]] = {}
+    for (start, title), (end, _next_title) in zip(headings, [*headings[1:], (len(page), "")], strict=True):
+        sentence = _STATED_TRADE.search(page, start, end)
+        if title in wanted and sentence is not None:
+            stated[title] = sentence
+    return stated
+
+
+def _whole(text: str, *, what: str) -> int:
+    number = Decimal(text)
+    if number != number.to_integral_value():
+        raise SystemExit(f"{what} is not a whole number on the page: {text!r}")
+    return int(number)
+
+
+def _golden_case(
+    name: str, rows: list[dict[str, Any]], stated: re.Match[str] | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One documented example as a golden case: the event as input, the share trade printed beside it as output.
+
+    The share trade is copied as printed. Beside it go the price its own
+    net amount comes to and the price the page's sentence states, so a page
+    that contradicts itself is recorded and not smoothed over. Whatever else
+    the page says about the trade must agree with the row, or nothing is
+    written: the shares a contract delivers, which way they go, and that
+    cash is paid for shares bought.
+    """
+    events = [row for row in rows if row["activity_type"] in _EVENT_KIND]
+    share_trades = [row for row in rows if row["activity_type"] == _SHARE_TRADE_CODE]
+    if len(events) != 1 or len(share_trades) > 1 or len(events) + len(share_trades) != len(rows):
+        raise SystemExit(f"{name}: expected one event and at most one share trade, got {len(rows)} rows")
+    (event,) = events
+    kind = _EVENT_KIND[event["activity_type"]]
+    position_change = _whole(event["qty"], what=f"{name}: the event's qty")
+    case = {
+        "case": name,
+        "activity_type": event["activity_type"],
+        "kind": kind,
+        "contract": event["symbol"],
+        "position_change": position_change,
+        # The row's date at 00:00 New York time, int64 ms UTC.
+        "event_date_ms": et_midnight_ms(date.fromisoformat(event["date"])),
+    }
+    if (kind == "expired") != (not share_trades):
+        raise SystemExit(f"{name}: an expiry comes with no share trade, and an exercise or an assignment with one")
+    if not share_trades:
+        return case, {"case": name, "share_trade": None}
+    (share_trade,) = share_trades
+    shares = _whole(share_trade["qty"], what=f"{name}: the share trade's qty")
+    net_amount = Decimal(share_trade["net_amount"])
+    if abs(shares) != abs(position_change) * _STANDARD_MULTIPLIER:
+        raise SystemExit(f"{name}: {shares} shares for {position_change} contracts is not {_STANDARD_MULTIPLIER} a contract")
+    if (net_amount < 0) != (shares > 0) or net_amount == 0:
+        raise SystemExit(f"{name}: cash of {net_amount} for {shares} shares is not paid for shares bought")
+    price_from_net_amount = abs(net_amount) / abs(shares)
+    if price_from_net_amount * abs(shares) != abs(net_amount):
+        raise SystemExit(f"{name}: {net_amount} over {shares} shares is not an exact price")
+    if stated is not None and (
+        int(stated["contracts"]) != abs(position_change)
+        or int(stated["shares"]) != abs(shares)
+        or (stated["way"] == "purchased") != (shares > 0)
+    ):
+        raise SystemExit(f"{name}: the sentence under the example no longer describes its rows")
+    return case, {
+        "case": name,
+        "share_trade": {field: share_trade[field] for field in ("symbol", "qty", "price", "net_amount")},
+        "price_from_net_amount": str(price_from_net_amount),
+        "price_in_sentence": None if stated is None else stated["price"],
+    }
+
+
+def _golden(
+    activities: dict[str, dict[str, list[dict[str, Any]]]], stated: dict[str, dict[str, re.Match[str]]]
+) -> dict[str, Any]:
+    """``input.json`` and ``output.json`` of OEV-001, a case for every documented example, in the pages' order."""
+    cases = [
+        _golden_case(f"{product}/{heading}", rows, stated.get(product, {}).get(heading))
+        for product, examples in activities.items()
+        for heading, rows in examples.items()
+    ]
+    return {
+        "input.json": {"multiplier": _STANDARD_MULTIPLIER, "cases": [case for case, _expected in cases]},
+        "output.json": {"cases": [expected for _case, expected in cases]},
+    }
+
+
 def _openapi(page: str) -> dict[str, Any]:
     """The OpenAPI definition a reference page carries in its one JSON block."""
     match = re.search(r"```json\n(?P<body>.*?)\n```", page, re.DOTALL)
@@ -136,13 +249,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pages-dir", type=Path, default=None, help="read saved pages instead of fetching them")
     pages_dir: Path | None = parser.parse_args().pages_dir
+    trading_page = _page("docs/non-trade-activities-for-option-events", pages_dir)
+    activities = {
+        "trading_api": _activities_by_heading(trading_page, _TRADING_API_HEADINGS),
+        "broker_api": _activities_by_heading(_page("docs/options-trading-overview", pages_dir), _BROKER_API_HEADINGS),
+    }
     fixtures: dict[str, Any] = {
-        "option_activities/documented_activities.json": {
-            "trading_api": _activities_by_heading(
-                _page("docs/non-trade-activities-for-option-events", pages_dir), _TRADING_API_HEADINGS
-            ),
-            "broker_api": _activities_by_heading(_page("docs/options-trading-overview", pages_dir), _BROKER_API_HEADINGS),
-        },
+        "option_activities/documented_activities.json": activities,
         "option_activities/documented_activity_types.json": _what_the_pages_list(pages_dir),
     }
     for relative, payload in fixtures.items():
@@ -150,6 +263,13 @@ def main() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         logger.info("documented example written", extra={"path": str(path.relative_to(DESTINATION.parents[2]))})
+    # Only the Trading API page states a share trade's price in a sentence; the Broker API page says "the strike price".
+    golden = _golden(activities, {"trading_api": _stated_trades(trading_page, _TRADING_API_HEADINGS)})
+    GOLDEN_DESTINATION.mkdir(parents=True, exist_ok=True)
+    for filename, payload in golden.items():
+        path = GOLDEN_DESTINATION / filename
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        logger.info("golden fixture written", extra={"path": str(path.relative_to(DESTINATION.parents[2]))})
 
 
 if __name__ == "__main__":

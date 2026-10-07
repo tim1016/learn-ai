@@ -9,22 +9,24 @@ shares, which the broker may report as an activity of its own.
 These are new types beside ``BrokerActivity`` in ``models.py``, which this
 module leaves alone: that model is served and holds its numbers as floats.
 Here a count is a whole number and money is an exact ``Decimal``, as in
-``options.py`` (ADR 0076).
+``options.py`` (ADR 0076), and as there nothing is coerced: an adapter hands
+over the ``int``, the ``Decimal`` or the enum it read.
 
 **An activity is read whole or not at all.** A row that cannot be is listed
 as unreadable, with its id, the broker's code and the reason, and no figure:
 it says such a row exists and nothing about what happened.
 
-Time is ``int64`` ms UTC. An activity carries a date only. It is held as
-00:00 New York time on that date, the anchor every date-only activity takes
-at the adapter (ADR 0022 (a)): the date need not be a trading day, so no
-session time exists for it, and 16:00 is an expiry's anchor alone.
+Time is ``int64`` ms UTC, and every such field is held to the range the
+domain admits. An activity carries a date only. It is held as 00:00 New York
+time on that date, the anchor every date-only activity takes at the adapter
+(ADR 0022 (a)): the date need not be a trading day, so no session time exists
+for it, and 16:00 is an expiry's anchor alone. That one field is the date:
+no model here hands out a ``date`` beside it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated
@@ -73,9 +75,14 @@ class OptionActivityStatus(StrEnum):
 
 
 class _OptionActivityModel(BaseModel):
-    """Base for what a broker reported: frozen, and unknown fields are an adapter's typo."""
+    """Base for what a broker reported: frozen, strict, and unknown fields are an adapter's typo.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    Strict as ``options.py``'s evidence is: ``True``, ``1.0`` or ``"1"`` is
+    refused, never read as one contract, and a price is a ``Decimal`` or it
+    is refused.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
 class BrokerOptionEventActivity(_OptionActivityModel):
@@ -101,8 +108,8 @@ class BrokerOptionEventActivity(_OptionActivityModel):
     # The broker's link between sibling activities. ``None`` when the row carries none.
     group_id: str | None
     # When the broker created the row, later than the date it carries. ``None`` when the row does not say.
-    created_at_ms: int | None
-    observed_at_ms: int
+    created_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @model_validator(mode="after")
     def _a_change_its_kind_can_make(self) -> BrokerOptionEventActivity:
@@ -120,10 +127,11 @@ class BrokerOptionEventActivity(_OptionActivityModel):
             raise ValueError(f"an option event moves no cash of its own; this one states {self.net_amount}")
         # An option cannot expire before its own expiry date. A row that says
         # so is about something else, and would close lots still alive.
-        if self.kind is OptionEventKind.EXPIRED and self.activity_date < self.contract.expiry_date:
+        dated = et_date_at_ms(self.activity_date_ms)
+        if self.kind is OptionEventKind.EXPIRED and dated < self.contract.expiry_date:
             raise ValueError(
                 f"an option expires on its expiry date, {self.contract.expiry_date.isoformat()}, or is reported "
-                f"after it; this expiry is dated {self.activity_date.isoformat()}"
+                f"after it; this expiry is dated {dated.isoformat()}"
             )
         return self
 
@@ -131,10 +139,6 @@ class BrokerOptionEventActivity(_OptionActivityModel):
     def contracts(self) -> int:
         """Whole contracts the event ends: one or more."""
         return abs(self.position_change)
-
-    @property
-    def activity_date(self) -> date:
-        return et_date_at_ms(self.activity_date_ms)
 
 
 class BrokerOptionShareTradeActivity(_OptionActivityModel):
@@ -158,8 +162,8 @@ class BrokerOptionShareTradeActivity(_OptionActivityModel):
     # Dollars paid (negative) or received (positive), exact.
     net_amount: Decimal
     group_id: str | None
-    created_at_ms: int | None
-    observed_at_ms: int
+    created_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @model_validator(mode="after")
     def _a_trade_of_some_shares_at_a_price(self) -> BrokerOptionShareTradeActivity:
@@ -168,10 +172,6 @@ class BrokerOptionShareTradeActivity(_OptionActivityModel):
         if self.price <= 0:
             raise ValueError(f"a share trade's price is above zero; got {self.price}")
         return self
-
-    @property
-    def activity_date(self) -> date:
-        return et_date_at_ms(self.activity_date_ms)
 
 
 class BrokerOptionActivityUnreadable(_OptionActivityModel):
@@ -193,29 +193,49 @@ class BrokerOptionActivityUnreadable(_OptionActivityModel):
     reason: str = Field(min_length=1)
 
 
+class BrokerOptionEventResume(_OptionActivityModel):
+    """Where a read of option events stopped, and what its next page is held to.
+
+    A read that stops at its page bound hands this back, and the next call
+    is given it whole. The cursor and the time travel as one value because
+    the cursor alone would start the walk's order check again from nothing:
+    the first page of the next call would be compared with no page before
+    it, and a page newer than the last one read would pass as newest-first.
+    Neither field has a default, so a cursor without the time is refused
+    where it is built.
+    """
+
+    # The broker's cursor: the page after it is the next to read.
+    page_token: str = Field(min_length=1)
+    # The oldest time placed on the last page read, which no row of the next
+    # page may be newer than. ``None`` only when a row of that page carried
+    # no date, so the page proved no order; it is said, never left out.
+    last_page_oldest_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class BrokerOptionEventEvidence(_OptionActivityModel):
     """A bounded read of the account's option events from one New York date on, newest first.
 
-    ``history_complete`` and ``next_page_token`` mean what they mean on
-    ``BrokerActivityEvidence``: complete only when the walk proved it reached
-    the window's start, and otherwise the token continues it from where it
-    stopped.
+    ``history_complete`` means what it means on ``BrokerActivityEvidence``:
+    complete only when the walk proved it reached the window's start.
+    ``resume`` is set when the walk stopped at its page bound instead, and
+    continues it from where it stopped, in the same order.
 
     **What a caller must do.** No event in the window means nothing happened
     only when ``read_whole`` is true. While it is false the caller holds: it
-    follows ``next_page_token`` until the walk is complete, and it keeps a
-    hold for every row in ``unreadable`` and every row in ``not_executed``
-    until the owner has settled what that row did. Neither kind of row is
-    ever booked. A row the broker marks ``correct`` or ``canceled`` stays in
-    ``events`` or ``share_trades`` so it can be shown; ``allocation_of``
-    refuses it.
+    hands ``resume`` back, whole and with the same window, until the walk is
+    complete, and it keeps a hold for every row in ``unreadable`` and every
+    row in ``not_executed`` until the owner has settled what that row did.
+    Neither kind of row is ever booked. A row the broker marks ``correct``
+    or ``canceled`` stays in ``events`` or ``share_trades`` so it can be
+    shown; ``allocation_of`` refuses it.
     """
 
     events: tuple[BrokerOptionEventActivity, ...]
     share_trades: tuple[BrokerOptionShareTradeActivity, ...]
     unreadable: tuple[BrokerOptionActivityUnreadable, ...] = ()
     history_complete: bool
-    next_page_token: str | None = None
+    resume: BrokerOptionEventResume | None = None
 
     @property
     def not_executed(self) -> tuple[BrokerOptionEventActivity | BrokerOptionShareTradeActivity, ...]:

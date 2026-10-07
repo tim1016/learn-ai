@@ -1888,6 +1888,53 @@
       ]
     },
     {
+      "id": "OEV-001",
+      "name": "Option events: the shares and cash an exercise, an assignment and an expiry create, against the share trades Alpaca documents",
+      "category": "option-events",
+      "canonical_module": "PythonDataService/app/options/event_allocation.py",
+      "canonical_callable": "allocate_option_event",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "the share-trade row Alpaca's documentation prints beside each documented exercise and assignment, and the absence of one beside each expiry; documentation examples, not recordings",
+        "citation": "Alpaca, Non-Trade Activities for Option Events (https://docs.alpaca.markets/docs/non-trade-activities-for-option-events, page dated 2025-09-24) and Options Trading Overview, a Broker API page (https://docs.alpaca.markets/docs/options-trading-overview, page dated 2026-09-16), both read 2026-10-06; ADR 0076 decision 14. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "vendored",
+        "vendor": "Alpaca documented examples",
+        "generated_by": "PythonDataService/scripts/fixture_generators/alpaca_documented_option_activities.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Bit-exact. Shares and cents are whole numbers and prices are exact decimals. One accepted divergence, named in the test: the Trading API page's exercise example prints a price of 90, against its own sentence and its own net amount, which both give the 150 strike."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "850501cf6b69ecd0ff8c059da08c8776317f7cf714b0793979e05997bb86e324",
+            "output.json": "ae2cb03571da1bd5f32e367cb99b486ad926a45e034c0a011f41a4654391ef83",
+            "attribution.md": "32d5f2718f00d08466d0af23485fcbd1c385d24ead2c3a9b9a89a019ddd036b5"
+          },
+          "file_sha256": {
+            "input.json": "5f583c56bde1251cfd7ded49f50797c24f8f6c6ff7a2bbb0185b8bdbf75ceb75",
+            "output.json": "e3a7abbd4f4f9d7ed9265845d595be4baa13f44de83e6f32533ce6d343dc3b1c",
+            "attribution.md": "32d5f2718f00d08466d0af23485fcbd1c385d24ead2c3a9b9a89a019ddd036b5"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_option_event_allocation_fixture.py::test_an_exercise_or_an_assignment_creates_the_share_trade_alpaca_prints_beside_it",
+        "tests/fixtures/test_option_event_allocation_fixture.py::test_the_bot_whose_lot_is_taken_gets_those_shares_and_that_cash",
+        "tests/fixtures/test_option_event_allocation_fixture.py::test_an_expiry_creates_no_share_trade_as_alpacas_examples_print_none"
+      ]
+    },
+    {
       "id": "AM-001",
       "name": "American option price and delta, no dividend — QuantLib Leisen-Reimer tree",
       "category": "options-pricing",

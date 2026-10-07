@@ -1,0 +1,77 @@
+{
+  "multiplier": 100,
+  "cases": [
+    {
+      "case": "trading_api/option_exercise",
+      "activity_type": "OPEXC",
+      "kind": "exercised",
+      "contract": "AAPL230721C00150000",
+      "position_change": -2,
+      "event_date_ms": 1689912000000
+    },
+    {
+      "case": "trading_api/option_assignment",
+      "activity_type": "OPASN",
+      "kind": "assigned",
+      "contract": "AAPL230721C00150000",
+      "position_change": 2,
+      "event_date_ms": 1688184000000
+    },
+    {
+      "case": "trading_api/otm_option_expiry",
+      "activity_type": "OPEXP",
+      "kind": "expired",
+      "contract": "AAPL230721C00150000",
+      "position_change": -2,
+      "event_date_ms": 1689912000000
+    },
+    {
+      "case": "broker_api/exercising_call",
+      "activity_type": "OPEXC",
+      "kind": "exercised",
+      "contract": "QS240301C00006500",
+      "position_change": -1,
+      "event_date_ms": 1709010000000
+    },
+    {
+      "case": "broker_api/exercising_put",
+      "activity_type": "OPEXC",
+      "kind": "exercised",
+      "contract": "QS240301P00006500",
+      "position_change": -1,
+      "event_date_ms": 1709010000000
+    },
+    {
+      "case": "broker_api/call_assignment",
+      "activity_type": "OPASN",
+      "kind": "assigned",
+      "contract": "QS240301C00004500",
+      "position_change": 1,
+      "event_date_ms": 1709269200000
+    },
+    {
+      "case": "broker_api/put_assignment",
+      "activity_type": "OPASN",
+      "kind": "assigned",
+      "contract": "QS240301P00009000",
+      "position_change": 1,
+      "event_date_ms": 1709269200000
+    },
+    {
+      "case": "broker_api/call_expiration",
+      "activity_type": "OPEXP",
+      "kind": "expired",
+      "contract": "QS240301C00010500",
+      "position_change": -1,
+      "event_date_ms": 1709269200000
+    },
+    {
+      "case": "broker_api/put_expiration",
+      "activity_type": "OPEXP",
+      "kind": "expired",
+      "contract": "QS240301P00000500",
+      "position_change": -1,
+      "event_date_ms": 1709269200000
+    }
+  ]
+}
