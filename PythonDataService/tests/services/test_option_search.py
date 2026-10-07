@@ -689,30 +689,21 @@ async def test_a_worker_that_cannot_be_started_is_a_search_not_run(failure: Exce
 async def test_a_search_that_raises_in_the_worker_is_the_searchs_failure_and_its_worker_takes_the_next(
     fault: Exception,
 ) -> None:
-    class Faulty(Held):
-        def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
-            answer = super().submit(fn, *args, **kwargs)
-            if fn is option_search.search and len(self.searches) == 1:
-                answer.set_exception(fault)
-            return answer
+    workers = Workers()
+    lane = OptionSearchLane("entry", executor=workers)
 
-    made: list[Faulty] = []
-
-    def worker() -> Faulty:
-        made.append(Faulty())
-        return made[-1]
-
-    lane = OptionSearchLane("entry", executor=worker)
-
-    lost = await lane.search(_ask(_AT_THE_MONEY))
+    searching = lane.start(_ask(_AT_THE_MONEY))
+    worker = await workers.handed()
+    # Raised while the lane waits for the answer, as a worker's own failure comes back.
+    worker.searches[0].set_exception(fault)
+    lost = await searching
     searching_again = lane.start(_ask(_AT_THE_MONEY))
-    await _moments()
-    made[0].let_go(1)
+    (await workers.handed(2)).let_go(1)
 
     assert isinstance(lost, SearchNotRun) and lost.reason is SearchNotRunReason.FAILED
     # Not "its worker process ended": the worker is as it was, and is the one that answers next.
     assert isinstance(await searching_again, Resolution)
-    assert len(made) == 1 and not made[0].shut_down
+    assert len(workers.made) == 1 and not worker.shut_down
 
 
 def test_a_process_that_never_searches_never_starts_a_worker() -> None:
