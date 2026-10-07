@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from app.engine.live.live_state_sidecar import fsync_parent_dir
+from app.utils.atomic_file import atomic_write_bytes
 
 RecordT = TypeVar("RecordT", bound=BaseModel)
 
@@ -95,6 +96,59 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
             fh.flush()
             os.fsync(fh.fileno())
         fsync_parent_dir(path)
+
+    def append_many(self, records: Sequence[RecordT]) -> None:
+        """Append several records in one write and one sync.
+
+        For records that each stand on their own. All of them are durable
+        when this returns. A crash part-way leaves the whole lines written so
+        far and at most one torn line, which the next append truncates as it
+        does after any crash. Their sequences run on from the last one
+        written, in order.
+        """
+        if not records:
+            return
+        path = self.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._truncate_tolerated_tail()
+        expected_seq = self.allocate_seq()
+        lines: list[str] = []
+        for record in records:
+            record_seq = self._seq_of(record)
+            if record_seq != expected_seq:
+                raise ValueError(
+                    f"{self._label} WAL append got seq={record_seq} but next "
+                    f"available seq is {expected_seq}"
+                )
+            lines.append(record.model_dump_json() + "\n")
+            expected_seq += 1
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("".join(lines))
+            self._next_seq = expected_seq
+            fh.flush()
+            os.fsync(fh.fileno())
+        fsync_parent_dir(path)
+
+    def replace_all(self, records: Sequence[RecordT]) -> None:
+        """Rewrite the file to hold exactly ``records``, in one atomic step.
+
+        For a caller that compacts its own WAL while it holds that WAL's own
+        transaction lock. A reader sees the old file or the new one whole,
+        never a part of either, and a crash leaves one of the two. Sequences
+        must rise; they need not be consecutive, so the rows kept keep the
+        sequences they were written under.
+        """
+        last_seq = 0
+        for record in records:
+            record_seq = self._seq_of(record)
+            if record_seq <= last_seq:
+                raise ValueError(
+                    f"{self._label} WAL rewrite got seq={record_seq} after {last_seq}; sequences must rise"
+                )
+            last_seq = record_seq
+        atomic_write_bytes(self.path, "".join(record.model_dump_json() + "\n" for record in records).encode("utf-8"))
+        # The next append reads its sequence from what the file now holds.
+        self._next_seq = None
 
     def read_all(self) -> list[RecordT]:
         return self.read_from(after_seq=0, limit=None)

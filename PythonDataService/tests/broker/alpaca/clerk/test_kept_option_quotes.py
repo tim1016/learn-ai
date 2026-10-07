@@ -1,12 +1,25 @@
-"""The option quotes a simulated account was handed: which one is the newest kept (#2913)."""
+"""The option quotes a simulated account was handed: which one is the newest kept, and how few are kept (#2913)."""
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
+import pytest
+
+from app.broker.alpaca.clerk import kept_option_quotes
+from app.broker.alpaca.clerk.kept_option_quotes import (
+    COMPACT_ABOVE_ROWS,
+    KeptOptionQuote,
+    KeptOptionQuotes,
+    KeptOptionQuotesUnavailable,
+    rows_still_answerable,
+)
+from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.contract.errors import BrokerUnavailable
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
+from app.services.session_authority import et_minute_of_day_ms
 
 SYMBOL = "SPY260918C00585000"
 
@@ -107,3 +120,239 @@ def test_each_contract_has_its_own_newest_and_a_store_never_written_has_none(tmp
     assert store.newest("SPY260918C00590000") is None
     # Another handle on the same account reads what the first wrote.
     assert _store(tmp_path).newest(SYMBOL) is not None
+
+
+
+# ── what is kept is bounded, and reading it costs what is kept, not what was ever handed over ──
+
+TUESDAY, WEDNESDAY = date(2026, 9, 8), date(2026, 9, 9)
+TUESDAY_OPEN = et_minute_of_day_ms(TUESDAY, 9 * 60 + 30)
+TUESDAY_CLOSE = et_minute_of_day_ms(TUESDAY, 16 * 60)
+WEDNESDAY_OPEN = et_minute_of_day_ms(WEDNESDAY, 9 * 60 + 30)
+EVERY_MS = 3_000
+FIFTY = tuple(f"SPY260918C00{500 + place:03d}000" for place in range(50))
+# What a file of fifty contracts may hold: it is cut once it passes the floor, and a hand-over adds fifty rows.
+FIFTY_BOUND_ROWS = COMPACT_ABOVE_ROWS + len(FIFTY)
+
+
+def _path(tmp_path: Path) -> Path:
+    return tmp_path / "accounts" / "alpaca" / "sim:buys-a-call" / "kept_option_quotes.jsonl"
+
+
+def _as_after_a_restart() -> None:
+    """Forget what this process holds in memory of every file, as a new process has."""
+    kept_option_quotes._HELD.clear()
+
+
+def _hand_over(store: KeptOptionQuotes, symbols: tuple[str, ...], *, at_ms: int, bid: str = "1.90") -> None:
+    """The runner states the newest quote it holds for each contract, received 200 ms before."""
+    quote = _quote(bid, "1.94", bid_at=at_ms - 200, ask_at=at_ms - 200)
+    store.keep_all(dict.fromkeys(symbols, quote), kept_at_ms=at_ms)
+
+
+def _hand_overs(store: KeptOptionQuotes, symbols: tuple[str, ...], *, first_ms: int, count: int) -> int:
+    """``count`` hand-overs three seconds apart; returns when the last was made."""
+    for step in range(count):
+        _hand_over(store, symbols, at_ms=first_ms + step * EVERY_MS)
+    return first_ms + (count - 1) * EVERY_MS
+
+
+def test_half_an_hour_of_hand_overs_for_fifty_contracts_leaves_a_small_file_that_stops_growing(
+    tmp_path: Path,
+) -> None:
+    """Fifty contracts every three seconds: 10,000 rows handed over in ten minutes, 30,000 in thirty.
+
+    The file is no bigger after thirty minutes than after ten, and the writer
+    never reads its own file back to make a hand-over.
+    """
+    store = _store(tmp_path)
+
+    _hand_overs(store, FIFTY, first_ms=TUESDAY_OPEN, count=200)
+    rows_at_ten_minutes = _rows(tmp_path)
+    last_ms = _hand_overs(store, FIFTY, first_ms=TUESDAY_OPEN + 200 * EVERY_MS, count=400)
+
+    assert rows_at_ten_minutes <= FIFTY_BOUND_ROWS
+    assert _rows(tmp_path) <= FIFTY_BOUND_ROWS, "30,000 rows were handed over"
+    assert _path(tmp_path).stat().st_size < 200_000
+    assert store.rows_parsed == 0, "a hand-over parsed rows of the file it had just written"
+    # Every contract's newest quote and last hand-over are the last ones made.
+    for symbol in (FIFTY[0], FIFTY[-1]):
+        newest, stated = store.newest(symbol, at_or_before_ms=last_ms), store.last_stated(symbol, at_or_before_ms=last_ms)
+        assert newest is not None and newest.received_ms == last_ms - 200
+        assert stated is not None and stated.kept_at_ms == last_ms
+    assert store.rows_parsed == 0, "a mark read in the process that wrote the file parsed it again"
+
+
+def test_after_a_restart_one_read_of_the_small_file_answers_every_mark_until_it_changes(tmp_path: Path) -> None:
+    """A new process holds nothing in memory. Its first question reads the file once: hundreds of rows, not 30,000."""
+    last_ms = _hand_overs(_store(tmp_path), FIFTY, first_ms=TUESDAY_OPEN, count=600)
+    in_the_file = _rows(tmp_path)
+    _as_after_a_restart()
+    reopened = _store(tmp_path)
+
+    marks = [reopened.last_stated(symbol, at_or_before_ms=last_ms, with_side="bid") for symbol in FIFTY]
+
+    assert all(mark is not None and mark.kept_at_ms == last_ms for mark in marks)
+    assert reopened.rows_parsed == in_the_file <= FIFTY_BOUND_ROWS
+    # Another handle on the same file, as the account's reading makes for each mark, reads nothing more.
+    again = _store(tmp_path).last_stated(FIFTY[7], at_or_before_ms=last_ms, with_side="bid")
+    assert again is not None and _store(tmp_path).rows_parsed == in_the_file
+    # A hand-over by this process is added to what is held, and the file is still not read back.
+    _hand_over(reopened, FIFTY, at_ms=last_ms + EVERY_MS)
+    after = _store(tmp_path).last_stated(FIFTY[7], at_or_before_ms=last_ms + EVERY_MS)
+    assert after is not None and after.kept_at_ms == last_ms + EVERY_MS
+    assert reopened.rows_parsed == in_the_file
+
+
+@pytest.mark.slow
+def test_a_whole_day_of_hand_overs_for_fifty_contracts_leaves_a_keep_and_a_mark_read_cheap(tmp_path: Path) -> None:
+    """09:30 to 16:00, every three seconds, fifty contracts: 7,800 hand-overs and 390,000 rows.
+
+    Kept whole, that is a file of 80 MB that every mark read parsed from end
+    to end. Cut back as it grows, it is the size it was after the first
+    minute, the writer has parsed none of it, and a new process reads it once.
+    """
+    store = _store(tmp_path)
+
+    last_ms = _hand_overs(store, FIFTY, first_ms=TUESDAY_OPEN, count=7_800)
+
+    assert last_ms == TUESDAY_CLOSE - EVERY_MS
+    assert _rows(tmp_path) <= FIFTY_BOUND_ROWS and _path(tmp_path).stat().st_size < 200_000
+    assert store.rows_parsed == 0
+    _as_after_a_restart()
+    mark = _store(tmp_path).last_stated(FIFTY[0], at_or_before_ms=TUESDAY_CLOSE, with_side="bid")
+    assert mark is not None and mark.kept_at_ms == last_ms
+    assert _store(tmp_path).rows_parsed <= FIFTY_BOUND_ROWS
+
+
+def test_the_mark_at_yesterdays_close_is_still_answered_after_todays_hand_overs_cut_the_file(tmp_path: Path) -> None:
+    """A contract held overnight starts the next day from the last bid handed over before the close.
+
+    That hand-over is made at 15:59:57 on Tuesday. Wednesday morning's
+    hand-overs cut the file many times over. The mark at Tuesday's close is
+    still the one made at 15:59:57, at its own bid, and nothing later.
+    """
+    store = _store(tmp_path)
+    _hand_overs(store, (SYMBOL,), first_ms=TUESDAY_CLOSE - 300 * EVERY_MS, count=299)
+    _hand_over(store, (SYMBOL,), at_ms=TUESDAY_CLOSE - EVERY_MS, bid="2.00")
+    # After the close too: these are no part of the close's mark.
+    _hand_overs(store, (SYMBOL,), first_ms=TUESDAY_CLOSE + 1_000, count=20)
+
+    _hand_overs(store, (SYMBOL,), first_ms=WEDNESDAY_OPEN, count=2_000)
+
+    assert _rows(tmp_path) <= COMPACT_ABOVE_ROWS + 1
+    for handle in (store, _store(tmp_path)):
+        at_the_close = handle.last_stated(SYMBOL, at_or_before_ms=TUESDAY_CLOSE, with_side="bid")
+        assert at_the_close is not None
+        assert (at_the_close.kept_at_ms, at_the_close.quote.bid) == (TUESDAY_CLOSE - EVERY_MS, Decimal("2.00"))
+    _as_after_a_restart()
+    reread = _store(tmp_path).last_stated(SYMBOL, at_or_before_ms=TUESDAY_CLOSE, with_side="bid")
+    assert reread is not None and reread.kept_at_ms == TUESDAY_CLOSE - EVERY_MS
+
+
+def test_the_entrys_own_quote_put_back_after_the_file_was_cut_is_kept_once_more_and_never_twice(
+    tmp_path: Path,
+) -> None:
+    """A close puts the entry's quote back each time it is tried. It costs one row, however often."""
+    store = _store(tmp_path)
+    entry = _quote("1.90", "1.94", bid_at=TUESDAY_OPEN - 300, ask_at=TUESDAY_OPEN - 300)
+    store.keep(SYMBOL, entry, kept_at_ms=TUESDAY_OPEN)
+    _hand_overs(store, (SYMBOL,), first_ms=TUESDAY_OPEN + EVERY_MS, count=1_500)
+    rows = _rows(tmp_path)
+
+    for _ in range(5):
+        store.restore(SYMBOL, entry)
+
+    assert _rows(tmp_path) == rows + 1
+    # It is older than every hand-over since, so it is the newest of nothing.
+    newest = store.newest(SYMBOL)
+    assert newest is not None and newest.received_ms > TUESDAY_OPEN
+
+
+def _row(seq: int, *, kept_at: int, received: int, bid: str | None = "1.90", ask: str | None = "1.94", symbol: str = SYMBOL) -> KeptOptionQuote:
+    quote = _quote(bid, ask, bid_at=received, ask_at=received)
+    return KeptOptionQuote(seq=seq, symbol=symbol, quote=RecordedQuote.of(quote), kept_at_ms=kept_at)
+
+
+def test_what_is_kept_through_a_cut_is_what_a_later_reader_can_ask_for_and_no_more() -> None:
+    noon = et_minute_of_day_ms(TUESDAY, 12 * 60)
+    rows = [
+        _row(1, kept_at=noon, received=noon - 300),
+        # Received later than any other, but handed over out of order: the newest by receipt.
+        _row(2, kept_at=noon + 3_000, received=noon + 2_900),
+        _row(3, kept_at=noon + 6_000, received=noon + 2_000),
+        # An ask alone: the newest for a purchase, and nothing a sale could be priced from.
+        _row(4, kept_at=noon + 9_000, received=noon + 8_900, bid=None),
+        # The last hand-over made for this contract.
+        _row(5, kept_at=noon + 12_000, received=noon + 2_500),
+        # Another contract's only row.
+        _row(6, kept_at=noon + 13_000, received=noon + 12_900, symbol=FIFTY[0]),
+        # Stamped a minute after the latest hand-over in the file: it may yet become the newest.
+        _row(7, kept_at=noon + 10_000, received=noon + 74_000),
+        # Handed over last of all, as of its own old receipt. Kept, so that its sequence is never given out twice.
+        _row(8, kept_at=noon - 5_000, received=noon - 5_000),
+    ]
+
+    still = rows_still_answerable(rows)
+
+    # Row 1 is behind in both; row 3 is neither the newest received nor the last handed over.
+    assert [row.seq for row in still] == [2, 4, 5, 6, 7, 8]
+
+
+def test_a_cut_keeps_one_mark_for_each_sessions_close_and_the_last_one_made_before_it() -> None:
+    monday_close = et_minute_of_day_ms(date(2026, 9, 14), 16 * 60)
+    friday_close = et_minute_of_day_ms(date(2026, 9, 11), 16 * 60)
+    rows = [
+        _row(1, kept_at=friday_close - 6_000, received=friday_close - 6_200),
+        _row(2, kept_at=friday_close, received=friday_close - 200),  # at the close itself: Friday's mark
+        _row(3, kept_at=friday_close + 1, received=friday_close - 100),  # a millisecond after it: Monday's, unless...
+        _row(4, kept_at=monday_close - 3_000, received=monday_close - 3_200),  # ...a later one is made before Monday's
+        _row(5, kept_at=monday_close + 60_000, received=monday_close + 59_800),
+    ]
+
+    still = rows_still_answerable(rows)
+
+    assert [row.seq for row in still] == [2, 4, 5]
+
+
+# ── a file that cannot be read, and one a crash left torn ────────────────
+
+
+def test_a_line_a_crash_left_half_written_is_passed_over_and_cut_off_by_the_next_hand_over(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _hand_over(store, (SYMBOL,), at_ms=TUESDAY_OPEN)
+    with open(_path(tmp_path), "a", encoding="utf-8") as torn:
+        torn.write('{"seq":2,"symbol":"SPY2609')
+    _as_after_a_restart()
+    reopened = _store(tmp_path)
+
+    before = reopened.last_stated(SYMBOL, at_or_before_ms=TUESDAY_OPEN + 60_000)
+    _hand_over(reopened, (SYMBOL,), at_ms=TUESDAY_OPEN + EVERY_MS, bid="2.00")
+
+    assert before is not None and before.kept_at_ms == TUESDAY_OPEN
+    assert _path(tmp_path).read_text().count("\n") == 2 and _path(tmp_path).read_text().endswith("\n")
+    _as_after_a_restart()
+    after = _store(tmp_path).last_stated(SYMBOL, at_or_before_ms=TUESDAY_OPEN + 60_000)
+    assert after is not None and (after.seq, after.quote.bid) == (2, Decimal("2.00"))
+
+
+def test_a_whole_line_that_is_not_a_kept_quote_makes_the_quotes_unavailable_by_name(tmp_path: Path) -> None:
+    """Not a bare runtime error: the same typed "unavailable" a broker that cannot answer raises."""
+    store = _store(tmp_path)
+    _hand_over(store, (SYMBOL,), at_ms=TUESDAY_OPEN)
+    with open(_path(tmp_path), "a", encoding="utf-8") as spoiled:
+        spoiled.write('{"seq":2,"symbol":"SPY260918C00585000","quote":"not a quote","kept_at_ms":1}\n')
+    _as_after_a_restart()
+    reopened = _store(tmp_path)
+
+    for ask in (
+        lambda: reopened.newest(SYMBOL),
+        lambda: reopened.last_stated(SYMBOL, at_or_before_ms=TUESDAY_OPEN + 60_000),
+        lambda: _hand_over(reopened, (SYMBOL,), at_ms=TUESDAY_OPEN + EVERY_MS),
+        lambda: reopened.restore(SYMBOL, _quote("1.90", "1.94")),
+    ):
+        with pytest.raises(KeptOptionQuotesUnavailable) as unavailable:
+            ask()
+        assert isinstance(unavailable.value, BrokerUnavailable)
+    assert _rows(tmp_path) == 2, "nothing was written over a file that could not be read"
+

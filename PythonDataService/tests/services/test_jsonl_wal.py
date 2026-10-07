@@ -44,6 +44,8 @@ def _wal(path: Path, trusted_root: Path) -> JsonlWal[_Record]:
     [
         pytest.param(lambda wal: wal.path, id="path"),
         pytest.param(lambda wal: wal.append(_Record(seq=1, value="x")), id="append"),
+        pytest.param(lambda wal: wal.append_many([_Record(seq=1, value="x")]), id="append_many"),
+        pytest.param(lambda wal: wal.replace_all([_Record(seq=1, value="x")]), id="replace_all"),
         pytest.param(lambda wal: wal.read_all(), id="read_all"),
         pytest.param(lambda wal: wal.read_tail(limit=1), id="read_tail"),
         pytest.param(lambda wal: wal.read_from(after_seq=0), id="read_from"),
@@ -94,3 +96,54 @@ def test_a_symlink_escaping_the_trusted_root_is_refused(tmp_path: Path) -> None:
         wal.append(_Record(seq=1, value="x"))
 
     assert outside.read_text(encoding="utf-8") == "", "the symlink target was written through"
+
+
+def test_several_records_appended_at_once_read_back_in_order_and_the_next_one_follows_on(tmp_path: Path) -> None:
+    wal = _wal(tmp_path / "wal.jsonl", tmp_path)
+    wal.append(_Record(seq=1, value="a"))
+
+    wal.append_many([_Record(seq=2, value="b"), _Record(seq=3, value="c")])
+    wal.append(_Record(seq=4, value="d"))
+
+    assert [record.value for record in wal.read_all()] == ["a", "b", "c", "d"]
+    with pytest.raises(ValueError, match="got seq=7 but next available seq is 6"):
+        wal.append_many([_Record(seq=5, value="e"), _Record(seq=7, value="g")])
+    assert [record.seq for record in wal.read_all()] == [1, 2, 3, 4], "a refused batch wrote nothing"
+
+
+def test_several_records_appended_after_a_torn_line_replace_it(tmp_path: Path) -> None:
+    """A crash left half a line. The next append, of one record or of several, truncates it first."""
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append(_Record(seq=1, value="a"))
+    with open(path, "a", encoding="utf-8") as torn:
+        torn.write('{"seq":2,"val')
+
+    wal.append_many([_Record(seq=2, value="b"), _Record(seq=3, value="c")])
+
+    assert [record.value for record in wal.read_all()] == ["a", "b", "c"]
+
+
+def test_a_rewrite_leaves_exactly_the_records_given_under_the_sequences_they_had(tmp_path: Path) -> None:
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
+
+    wal.replace_all([_Record(seq=2, value="2"), _Record(seq=6, value="6")])
+
+    assert [record.seq for record in wal.read_all()] == [2, 6]
+    # The sequence runs on from the last one kept: it never reuses one.
+    assert wal.allocate_seq() == 7
+    wal.append(_Record(seq=7, value="7"))
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [2, 6, 7]
+    assert [entry.name for entry in tmp_path.iterdir() if entry.name.endswith(".tmp")] == []
+
+
+def test_a_rewrite_refuses_sequences_that_do_not_rise_and_leaves_the_file_as_it_was(tmp_path: Path) -> None:
+    wal = _wal(tmp_path / "wal.jsonl", tmp_path)
+    wal.append_many([_Record(seq=1, value="a"), _Record(seq=2, value="b")])
+
+    with pytest.raises(ValueError, match="sequences must rise"):
+        wal.replace_all([_Record(seq=2, value="b"), _Record(seq=1, value="a")])
+
+    assert [record.seq for record in wal.read_all()] == [1, 2]

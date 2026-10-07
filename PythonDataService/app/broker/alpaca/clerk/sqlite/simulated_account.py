@@ -23,6 +23,7 @@ with no fresh bar. A bid of zero is a mark: nothing is bid for the contract.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from decimal import Decimal
 from pathlib import Path
@@ -34,7 +35,11 @@ from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuote, KeptOptionQuotes
+from app.broker.alpaca.clerk.kept_option_quotes import (
+    KeptOptionQuote,
+    KeptOptionQuotes,
+    KeptOptionQuotesUnavailable,
+)
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
@@ -55,6 +60,7 @@ if TYPE_CHECKING:
     from app.services.alpaca_fee_attribution import FeeAttribution
 
 BASELINE_KIND = "SIMULATION_SESSION_BASELINE"
+logger = logging.getLogger(__name__)
 
 
 class SimulationEvidenceUnavailable(BrokerUnavailable):
@@ -139,6 +145,27 @@ class SimulatedAccountProjection:
             raise SimulationEvidenceUnavailable("Choose simulated starting cash before deploying this Dry Run.")
         return normalize_money(self.initial_cash), False
 
+    def _kept_option_quotes(self) -> KeptOptionQuotes:
+        return KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id)
+
+    def _read_kept_option_quotes_ahead(self) -> None:
+        """Read the Dry Run's kept option quotes before the custody lock is taken, never under it.
+
+        What is kept is then already in memory when a mark is asked for. A
+        file that cannot be read is not an error of a reading that marks no
+        contract: the mark itself says so when one is needed.
+        """
+        if not self.repo.account_id.startswith("sim:"):
+            return
+        try:
+            self._kept_option_quotes().refresh()
+        except KeptOptionQuotesUnavailable:
+            logger.warning(
+                "the option quotes kept for a Dry Run cannot be read; an open contract cannot be marked",
+                exc_info=True,
+                extra={"action": "kept_option_quotes_unreadable", "account_id": self.repo.account_id},
+            )
+
     def _option_mark(self, symbol: str, *, long: bool, at_ms: int) -> KeptOptionQuote:
         """The quote an open option contract is marked from at ``at_ms``, or the reading is unavailable.
 
@@ -151,9 +178,12 @@ class SimulatedAccountProjection:
             raise SimulationEvidenceUnavailable(f"A sold option position in {symbol} cannot be marked yet.")
         if not self.repo.account_id.startswith("sim:"):
             raise SimulationEvidenceUnavailable(f"Only a Dry Run keeps option quotes; {symbol} cannot be marked here.")
-        kept = KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id).last_stated(
-            symbol, at_or_before_ms=at_ms, with_side="bid"
-        )
+        try:
+            kept = self._kept_option_quotes().last_stated(symbol, at_or_before_ms=at_ms, with_side="bid")
+        except KeptOptionQuotesUnavailable as exc:
+            raise SimulationEvidenceUnavailable(
+                f"The option quotes kept for this Dry Run need repair; {symbol} cannot be marked from them."
+            ) from exc
         if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
             raise SimulationEvidenceUnavailable(
                 f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
@@ -274,6 +304,7 @@ class SimulatedAccountProjection:
         already dedupes by session, so a second call for the same session
         returns the existing baseline instead of appending another transition.
         """
+        self._read_kept_option_quotes_ahead()
         with self.repo._write_lock:
             private = self.repo.account_id.startswith("sim:")
             capital, persist = self._private_cash() if private else (normalize_money(reference_cash), True)
@@ -288,6 +319,7 @@ class SimulatedAccountProjection:
         before that command commits. Shadow uses current real cash only as
         available reference capital; its retained risk capital never resets.
         """
+        self._read_kept_option_quotes_ahead()
         with self.repo._write_lock:
             private = self.repo.account_id.startswith("sim:")
             capital, persist = self._private_cash() if private else (normalize_money(reference_cash), True)
