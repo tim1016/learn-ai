@@ -1067,9 +1067,10 @@ def recheck(
 
     Nothing is picked again. Raises ``ContractsNotResolved`` when the feed is
     unhealthy or has reconnected since the selection (ADR 0067: a new
-    generation is refused even when it is healthy), a picked leg's quote or
-    the underlying's is no longer usable, or the quotes are now too far
-    apart; nothing is sent then. The limits are the ones the selection was
+    generation is refused even when it is healthy), a picked contract has
+    come inside its entry cutoff, a picked leg's quote or the underlying's
+    is no longer usable, or the quotes are now too far apart; nothing is
+    sent then. The limits are the ones the selection was
     made under. What the structure now costs, and how wide its legs' markets
     are, is not asked here.
     """
@@ -1096,6 +1097,16 @@ def recheck(
                 "generation that is gone",
             )
         underlying_quote = _require_usable_underlying(underlying, feed, limits, recheck_ms)
+        for leg_id, contract in resolution.picked.items():
+            # The selection was outside the cutoff. The order is sent now, and now may not be.
+            if recheck_ms >= session_close_ms_utc(contract.expiry_date) - limits.entry_cutoff_lead_ms:
+                raise _NoPick(
+                    ResolverRefusal.PAST_ENTRY_CUTOFF,
+                    f"leg {leg_id!r} picked {contract.occ_symbol}, which is now too close to its last trade "
+                    "for the entry to be seen through",
+                    leg_ids=(leg_id,),
+                    contract=contract,
+                )
         for leg_id, quote in held.items():
             contract = resolution.picked[leg_id]
             fault = (
