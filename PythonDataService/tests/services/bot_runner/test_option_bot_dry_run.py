@@ -13,9 +13,12 @@ thing (``_option_floor``).
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -25,15 +28,20 @@ import pytest
 
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
-from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.market_liveness import set_market_liveness_consumer
 from app.broker.ibkr.config import reset_settings_for_testing
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.options.deadlines import CloseTerms
 from app.options.requirement import StructureMoneyRefusal
 from app.options.simulated_fill import SimulatedFillModel
 from app.options.watch import LineClass
+from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource, TopOfBookQuote
 from app.services import bot_option_run, market_liveness, option_search
+from app.services.bot_option_run import OptionOrderTerms
+from app.services.broker_v2_panel import budget_deploy
 from app.services.option_search import OptionSearches, OptionSearchLane
 from app.services.option_watch import get_option_watch_list
 from tests._helpers.bot_runner.custody import _SID, _T0, _registry
@@ -61,8 +69,10 @@ from ._option_floor import (
     SID,
     TUESDAY,
     WEDNESDAY,
+    AnswersWith,
     Floor,
     Ran,
+    SearchesLate,
     Step,
     green,
     one_call,
@@ -90,6 +100,7 @@ async def on_the_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Async
     finally:
         for floor in built:
             floor.lane.close()
+            await floor.held.stop()
             await floor.supervisor.close()
         await close_synthetic_clerk_runtimes()
         reset_held_option_quotes_for_testing()
@@ -195,6 +206,31 @@ async def test_the_journal_names_the_contract_its_multiplier_and_how_each_fill_w
     assert (bought.recorded_at_ms, sold.recorded_at_ms) == (ENTER_MS + DELIVERY_MS, EXIT_MS + DELIVERY_MS)
     assert bought.order_ref != sold.order_ref
     assert {bought.price_bar_end_ms, sold.price_bar_end_ms} == {None}
+
+
+def _decisions(ran: Ran) -> dict[str, str]:
+    """Each decision's own id, as the runner named it to the Clerk, by its outcome."""
+    return {outcome: facts["evaluation_id"] for outcome, facts in ran.receipts}
+
+
+async def test_the_clerk_says_what_each_decision_filled_when_asked_by_the_decisions_own_name(floor: Floor) -> None:
+    """The runner asks the Clerk what a decision filled. It takes no order out of a receipt by its place:
+    an EXIT's receipt names the entry it closes before the order that closed it."""
+    ran = await floor.run(_round_trip())
+    decided = _decisions(ran)
+
+    (bought,) = floor.clerk.option_fills_of_decision(SID, decided["enter_intent"])
+    (sold,) = floor.clerk.option_fills_of_decision(SID, decided["exit_intent"])
+
+    assert (bought.contract, bought.side, bought.quantity, bought.price, bought.multiplier) == (CALL, "buy", 1.0, 4.12, 100)
+    assert (sold.contract, sold.side, sold.quantity, sold.price, sold.multiplier) == (CALL, "sell", 1.0, 4.30, 100)
+    assert (bought.fill_model, bought.quote_age_ms, bought.filled_at_ms) == ("natural_price", 0, ENTER_MS + DELIVERY_MS)
+    assert (sold.fill_model, sold.quote_age_ms, sold.filled_at_ms) == ("natural_price", 0, EXIT_MS + DELIVERY_MS)
+    assert bought.order_ref != sold.order_ref, "each is the fill of its own decision's order"
+    assert [row.order_ref for row in ran.journal] == [bought.order_ref, sold.order_ref]
+    # A decision that made no order, and one the Clerk never heard of, filled nothing.
+    assert floor.clerk.option_fills_of_decision(SID, decided["no_action"]) == ()
+    assert floor.clerk.option_fills_of_decision(SID, "a-decision-nobody-made") == ()
 
 
 async def test_the_watched_window_is_asked_for_from_the_start_and_follows_the_underlyings_bars(floor: Floor) -> None:
@@ -455,6 +491,232 @@ async def test_a_leg_picked_by_delta_is_bought_when_the_dividends_are_known(on_t
     assert ran.blocked() == []
     assert [fill[0] for fill in floor.fills()] == [picked.occ_symbol]
     assert floor.holds() == {picked.occ_symbol: 1.0}
+
+
+# ---- A fault on the way is that decision's refusal, never the end of the run --------------
+
+
+async def test_a_fault_in_the_read_of_the_rate_and_dividends_refuses_that_entry_by_name_and_the_run_goes_on(
+    floor: Floor,
+) -> None:
+    """The read itself breaks: not "the dividends are unknown", which it reports, but an error. The entry is one
+    refused decision with a code of its own, and the three bars after it are decided on as usual."""
+
+    def a_reader_that_breaks(asked_as_of_ms: int) -> None:
+        # The read the decision itself waits for, not the one made in the background as the bar closed.
+        if asked_as_of_ms > ENTER_MS:
+            raise LookupError("the series is not there")
+
+    floor.while_inputs_are_read = a_reader_that_breaks
+
+    ran = await floor.run(_entry_then_three_bars())
+
+    [(reason_code, why)] = ran.blocked()
+    assert reason_code == "OPTION_ENTRY_PRICING_INPUTS_NOT_READ"
+    assert why.strip(), "the refusal says nothing in words"
+    assert ran.outcomes() == [
+        ("no_action", FIRST_GREEN_MS),
+        ("blocked", ENTER_MS),
+        ("no_action", ENTER_MS + MINUTE),
+        ("no_action", ENTER_MS + 2 * MINUTE),
+        ("no_action", EXIT_MS),
+    ]
+    assert (floor.worker.asked, floor.asked_of_the_clerk) == ([], [])
+    _nothing_was_sent(floor, ran)
+
+
+async def test_a_fault_while_the_window_follows_a_bar_never_breaks_the_stream_the_bot_decides_on(
+    floor: Floor, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The watch list breaks every time a closed bar would move the window. The bars still reach the strategy:
+    the bot buys its call and sells it, from the window it asked for at the start."""
+    caplog.set_level(logging.ERROR, logger="app.services.bot_option_run")
+    watch = floor.watch.watch
+
+    def breaks_on_a_bar(key: str, request: Any) -> None:
+        if request.money is not None:
+            raise RuntimeError("the watch list is broken")
+        watch(key, request)
+
+    monkeypatch.setattr(floor.watch, "watch", breaks_on_a_bar)
+
+    ran = await floor.run(_round_trip())
+
+    assert [outcome for outcome, _ in ran.outcomes()] == [
+        "no_action", "enter_intent", "no_action", "no_action", "exit_intent",
+    ]
+    assert [fill[:3] for fill in floor.fills()] == [(CALL, "buy", 1.0), (CALL, "sell", 1.0)]
+    said = [record for record in caplog.records if getattr(record, "action", None) == "option_bar_listener_failed"]
+    assert len(said) == 5 and all(record.exc_info is not None for record in said), "one for each bar, with its stack"
+    assert {(record.strategy_instance_id, record.underlying) for record in said} == {(SID, "SPY")}
+
+
+# ---- A wait is given no longer than the decision has left -------------------------------
+
+
+async def _with_a_tenth_of_a_second_left(floor: Floor) -> None:
+    """The bar reaches the bot 19.9 seconds after it closed. A decision is on time for twenty."""
+    await floor.bar_arrives(ENTER_MS + 19_900)
+
+
+async def test_an_entry_whose_rate_is_still_being_read_when_its_time_is_up_is_refused_as_that_and_searches_nothing(
+    floor: Floor,
+) -> None:
+    """The vendors do not answer the decision's own read in the tenth of a second it has left. The wait ends
+    with the decision's time, not with the vendors: one refused decision, by that name."""
+    vendors = threading.Event()
+
+    def vendors_that_do_not_answer(asked_as_of_ms: int) -> None:
+        if asked_as_of_ms > ENTER_MS:
+            vendors.wait(3)
+
+    floor.while_inputs_are_read = vendors_that_do_not_answer
+    try:
+        ran = await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS), before=_with_a_tenth_of_a_second_left)])
+    finally:
+        vendors.set()
+
+    [(reason_code, why)] = ran.blocked()
+    assert reason_code == "OPTION_ENTRY_PRICING_INPUTS_LATE"
+    assert why.strip(), "the refusal says nothing in words"
+    assert (floor.worker.asked, floor.asked_of_the_clerk) == ([], [])
+    _nothing_was_sent(floor, ran)
+
+
+async def test_an_entry_whose_search_has_not_answered_when_its_time_is_up_is_refused_as_that_and_sends_nothing(
+    floor: Floor,
+) -> None:
+    """The search's worker is busy, and the decision has a tenth of a second left. Nothing waits past it."""
+    floor.worker = busy = SearchesLate()
+    try:
+        ran = await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS), before=_with_a_tenth_of_a_second_left)])
+    finally:
+        busy.let_go()
+
+    [(reason_code, why)] = ran.blocked()
+    assert reason_code == "OPTION_ENTRY_SEARCH_LATE"
+    assert why.strip(), "the refusal says nothing in words"
+    assert (len(busy.asked), floor.asked_of_the_clerk) == (1, [])
+    _nothing_was_sent(floor, ran)
+
+
+# ---- The bot's two limits, each in its own place ----------------------------------------
+
+
+def _the_call_is_quoted_nine_percent_wide(floor: Floor) -> None:
+    """Bid $4.00, offered at $4.38: the gap is 9.07% of the mid, and buying and selling at once would cost
+    8.7% of what the entry sets aside."""
+    floor.quote(585, "4.00", "4.38")
+
+
+async def test_a_market_wider_than_the_gap_limit_alone_is_refused_for_its_gap(floor: Floor) -> None:
+    """Under the terms a Deploy starts from, a leg's gap may be 8% and the round trip may cost 10%. This
+    market is over the first and inside the second, and the refusal names the gap."""
+    ran = await floor.run(_entry_then_three_bars(_the_call_is_quoted_nine_percent_wide))
+
+    assert [code for code, _ in ran.blocked()] == [StructureMoneyRefusal.LEG_GAP_OVER_LIMIT.value]
+    assert floor.asked_of_the_clerk == ["ENTER"]
+    _nothing_was_sent(floor, ran)
+
+
+async def test_a_round_trip_dearer_than_the_cost_limit_alone_is_refused_for_its_cost(
+    floor: Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bot deployed with a gap limit of 50% and a cost limit of 5%. The same market is inside the first and
+    over the second, and the refusal names the cost: each limit is handed to the Clerk as itself."""
+    monkeypatch.setattr(
+        bot_option_run, "option_order_terms",
+        lambda _binding: OptionOrderTerms(leg_gap_limit_percent=Decimal(50), cost_limit_percent=Decimal(5)),
+    )
+
+    ran = await floor.run(_entry_then_three_bars(_the_call_is_quoted_nine_percent_wide))
+
+    assert [code for code, _ in ran.blocked()] == [StructureMoneyRefusal.COST_OVER_LIMIT.value]
+    assert floor.asked_of_the_clerk == ["ENTER"]
+    _nothing_was_sent(floor, ran)
+
+
+async def test_a_pick_listed_with_another_multiplier_is_refused_by_name_before_the_clerk_is_asked(
+    floor: Floor,
+) -> None:
+    """The resolver picks standard contracts only, so this answer is made by hand: the search comes back
+    saying the call multiplies by 10. The runner refuses it from the listing, and asks the Clerk nothing."""
+
+    def listed_with_ten(found: Any) -> Any:
+        # A worker's answer to a search that came to contracts carries each pick's listed multiplier.
+        return replace(found, multipliers={LEG: 10}) if hasattr(found, "multipliers") else found
+
+    floor.worker = AnswersWith(listed_with_ten)
+
+    ran = await floor.run(_entry_then_three_bars())
+
+    assert [code for code, _ in ran.blocked()] == [OptionEffectRefusal.CONTRACT_NOT_STANDARD.value]
+    assert (len(floor.worker.asked), floor.asked_of_the_clerk) == (1, [])
+    _nothing_was_sent(floor, ran)
+
+
+# ---- On its contract's expiry day, an entry has a last moment ---------------------------
+
+# The call expires on Friday, whose session closes at 16:00. An entry is opened only when its whole life
+# ends 45 minutes before that: from 15:13:40 none is.
+AT_1513 = scenes._at(FRIDAY, 15, 13)
+
+
+def _entered_on_the_bar_closing_at(enter_ms: int) -> list[Step]:
+    return [Step(green(enter_ms - MINUTE)), Step(green(enter_ms))]
+
+
+async def _on_friday_afternoon(on_the_floor: Callable[..., Floor]) -> Floor:
+    return await on_the_floor(starts_at_ms=AT_1513 - 3 * MINUTE).open()
+
+
+async def test_on_its_expiry_day_a_call_is_still_bought_on_the_last_bar_before_the_entry_cutoff(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    """Decided on the bar that closed at 15:13:00, forty seconds before the cutoff."""
+    floor = await _on_friday_afternoon(on_the_floor)
+
+    ran = await floor.run(_entered_on_the_bar_closing_at(AT_1513))
+
+    assert ran.blocked() == []
+    assert floor.fills() == [(CALL, "buy", 1.0, 4.12, 100, Decimal("412.00"))]
+
+
+async def test_on_its_expiry_day_an_entry_after_the_cutoff_is_refused_by_the_runner_and_never_reaches_the_clerk(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    """Decided on the bar that closed at 15:14:00. It could not be closed again in time, so nothing is opened."""
+    floor = await _on_friday_afternoon(on_the_floor)
+
+    ran = await floor.run(_entered_on_the_bar_closing_at(AT_1513 + MINUTE))
+
+    [(reason_code, why)] = ran.blocked()
+    assert reason_code == OptionEffectRefusal.PAST_ENTRY_CUTOFF.value
+    assert why.strip(), "the refusal says nothing in words"
+    assert (len(floor.worker.asked), floor.asked_of_the_clerk) == (1, [])
+    _nothing_was_sent(floor, ran)
+
+
+async def test_the_clerk_refuses_an_entry_past_the_cutoff_whatever_the_runner_let_through(
+    on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bot whose own terms would let it enter up to the close. Its runner's recheck passes at 15:14. The
+    Clerk asks the cutoff itself, at its own clock and under its own terms, and refuses: one refused
+    decision, written once, and nothing sent."""
+    monkeypatch.setattr(
+        bot_option_run, "option_order_terms",
+        lambda _binding: OptionOrderTerms(
+            close=CloseTerms(expiry_close_lead_ms=0, entry_wait_ms=0, cancel_allowance_ms=0, entry_margin_ms=0)
+        ),
+    )
+    floor = await _on_friday_afternoon(on_the_floor)
+
+    ran = await floor.run([*_entered_on_the_bar_closing_at(AT_1513 + MINUTE), Step(red(AT_1513 + 2 * MINUTE))])
+
+    assert [code for code, _ in ran.blocked()] == [OptionEffectRefusal.PAST_ENTRY_CUTOFF.value]
+    assert [outcome for outcome, _ in ran.outcomes()] == ["no_action", "blocked", "no_action"]
+    assert floor.asked_of_the_clerk == ["ENTER"]
+    _nothing_was_sent(floor, ran)
 
 
 # ---- Lateness ---------------------------------------------------------------------------
@@ -755,6 +1017,265 @@ async def test_a_session_that_ends_with_the_runner_silent_still_has_its_mark_at_
     assert reading.unrealized_pl_usd == Decimal("48")
 
 
+async def test_after_a_restart_the_close_made_as_the_account_opens_is_priced_from_the_last_quote_kept_and_says_its_age(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    """The Stop could sell nothing, and the call was bid $4.50 again before the process stopped. Two hours
+    later the process starts and its restoration opens the account: the call is then bid $2.00, and no quote
+    has been kept since the restart, because nothing asked for the line while the account was closed. The
+    close made as the account opens is priced from the newest quote there is, $4.50, and says what that is:
+    an older quote, and how old. A simulated close may use the newest quote kept; it never passes it off as
+    a price of now."""
+    before = await on_the_floor().open()
+    await _bought_and_the_runner_gone(before)
+    before.markets[585] = ("0", "0.05")
+    await before.time_passes_to(ENTER_MS + 2 * MINUTE)
+    await before.stop_is_pressed()
+    not_sold = before.sales_the_simulation_made()
+    before.markets[585] = ("4.50", "4.54")
+    await before.time_passes_to(ENTER_MS + 4 * MINUTE)
+    last_kept = before.kept_quotes().newest(CALL, with_side="bid")
+    assert last_kept is not None and last_kept.quote.bid == Decimal("4.5")
+    # The process stops. Nothing it held in memory is left; the account's files are.
+    await before.held.stop()
+    await before.supervisor.close()
+    reset_held_option_quotes_for_testing()
+
+    after = on_the_floor(starts_at_ms=last_kept.received_ms + 120 * MINUTE + 12_000)
+    after.running = False
+    after.markets[585] = ("2.00", "2.04")
+    await after.authority.ensure_recoverable()
+
+    (sale,) = after.sales_the_simulation_made()
+    assert not_sold == []
+    assert (sale.fill_model, sale.fill_price, sale.quote_age_ms) == (
+        SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("4.5"), 120 * MINUTE + 12_000,
+    )
+    assert sale.filled_at_ms == after.clock.value
+    assert after.holds() == {}
+
+
+# ---- A quiet contract's mark ------------------------------------------------------------
+
+
+async def _bought_and_never_requoted(floor: Floor) -> int:
+    """The bot buys its call at 10:31 and its Signal stream ends. Nobody changes the call's bid or its offer
+    again: its line stays open and silent. Returns when its two sides were last received."""
+    await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
+    assert floor.holds() == {CALL: 1.0}
+    return ENTER_MS + DELIVERY_MS
+
+
+def _reading(floor: Floor) -> Any:
+    now = floor.clock.value
+    return SimulatedAccountProjection(repo=floor.repo, artifacts_root=floor.tmp_path).observe(
+        reference_cash=0, observed_at_ms=now, now_ms=now
+    )
+
+
+async def test_a_call_nobody_requotes_all_day_is_marked_at_every_hand_over_and_at_the_close_and_the_next_day_starts_from_it(
+    floor: Floor,
+) -> None:
+    """Bought at $4.12 with $4.08 bid, and neither side ticks again all Tuesday. $4.08 is still what the call
+    could be sold for, so the Clerk states it every fifteen seconds while the session is open: the account
+    can be read all day, and the close has its mark. Wednesday starts from Tuesday's close: $1,000.00, $4.00
+    down on the call, less six cents of fees. Nothing is restated on Wednesday until the call ticks."""
+    last_ticked = await _bought_and_never_requoted(floor)
+    close = session_close_ms_utc(TUESDAY)
+
+    await floor.time_passes_to(ENTER_MS + 10 * MINUTE)
+    ten_minutes_on = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    read_ten_minutes_on = _reading(floor)
+    await floor.hours_pass_to(close - 2 * MINUTE)
+    await floor.time_passes_to(close + 30_000)
+    at_the_close = floor.kept_quotes().last_stated(CALL, at_or_before_ms=close, with_side="bid")
+    after_the_close = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    await floor.hours_pass_to(scenes._at(WEDNESDAY, 9, 31))
+    await floor.time_passes_to(floor.clock.value + MINUTE)
+    before_it_ticks = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    floor.quote(585, "4.60", "4.64")
+    await floor.time_passes_to(floor.clock.value + 15_000)
+    wednesday = _reading(floor)
+
+    assert ten_minutes_on is not None and at_the_close is not None
+    assert ENTER_MS + 10 * MINUTE - ten_minutes_on.kept_at_ms < KEEP_EVERY_MS
+    assert (ten_minutes_on.quote.bid, ten_minutes_on.quote.bid_received_ms) == (Decimal("4.08"), last_ticked)
+    assert read_ten_minutes_on.unrealized_pl_usd == Decimal("-4")
+    assert (at_the_close.quote.bid, at_the_close.kept_at_ms) == (Decimal("4.08"), close)
+    assert (at_the_close.quote.bid_received_ms, at_the_close.quote.ask_received_ms) == (last_ticked, last_ticked)
+    assert after_the_close == at_the_close, "nothing is restated once the session has closed"
+    assert before_it_ticks == at_the_close, "Tuesday's quote is no mark of Wednesday"
+    assert wednesday.last_equity_usd == Decimal("1000") - Decimal("4") - Decimal("0.06")
+    assert wednesday.unrealized_pl_usd == Decimal("48")
+
+
+async def test_a_call_last_requoted_ten_minutes_ago_is_sold_at_its_standing_bid_and_the_sale_says_how_old_it_is(
+    floor: Floor,
+) -> None:
+    """The mark kept seconds ago restates a bid received ten minutes ago. The close is priced from it, and
+    says what it is: an older quote, ten minutes old, not a fresh one."""
+    last_ticked = await _bought_and_never_requoted(floor)
+
+    await floor.time_passes_to(last_ticked + 10 * MINUTE)
+    stated = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    await floor.stop_is_pressed()
+
+    (sale,) = floor.sales_the_simulation_made()
+    assert stated is not None and floor.clock.value - stated.kept_at_ms < KEEP_EVERY_MS
+    assert (sale.fill_model, sale.fill_price, sale.quote_age_ms) == (
+        SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("4.08"), 10 * MINUTE,
+    )
+
+
+async def test_after_a_data_loss_the_quote_the_line_held_is_no_mark_until_the_call_ticks_again(floor: Floor) -> None:
+    """IBKR's data farm drops and comes back with every request kept alive. The call's line is the same line,
+    and what it showed before is not stated again. Nobody quotes the call for two minutes after, though the
+    line is asked for again: the mark lapses, the account says it cannot be read, and the first tick of both
+    sides after the recovery is the next mark."""
+    await _bought_and_never_requoted(floor)
+    floor.new_lines_are_answered = False
+    await floor.time_passes_to(ENTER_MS + MINUTE)
+    stated_before = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+
+    floor.ibkr.client.connection_state = "soft_lost"
+    await floor.time_passes_to(floor.clock.value + 15_000)
+    floor.ibkr.client.connection_state = "connected"
+    floor.ibkr.client.connectivity_lost_count += 1
+    floor.ibkr.client.last_ibkr_code = 1102
+    await floor.time_passes_to(floor.clock.value + 15_000)
+    lines_after_the_recovery = (floor.ibkr.open_option_lines(), CALL in floor.ibkr.cancelled)
+    await floor.time_passes_to(floor.clock.value + 2 * MINUTE)
+    stated_after = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    with pytest.raises(SimulationEvidenceUnavailable, match=CALL):
+        _reading(floor)
+    while CALL not in floor.ibkr.open_option_lines():
+        # A line with no whole quote is given up and asked for again, a little later each time.
+        await floor.time_passes_to(floor.clock.value + 15_000)
+    floor.quote(585, "4.00", "4.04")
+    await floor.time_passes_to(floor.clock.value + 15_000)
+    ticked = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+
+    assert stated_before is not None and stated_after == stated_before
+    assert lines_after_the_recovery == ({CALL}, False), "the line was kept through the recovery, not opened afresh"
+    assert ticked is not None and (ticked.quote.bid, ticked.kept_at_ms) == (Decimal("4"), floor.clock.value)
+    assert _reading(floor).unrealized_pl_usd == Decimal("-12")
+
+
+async def test_delayed_data_on_a_held_calls_line_is_never_its_mark(floor: Floor) -> None:
+    """The line falls back to delayed data and shows $9.00 bid. No live quote stands on it any more, so
+    nothing is stated, least of all the delayed price."""
+    await _bought_and_never_requoted(floor)
+    await floor.time_passes_to(ENTER_MS + MINUTE)
+    stated_before = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+
+    floor.ibkr.lines[CALL].marketDataType = 3
+    floor.ibkr.now = floor.clock.value
+    floor.ibkr.tick(CALL, bid=9.00, ask=9.04)
+    await floor.time_passes_to(floor.clock.value + 2 * MINUTE)
+
+    assert stated_before is not None
+    assert floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid") == stated_before
+    assert floor.kept_quotes().newest(CALL, with_side="bid").quote.bid == Decimal("4.08")  # type: ignore[union-attr]
+
+
+async def test_a_call_bought_in_the_second_its_run_ended_is_asked_for_and_marked_from_the_next_pass_on(
+    floor: Floor,
+) -> None:
+    """The books are read after a pass, never under it. A run that ends before any pass has read of its
+    purchase leaves the contract unasked for one pass; the next asks for it, and its mark follows."""
+    floor.a_pass_before_the_stream_ends = False
+    await _bought_and_never_requoted(floor)
+    floor.option_lines_tick = True
+
+    await floor.supervisor_passes(2)
+    await floor.time_passes_to(floor.clock.value + 15_000)
+
+    assert [request.held for request in floor.held.requests()] == [(CALL_585,)]
+    assert floor.ibkr.open_option_lines() == {CALL}
+    stated = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
+    assert stated is not None and stated.kept_at_ms == floor.clock.value
+
+
+# ---- The stock quotes never wait on the option side -------------------------------------
+
+
+async def _spy_is_quoted_for_a_stock_bot(floor: Floor) -> None:
+    """SPY is asked for as a bot in shares asks for it, and its quote is published."""
+    floor.store.request_symbol("SPY", now_ms=floor.clock.value)
+    await floor.supervisor_passes(2)
+    floor.spy()
+    await floor.consumer.refresh_shared_status()
+    assert floor.store.top_of_book("SPY", now_ms=floor.clock.value) is not None
+
+
+async def _a_second_passes(floor: Floor) -> None:
+    floor.clock.value += 1_000
+    floor.store.request_symbol("SPY", now_ms=floor.clock.value)
+    floor.spy()
+    await floor.consumer.refresh_shared_status()
+
+
+async def test_books_that_do_not_answer_never_hold_up_the_stock_quotes(floor: Floor) -> None:
+    """A Dry Run account's books are stuck behind a lock for as long as this test lasts. SPY's quote is
+    published at every pass all the same, each within the second: the pass begins the option side's round
+    and does not wait for it."""
+    await _spy_is_quoted_for_a_stock_bot(floor)
+    stuck = threading.Event()
+
+    def books_that_do_not_answer() -> tuple[str, ...]:
+        stuck.wait(30)
+        return ()
+
+    floor.held.follow(
+        "sim:stuck-books", books=books_that_do_not_answer,
+        kept=KeptOptionQuotes.of_account(artifacts_root=floor.tmp_path, account_id="sim:stuck-books"),
+    )
+    try:
+        began, published = time.monotonic(), []
+        for _ in range(4):
+            await _a_second_passes(floor)
+            quote = floor.store.top_of_book("SPY", now_ms=floor.clock.value)
+            published.append(None if quote is None else quote.observed_at_ms)
+        took_s = time.monotonic() - began
+        still_stuck = not stuck.is_set()
+    finally:
+        stuck.set()
+        await floor.held.settled()
+
+    assert still_stuck
+    assert published == [floor.clock.value - 3_000, floor.clock.value - 2_000, floor.clock.value - 1_000, floor.clock.value]
+    assert took_s < 1.0, "the stock quotes waited on the option side's books"
+
+
+async def test_a_keeping_that_breaks_in_every_way_never_fails_the_stock_quotes(
+    floor: Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The books raise, the file cannot be written, the round itself cannot be begun. A status source that
+    raises blocks every entry of every bot in the process, so none of this may reach it: SPY's quote is
+    published at every pass, and the connection reads as up."""
+    await _spy_is_quoted_for_a_stock_bot(floor)
+
+    def books_that_raise() -> tuple[str, ...]:
+        raise RuntimeError("the books cannot be read")
+
+    floor.held.follow(
+        "sim:broken-books", books=books_that_raise,
+        kept=KeptOptionQuotes.of_account(artifacts_root=floor.tmp_path, account_id="sim:broken-books"),
+    )
+    published = []
+    for trouble in ("books that raise", "a round that fails", "a round that cannot begin"):
+        if trouble == "a round that fails":
+            monkeypatch.setattr(floor.held, "keep", lambda _source: 1 / 0)
+        elif trouble == "a round that cannot begin":
+            monkeypatch.setattr(floor.held, "_one_round", lambda _source: 1 / 0)
+        await _a_second_passes(floor)
+        await floor.held.settled()
+        quote = floor.store.top_of_book("SPY", now_ms=floor.clock.value)
+        published.append((quote is not None, floor.store.status_snapshot(now_ms=floor.clock.value).connected))
+
+    assert published == [(True, True)] * 3
+
+
 # ---- The search in a real worker process ------------------------------------------------
 
 
@@ -815,6 +1336,10 @@ async def test_an_exit_decided_after_the_close_is_held_for_the_open_and_the_jour
     assert floor.holds() == {CALL: 1.0}
     assert [(row.intent, row.side, row.fill_price) for row in ran.journal] == [("ENTER", "buy", 4.12)]
     assert [fill[1] for fill in floor.fills()] == ["buy"]
+    # Asked what the EXIT filled, the Clerk says nothing yet. The purchase is the ENTER's, and stays its.
+    decided = _decisions(ran)
+    assert floor.clerk.option_fills_of_decision(SID, decided["exit_intent"]) == ()
+    assert [fill.side for fill in floor.clerk.option_fills_of_decision(SID, decided["enter_intent"])] == ["buy"]
 
 
 async def test_a_close_of_options_on_another_symbol_waits_for_no_bar_of_that_symbol(
@@ -840,6 +1365,37 @@ async def test_a_close_of_options_on_another_symbol_waits_for_no_bar_of_that_sym
     assert time.monotonic() - started < 20, "the close waited for a bar of the underlying"
     assert [fill[:3] for fill in floor.fills()] == [(CALL, "buy", 1.0), (CALL, "sell", 1.0)]
     assert floor.holds() == {}
+
+
+# ---- The bot's money view ----------------------------------------------------------------
+
+
+async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_the_underlying(floor: Floor) -> None:
+    """Running and flat, with SPY's own stock quote published at $585.12 and the 585 call offered at $4.12.
+    One contract would cost $412.00; a share of SPY is no price of it. The view gives no figure for the next
+    entry, and says neither that the budget covers one nor that it is short of one."""
+    await floor.account_is_read()
+    now = floor.clock.value
+    market_liveness.get_market_liveness_store().apply_status_snapshot(
+        MarketStatusSnapshot(
+            source=MarketStatusSource.IBKR, connected=True, observed_at_ms=now, connection_changed_at_ms=now,
+            symbol_statuses=(),
+            quotes=(
+                TopOfBookQuote(symbol="SPY", bid=585.10, ask=585.12, source="ibkr.market_data.status", observed_at_ms=now),
+            ),
+        ),
+        now_ms=now,
+    )
+
+    view = budget_deploy._budget_view(floor.runtime, SID)
+
+    assert (view.state, view.world, view.entry_eligible) == ("ready", "synthetic", True)
+    words = f"{view.headline} {view.detail}"
+    assert "585" not in words and "USD" not in words, "a share of SPY was priced as the next entry"
+    assert "cover" not in words.lower() and "short" not in words.lower()
+    assert "option" in view.detail.lower(), "the view does not say the cost is an option's, known at the entry"
+    assert [line.label for line in view.statement if "next entry" in line.label.lower()] == []
+    assert ("Free to trade", "1000.00") in [(line.label, line.amount_usd) for line in view.statement]
 
 
 # ---- With nothing handed in, the process's own -------------------------------------------

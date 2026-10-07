@@ -87,7 +87,6 @@ from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
-    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.services.bot_dry_run import DryRunActivityJournal
     from app.services.bot_option_run import OptionMarket, OptionRun
     from app.services.bot_runner import BrokerBotBinding
@@ -1650,40 +1649,31 @@ def _journal_option_fill(
     journal: DryRunActivityJournal,
     *,
     clerk: ActiveAlpacaClerk,
-    repository: ClerkSqliteRepository,
     binding: BrokerBotBinding,
     options: OptionRun,
     account_id: str,
+    evaluation: StrategyEvaluation,
     intent: SignalIntent,
     receipt: Any,
     bar_ref: str,
 ) -> None:
-    """Write the journal's row for a fill in an option contract, from the simulation's own record of it.
+    """Write the journal's rows for what a decision filled in an option contract.
 
-    The contract and its multiplier are the books' (``order_contracts``),
-    and the premium, the model and the quote's age are the simulation's
-    (``synthesized_option_fills``); nothing is taken from what the runner
-    handed over. An entry is filled at once and in full, so one with no fill
-    on record is a broken simulation and is raised. An EXIT the Clerk
-    accepted and holds for the session's open has no fill yet, and no row.
+    The Clerk is asked what the decision's own order filled
+    (``option_fills_of_decision``): the contract and its multiplier are the
+    books', and the premium, the model and the quote's age are the
+    simulation's record of the fill. Nothing is taken from what the runner
+    handed over, and no order is read out of the receipt. An entry is filled
+    at once and in full, so one with no fill on record is a broken
+    simulation and is raised. An EXIT the Clerk accepted and holds for the
+    session's open has no closing order yet, and no row.
     """
-    from app.broker.alpaca.clerk.sqlite.option_entry import order_contract
-    from app.broker.contract.options import OptionPositionIntent
     from app.services.bot_dry_run import DryRunActivity
     from app.services.bot_option_run import IBKR_LISTING
 
     entering = intent.kind is SignalIntentKind.ENTER
-    # An ENTER's receipt names its order. An EXIT's names the entry it closes, then the order that closed it.
-    order_ref = receipt.child_order_refs[0 if entering else -1] if receipt.child_order_refs else None
-    fill = None if order_ref is None else clerk.synthesized_option_fills().get(order_ref)
-    if fill is not None and fill.request.intent is not (
-        OptionPositionIntent.OPEN if entering else OptionPositionIntent.CLOSE
-    ):
-        # An EXIT with no closing order yet names only the entry it will close. That order's fill
-        # is the purchase, and is not this decision's.
-        fill = None
-    contract = None if order_ref is None else order_contract(repository, order_ref)
-    if order_ref is None or fill is None or fill.fill_price is None or fill.fill_model is None or contract is None:
+    fills = clerk.option_fills_of_decision(binding.strategy_instance_id, evaluation.evaluation_id)
+    if not fills:
         if entering:
             raise RuntimeError(
                 "A simulated option entry was accepted, and the simulation has no fill of it on record."
@@ -1699,42 +1689,43 @@ def _journal_option_fill(
             },
         )
         return
-    journal.append(
-        DryRunActivity(
-            seq=journal.next_seq(),
-            strategy_instance_id=binding.strategy_instance_id,
-            run_id=binding.run_id,
-            authority_account_id=account_id,
-            authority_kind="synthetic",
-            # When the simulation filled it: after the quotes were read again, not at the bar's close.
-            recorded_at_ms=intent.bar_close_ms if fill.filled_at_ms is None else fill.filled_at_ms,
-            bar_ref=bar_ref,
-            intent=intent.kind.value,
-            order_ref=order_ref,
-            symbol=contract.symbol,
-            side="buy" if entering else "sell",
-            quantity=float(fill.request.quantity),
-            fill_price=float(fill.fill_price),
-            underlying=options.underlying,
-            multiplier=int(contract.multiplier),
-            fill_model=fill.fill_model.value,
-            quote_age_ms=fill.quote_age_ms,
-            # A Dry Run has no broker reference to ask: the listing IBKR gave is the contract's.
-            contract_reference=IBKR_LISTING if entering else None,
+    for fill in fills:
+        journal.append(
+            DryRunActivity(
+                seq=journal.next_seq(),
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                authority_account_id=account_id,
+                authority_kind="synthetic",
+                # When the simulation filled it: after the quotes were read again, not at the bar's close.
+                recorded_at_ms=fill.filled_at_ms,
+                bar_ref=bar_ref,
+                intent=intent.kind.value,
+                order_ref=fill.order_ref,
+                symbol=fill.contract,
+                side=fill.side,
+                quantity=fill.quantity,
+                fill_price=fill.price,
+                underlying=options.underlying,
+                multiplier=fill.multiplier,
+                fill_model=fill.fill_model,
+                quote_age_ms=fill.quote_age_ms,
+                # A Dry Run has no broker reference to ask: the listing IBKR gave is the contract's.
+                contract_reference=IBKR_LISTING if entering else None,
+            )
         )
-    )
-    logger.info(
-        "Dry-run simulated option fill",
-        extra={
-            "action": "dry_run_simulated_option_fill",
-            "strategy_instance_id": binding.strategy_instance_id,
-            "run_id": binding.run_id,
-            "intent": intent.kind.value,
-            "order_ref": order_ref,
-            "contract": contract.symbol,
-            "fill_model": fill.fill_model.value,
-        },
-    )
+        logger.info(
+            "Dry-run simulated option fill",
+            extra={
+                "action": "dry_run_simulated_option_fill",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "run_id": binding.run_id,
+                "intent": intent.kind.value,
+                "order_ref": fill.order_ref,
+                "contract": fill.contract,
+                "fill_model": fill.fill_model,
+            },
+        )
 
 
 async def run_dry_run_bot(
@@ -1899,8 +1890,8 @@ async def run_dry_run_bot(
                 # An option fill has no bar it filled at. Its row is what the simulation itself
                 # recorded of the fill, on the contract the Clerk's books name.
                 _journal_option_fill(
-                    journal, clerk=clerk, repository=repository, binding=binding, options=options,
-                    account_id=account_id, intent=intent, receipt=receipt, bar_ref=decision_evidence.bar_ref,
+                    journal, clerk=clerk, binding=binding, options=options, account_id=account_id,
+                    evaluation=evaluation, intent=intent, receipt=receipt, bar_ref=decision_evidence.bar_ref,
                 )
                 continue
             if retained is None:

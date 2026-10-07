@@ -25,9 +25,11 @@ own screens, in order:
    third read.
 
 Each await is given no longer than the decision has left, and a decision
-whose time ran out on the way is refused as late. The runner then judges
-lateness once more, and hands the Clerk the facts: the contracts, their
-listed multipliers and the recheck's quotes. It hands over no price.
+whose time ran out on the way is refused as late. A read of the rate and
+dividends that fails refuses its decision too, and the run goes on. The
+runner then judges lateness once more, and hands the Clerk the facts: the
+contracts, their listed multipliers and the recheck's quotes. It hands over
+no price.
 
 **A refusal at any step is one answer**: a reason code and a sentence. The
 runner writes it as the decision's one ``blocked`` receipt and discards the
@@ -110,6 +112,8 @@ class OptionEntryRefusal(StrEnum):
     DIVIDENDS_UNKNOWN = "OPTION_ENTRY_DIVIDENDS_UNKNOWN"
     # The rate and the dividends were not read while the decision was still on time.
     PRICING_INPUTS_LATE = "OPTION_ENTRY_PRICING_INPUTS_LATE"
+    # The read of the rate and the dividends failed. Not that they are unknown: that it could not be asked.
+    PRICING_INPUTS_NOT_READ = "OPTION_ENTRY_PRICING_INPUTS_NOT_READ"
     # The search had not answered while the decision was still on time.
     SEARCH_LATE = "OPTION_ENTRY_SEARCH_LATE"
 
@@ -290,10 +294,25 @@ class OptionRun:
         return _UnderlyingBars(feed, symbol=self._underlying, on_bar=self._bar_closed)  # type: ignore[return-value]
 
     def _bar_closed(self, bar: MarketDataBar) -> None:
-        if bar.volume > 0:
-            # A minute with no trade has no price to centre a window on: it stays where it was.
-            self._watch(money=bar.close)
-        self._keep_the_model_inputs_read(bar.end_ms)
+        """Follow one closed bar of the underlying. This listens on the stream the strategy decides from,
+        so a fault here is logged and never reaches that stream: the window stays where it was, and an
+        entry that needs it is refused in its own words."""
+        try:
+            if bar.volume > 0:
+                # A minute with no trade has no price to centre a window on: it stays where it was.
+                self._watch(money=bar.close)
+            self._keep_the_model_inputs_read(bar.end_ms)
+        except Exception:
+            logger.exception(
+                "An option bot's watched window could not follow a bar of its underlying",
+                extra={
+                    "action": "option_bar_listener_failed",
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "run_id": self._run_id,
+                    "underlying": self._underlying,
+                    "bar_end_ms": bar.end_ms,
+                },
+            )
 
     def _keep_the_model_inputs_read(self, at_ms: int) -> None:
         """Read the rate and the dividends again in the background, so a decision finds them kept and does
@@ -309,6 +328,8 @@ class OptionRun:
         self._warming.add_done_callback(self._warmed)
 
     def _warmed(self, read: asyncio.Future[ModelInputsRead]) -> None:
+        """Hear how a read nobody is waiting for ended: one made ahead of a decision, or one a decision
+        stopped waiting for."""
         if read.cancelled():
             return
         failed = read.exception()
@@ -355,18 +376,40 @@ class OptionRun:
         self, reading: _Reading, *, decision_bar_close_ms: int, time_left_ms: Callable[[], int]
     ) -> ModelInputs | OptionEntryBlocked:
         """The pricing model's inputs for this decision, read off the event loop and waited for no longer than
-        the decision has left. A read that outlives the wait goes on, and is kept for the next decision."""
+        the decision has left. A read that outlives the wait goes on, and is kept for the next decision. A
+        read that fails refuses this decision by name, and the run goes on."""
         latest_expiry = self._latest_expiry(reading.chain, decision_bar_close_ms)
         reading_them = off_the_loop(
             partial(self._market.model_inputs, self._underlying, self._market.clock(), latest_expiry)
         )
-        try:
-            inputs = await asyncio.wait_for(reading_them, timeout=time_left_ms() / 1000)
-        except TimeoutError:
+        read, _ = await asyncio.wait({reading_them}, timeout=time_left_ms() / 1000)
+        if not read:
+            # It goes on. What it learns is kept, and a fault of its own is said when it ends.
+            reading_them.add_done_callback(self._warmed)
             return _blocked(
                 OptionEntryRefusal.PRICING_INPUTS_LATE,
                 f"The rate and the dividends for {self._underlying} had not been read while this decision was "
                 "still on time",
+            )
+        try:
+            inputs = reading_them.result()
+        except Exception as failed:
+            # A fault of the read is this decision's refusal, never the end of the run: the next
+            # decision asks again.
+            logger.exception(
+                "An option bot's rate and dividends could not be read for its decision",
+                extra={
+                    "action": "option_model_inputs_read_failed",
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "run_id": self._run_id,
+                    "underlying": self._underlying,
+                    "decision_bar_close_ms": decision_bar_close_ms,
+                },
+            )
+            return _blocked(
+                OptionEntryRefusal.PRICING_INPUTS_NOT_READ,
+                f"The rate and the dividends for {self._underlying} could not be read for this decision "
+                f"({type(failed).__name__}), so nothing was picked",
             )
         model = inputs.model
         if model is not None:

@@ -19,6 +19,11 @@ it closes, with the quotes IBKR would have sent by then.
 **One decision at a time.** The live stream is read ahead of the strategy, so
 the script hands over a bar only once the runner has finished with every
 decision before it.
+
+**The keeping is waited for.** The supervisor's pass begins a round of the
+Clerk's keeping and goes on without it. The floor waits for each round, so a
+test reads the books and the kept quotes as that pass left them. The books
+are read after a pass, so what they say is asked for from the next pass on.
 """
 
 from __future__ import annotations
@@ -163,6 +168,41 @@ class SearchesHere(Executor):
         return answered
 
 
+class SearchesLate(SearchesHere):
+    """A search worker that is busy: it takes each search and answers none until it is let go."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.unanswered: list[Future[Any]] = []
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        if fn is not option_search.search:
+            return super().submit(fn, *args, **kwargs)
+        self.asked.append(args[0])
+        self.unanswered.append(Future())
+        return self.unanswered[-1]
+
+    def let_go(self) -> None:
+        for search in self.unanswered:
+            search.cancel()
+
+
+class AnswersWith(SearchesHere):
+    """A search worker whose every answer is changed on its way back, as a worker of another build's might be."""
+
+    def __init__(self, change: Callable[[Any], Any]) -> None:
+        super().__init__()
+        self._change = change
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        answered = super().submit(fn, *args, **kwargs)
+        if fn is not option_search.search or answered.exception() is not None:
+            return answered
+        changed: Future[Any] = Future()
+        changed.set_result(self._change(answered.result()))
+        return changed
+
+
 @dataclass(frozen=True)
 class Step:
     """One scripted delivery: a bar, and what the floor does just before it is handed over."""
@@ -202,6 +242,11 @@ class ScriptedFeed:
             yield step.bar
         if symbol != self._signal:
             await asyncio.Event().wait()
+        if self._floor.a_pass_before_the_stream_ends:
+            # The supervisor passes once a second, and a stream does not end in the second of its last
+            # decision: the books are read once more while the run is still alive.
+            await self._floor.runner_has_finished(sum(step.bar.symbol == self._signal for step in self._script))
+            await self._floor.supervisor_passes(1)
 
     async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
         del symbol, use_rth, lookback_days
@@ -251,6 +296,7 @@ class Floor:
         watch: OptionWatchList | None = None,
     ) -> None:
         self.tmp_path = tmp_path
+        self._monkeypatch = monkeypatch
         self.clock = Clock(starts_at_ms)
         # Every part reads the wall clock through ``now_ms_utc``; the lateness gate reads its own import of it.
         monkeypatch.setattr(timestamps, "time", SimpleNamespace(time=lambda: self.clock.value / 1000))
@@ -264,11 +310,13 @@ class Floor:
         self.line_budget, self.reach = line_budget, reach
         self.watch = watch or OptionWatchList()
         self.held = get_held_option_quotes()
+        # Where the supervisor's stock evidence is published: what a stock bot's entry is admitted on.
+        self.store = MarketLivenessStore()
         # The supervisor exactly as a Clerk's process builds it, on the stand-in connection.
         self.consumer = AlpacaMarketLivenessConsumer.for_alpaca(
             read=object(),  # type: ignore[arg-type]
             settings=AlpacaSettings(api_key_id="paper-key", api_secret_key="paper-secret", mode="paper"),
-            store=MarketLivenessStore(),
+            store=self.store,
             journal=CaptureJournal(capture_dir=tmp_path / "capture"),
             option_watch=self.watch,
             held_option_quotes=self.held,
@@ -293,6 +341,8 @@ class Floor:
         # IBKR answers a new request for a line with the contract's current prices. False: its lines stay silent.
         self.new_lines_are_answered = True
         self._lines_answered: set[str] = set()
+        # False: the Signal stream ends in the very second of its last decision, before any pass.
+        self.a_pass_before_the_stream_ends = True
 
         self.binding = binding_for(plan or one_call(), listens_to=listens_to)
         self.running = True
@@ -304,6 +354,9 @@ class Floor:
         self._evaluations_finished = 0
         # The feed of the run last started, there for a test whose run is refused.
         self.feed: ScriptedFeed | None = None
+        # Each effect the runner asked the Clerk for, by its purpose, in order. A decision the runner
+        # itself refused never reaches the Clerk, and is not here.
+        self.asked_of_the_clerk: list[str] = []
 
     # ---- pacing -----------------------------------------------------------------
 
@@ -331,7 +384,17 @@ class Floor:
         """Compose the Dry Run's Clerk and start the bot's run on it."""
         await self.authority.ensure_recoverable()
         await self.clerk.register_strategy_run(self.binding)
+        self._note_what_the_clerk_is_asked()
         return self
+
+    def _note_what_the_clerk_is_asked(self) -> None:
+        clerk, ask = self.clerk, self.clerk.execute_for_instance
+
+        async def noted(**effect: Any) -> Any:
+            self.asked_of_the_clerk.append(effect["purpose"].value)
+            return await ask(**effect)
+
+        self._monkeypatch.setattr(clerk, "execute_for_instance", noted)
 
     @property
     def runtime(self) -> ActiveClerkRuntime | None:
@@ -396,9 +459,12 @@ class Floor:
 
     async def supervisor_passes(self, passes: int = 3) -> None:
         """The supervisor's own pass, as the consumer's loop makes it once a second, with nothing swallowed:
-        the books are read, the lines are brought to what is wanted, and the held contracts' quotes kept."""
+        the lines are brought to what is wanted. The pass begins a round of the Clerk's keeping and does not
+        wait for it; the floor does, so that what a test looks at next is there: the books read, and the
+        held contracts' quotes kept."""
         for _ in range(passes):
             await self.consumer._status_snapshot_source()  # type: ignore[misc]
+            await self.held.settled()
             for _ in range(12):
                 await asyncio.sleep(0)
             opened = self.ibkr.open_option_lines()
