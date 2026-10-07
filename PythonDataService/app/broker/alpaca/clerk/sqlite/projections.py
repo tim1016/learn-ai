@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes, KeptOptionQuotesUnavailable
+from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
 from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -33,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     attested_absent_order_ref,
     recovery_stopped_because,
 )
+from app.broker.alpaca.clerk.sqlite.exit_resolution import expired_option_close
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
@@ -186,6 +188,19 @@ def _cause_symbol(cause_facts: Mapping[str, Any]) -> str | None:
     return symbol if isinstance(symbol, str) and symbol else None
 
 
+def _expired_contract(reason_code: str, symbol: str | None, now_ms: int) -> LegRefusal | None:
+    """Why no order can close the position an EXIT notice names, once its option contract has expired (ADR 0076).
+
+    ``None`` for any other notice, for a position in shares, and for a
+    contract that still trades. Read from the contract's own expiry and the
+    calendar, so it holds from the instant the contract expired, whether or
+    not the Clerk has made a pass since.
+    """
+    if symbol is None or reason_code not in (EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE):
+        return None
+    return expired_option_close(symbol, now_ms)
+
+
 def _projected_uncertainty(
     row: Mapping[str, Any],
     *,
@@ -198,6 +213,11 @@ def _projected_uncertainty(
 
     ``stuck`` is the open ``EXIT_STUCK`` episode beside an ``EXIT_NOT_FLAT``
     one, under which the Clerk sends nothing for the position by itself.
+
+    An expired option contract wins over both (ADR 0076). The next step of
+    an EXIT notice that names one is the expired one, and its recovery
+    status the expired hold: a flatten, a retry and "stuck" each point at
+    something that can no longer happen.
     """
     next_step = row["next_step"]
     if stuck is not None and attested_absent_order_ref(stuck) is None:
@@ -209,6 +229,9 @@ def _projected_uncertainty(
             UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
         )
         symbol = _cause_symbol(cause_facts)
+        expired = _expired_contract(row["reason_code"], symbol, now_ms)
+        if expired is not None:
+            next_step = expired.next_step
         if row["reason_code"] == EXIT_NOT_FLAT_REASON_CODE:
             recovery_status = (
                 RecoveryStatus("unknown", "RECOVERY_NOT_CHECKED", "Recovery status has not been checked.", None, None)
@@ -216,6 +239,7 @@ def _projected_uncertainty(
                     recovery_connection, strategy_instance_id=row["strategy_instance_id"],
                     uncertainty_id=row["uncertainty_id"], now_ms=now_ms,
                     stopped=stuck is not None, working=exit_working, stopped_because=stopped_because,
+                    expired=expired,
                 )
             )
     except (TypeError, ValueError, OverflowError):

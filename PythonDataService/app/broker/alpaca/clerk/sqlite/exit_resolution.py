@@ -188,7 +188,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_exit_not_flat_uncertainty,
     uncertainty_envelope,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause, ExitStuckCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_STUCK_REASON_CODE,
+    ExitNotFlatCause,
+    ExitStuckCause,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import LOST_ANSWER_NOTICE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import RedriveThenEscalate, reason_age_policy
 from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
@@ -382,6 +386,13 @@ def option_close_unpriced(symbol: str, *, side: str) -> LegRefusal:
 OPTION_CONTRACT_EXPIRED = OptionEffectRefusal.CONTRACT_EXPIRED.value
 
 _EXPIRED_CONTRACT_HEADLINE = "An option contract expired while the bot still held it"
+
+_EXPIRED_CONTRACT_OPERATOR_IMPACT = (
+    "New exposure is on hold for this strategy. No order can reduce this position; reconciliation "
+    "remains available."
+)
+"""What an expired contract's notice says the owner can still do. Never "exact risk reduction remains
+available", as every other ``EXIT_NOT_FLAT`` notice says: nothing reduces an expired contract."""
 
 
 def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
@@ -859,6 +870,7 @@ def _fold_exit_not_flat(
     next_step: str,
     why: str | None = None,
     refusal: BrokerRefusal | None = None,
+    operator_impact: str | None = None,
 ) -> None:
     """Fail the EXIT and raise the ``EXIT_NOT_FLAT`` episode exposure is still held under.
 
@@ -890,6 +902,7 @@ def _fold_exit_not_flat(
             headline=headline,
             explanation=explanation,
             next_step=next_step,
+            operator_impact=operator_impact,
         ),
     )
     fold_failed(
@@ -931,6 +944,7 @@ def _exit_not_flat_notice(
     headline: str,
     explanation: str,
     next_step: str,
+    operator_impact: str | None = None,
 ) -> _ExitNotFlatNotice:
     """The ``EXIT_NOT_FLAT`` notice of an EXIT that ended with ``attributed_qty`` of ``symbol`` still held.
 
@@ -943,7 +957,7 @@ def _exit_not_flat_notice(
         "reason_code": EXIT_NOT_FLAT_REASON_CODE,
         "headline": headline,
         "explanation": explanation,
-        "operator_impact": _EXIT_NOT_FLAT_OPERATOR_IMPACT,
+        "operator_impact": _EXIT_NOT_FLAT_OPERATOR_IMPACT if operator_impact is None else operator_impact,
         "next_step": next_step,
         "evidence_refs": (order_ref,),
         "cause_facts": ExitNotFlatCause(symbol=symbol.upper(), attributed_qty=attributed_qty).to_mapping(),
@@ -1241,6 +1255,7 @@ def _fold_expired_option_close(
         headline=_EXPIRED_CONTRACT_HEADLINE,
         explanation=expired.explanation,
         next_step=expired.next_step,
+        operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
     )
     return True
 
@@ -1271,8 +1286,51 @@ def note_expired_option_position(
             headline=_EXPIRED_CONTRACT_HEADLINE,
             explanation=expired.explanation,
             next_step=expired.next_step,
+            operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
         ),
     )
+
+
+def say_the_contract_expired(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, expired: LegRefusal
+) -> bool:
+    """Say on this bot's open EXIT notices that its option contract expired; whether anything was written.
+
+    A notice raised while the contract still traded tells the operator what
+    could be done then: wait for the Clerk's retry, or flatten. Once the
+    contract's last session is over neither can happen, and a stopped bot
+    makes no later EXIT that would say so. So the Clerk's own pass says it
+    (``exit_watchdog.commit_recovery_evaluations``), on the
+    ``EXIT_NOT_FLAT`` notice and on the ``EXIT_STUCK`` one beside it, in the
+    words an EXIT ended by :func:`_fold_expired_option_close` raises.
+
+    Each notice keeps what it names and its evidence: the watchdog still
+    reads the episode's orders from them. The words do not change with the
+    time, so a notice that already says it is left as it is and nothing is
+    written: once per notice, however many passes follow.
+    """
+    written = False
+    for reason_code in (EXIT_NOT_FLAT_REASON_CODE, EXIT_STUCK_REASON_CODE):
+        episode = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT", reason_code=reason_code, strategy_instance_id=strategy_instance_id
+        )
+        if episode is None:
+            continue
+        recorded = UncertaintyRaisedFacts.from_facts_json(episode["facts_json"])
+        outcome = raise_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            reason_code=reason_code,
+            headline=_EXPIRED_CONTRACT_HEADLINE,
+            explanation=expired.explanation,
+            operator_impact=_EXPIRED_CONTRACT_OPERATOR_IMPACT,
+            next_step=expired.next_step,
+            evidence_refs=tuple(recorded.evidence_refs),
+            cause_facts=recorded.cause_facts,
+            severity=recorded.severity,
+        )
+        written = written or outcome != "unchanged"
+    return written
 
 
 def _send_verdict(
