@@ -25,6 +25,7 @@ import pytest
 from app.broker.alpaca.clerk.simulated_option_settlement import (
     SETTLEMENT_BAR_MAX_AGE_MS,
     SETTLEMENT_GRACE_MS,
+    OwnersWord,
     SimulatedOptionSettlements,
     SimulatedOutcome,
 )
@@ -466,6 +467,12 @@ async def test_shares_are_never_settled_and_a_settlement_is_no_open_order(
 
     assert len(again.settled) == 1 and await _held(simulation) == {}
     assert await simulation.list_orders(status="open") == []
+    # The settlement is in the ledger as a sale that filled at the close of the contract's last session,
+    # whenever the step that made it ran.
+    [_bought, sold] = sorted(await simulation.list_orders(status="closed"), key=lambda order: order.filled_at_ms or 0)
+    assert (sold.side, sold.filled_quantity, sold.filled_avg_price, sold.filled_at_ms) == (
+        "sell", 1.0, 5.25, LAST_SESSION_CLOSE
+    )
 
 
 @pytest.mark.parametrize(
@@ -506,3 +513,39 @@ async def test_reading_the_accounts_option_events_settles_nothing_and_reports_no
     # Once the step has settled it, the read still reports none: the step's own answer carries the record.
     assert len(_settle(simulation).settled) == 1
     assert (await simulation.read_option_event_activities(after_ms=WINDOW)).events == ()
+
+
+async def _sells_to_open(simulation: SyntheticBroker, contract: OptionContract, clock: list[int]) -> None:
+    """The simulation is handed an order that opens a sold position. No bot may send one yet; the port takes it."""
+    received = clock[0] - 300
+    quote = HeldQuote(
+        bid=QuoteSide(Decimal("1.90"), received), ask=QuoteSide(Decimal("1.94"), received),
+        data_type=QuoteDataType.LIVE, generation=4,
+    )
+    ref = f"sells-{contract.occ_symbol}"
+    simulation.bind_option_entry_quote(ref, symbol=contract.occ_symbol, quote=quote, multiplier=100)
+    await simulation.submit_option_order(
+        SingleOptionOrderRequest(
+            contract=contract, side=OrderSide.SELL, intent=OptionPositionIntent.OPEN, quantity=1,
+            order_type=OrderType.LIMIT, limit_price=Decimal("1.90"),
+        ),
+        client_order_id=ref,
+    )
+
+
+async def test_a_sold_contract_is_settled_in_no_way_and_is_not_let_go_of_at_a_word(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    """A sold call that ends in the money would be assigned: shares would move. The simulation's rule is for
+    what it bought. It settles a sold contract in no way, says so, and no word of the owner's ends it."""
+    await _sells_to_open(simulation, CALL, clock)
+    assert await _held(simulation) == {CALL.occ_symbol: -1.0}
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
+    clock[0] = SATURDAY
+    word = OwnersWord(operator="the-owner", reason=None, said_at_ms=SATURDAY)
+
+    settled = simulation.settle_expired_options(after_ms=WINDOW, at_the_owners_word={CALL.occ_symbol: word})
+
+    assert settled.settled == () and settled.waiting == {}
+    assert "only whole contracts it bought" in settled.not_settled[CALL.occ_symbol]
+    assert await _held(simulation) == {CALL.occ_symbol: -1.0}
