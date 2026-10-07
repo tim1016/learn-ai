@@ -233,6 +233,8 @@ class ClerkSqliteRepository(
         self._authority_generation_at_open = authority_generation
         self._poisoned = False
         self._reconciliation_in_progress = False
+        # Whether the Clerk over this handle has begun to close (``begin_closing``). Process-local.
+        self._closing = False
         # Latest successful fee-evidence read by this process. Process-local
         # liveness like the envelope's published account observation, never
         # a custody fact: only record_fee_evidence writes it, under the lock.
@@ -1213,6 +1215,22 @@ class ClerkSqliteRepository(
         """Release the account gate only after the final safety verdict is durable."""
         with self._write_lock:
             self._reconciliation_in_progress = False
+
+    def begin_closing(self) -> None:
+        """Say that the Clerk over this handle has begun to close. Process-local, and never unsaid.
+
+        Said by the closing Clerk's facade, under its intake fence. A closing
+        Clerk takes no scheduled close (ADR 0076): the run that would accept
+        one asks :attr:`closing` under the same fence, so a close is either
+        accepted before this was said or not at all. The next Clerk opens the
+        books with a handle of its own.
+        """
+        self._closing = True
+
+    @property
+    def closing(self) -> bool:
+        """Whether the Clerk over this handle has begun to close."""
+        return self._closing
 
     # ------------------------------------------------------------------
     # Operation claims — CAS fencing before broker contact (Scope D). The

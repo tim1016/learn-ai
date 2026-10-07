@@ -267,6 +267,10 @@ class ActiveClerkRuntime:
             tap.start()
 
     async def close(self) -> None:
+        # Said first, while every tap still runs: a closing Clerk takes no scheduled close (ADR 0076).
+        # The keeper and the reconciliation loop both go on until they are stopped below, and each asks.
+        if isinstance(self.clerk, SqliteAlpacaClerkFacade):
+            await self.clerk.begin_closing()
         # Every tap is stopped before the repository it writes to is closed,
         # in ``_ordered_taps``' declared order. ``stop()`` is terminal -- the
         # envelope sync closes its own projection reader there -- so the

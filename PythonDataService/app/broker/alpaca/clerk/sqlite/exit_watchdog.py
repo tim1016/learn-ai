@@ -86,11 +86,13 @@ not read from the orders the open notice names, so another exit of the bot
 that fails after the close leaves the rule standing. It is read once more
 before a bot is given up: a pass that took the close after its scan does
 not give the bot up. Every check a re-drive passes still stands, and under
-the rule one more is asked in the run that accepts it: has the retry wait
-passed since the bot's newest exit? On a Dry Run the keeper retries a
-failed close too, and its try may have come since the scan. Each re-drive
-made under the rule records the same close on its own acceptance, and
-neither it nor the time it failed for is counted toward giving the bot up.
+the rule two more are asked in the run that accepts it. Has the Clerk
+begun to close? Then it sends no close again, and the next start does.
+And has the retry wait passed since the bot's newest exit? On a Dry Run
+the keeper retries a failed close too, and its try may have come since the
+scan. Each re-drive made under the rule records the same close on its own
+acceptance, and neither it nor the time it failed for is counted toward
+giving the bot up.
 So the next session starts from where the ordinary count stood before the
 close was taken. A count that was already full then gives the bot up at
 that session's open, with nothing sent.
@@ -662,6 +664,13 @@ def _accept_admissible_redrive(
         return _RedriveRefused(
             action="OWN_EXIT_WORKING", reason_code="OWN_EXIT_WORKING",
             message="An EXIT for this strategy is already working.",
+            facts={}, outcome="hold",
+        )
+    if scheduled_close is not None and repo.closing:
+        # A closing Clerk takes no scheduled close, and sends none again (ADR 0076). The next start does.
+        return _RedriveRefused(
+            action="exit_redrive_deferred_clerk_closing", reason_code="RECOVERY_CLERK_CLOSING",
+            message="The Clerk is shutting down. It sends this close again once it has started again.",
             facts={}, outcome="hold",
         )
     if scheduled_close is not None and inside_the_retry_wait(repo, strategy_instance_id):

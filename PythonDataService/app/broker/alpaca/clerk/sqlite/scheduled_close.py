@@ -68,8 +68,15 @@ the bot's newest exit (:func:`inside_the_retry_wait`).
 **A stop loses no close and sends none twice.** A close cut by a stop after
 it was accepted stays accepted, and the next start drives it as it drives
 every unfinished EXIT. One cut inside its send is looked up by its order's
-own id before anything is sent again. A closing Clerk's last round takes no
-close at all: a closing Clerk sends no new order.
+own id before anything is sent again.
+
+**A Clerk that has begun to close takes no close.** It says so first, under
+the lock a close is accepted under (``repo.closing``), and its keeper and
+its reconciliation loop both go on until the shutdown stops them. So the
+run that would accept a close asks, and so does the watchdog's retry of a
+failed one. A close is accepted before the Clerk began to close, and is
+then finished or left for the next start, or it is not taken. The keeper's
+last round takes none either.
 
 Not here: reading an expiry, an exercise or an assignment and taking the
 contract off the books. After a miss on an expired contract nothing is sent
@@ -536,12 +543,17 @@ def _accept_while_still_owed(repo: ClerkSqliteRepository, item: HeldContract) ->
     lock, so of two that meet only the first is accepted, and the second
     finds an EXIT working. ``None`` writes nothing.
 
+    A Clerk that has begun to close takes none. It says so under this same
+    lock, so a close is accepted before that or not at all.
+
     A close that failed is taken again as a decision of its own, numbered
     after the first. It is asked one thing more: has the retry wait passed
     since the bot's newest exit, as the books show it now?
     """
     assert item.owed is not None and item.holding is not None
     sid = item.strategy_instance_id
+    if repo.closing:
+        return None
     if not position_quantity_is_nonzero(repo.position(sid, item.symbol)):
         return None
     if repo.active_exit_for_strategy(sid) is not None:
