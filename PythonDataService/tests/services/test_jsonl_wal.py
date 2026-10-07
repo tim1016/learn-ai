@@ -10,6 +10,7 @@ of one particular copy of the check.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -44,6 +45,8 @@ def _wal(path: Path, trusted_root: Path) -> JsonlWal[_Record]:
     [
         pytest.param(lambda wal: wal.path, id="path"),
         pytest.param(lambda wal: wal.append(_Record(seq=1, value="x")), id="append"),
+        pytest.param(lambda wal: wal.append_many([_Record(seq=1, value="x")]), id="append_many"),
+        pytest.param(lambda wal: wal.replace_all([_Record(seq=1, value="x")]), id="replace_all"),
         pytest.param(lambda wal: wal.read_all(), id="read_all"),
         pytest.param(lambda wal: wal.read_tail(limit=1), id="read_tail"),
         pytest.param(lambda wal: wal.read_from(after_seq=0), id="read_from"),
@@ -94,3 +97,98 @@ def test_a_symlink_escaping_the_trusted_root_is_refused(tmp_path: Path) -> None:
         wal.append(_Record(seq=1, value="x"))
 
     assert outside.read_text(encoding="utf-8") == "", "the symlink target was written through"
+
+
+def test_several_records_appended_at_once_read_back_in_order_and_the_next_one_follows_on(tmp_path: Path) -> None:
+    wal = _wal(tmp_path / "wal.jsonl", tmp_path)
+    wal.append(_Record(seq=1, value="a"))
+
+    wal.append_many([_Record(seq=2, value="b"), _Record(seq=3, value="c")])
+    wal.append(_Record(seq=4, value="d"))
+
+    assert [record.value for record in wal.read_all()] == ["a", "b", "c", "d"]
+    with pytest.raises(ValueError, match="got seq=7 but next available seq is 6"):
+        wal.append_many([_Record(seq=5, value="e"), _Record(seq=7, value="g")])
+    assert [record.seq for record in wal.read_all()] == [1, 2, 3, 4], "a refused batch wrote nothing"
+
+
+def test_several_records_appended_after_a_torn_line_replace_it(tmp_path: Path) -> None:
+    """A crash left half a line. The next append, of one record or of several, truncates it first."""
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append(_Record(seq=1, value="a"))
+    with open(path, "a", encoding="utf-8") as torn:
+        torn.write('{"seq":2,"val')
+
+    wal.append_many([_Record(seq=2, value="b"), _Record(seq=3, value="c")])
+
+    assert [record.value for record in wal.read_all()] == ["a", "b", "c"]
+
+
+def test_a_rewrite_leaves_exactly_the_records_given_under_the_sequences_they_had(tmp_path: Path) -> None:
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
+
+    wal.replace_all([_Record(seq=2, value="2"), _Record(seq=6, value="6")])
+
+    assert [record.seq for record in wal.read_all()] == [2, 6]
+    # The sequence runs on from the last one kept: it never reuses one.
+    assert wal.allocate_seq() == 7
+    wal.append(_Record(seq=7, value="7"))
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [2, 6, 7]
+    assert [entry.name for entry in tmp_path.iterdir() if entry.name.endswith(".tmp")] == []
+
+
+def test_after_a_rewrite_that_drops_the_tail_the_next_sequence_is_the_one_a_fresh_reader_of_the_file_gives(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
+
+    wal.replace_all([_Record(seq=1, value="1"), _Record(seq=2, value="2")])
+
+    # The writer that rewrote and a process started afterwards must agree, or one of them refuses the other's append.
+    assert wal.allocate_seq() == _wal(path, tmp_path).allocate_seq() == 3
+    wal.append(_Record(seq=3, value="3"))
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [1, 2, 3]
+
+
+def test_a_rewrite_refuses_sequences_that_do_not_rise_and_leaves_the_file_as_it_was(tmp_path: Path) -> None:
+    wal = _wal(tmp_path / "wal.jsonl", tmp_path)
+    wal.append_many([_Record(seq=1, value="a"), _Record(seq=2, value="b")])
+
+    with pytest.raises(ValueError, match="sequences must rise"):
+        wal.replace_all([_Record(seq=2, value="b"), _Record(seq=1, value="a")])
+
+    assert [record.seq for record in wal.read_all()] == [1, 2]
+
+
+class _Stopped(BaseException):
+    """The process is stopped: nothing after this instant runs."""
+
+
+def test_a_rewrite_stopped_before_its_one_last_step_leaves_the_old_file_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new contents are written beside the file and put in its place in one step.
+
+    Stopped just before that step, the file is byte for byte what it was, and
+    a reader started afterwards reads every record it held.
+    """
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
+    before = path.read_bytes()
+
+    def stopped_here(_source: object, _destination: object) -> None:
+        raise _Stopped
+
+    with monkeypatch.context() as stopping:
+        stopping.setattr(os, "replace", stopped_here)
+        with pytest.raises(_Stopped):
+            wal.replace_all([_Record(seq=2, value="2"), _Record(seq=6, value="6")])
+
+    assert path.read_bytes() == before
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [1, 2, 3, 4, 5, 6]

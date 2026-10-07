@@ -1,8 +1,9 @@
-"""Who takes an option order: Alpaca does, the simulated brokers say they do not, and refuse one by type.
+"""Who takes an option order: Alpaca does, a Dry Run's simulation takes one of a single leg, a shadow world none.
 
-The simulated brokers learn option fills in a later part of #2913. Until then
-a caller that gates on capabilities is told no, and one that asks anyway gets
-a refusal that can never be mistaken for an order of unknown outcome.
+A caller that gates on capabilities is told so, and one that asks for what
+is not taken gets a refusal that can never be mistaken for an order of
+unknown outcome. How the simulation fills the single-leg order it does take
+is ``test_synthetic_broker_option_orders.py``.
 """
 
 from __future__ import annotations
@@ -75,8 +76,8 @@ def test_alpaca_says_it_takes_option_orders_of_one_leg_and_of_several() -> None:
         assert capabilities.supports_multi_leg_option_orders is True
 
 
-def test_the_simulation_says_it_takes_no_option_orders() -> None:
-    assert SYNTHETIC_CAPABILITIES.supports_option_orders is False
+def test_the_simulation_says_it_takes_an_option_order_of_one_leg_and_none_of_several() -> None:
+    assert SYNTHETIC_CAPABILITIES.supports_option_orders is True
     assert SYNTHETIC_CAPABILITIES.supports_multi_leg_option_orders is False
     assert SyntheticBroker(account_id="sim:options-1").capabilities() is SYNTHETIC_CAPABILITIES
 
@@ -93,12 +94,24 @@ def test_a_shadow_world_says_it_takes_no_option_orders_though_its_live_broker_do
     assert shadow.model_dump(exclude=unchanged) == ALPACA_LIVE_CAPABILITIES.model_dump(exclude=unchanged)
 
 
-@pytest.mark.parametrize("order", [_LONG_CALL, _CALL_SPREAD], ids=["one leg", "several legs"])
-async def test_the_simulation_refuses_an_option_order_definitively(tmp_path: Path, order: OptionOrderRequest) -> None:
+@pytest.mark.parametrize(
+    ("order", "with_an_order_ledger"),
+    [
+        pytest.param(_CALL_SPREAD, True, id="several legs: never taken"),
+        pytest.param(_CALL_SPREAD, False, id="several legs, and no order ledger either"),
+        pytest.param(_LONG_CALL, False, id="one leg, with no order ledger to record a fill in"),
+    ],
+)
+async def test_the_simulation_refuses_an_option_order_definitively(
+    tmp_path: Path, order: OptionOrderRequest, with_an_order_ledger: bool
+) -> None:
+    """An order of several legs it never takes. One of a single leg it takes only with an order ledger to
+    record the fill in; how it fills that one is ``test_synthetic_broker_option_orders.py``."""
     # A real order ledger, as a running simulation has: without one, "no orders" is all it could ever answer.
     account_id = "sim:options-1"
     broker = SyntheticBroker(
-        account_id=account_id, source_bars=SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
+        account_id=account_id,
+        source_bars=SourceBarLedger(artifacts_root=tmp_path, account_id=account_id) if with_an_order_ledger else None,
     )
 
     with pytest.raises(BrokerOptionsNotSupported, match="takes no option orders") as refused:
@@ -125,16 +138,26 @@ async def test_a_shadow_order_book_refuses_an_option_order_definitively(
     assert ports.book.orders() == []
 
 
-async def test_a_simulated_broker_holds_no_option_order_to_look_up(tmp_path: Path) -> None:
-    """ "Absent" would be an answer about an order; the simulation never held one to answer about."""
-    simulation = SyntheticBroker(account_id="sim:options-1")
+async def test_a_shadow_order_book_holds_no_option_order_to_look_up(tmp_path: Path) -> None:
+    """ "Absent" would be an answer about an order; a shadow world never held one to answer about."""
     shadow = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path).trade
 
-    for trade in (simulation, shadow):
-        with pytest.raises(BrokerOptionsNotSupported, match="holds no option orders"):
-            await trade.get_option_order_by_client_order_id(_REF)
-        with pytest.raises(BrokerOptionsNotSupported, match="holds no option orders"):
-            await trade.get_option_order_by_broker_order_id("83f37e9f-6b1f-49ed-8fc6-3e6af716323f")
+    with pytest.raises(BrokerOptionsNotSupported, match="holds no option orders"):
+        await shadow.get_option_order_by_client_order_id(_REF)
+    with pytest.raises(BrokerOptionsNotSupported, match="holds no option orders"):
+        await shadow.get_option_order_by_broker_order_id("83f37e9f-6b1f-49ed-8fc6-3e6af716323f")
+
+
+async def test_the_simulation_answers_that_it_holds_no_such_option_order(tmp_path: Path) -> None:
+    """It can hold option orders now, so "none by that id" is an answer it can give."""
+    # A real order ledger, as a running simulation has: the answer is read from it.
+    account_id = "sim:options-1"
+    simulation = SyntheticBroker(
+        account_id=account_id, source_bars=SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
+    )
+
+    assert await simulation.get_option_order_by_client_order_id(_REF) is None
+    assert await simulation.get_option_order_by_broker_order_id("83f37e9f-6b1f-49ed-8fc6-3e6af716323f") is None
 
 
 async def test_the_simulation_has_no_contract_reference_and_does_not_call_a_contract_unlisted() -> None:

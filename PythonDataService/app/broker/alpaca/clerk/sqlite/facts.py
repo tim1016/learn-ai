@@ -204,7 +204,18 @@ class EnterAcceptedFacts:
     the decision id, the effect idempotency key/kind, and the complete
     immutable broker leg — everything ``_fold_enter_accepted`` needs to
     rebuild the ``commands``, ``effect_operations``, and ``orders`` rows from
-    a finalized mirror line alone."""
+    a finalized mirror line alone.
+
+    An entry in an option contract (ADR 0076) also carries ``option``: the
+    order as it was asked, the contract each leg resolved to with its
+    multiplier, and the quotes and money the entry was admitted on
+    (``option_entry.OptionEntryFacts``). Its ``leg`` is then the order's line
+    in a stock leg's own keys -- the contract's symbol, the side, contracts,
+    and the limit a share -- so every reader of an order's symbol and quantity
+    reads the contract. It is not a ``BrokerOrderLeg``: an option contract's
+    symbol cannot be one. ``option`` is omitted from the canonical JSON when
+    ``None``, so a stock entry's facts, and every row written before it
+    existed, hash identically (hash-chained schema evolution)."""
 
     idempotency_key: str
     payload_hash: str
@@ -223,12 +234,15 @@ class EnterAcceptedFacts:
     leg: dict[str, Any]
     cash_reference_price: str | None = None
     fee_provision_cents: int = 0
+    option: dict[str, Any] | None = None
 
     def to_facts_json(self) -> str:
         facts = asdict(self)
         if self.cash_reference_price is None:
             facts.pop("cash_reference_price")
             facts.pop("fee_provision_cents")
+        if self.option is None:
+            facts.pop("option")
         return canonicalize(facts)
 
     @classmethod
@@ -358,6 +372,8 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "reference_ask": None,
     "reference_quote_observed_at_ms": None,
     "regular_session_only": False,
+    "option_contract": None,
+    "option_exit": None,
 }
 
 
@@ -437,6 +453,16 @@ class ExitAcceptedFacts:
     # being re-priced as an extended-hours limit. Absent (every other EXIT,
     # and every acceptance recorded before it existed) is ``False``.
     regular_session_only: bool = False
+    # The OCC symbol of the option contract this EXIT closes (ADR 0076), read
+    # from the entry it targets. Such an EXIT is always regular-session-only,
+    # and its hold outside the session is told as an option close's, never as
+    # a scheduled end's. Absent for every EXIT in shares.
+    option_contract: str | None = None
+    # The quotes read at the exit decision for the option contracts the bot
+    # holds (``option_entry.OptionExitFacts``, ADR 0076): what a simulated
+    # close is priced from when whichever pass sends it comes to send it.
+    # Absent for an EXIT that was handed none, and for every EXIT in shares.
+    option_exit: dict[str, Any] | None = None
 
     @property
     def operator_priced(self) -> bool:
@@ -559,6 +585,18 @@ class ExitReducingOrderCreatedFacts:
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:
         return cls(**json.loads(facts_json))
+
+    @staticmethod
+    def reduced_symbol(facts_json: str) -> str | None:
+        """What a reducing order reduces, read on its own: its symbol in upper case, or ``None`` when none is named.
+
+        For the fold that creates the order's row, which needs nothing else
+        of these facts (ADR 0076: it binds the order to its option contract).
+        Read without the rest of the shape, so that replaying a fact never
+        fails here over a key this build does not know.
+        """
+        symbol = json.loads(facts_json).get("symbol")
+        return symbol.upper() if isinstance(symbol, str) else None
 
 
 @dataclass(frozen=True)

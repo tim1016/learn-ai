@@ -43,6 +43,7 @@ from app.services.alpaca_fee_attribution import (
     UnattributedCharge,
     activity_economics,
     attribute_session_fees,
+    attribute_simulated_option_fees,
     collapse_activity_deliveries,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
@@ -471,6 +472,7 @@ def _effective_fills(
                 native_order_id=record.native_order_id,
                 reported_fee=None if record.fee is None else normalize_money(record.fee),
                 observed_at_ms=record.recorded_at_ms,
+                multiplier=record.multiplier,
             )
         )
         if record.native_order_id:
@@ -485,11 +487,13 @@ def _effective_fills(
 def _has_option_fill(conn: sqlite3.Connection) -> bool:
     """Whether the books hold a fill of an order that trades an option contract.
 
-    The fee model and the settlement rule this projection applies are the
-    listed-stock ones (``regulatory_fees``): they would charge a contract as
-    one share. Until option fees are attributed here from Alpaca's own fee
-    activities, such a fill leaves the fees unresolved, never mispriced
-    (ADR 0076 decision 13).
+    The fee model and the settlement rule this projection applies to a real
+    account are the listed-stock ones (``regulatory_fees``): they would
+    charge a contract as one share. Until option fees are attributed here
+    from Alpaca's own fee activities, such a fill leaves a real account's
+    fees unresolved, never mispriced (ADR 0076 decision 13). A simulated
+    account observes no fee at all, so its option fills are charged by the
+    option fee model.
 
     Asked from the bound orders: books that bind no order to a contract
     hold no option fill, and are answered without reading a fill. Each
@@ -705,9 +709,14 @@ def custody_fee_attribution(
             for row in by_date[day].values()
             if row.activity_type == "FEE"
         ]
+        # A simulation charges its option fills by the option fee model; its
+        # fills in shares go through the one rule every account's do. A real
+        # account's fills all go through that rule, and one in an option
+        # contract leaves the whole projection unresolved below.
+        option_fills = [fill for fill in grouped[day] if fill.multiplier is not None] if simulated else []
         result = attribute_session_fees(
             trade_date=day,
-            fills=grouped[day],
+            fills=[fill for fill in grouped[day] if fill.multiplier is None] if simulated else grouped[day],
             charges=fees,
             population_complete=population_complete and day not in conflicting,
             activities_complete=day not in unproven,
@@ -715,21 +724,32 @@ def custody_fee_attribution(
             session_ended=day < et_date_at_ms(now_ms),
             settlement_at_ms=et_midnight_ms(day + timedelta(days=1)),
         )
-        shares.extend(result.shares)
-        unresolved.extend(result.unresolved)
-        unattributed += result.unattributed
-        unattributed_charges.extend(result.unattributed_charges)
-        if result.observed_total is None:
+        results = [result]
+        if option_fills:
+            results.append(attribute_simulated_option_fees(
+                trade_date=day,
+                fills=option_fills,
+                population_complete=population_complete and day not in conflicting,
+                session_ended=day < et_date_at_ms(now_ms),
+                settlement_at_ms=et_midnight_ms(day + timedelta(days=1)),
+            ))
+        for result in results:
+            shares.extend(result.shares)
+            unresolved.extend(result.unresolved)
+            unattributed += result.unattributed
+            unattributed_charges.extend(result.unattributed_charges)
+            if result.predicted_total is None:
+                predicted_known = False
+            else:
+                predicted += result.predicted_total
+        # A simulation observes no fee: the day's observed total is its share rule's alone.
+        if results[0].observed_total is None:
             observed_known = False
         else:
-            observed += result.observed_total
-        if result.predicted_total is None:
-            predicted_known = False
-        else:
-            predicted += result.predicted_total
+            observed += results[0].observed_total
     if not population_complete:
         unresolved.append("Account fill coverage is incomplete. Reconcile account executions before deploying.")
-    if _has_option_fill(conn):
+    if not simulated and _has_option_fill(conn):
         unresolved.append(OPTION_FILL_FEES_NOT_ATTRIBUTED)
     return FeeAttribution(
         tuple(shares),

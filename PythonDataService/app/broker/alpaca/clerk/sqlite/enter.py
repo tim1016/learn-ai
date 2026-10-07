@@ -65,6 +65,13 @@ block applies to every bot; a ``CUSTODY_SUBJECT``-scoped block applies only
 to the matching subject). The ADR 0059 envelope (cash bound; the loss hold
 arrives as an account hold) is checked here too, after admission, and its
 reservation commits with the same transition.
+
+An entry in an option contract (ADR 0076) is accepted by
+:func:`accept_option_enter`, the sibling of :func:`accept_enter`: the same
+identity key, the same fences in the same order, the same ``ENTER_ACCEPTED``
+fact with the option's own part added, and its own payload under its own key
+in the identity hash, so no entry in shares can hash as one. It is then
+driven by the same :func:`submit_accepted_enter`.
 """
 
 from __future__ import annotations
@@ -79,7 +86,10 @@ from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_COMMITMENT_MISSING
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
-from app.broker.alpaca.clerk.sqlite.envelope_admission import require_envelope_admission
+from app.broker.alpaca.clerk.sqlite.envelope_admission import (
+    require_envelope_admission,
+    require_option_envelope_admission,
+)
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, leg_instruction_payload
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
@@ -93,8 +103,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandExistingConflict,
     CommandExistingSame,
     CommandResource,
+    RunResource,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     broker_refusal,
     fold_failed,
@@ -112,6 +124,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.options import SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
@@ -129,6 +142,7 @@ __all__ = [
     "EnterSubmission",
     "EntrySubmissionRefusal",
     "accept_enter",
+    "accept_option_enter",
     "fold_order_evidence",
     "resolve_enter_submission",
     "submit_accepted_enter",
@@ -236,22 +250,9 @@ def accept_enter(
     )
 
     def build_transition() -> TransitionInput:
-        # See commands.py's submit_start_run for why these checks run here,
-        # under commit_first_transition's lock, rather than before it.
-        require_strategy_instance(repo, strategy_instance_id)
-        active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
-        require_admission(repo, strategy_instance_id=strategy_instance_id)
-        budget = repo.deployment_budget(strategy_instance_id)
-        if repo.budget_authority_version() >= 2 and budget is None:
-            raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
-                why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
-            ))
-        if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:
-            raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
-                why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
-            ))
+        active = _require_enter_fences(
+            repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope
+        )
         reservation = (
             None
             if envelope is None
@@ -302,6 +303,49 @@ def accept_enter(
         build_transition=build_transition,
         decision_receipt=decision_receipt,
     )
+    return _accepted_submission(repo, outcome)
+
+
+def _require_enter_fences(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+    envelope: LiveEnvelopeGate | None,
+) -> RunResource:
+    """The fences every ENTER passes before the envelope is asked, in their one order; returns the active run.
+
+    The bot is registered. The caller's run is the bot's active one. No hold
+    or uncertainty blocks new exposure for it. A budgeted account has a
+    budget commitment for it. A budgeted deployment has its envelope to be
+    admitted against. An entry in shares and one in an option contract pass
+    the same five, so neither can lose one the other keeps.
+
+    Called from inside a ``build_transition`` closure: see commands.py's
+    submit_start_run for why these checks run there, under
+    commit_first_transition's lock, rather than before it.
+    """
+    require_strategy_instance(repo, strategy_instance_id)
+    active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
+    require_admission(repo, strategy_instance_id=strategy_instance_id)
+    budget = repo.deployment_budget(strategy_instance_id)
+    if repo.budget_authority_version() >= 2 and budget is None:
+        raise AdmissionBlockedError(CapabilityDecision(
+            allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
+            why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
+        ))
+    if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:
+        raise AdmissionBlockedError(CapabilityDecision(
+            allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
+            why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
+        ))
+    return active
+
+
+def _accepted_submission(
+    repo: ClerkSqliteRepository, outcome: CommandCreated | CommandExistingSame | CommandExistingConflict
+) -> EnterSubmission:
+    """What an ENTER's first commit came to: the fresh acceptance, or the one already on the books."""
     if isinstance(outcome, CommandExistingConflict):
         raise DurableConflictError(outcome.command)
     if isinstance(outcome, CommandExistingSame):
@@ -325,6 +369,129 @@ def accept_enter(
         order_ref=order.order_ref,
         created=True,
     )
+
+
+def _option_enter_identity(
+    *, account_id: str, strategy_instance_id: str, decision_id: str, order: SingleOptionOrderRequest
+) -> tuple[str, str, str, str]:
+    """The identity one option ENTER decision commits under.
+
+    The keys are an ENTER's own: one entry per bot and decision, whatever it
+    is in. The payload hashes the order under ``option_order``, never
+    ``leg``, so an entry in shares and one in a contract cannot hash alike.
+    """
+    idempotency_key = f"{strategy_instance_id}:{decision_id}"
+    payload_hash = hashlib.sha256(
+        canonicalize(
+            {
+                "account_id": account_id,
+                "strategy_instance_id": strategy_instance_id,
+                "decision_id": decision_id,
+                "action": ACTION_ENTER,
+                "option_order": order.model_dump(mode="json"),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return idempotency_key, payload_hash, f"cmd:{idempotency_key}", f"enter:{idempotency_key}"
+
+
+def accept_option_enter(
+    repo: ClerkSqliteRepository,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+    decision_id: str,
+    lifecycle_run_id: str,
+    entry: OptionEntryFacts,
+    decision_receipt: AtomicDecisionReceipt | None = None,
+    envelope: LiveEnvelopeGate | None = None,
+) -> EnterSubmission:
+    """Reserve + accept one entry in an option contract, entirely local (no broker call).
+
+    The sibling of :func:`accept_enter`. It passes the same fences, which
+    are one function (:func:`_require_enter_fences`), and then the envelope
+    admits the entry. What the envelope is asked to admit is the entry
+    commitment the Clerk worked out (``entry.money``), not a quantity times
+    a price.
+
+    ``entry`` rides the ``ENTER_ACCEPTED`` facts whole: the order as asked,
+    the contract each leg resolved to with its multiplier, and the quotes and
+    money it was admitted on. The fold records the contract's terms and binds
+    the order to it in the same transaction, so the order never exists
+    without its contract.
+    """
+    reject_colon("strategy_instance_id", strategy_instance_id)
+    reject_colon("decision_id", decision_id)
+    reject_colon("lifecycle_run_id", lifecycle_run_id)
+    if entry.order.limit_price is None:
+        raise ValueError("an option entry is a limit order at its natural price")
+
+    idempotency_key, payload_hash, command_id, effect_idempotency_key = _option_enter_identity(
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        decision_id=decision_id,
+        order=entry.order,
+    )
+    limit_price = entry.order.limit_price
+
+    def build_transition() -> TransitionInput:
+        active = _require_enter_fences(
+            repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope
+        )
+        reservation = (
+            None
+            if envelope is None
+            else require_option_envelope_admission(
+                repo,
+                envelope=envelope,
+                contracts=entry.order.quantity,
+                limit_price=limit_price,
+                commitment_cents=entry.money.entry_commitment_cents,
+                fee_provision_cents=entry.money.fee_provision_cents,
+                now_ms=repo.clock(),
+                strategy_instance_id=strategy_instance_id,
+            )
+        )
+        effect_operation_id = f"effect:{idempotency_key}"
+        namespace = build_bot_order_namespace(strategy_instance_id)
+        order_ref = build_order_ref(namespace, mint_intent_id())
+        facts = EnterAcceptedFacts(
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+            kind="strategy_decision",
+            action=ACTION_ENTER,
+            intended_end_state=None,
+            effect_idempotency_key=effect_idempotency_key,
+            effect_kind="ENTER",
+            decision_id=decision_id,
+            leg=entry.order_line(),
+            cash_reference_price=None if reservation is None else reservation.exact_reference_price,
+            fee_provision_cents=0 if reservation is None else reservation.fee_provision_cents,
+            option=entry.to_facts(),
+        )
+        return TransitionInput(
+            strategy_instance_id=strategy_instance_id,
+            run_id=active.run_id,
+            command_id=command_id,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            transition_kind="ENTER_ACCEPTED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="accepted",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="ENTER_ACCEPTED",
+            facts_json=facts.to_facts_json(),
+        )
+
+    outcome = repo.commit_first_transition(
+        command_id=command_id,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash,
+        build_transition=build_transition,
+        decision_receipt=decision_receipt,
+    )
+    return _accepted_submission(repo, outcome)
 
 
 async def submit_enter(
@@ -379,11 +546,17 @@ async def submit_accepted_enter(
     repo: ClerkSqliteRepository,
     *,
     accepted: EnterSubmission,
-    leg: BrokerOrderLeg,
+    leg: BrokerOrderLeg | SingleOptionOrderRequest,
     trade: BrokerTradePort,
     before_submit: Callable[[], EntrySubmissionRefusal | None] | None = None,
 ) -> EnterSubmission:
-    """Drive a previously accepted ENTER outside the intake decision segment."""
+    """Drive a previously accepted ENTER outside the intake decision segment.
+
+    ``leg`` is the instruction the ENTER was accepted with: a leg in shares,
+    or one option order (ADR 0076). Either is sent once under the claim and
+    its answer is folded the same way; which one it is decides only the call
+    the port is given (``ClaimedBrokerIO.submit``).
+    """
     if not accepted.created:
         return accepted
 
