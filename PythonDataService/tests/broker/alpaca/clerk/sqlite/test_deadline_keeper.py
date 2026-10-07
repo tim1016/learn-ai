@@ -131,6 +131,26 @@ async def test_an_old_unproven_cancel_is_not_asked_again_each_time_the_keeper_wa
     assert paper.outcome(stuck).standing is EntryStanding.OUTCOME_UNKNOWN
 
 
+async def test_a_clock_set_back_does_not_keep_the_keeper_from_asking_again(paper: PaperOptions) -> None:  # noqa: F811
+    """Measured on a clock set back an hour, the pause since the last ask would not end for an hour."""
+    stuck = await paper.resting()
+    paper.venue.cancel_error = BrokerUnavailable("Alpaca did not answer", broker="alpaca")
+    paper.wait(WAIT_MS + UNPROVEN_RETRY_WINDOW_MS)
+    await paper.round()
+    asks = len(paper.venue.cancel_calls)
+    # Inside its pause the entry is not asked about again.
+    paper.wait(1_000)
+    await paper.round()
+    assert len(paper.venue.cancel_calls) == asks
+
+    paper.clock.advance(-60 * 60 * 1000)
+    await paper.round()
+
+    # The pause cannot be measured on this clock, so the cancel is asked for at once.
+    assert len(paper.venue.cancel_calls) == asks + 1
+    assert not paper.outcome(stuck).proven
+
+
 async def test_two_bots_on_one_account_one_at_its_deadline_while_the_other_enters_and_is_not_refused(
     paper: PaperOptions,  # noqa: F811
 ) -> None:
