@@ -143,8 +143,8 @@ class ActiveAlpacaClerk(Protocol):
         ``execute_for_instance`` returns once an option entry is sent: the
         order then rests at the broker. A runner asks this next, and settles
         its Signal Program on the answer. It waits until the outcome is
-        proven, or the authority's clock reaches ``until_ms`` (the close of
-        the bot's next decision bar), or the run stops. It holds no lock
+        proven, or the authority's clock reaches ``until_ms`` (the end of
+        the runner's own wait), or the run stops. It holds no lock
         while it waits and may be cancelled. Only for a decision whose
         receipt was not a refusal; a stock decision is never asked.
         """

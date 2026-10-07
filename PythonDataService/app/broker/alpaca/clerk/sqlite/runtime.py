@@ -2029,8 +2029,8 @@ class SqliteAlpacaClerkFacade:
         - the bot's run is no longer active: the answer is the books' as
           they stand, and nothing is recorded, so a later replay settles
           from the books as they then are;
-        - the Clerk's clock has reached ``until_ms``, the close of the
-          bot's next decision bar: still unproven, the strategy is in.
+        - the Clerk's clock has reached ``until_ms``, the end of the
+          caller's own wait: still unproven, the strategy is in.
 
         The settlement is recorded once, as ``ENTRY_SETTLED`` on the ENTER's
         own timeline, in the same locked read it was worked out in: what is
@@ -2047,8 +2047,8 @@ class SqliteAlpacaClerkFacade:
 
         Raises ``EntryOutcomeWaitRefused``, by name, for a limit the Clerk
         does not take, for an entry still unproven with no answer recorded.
-        One more than a week ahead of its clock: no decision bar closes
-        that far on. And one already past when the wait is asked for:
+        One more than a week ahead of its clock: no caller waits that
+        long. And one already past when the wait is asked for:
         "still unproven at the limit" is a judgment made by waiting to the
         limit, and is not handed out for a limit that was never waited for.
         The books are read first, so an entry already settled, or already
