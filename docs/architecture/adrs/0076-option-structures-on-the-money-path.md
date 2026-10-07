@@ -60,6 +60,19 @@ A per-leg limit on the bid-ask gap does not bound what a structure costs to trad
 - The **round-trip cost** is the sum over the legs of ask minus bid, times ratio and multiplier. It is always worked out.
 - An entry is to be refused when it is more than the **structure cost limit**: a percent of the entry commitment, 10 by default, set at Deploy. The owner chose this on 2026-10-06. The comparison is built; the setting arrives with Deploy. The commitment is the measure because it is always above zero; a percent of the structure's mid value breaks down when that value is near zero.
 
+### 6. The pricing model matches the contract
+
+Stock and ETF options are American: the holder may exercise early. Everything this repo priced options with before is European Black-Scholes, which prices a different contract. Delta and implied volatility for a contract a bot may pick come from an American model.
+
+- **The model is a Leisen-Reimer binomial tree,** with the exercise test at every step. It was chosen over a finite-difference solver because it can be proven: with no dividend it is the same construction as QuantLib 1.42.1's `BinomialLRVanillaEngine`, and the two agree to 1e-9 on 400 cases from thirty days to fifteen minutes to expiry (fixture `AM-001`). A finite-difference solver could only be shown to agree with another to within both grids.
+- **Time to expiry is a fraction of a 365-day year, to the millisecond.** A date-based day count gives a contract expiring today no time at all.
+- **Dividends are cash amounts on dates, given explicitly, and held in escrow:** the tree is built on the price less the present value of the dividends still to go ex, and a node is exercised at that plus the dividends not yet paid. There is no dividend yield, and no default of none: a caller pricing a stock that pays nothing says so.
+- **With dividends the tree is proven only to its own discretization error. This is an accepted divergence from the strict tolerance.** No pinned engine builds this tree with cash dividends, so there is nothing to match to 1e-9. Against QuantLib's finite-difference engine under the same escrowed model, itself good to about 5e-5, the tree is within 5.9e-4 in price and 7.2e-5 in delta at 2,001 steps (fixture `AM-002`, held to 1e-3 and 2e-4). An implied volatility solved from that engine's prices is within 3.0e-4 of its volatility inside one standard deviation of the money.
+- **The other cash-dividend model would move the answer more than the step count does.** QuantLib's "spot" model changes the same cases by up to 8e-2 in price and 3e-3 in delta. Escrowed is the choice; it is the one the tree can carry.
+- **The default is 401 steps.** Against the same second engine that costs up to 3.2e-3 in price and 4.2e-4 in delta, with or without a dividend; the test holds it to half a cent and a thousandth of delta. A delta rule's own tolerance is 0.05.
+- **A solve with no answer says why and carries no number.** The reasons are kept apart: under a minute to expiry; a price under what exercising now pays; a price no higher than the model's at the lowest volatility tried, which includes an option priced at exactly its exercise value, whichever way its cents round; a price above the model's at the highest; no convergence, which is also the answer when the tree resolves the strike at no volatility it tries (a strike far from the price within a couple of minutes of expiry); an input the model has no meaning for. A vendor's implied volatility or Greeks are never put in a failure's place (ADR 0071 Decision 1, which this extends from the Polygon recorder to any quote a bot prices).
+- **A strike dozens of standard deviations from the price is not priced.** The tree's branch sizes are rounding error there. It answers nothing, never a guess.
+
 ### 7. A structure is checked after its contracts are picked
 
 A plan's legs are rules, and independent rules can land on a shape nobody meant. A bounded loss does not prove the result is the structure the owner named. So the picked contracts are checked before an order is built from them, and wherever a plan is previewed.
@@ -87,7 +100,7 @@ A plan's legs are rules, and independent rules can land on a shape nobody meant.
 
 ## Where it lives
 
-`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
+`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-003` pin the American price, delta and implied volatility against QuantLib.
 
 Nothing on the money path calls these yet.
 
@@ -95,4 +108,6 @@ Nothing on the money path calls these yet.
 
 - **Ask Alpaca what an order costs.** Its references describe no such call. The account does report an option buying power, which Deploy is to read as a second check, but that is an account-wide figure and not the cost of one order.
 - **Use the loss at expiry as the amount to set aside.** Rejected: Alpaca holds the requirement, not the loss, and the loss is not estimated at all when expiries are mixed. Keeping both lets the bot compare its own figure with Alpaca's.
+- **Keep Black-Scholes and call it close enough.** Rejected: it gives a deep put less than exercising it pays, and it cannot see why a call is exercised the day before a dividend. The PRD allows an approximation only with its measured cost; the tree is the model itself, and its measured cost is the step count's.
+- **Take delta from IBKR.** Rejected by the owner's rule that a number picking a contract must be one this repo can check. IBKR's delta is to be recorded beside ours, and blocks nothing.
 - **Check the payoff only at the strikes.** Rejected: it reports zero for one bought 450 put against two sold 440 puts, whose payoff is above zero at both strikes and falls to minus $430 a share at a price of zero.
