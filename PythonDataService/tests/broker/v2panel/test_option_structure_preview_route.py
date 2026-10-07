@@ -406,8 +406,9 @@ async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     as_sent = (
         '{"preview_key": "page-0001", "underlying": "SPY", "legs": [{"leg_id": "only", "position": "long", '
-        '"qty_ratio": 1, "right": "call", "strike": {"selector": "delta", "target": %s}, '
-        '"expiry": {"selector": "nearest_weekly"}}]}' % no_number
+        '"qty_ratio": 1, "right": "call", "strike": {"selector": "delta", "target": '
+        + no_number
+        + '}, "expiry": {"selector": "nearest_weekly"}}]}'
     )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
