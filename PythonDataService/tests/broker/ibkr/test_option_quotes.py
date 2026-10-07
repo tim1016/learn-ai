@@ -392,7 +392,7 @@ async def test_a_line_with_no_callback_yet_holds_no_quote(monkeypatch: pytest.Mo
 
     assert set(chain.watched) == _symbols(583, 584, 585, 586, 587)
     assert all(watched.quote is None for watched in chain.watched.values())
-    assert chain.expiries == scenes._EXPIRIES
+    assert chain.expiry_dates == scenes._EXPIRIES
 
 
 # ---- Which contracts hold a line ----------------------------------------------
@@ -899,12 +899,20 @@ async def test_a_fault_on_the_option_side_does_not_stop_the_stock_quotes(monkeyp
     status, lines, ibkr, _ = _watching(monkeypatch, _bot())
     await _settle(status)
     ibkr.tick("SPY", bid=585.10, ask=585.12)
-    monkeypatch.setattr(lines, "reconcile", Mock(side_effect=RuntimeError("an option-side bug")))
+    reconcile = lines.reconcile
+    monkeypatch.setattr(lines, "reconcile", Mock(side_effect=[RuntimeError("an option-side bug")]))
 
     snapshot = await status()
+    while_faulty = status.option_feed()
+    monkeypatch.setattr(lines, "reconcile", reconcile)
+    await status()
 
     assert snapshot.connected
     assert [quote.symbol for quote in snapshot.quotes] == ["SPY"]
+    # The lines may be part way between what was wanted and what is, so no decision is made on them until a
+    # whole pass has gone through.
+    assert while_faulty.unhealthy is not None
+    assert status.option_feed().unhealthy is None
 
 
 async def test_when_what_is_wanted_cannot_be_read_the_last_answer_stands_and_the_stock_quotes_go_on(
@@ -1209,9 +1217,28 @@ async def test_a_held_contract_only_the_new_days_listing_has_gets_its_line_when_
     ibkr.keep_alive()
     await _settle(status)
 
-    assert list(off_yesterdays) == [_call(611).occ_symbol]
+    # Yesterday's listing cannot say what was listed overnight, so the contract is not called unlisted.
+    assert off_yesterdays == {_call(611).occ_symbol: NoLine.LISTING_NOT_READ}
     assert _call(611).occ_symbol in ibkr.open_option_lines()
     assert dict(lines.line_use().without) == {}
+
+
+async def test_a_line_is_still_opened_from_yesterdays_listing_while_todays_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Yesterday's listing stays in service through the night's failed reads: a window that moves still gets
+    its lines, for the contracts that listing has."""
+    status, _, ibkr, wanted = _watching(monkeypatch, _bot())
+    await _settle(status)
+    ibkr.keep_alive()
+
+    ibkr.now = scenes._at(scenes._WEDNESDAY, 0, 0, 1)
+    ibkr.client.ib.reqContractDetailsAsync.side_effect = TimeoutError("the nightly reset")
+    wanted[0] = _bot(money=Decimal("590.00"))
+    ibkr.keep_alive()
+    await _settle(status, passes=2)
+
+    assert ibkr.open_option_lines() == _symbols(588, 589, 590, 591, 592)
 
 
 async def test_only_the_expiries_a_plan_comes_to_have_their_contracts_read(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1221,7 +1248,7 @@ async def test_only_the_expiries_a_plan_comes_to_have_their_contracts_read(monke
     chain = lines.chain("SPY")
 
     assert {listing.contract.expiry_date for listing in chain.listings} == {FRIDAY}
-    assert chain.expiries == scenes._EXPIRIES
+    assert chain.expiry_dates == scenes._EXPIRIES
     assert ibkr.client.ib.reqContractDetailsAsync.await_count == 1
     assert ibkr.client.ib.reqSecDefOptParamsAsync.await_count == 1
 

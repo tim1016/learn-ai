@@ -60,6 +60,8 @@ class IbkrMarketStatusSource:
         self._symbols, self._client, self._clock = symbols, client, clock
         # The option side of this supervisor (ADR 0076). None: this Clerk watches no option contract.
         self._options = options
+        # A step of the option side failed, and no whole pass has gone through since.
+        self._option_fault = self._option_fault_this_pass = False
         self._publish_snapshot = publish
         self._halt_path = halt_path
         self._halted = self._load_halts()
@@ -170,6 +172,7 @@ class IbkrMarketStatusSource:
 
     async def __call__(self) -> MarketStatusSnapshot:
         await self._flush_halts()
+        self._option_fault_this_pass = False
         requested = self._symbols()
         symbols = await requested if isawaitable(requested) else requested
         # An option contract is watched beside its underlying's own quote.
@@ -239,16 +242,19 @@ class IbkrMarketStatusSource:
                 self._subscriptions[symbol] = subscription
                 self._pending[symbol] = asyncio.create_task(self._subscribe(subscription, client, generation))
         self._option_side(lambda lines: lines.reconcile(client, now, self._underlying_mid))
+        if not self._option_fault_this_pass:
+            self._option_fault = False
         return self._snapshot(self._clock(), connected=self._connected())
 
     def _option_side(self, step: Callable[[OptionQuoteLines], Any], otherwise: Any = None) -> Any:
         """Run one step of the option lines, when this Clerk has them. A fault there is logged and never
-        takes the stock quotes down with it."""
+        takes the stock quotes down with it; the option feed reads unhealthy until a whole pass goes through."""
         if self._options is None:
             return otherwise
         try:
             return step(self._options)
         except Exception:
+            self._option_fault = self._option_fault_this_pass = True
             logger.exception("The option quote lines failed a step", extra={"action": "option_lines_step_failed"})
             return otherwise
 
@@ -267,10 +273,13 @@ class IbkrMarketStatusSource:
             return None
         from app.options.resolver import FeedState
 
-        return FeedState(
-            generation=self._options.generation,
-            unhealthy=None if self._connected() else "the IBKR market-data connection is not up",
-        )
+        unhealthy = None
+        if not self._connected():
+            unhealthy = "the IBKR market-data connection is not up"
+        elif self._option_fault:
+            # The lines may be part way between what was wanted and what is: no decision is made on them.
+            unhealthy = "the option quote lines failed a step and have not completed a pass since"
+        return FeedState(generation=self._options.generation, unhealthy=unhealthy)
 
     def _underlying_mid(self, symbol: str) -> Decimal | None:
         """Where a window is centred when no bar close is given: the mid of a quote a decision could use."""
