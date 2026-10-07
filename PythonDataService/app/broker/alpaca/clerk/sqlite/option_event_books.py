@@ -22,7 +22,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OptionPositionEndedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_ORDER_NOT_OURS_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OptionEventHoldItem
 
 # The idempotency key of a booking starts with what was booked: an activity, or an outside order's fill.
 EVENT_KEY_PREFIX = "option-event:"
@@ -102,13 +102,39 @@ OPTION_EVENT_HOLD_ACKNOWLEDGED = "OPTION_EVENT_HOLD_ACKNOWLEDGED"
 ACK_ITEM_REF_PREFIX = "item:"
 
 
-def hold_item_ack_ref(strategy_instance_id: str | None, reason_code: str, item_ref: str) -> str:
-    """The reference an acknowledgement carries for one thing one hold named."""
-    return f"{ACK_ITEM_REF_PREFIX}{strategy_instance_id or '-'}:{reason_code}:{item_ref}"
+@dataclass(frozen=True, slots=True)
+class AcknowledgedFinding:
+    """One thing one hold named, as the owner acknowledged it: whose hold, which reason, which thing, and what was wrong.
+
+    What was wrong is part of it. An acknowledgement covers what the owner
+    looked at. A later and different fault under the same reference is
+    something they have not seen, and it is held for again.
+    """
+
+    strategy_instance_id: str | None
+    reason_code: str
+    item_ref: str
+    # A digest of the hold's own words for what was wrong with the thing.
+    what_was_wrong: str
+
+    @classmethod
+    def of(cls, strategy_instance_id: str | None, reason_code: str, item: OptionEventHoldItem) -> AcknowledgedFinding:
+        return cls(
+            strategy_instance_id=strategy_instance_id, reason_code=reason_code, item_ref=item.ref,
+            what_was_wrong=hashlib.sha256(item.detail.encode()).hexdigest()[:16],
+        )
+
+    @property
+    def evidence_ref(self) -> str:
+        """The reference the acknowledgement's record carries for it, and the one a later read asks for."""
+        return (
+            f"{ACK_ITEM_REF_PREFIX}{self.strategy_instance_id or '-'}:{self.reason_code}:"
+            f"{self.what_was_wrong}:{self.item_ref}"
+        )
 
 
-def acknowledged_hold_items(conn: sqlite3.Connection) -> frozenset[str]:
-    """Every (bot, reason, thing) the owner has acknowledged, as the references the acknowledgements carry."""
+def acknowledged_findings(conn: sqlite3.Connection) -> frozenset[str]:
+    """Every finding the owner has acknowledged, as the references the acknowledgements carry."""
     rows = conn.execute(
         "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RESOLVED' AND summary_code = ?",
         (OPTION_EVENT_HOLD_ACKNOWLEDGED,),
@@ -179,6 +205,18 @@ class UnsettledOutsideOrder:
             return f"{named} is {(order.broker_state or '').lower() or 'in a state the broker did not give'}."
         return f"{named} filled {self.filled}."
 
+    @property
+    def released_by_review(self) -> bool:
+        """Whether the owner's review of the order lets the bot's own orders go on beside it.
+
+        Only while the order has filled nothing. The owner looked at an
+        order that was working; what it fills afterwards they have not seen.
+        So a fill not yet booked always stands in the way, and one that
+        cannot be booked is always held for by name. An order that does not
+        state what it filled may have filled, and is not released either.
+        """
+        return self.order.acknowledged_at_ms is not None and self.filled == 0
+
 
 def unsettled_outside_order(conn: sqlite3.Connection, order: ExternalOrderResource) -> UnsettledOutsideOrder | None:
     """What one outside order still asks of the books, or None when it asks nothing.
@@ -203,27 +241,18 @@ def unsettled_outside_order(conn: sqlite3.Connection, order: ExternalOrderResour
     return UnsettledOutsideOrder(order=order, filled=filled, ended=ended, against=against)
 
 
-def outside_order_reviewed(
-    conn: sqlite3.Connection, strategy_instance_id: str, order: ExternalOrderResource
-) -> bool:
-    """Whether the owner has looked at an outside order: reviewed the order itself, or acknowledged this bot's hold for it."""
-    if order.acknowledged_at_ms is not None:
-        return True
-    return hold_item_ack_ref(
-        strategy_instance_id, OPTION_ORDER_NOT_OURS_REASON_CODE, outside_order_hold_ref(order.broker_order_id)
-    ) in acknowledged_hold_items(conn)
-
-
 def outside_order_in_the_way(
     conn: sqlite3.Connection, *, strategy_instance_id: str, symbol: str | None = None
 ) -> UnsettledOutsideOrder | None:
-    """The oldest unsettled outside order that stands against one bot and that the owner has not reviewed.
+    """The oldest unsettled outside order that stands against one bot and that the owner's review has not released.
 
     The fact every check of a bot's own order reads (ADR 0076 decision 22).
     While it is not None, an order of the bot to close ``symbol`` would be a
     second order on contracts the outside order may sell, or has sold and
     the books have not yet counted. ``symbol`` names one contract; without
-    it every contract the bot holds is asked about.
+    it every contract the bot holds is asked about. The owner's review of
+    the order releases it only while it has filled nothing
+    (``UnsettledOutsideOrder.released_by_review``).
 
     Read from the books alone, from the record the observation's own
     transition wrote, so it is true from that transition on and needs no
@@ -246,7 +275,7 @@ def outside_order_in_the_way(
             if (
                 unsettled is not None
                 and strategy_instance_id in unsettled.against
-                and not outside_order_reviewed(conn, strategy_instance_id, order)
+                and not unsettled.released_by_review
             ):
                 return unsettled
     return None

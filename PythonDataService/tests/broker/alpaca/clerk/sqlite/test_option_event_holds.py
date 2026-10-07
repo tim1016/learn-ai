@@ -480,6 +480,30 @@ async def test_an_acknowledged_row_is_not_held_for_again_and_a_new_row_is(tmp_pa
         repo.close()
 
 
+async def test_an_acknowledgement_covers_what_was_wrong_then_and_a_new_fault_in_the_same_row_is_raised(
+    tmp_path: Path,
+) -> None:
+    """The owner looked at a row that read half a contract. The same id now reads as a corporate action.
+
+    That is something they have not seen. It is held for again.
+    """
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(qty="-0.5"))
+        [first] = _cause(repo, "bot-a", "OPTION_EVENT_UNREADABLE")
+        assert acknowledge_option_event_hold(
+            repo, strategy_instance_id="bot-a", reason_code="OPTION_EVENT_UNREADABLE", operator="owner"
+        )
+
+        await _read(repo, account, _expiry(activity_type="OPCA"))
+
+        [again] = _cause(repo, "bot-a", "OPTION_EVENT_UNREADABLE")
+        assert again["ref"] == first["ref"] and again["detail"] != first["detail"]
+    finally:
+        repo.close()
+
+
 async def test_a_hold_that_ends_only_by_proof_cannot_be_acknowledged_away(tmp_path: Path) -> None:
     repo = _one_bot(tmp_path)
     account = _FakeReadPort()

@@ -500,20 +500,116 @@ def test_an_order_the_owner_has_reviewed_holds_nothing_back_and_its_fill_is_stil
         repo.close()
 
 
-def test_acknowledging_the_bots_hold_for_the_order_lets_its_own_close_go_on(tmp_path: Path) -> None:
+def _reviewed_while_working(repo: ClerkSqliteRepository, order_id: str, **order: Any) -> None:
+    """An outside order is seen working, and the owner marks it reviewed with the button Activity has."""
+    observe_external_order(repo, order=_outside(order_id, status="new", **order))
+    book_option_events(repo, None)
+    [seen] = repo.external_order_resources()
+    acknowledge_external_order(repo, external_order_id=seen.external_order_id, operator="owner")
+    book_option_events(repo, None)
+    assert option_holds(repo) == {}
+
+
+def test_a_reviewed_order_that_then_fills_stands_in_the_way_again_until_its_fill_is_booked(tmp_path: Path) -> None:
+    """The review released an order that had filled nothing. It then sold the bot's one contract.
+
+    Until that sale is booked the books still say the bot holds one, and an
+    order of the bot's own would sell a contract already sold.
+    """
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    try:
+        _reviewed_while_working(repo, "by-hand-1")
+        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+
+        observe_external_order(repo, order=_outside("by-hand-1", status="filled", filled=1, price=0.40))
+
+        assert held(repo, "bot-a") == {CALL: 1.0}
+        assert _sale_refused_for(repo, "bot-a", CALL, 1) == "OPTION_ORDER_NOT_OURS"
+
+        book_option_events(repo, None)
+        assert held(repo, "bot-a") == {} and option_holds(repo) == {}
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("then", "why"),
+    [
+        pytest.param({"status": "filled", "quantity": 2, "filled": 2, "price": 0.40}, "more than", id="it sold more than the bot holds"),
+        pytest.param({"status": "filled", "filled": 1, "price": None}, "no price", id="it states no price"),
+        pytest.param(
+            {"status": "partially_filled", "quantity": 2, "filled": 1, "price": 0.40}, "partially_filled",
+            id="it filled in part and still works",
+        ),
+    ],
+)
+def test_a_reviewed_orders_fill_that_cannot_be_booked_is_held_for_by_name_and_no_order_of_the_bots_is_sent(
+    tmp_path: Path, then: dict[str, Any], why: str
+) -> None:
+    """The owner looked at an order that had filled nothing. What it filled afterwards they have not seen.
+
+    A fill the books cannot count is never silent: the bot is held, the
+    hold names the order and says why, and the bot's own sale waits.
+    """
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    try:
+        _reviewed_while_working(repo, "by-hand-1", quantity=then.get("quantity", 1))
+
+        observe_external_order(repo, order=_outside("by-hand-1", **then))
+        done = book_option_events(repo, None)
+
+        assert done.booked == () and held(repo, "bot-a") == {CALL: 1.0}
+        [named] = json.loads(option_holds(repo)[("bot-a", "OPTION_ORDER_NOT_OURS")]["facts_json"])["cause_facts"]["items"]
+        assert named["ref"] == "outside-order:by-hand-1" and why in named["detail"]
+        assert _sale_refused_for(repo, "bot-a", CALL, 1) == "OPTION_ORDER_NOT_OURS"
+    finally:
+        repo.close()
+
+
+async def test_an_event_beside_an_order_that_does_not_state_its_fill_is_not_booked_and_the_bot_is_told_which_order(
+    tmp_path: Path,
+) -> None:
+    """Whose lot the expiry took is not known while an outside order in the contract may have sold one.
+
+    The expiry is not booked. That is never silent: the bot is held for the
+    order by name, though the owner reviewed it while it had filled nothing.
+    """
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    account = _FakeReadPort()
+    account.option_events.rows = [documented_option_activity("trading_api", "otm_option_expiry", id="exp-1", qty="-1")]
+    try:
+        _reviewed_while_working(repo, "by-hand-1")
+        observe_external_order(repo, order=_outside("by-hand-1", status="partially_filled", filled=0.5, price=0.40))
+
+        polled = await poll_option_events(repo, read=account, off_loop=run_inline)
+
+        assert polled.round is not None and polled.round.booked == () and held(repo, "bot-a") == {CALL: 1.0}
+        [named] = json.loads(option_holds(repo)[("bot-a", "OPTION_ORDER_NOT_OURS")]["facts_json"])["cause_facts"]["items"]
+        assert named["ref"] == "outside-order:by-hand-1" and "does not state what it filled" in named["detail"]
+    finally:
+        repo.close()
+
+
+def test_the_bots_hold_for_an_outside_order_is_not_acknowledged_away_and_the_orders_own_review_is_its_release(
+    tmp_path: Path,
+) -> None:
+    """One release, in one place: the review of the order itself. The hold is never ended over its head."""
     repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
     holds_option(repo, "bot-a", CALL, contracts=1)
     try:
         observe_external_order(repo, order=_outside("by-hand-1", status="new"))
         book_option_events(repo, None)
 
-        assert option_events.acknowledge_option_event_hold(
-            repo, strategy_instance_id="bot-a", reason_code="OPTION_ORDER_NOT_OURS", operator="owner"
-        )
+        with pytest.raises(ValueError, match="review"):
+            option_events.acknowledge_option_event_hold(
+                repo, strategy_instance_id="bot-a", reason_code="OPTION_ORDER_NOT_OURS", operator="owner"
+            )
 
-        assert _bot_may_sell(repo, "bot-a", CALL, 1)
-        book_option_events(repo, None)
-        assert option_holds(repo) == {}
+        assert ("bot-a", "OPTION_ORDER_NOT_OURS") in option_holds(repo)
+        assert not _bot_may_sell(repo, "bot-a", CALL, 1)
     finally:
         repo.close()
 

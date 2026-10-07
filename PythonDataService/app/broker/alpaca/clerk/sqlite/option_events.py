@@ -63,7 +63,9 @@ filled and not yet booked) no order of the bot's own to reduce that contract
 is sent: it would be a second order on the same contracts. That is asked of
 the books' record of the order where every reduction is admitted
 (``uncertainty.decide_capability``), not of a hold. The owner's review of
-the order releases it.
+the order releases it only while it has filled nothing. A fill not yet
+booked stands in the way again, and a fill that cannot be booked is held
+for by name, whatever was reviewed before it.
 
 **A row read after the owner wrote its position off** closes nothing: the
 write-off closed no lot and the bot is offered none. An expiry's row then
@@ -114,24 +116,21 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyResolvedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.models import (
-    CommandExistingConflict,
-    ExternalOrderResource,
-    TransitionInput,
-)
+from app.broker.alpaca.clerk.sqlite.models import CommandExistingConflict, TransitionInput
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
 from app.broker.alpaca.clerk.sqlite.option_event_books import (
     EVENT_KEY_PREFIX,
     OPTION_EVENT_HOLD_ACKNOWLEDGED,
     OUTSIDE_ORDER_BROKER,
     SALE_KEY_PREFIX,
+    AcknowledgedFinding,
     OutsideFillUnknown,
-    acknowledged_hold_items,
+    UnsettledOutsideOrder,
+    acknowledged_findings,
     booking_key,
     bookings,
     books_record_no_contract,
     held_option_positions,
-    hold_item_ack_ref,
     outside_fill,
     outside_order_hold_ref,
     outside_order_reduces_a_bots_contract,
@@ -241,8 +240,15 @@ _READ_HOLDS = tuple(
     for code in OPTION_EVENT_HOLD_REASON_CODES
     if code not in (OPTION_EVENTS_NOT_READ_REASON_CODE, OPTION_SHARES_HELD_REASON_CODE, OPTION_ORDER_NOT_OURS_REASON_CODE)
 )
-# What the owner may acknowledge. The other holds end only by proof: a whole read, or a flat position.
-_ACKNOWLEDGEABLE = frozenset(_READ_HOLDS) | {OPTION_ORDER_NOT_OURS_REASON_CODE}
+# What the owner may acknowledge. The other holds end only by proof: a whole read, a flat position, or,
+# for an order the Clerk did not place, that order's end or the owner's review of the order itself.
+_ACKNOWLEDGEABLE = frozenset(_READ_HOLDS)
+_NOT_ACKNOWLEDGED_BECAUSE: dict[str, str] = {
+    OPTION_ORDER_NOT_OURS_REASON_CODE: (
+        "ends when the order has ended and what it filled is booked, or by the review of the order itself "
+        "while it has filled nothing; it is not acknowledged away"
+    ),
+}
 
 # What each hold says. The reason code names it; these are the owner's words for it.
 _HOLD_COPY: dict[str, tuple[str, str]] = {
@@ -333,7 +339,8 @@ _NEXT_STEPS: dict[str, str] = {
     OPTION_SHARES_HELD_REASON_CODE: "Stop the bot and flatten it to close the shares.",
     OPTION_ORDER_NOT_OURS_REASON_CODE: (
         "Nothing to do while the order works: once it has ended, what it filled is booked against this bot. "
-        "If the order is your own, cancel it at the broker, or mark it reviewed and the bot's own orders go on."
+        "If the order is your own, cancel it at the broker. Or mark it reviewed: the bot's own orders then go on "
+        "while it has filled nothing. Anything it fills is held for again until it is booked."
     ),
     OPTION_EVENTS_NOT_READ_REASON_CODE: "Nothing to do: the Clerk reads them once more within a minute.",
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
@@ -353,8 +360,8 @@ _SIMULATED_NEXT_STEPS: dict[str, str] = {
 _OPERATOR_IMPACTS: dict[str, str] = {
     OPTION_ORDER_NOT_OURS_REASON_CODE: (
         "This bot takes no new entries, and no order of its own to close that contract is sent until the order "
-        "is settled or reviewed: it would be a second order on the same contracts. Its other reductions stay "
-        "available."
+        "is settled, or reviewed while it has filled nothing: it would be a second order on the same contracts. "
+        "Its other reductions stay available."
     ),
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: "This bot takes no new entries. No order can close an expired contract.",
 }
@@ -679,7 +686,9 @@ def acknowledge_option_event_hold(
     Whether a hold was open to acknowledge is the answer.
     """
     if reason_code not in _ACKNOWLEDGEABLE:
-        raise ValueError(f"{reason_code!r} ends by proof, not by acknowledgement")
+        raise ValueError(
+            f"{reason_code!r} {_NOT_ACKNOWLEDGED_BECAUSE.get(reason_code, 'ends by proof, not by acknowledgement')}"
+        )
     if not operator.strip():
         raise ValueError("an acknowledgement names who made it")
     with repo.write_fence() as conn:
@@ -695,7 +704,7 @@ def acknowledge_option_event_hold(
             summary_code=OPTION_EVENT_HOLD_ACKNOWLEDGED,
             evidence_refs=(
                 f"{_ACK_OPERATOR_REF_PREFIX}{operator.strip()}",
-                *(hold_item_ack_ref(strategy_instance_id, reason_code, item.ref) for item in cause.items),
+                *(AcknowledgedFinding.of(strategy_instance_id, reason_code, item).evidence_ref for item in cause.items),
             ),
         )
 
@@ -704,12 +713,15 @@ def _sync_holds(
     repo: ClerkSqliteRepository, conn: sqlite3.Connection, holds: _Holds, *, codes: Sequence[str], may_end: bool
 ) -> list[tuple[str | None, str]]:
     """Raise each hold found, and end each open one of ``codes`` that was not, when this run may."""
-    acknowledged = acknowledged_hold_items(conn)
+    acknowledged = acknowledged_findings(conn)
     wanted: dict[tuple[str | None, str], list[OptionEventHoldItem]] = {}
     for (sid, reason_code), items in holds.items().items():
         if reason_code not in codes:
             continue
-        standing = [item for item in items if hold_item_ack_ref(sid, reason_code, item.ref) not in acknowledged]
+        # An acknowledgement covers a thing and what was wrong with it then, and nothing found since.
+        standing = [
+            item for item in items if AcknowledgedFinding.of(sid, reason_code, item).evidence_ref not in acknowledged
+        ]
         if standing:
             wanted[(sid, reason_code)] = standing
     for hold in _active_holds(conn):
@@ -1072,9 +1084,17 @@ def _book_events(
             terms = contract_terms(conn, symbol)
             try:
                 outside = _outside_lot(conn, contract)
-            except OutsideFillUnknown:
+            except OutsideFillUnknown as unknown:
                 # Whose lot the event took is not known while an outside order in the contract does not
-                # state what it filled. The bots holding it are held for that order by name.
+                # state what it filled. The bots holding it are held for that order by name, whatever
+                # the owner reviewed (``_book_outside_orders``).
+                logger.warning(
+                    "an option event is not booked while an outside order in its contract does not state what it filled",
+                    extra={
+                        "action": "option_event_waits_for_an_outside_fill", "account_id": account_id,
+                        "symbol": symbol, "activity_id": event.activity_id, "broker_order_id": str(unknown),
+                    },
+                )
                 continue
             if outside is not None:
                 left = outside_left.setdefault(symbol, outside.quantity)
@@ -1382,12 +1402,15 @@ def _book_outside_orders(
         reduces = _BOUGHT if order.side == "SELL" else _SOLD
 
         def hold(
-            detail: str, *, _order: ExternalOrderResource = order, _ref: str = ref, _symbol: str = symbol,
-            _bots: Sequence[str] = unsettled.against,
+            detail: str, *, _unsettled: UnsettledOutsideOrder = unsettled, _ref: str = ref, _symbol: str = symbol,
         ) -> None:
-            # An order the owner has reviewed is held for no more. What it filled is still booked.
-            if _order.acknowledged_at_ms is None:
-                holds.add(OPTION_ORDER_NOT_OURS_REASON_CODE, _bots, ref=_ref, symbol=_symbol, date_ms=None, detail=detail)
+            # The owner's review releases an order that has filled nothing, and nothing else: a
+            # fill that is not booked is held for by name whatever was reviewed before it.
+            if not _unsettled.released_by_review:
+                holds.add(
+                    OPTION_ORDER_NOT_OURS_REASON_CODE, _unsettled.against, ref=_ref, symbol=_symbol, date_ms=None,
+                    detail=detail,
+                )
 
         if unsettled.filled is None or not unsettled.ended:
             hold(unsettled.sentence)

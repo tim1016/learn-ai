@@ -1222,9 +1222,12 @@ def _outside_option_order_in_the_way(
         found = outside_order_in_the_way(conn, strategy_instance_id=strategy_instance_id, symbol=intent.symbol)
     if found is None:
         return None
+    until = (
+        "it is settled or reviewed" if found.filled == 0 else "what it filled is booked against this bot"
+    )
     return (
         f"{found.sentence} The Clerk did not place it, and it is in a contract this bot holds. No order of the "
-        "bot's own in that contract is sent until it is settled or reviewed."
+        f"bot's own in that contract is sent until {until}."
     )
 
 
