@@ -3,26 +3,39 @@
 A Dry Run has no option market of its own. What it knows of a contract's
 price is the quotes kept for it (``kept_option_quotes``): a close is priced
 from the newest, and an open contract is marked from the last one handed
-over. A runner hands over the quotes of its own two decisions, the entry's
-and the exit's. Everything between and after them is this module's.
+over. A runner's own two decisions reach the file with their orders: the
+entry's quote as its order is sent, the exit's as its close is priced.
+Every other hand-over is made here, and this is the one place a quote is
+stated to be the newest held for a contract.
 
 **What is held is read from the Clerk's books**, never from a runner: a
 position in a recorded contract, or an order working in one
 (``reads.option_contracts_to_watch``). Each Dry Run's Clerk is followed while
-it is composed, and its books are read on every pass of the IBKR supervisor.
+it is composed.
 
 **What is held is asked for** as the supervisor's first class of quote line
 (``requests``), so a held contract keeps its line when the runner that bought
 it is gone.
 
-**What is held is kept**: every ``KEEP_EVERY_MS`` the newest quote the
-supervisor holds for it is appended to its account's kept quotes, when that
-quote is one a decision could use (``app.options.quotes.quote_fault``, with
-the decision-data age limit, on a healthy feed). A hand-over says "this is
-the newest held", and a mark is judged by the hand-over's own time, so a
-quote that is delayed, from before a reconnect, one-sided or gone quiet is
-not handed over: restating it would pass a dead line off as a fresh mark. A
-bid of zero is handed over, because it is the truth: nothing is bid.
+**What is held is marked.** A mark is the newest whole quote the contract's
+line holds, restated every ``KEEP_EVERY_MS`` while the session is open
+(``mark_fault``). It is kept when the feed is healthy and the quote is live
+data, of the feed's current generation, both sides arrived, not crossed, and
+both sides were received since today's session opened. Its age is not
+tested. A calm contract's sides tick only when they change, so its bid can
+stand for many minutes and is still what the contract could be sold for:
+each hand-over says so again, and the next day finds its mark at the close.
+The row keeps both sides' own receipt times, so whatever prices a close from
+it knows the quote's true age and says so
+(``natural_price_older_quote``). A quote a **decision** uses is held to the
+decision-data age all the same: that test is the runner's and the Clerk's,
+at the entry and at the exit, and is not this module's.
+
+What is never a mark: a quote from before a reconnect or a data loss (the
+feed's generation moves, and each side waits for a tick of its own), delayed
+or frozen data, a quote with one side, a crossed one, and one a side of
+which was last received before today's session. Outside the session nothing
+is restated. A bid of zero is kept, because it is the truth: nothing is bid.
 
 **It outlives the Clerk's runtime.** A Dry Run's runtime is closed when its
 run ends. The books give their last word as it closes, and this goes on
@@ -34,25 +47,34 @@ find a recent quote kept, and the next session finds its mark at the close.
 A contract past its last session is neither asked for nor kept: nothing
 trades in it.
 
-Nothing here opens a connection or keeps a timer. The supervisor's own pass
-drives it (``app.broker.alpaca.market_liveness``), and a fault here is logged
-and never takes the stock quotes down with it.
+**The stock quotes never wait on this.** The supervisor's pass starts a
+round here and goes on (``drive``); it does not wait for the books to be
+read or for a file to be written. A round reads the books and keeps the
+quotes off the event loop, waits for each no longer than ``STEP_BUDGET_MS``,
+and goes on without what is late. One round runs at a time, and work a round
+gave up waiting for is left to finish with no second one started beside it.
+A fault here is logged once as it starts, again every ``FAULT_REPEAT_MS``
+while it lasts and once as it ends, and never reaches the stock evidence. A
+process with no Dry Run account open starts nothing.
+
+Nothing here opens a connection or keeps a timer of its own.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
+from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.options.contract import OptionContract
 from app.options.deadlines import past_last_session
-from app.options.quotes import HeldQuote, quote_fault
-from app.services.market_liveness import QUOTE_MAX_AGE_MS
+from app.options.quotes import NOT_YET_ARRIVED, HeldQuote, QuoteFault, quote_fault
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
@@ -60,19 +82,92 @@ if TYPE_CHECKING:
     # contract never loads them.
     from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
     from app.broker.ibkr.option_quotes import WatchRequest
-    from app.options.resolver import FeedState
 
 logger = logging.getLogger(__name__)
 
-# How often the newest usable quote of a held contract is handed over. A mark is good for 80 seconds
+# How often the newest whole quote of a held contract is handed over. A mark is good for 80 seconds
 # from its hand-over, so several fall inside the last 80 seconds before a session's close.
 KEEP_EVERY_MS = 15_000
-# The oldest either side of a quote may be when it is handed over: what the Clerk holds an entry's
-# own quote to.
-HELD_QUOTE_MAX_AGE_MS = QUOTE_MAX_AGE_MS
+# How long a round waits for one piece of its work off the event loop: the read of the books, or one
+# account's file write.
+STEP_BUDGET_MS = 2_000
+# How often a fault that lasts is said again.
+FAULT_REPEAT_MS = 5 * 60_000
 
 # What an account's books answer: the OCC symbols of the contracts it must have quoted.
 Books = Callable[[], Sequence[str]]
+
+
+def mark_fault(quote: HeldQuote, *, generation: int, session_open_ms: int, now_ms: int) -> QuoteFault | None:
+    """Why ``quote`` is not kept as a held contract's mark at ``now_ms``, or ``None`` when it is.
+
+    Every test a decision's quote passes but its age (``quote_fault``): the
+    feed's current generation, both sides, live data, prices, not crossed.
+    In place of the age, both sides were received in the session that opened
+    at ``session_open_ms``, and neither after ``now_ms``. One that was not
+    fails as ``STALE``: it is yesterday's.
+    """
+    return quote_fault(
+        quote, at_ms=now_ms, generation=generation, max_age_ms=now_ms - session_open_ms, needs_a_bid=False
+    )
+
+
+# Why a quote is not yet a mark though nothing is wrong: it has not arrived whole in this generation,
+# or not since today's session opened.
+_WAITING_FOR_A_TICK = NOT_YET_ARRIVED | {QuoteFault.STALE}
+
+
+def _session_open_now(now_ms: int) -> int | None:
+    """When the session ``now_ms`` falls in opened, its close included; ``None`` outside one.
+
+    The close is in it so that the hand-over made as a session ends is that
+    session's mark: the next day's starting equity is read at the close.
+    """
+    window = current_trading_session_window(now_ms)
+    if window is None or not window.open_ms_utc <= now_ms <= window.close_ms_utc:
+        return None
+    return window.open_ms_utc
+
+
+@dataclass
+class _Fault:
+    kind: str
+    since_ms: int
+    said_ms: int
+    times: int = 1
+
+
+class _FaultLog:
+    """Says a fault that lasts once as it starts, again every so often while it lasts, and once as it ends.
+
+    A round runs every second. A disk that is full, or books that cannot be
+    read, would otherwise write the same stack every second for as long as
+    it lasted.
+    """
+
+    def __init__(self, clock: Clock, *, repeat_ms: int) -> None:
+        self._clock, self._repeat_ms = clock, repeat_ms
+        self._lasting: dict[Hashable, _Fault] = {}
+
+    def failed(
+        self, key: Hashable, message: str, *, kind: str, extra: dict[str, Any], error: BaseException | None = None
+    ) -> None:
+        now, fault = self._clock(), self._lasting.get(key)
+        if fault is None or fault.kind != kind:
+            self._lasting[key] = _Fault(kind, now, now)
+            logger.error(message, extra={**extra, "fault": kind}, exc_info=error)
+            return
+        fault.times += 1
+        if now - fault.said_ms >= self._repeat_ms:
+            fault.said_ms = now
+            logger.warning(
+                message, extra={**extra, "fault": kind, "still_failing_since_ms": fault.since_ms, "times": fault.times}
+            )
+
+    def cleared(self, key: Hashable, message: str, *, extra: dict[str, Any]) -> None:
+        fault = self._lasting.pop(key, None)
+        if fault is not None:
+            logger.info(message, extra={**extra, "fault": fault.kind, "failed_since_ms": fault.since_ms, "times": fault.times})
 
 
 @dataclass
@@ -86,6 +181,8 @@ class _Account:
     held: tuple[OptionContract, ...] = ()
     # When each held contract's quote was last handed over, by OCC symbol.
     kept_at_ms: dict[str, int] = field(default_factory=dict)
+    # The write of this account's file under way, if one is.
+    writing: asyncio.Task[int] | None = None
 
 
 class FollowedBooks:
@@ -103,6 +200,12 @@ class FollowedBooks:
         self._held._stop_following(self._account, self._books)
 
 
+def _under_way(task: asyncio.Task[Any] | None) -> bool:
+    """Whether ``task`` is still running on the event loop this is asked from. Work left on a loop that has
+    gone is nobody's any more."""
+    return task is not None and not task.done() and task.get_loop() is asyncio.get_running_loop()
+
+
 class HeldOptionQuotes:
     """Every option contract this process's Dry Run Clerks hold: asked for, and its quotes kept."""
 
@@ -111,14 +214,20 @@ class HeldOptionQuotes:
         *,
         clock: Clock = now_ms_utc,
         keep_every_ms: int = KEEP_EVERY_MS,
-        max_quote_age_ms: int = HELD_QUOTE_MAX_AGE_MS,
+        step_budget_ms: int = STEP_BUDGET_MS,
+        fault_repeat_ms: int = FAULT_REPEAT_MS,
     ) -> None:
         if keep_every_ms <= 0:
             raise ValueError(f"a held contract's quote is kept every so often; got {keep_every_ms} ms")
-        self._clock, self._keep_every_ms, self._max_quote_age_ms = clock, keep_every_ms, max_quote_age_ms
+        self._clock, self._keep_every_ms, self._step_budget_ms = clock, keep_every_ms, step_budget_ms
         self._accounts: dict[str, _Account] = {}
         # Why each held contract's quote was not handed over on the last round, so a reason is said once.
         self._not_kept: dict[tuple[str, str], str] = {}
+        # Why nothing at all could be read of the feed on the last round, said once.
+        self._feed_trouble: str | None = None
+        self._faults = _FaultLog(clock, repeat_ms=fault_repeat_ms)
+        self._round: asyncio.Task[None] | None = None
+        self._reading: asyncio.Task[None] | None = None
 
     # ---- whose books are read ---------------------------------------------------
 
@@ -149,34 +258,52 @@ class HeldOptionQuotes:
             )
 
     async def read_books(self) -> None:
-        """Read every followed Clerk's books again, off the event loop.
+        """Read every followed Clerk's books again, off the event loop, and wait for the answer.
 
         A read that fails leaves what that account held a moment ago: a held
         contract keeps its line while the asking fails.
         """
+        reading = self._read_the_books()
+        if reading is not None:
+            await reading
+
+    def _read_the_books(self) -> asyncio.Task[None] | None:
+        """The read of every open Clerk's books under way, begun now if none is. None with no books open."""
+        if _under_way(self._reading):
+            return self._reading
         open_books = [(account, account.books) for account in self._accounts.values() if account.books is not None]
         if not open_books:
-            return
+            return None
+        self._reading = asyncio.get_running_loop().create_task(self._read(open_books))
+        return self._reading
 
-        def read() -> list[tuple[_Account, Books, Sequence[str] | None]]:
-            answers: list[tuple[_Account, Books, Sequence[str] | None]] = []
+    async def _read(self, open_books: list[tuple[_Account, Books]]) -> None:
+        def read() -> list[tuple[_Account, Books, Sequence[str] | BaseException]]:
+            answers: list[tuple[_Account, Books, Sequence[str] | BaseException]] = []
             for account, books in open_books:
                 try:
                     answers.append((account, books, books()))
-                except Exception:
-                    # A Clerk that closed while its books were read has given its last word already.
-                    if account.books is books:
-                        logger.exception(
-                            "Could not read a Clerk's held option contracts",
-                            extra={"action": "held_option_books_read_failed", "account_id": account.account_id},
-                        )
-                    answers.append((account, books, None))
+                except Exception as failed:
+                    answers.append((account, books, failed))
             return answers
 
-        for account, books, symbols in await to_thread(read):
+        for account, books, answer in await to_thread(read):
             # A Clerk that closed, or was opened again, while its books were read gave a later word.
-            if symbols is not None and account.books is books:
-                self._hold(account, symbols)
+            if account.books is not books:
+                continue
+            key = ("books", account.account_id)
+            if isinstance(answer, BaseException):
+                self._faults.failed(
+                    key, "Could not read a Clerk's held option contracts; what it held a moment ago stands",
+                    kind=type(answer).__name__, error=answer,
+                    extra={"action": "held_option_books_read_failed", "account_id": account.account_id},
+                )
+                continue
+            self._faults.cleared(
+                key, "A Clerk's held option contracts are being read again",
+                extra={"action": "held_option_books_read_again", "account_id": account.account_id},
+            )
+            self._hold(account, answer)
 
     def _hold(self, account: _Account, symbols: Sequence[str]) -> None:
         account.held = tuple(OptionContract.from_occ_symbol(symbol) for symbol in sorted(set(symbols)))
@@ -211,6 +338,8 @@ class HeldOptionQuotes:
         A held contract's line is kept whatever else gives way
         (``app.options.watch.plan_lines``).
         """
+        if not any(account.held for account in self._accounts.values()):
+            return ()
         from app.broker.ibkr.option_quotes import WatchRequest
         from app.options.watch import LineClass
 
@@ -223,74 +352,203 @@ class HeldOptionQuotes:
             for underlying, held in sorted(self._still_trading(self._clock()).items())
         )
 
+    # ---- a round, beside the supervisor's pass -----------------------------------
+
+    def drive(self, source: IbkrMarketStatusSource) -> None:
+        """The supervisor has made a pass: begin a round, unless one is under way. Returns at once.
+
+        Nothing waits for the round, and nothing it does can fail the
+        caller. With no Dry Run account open and nothing held there is no
+        round to begin.
+        """
+        if _under_way(self._round) or not any(
+            account.books is not None or account.held for account in self._accounts.values()
+        ):
+            return
+        try:
+            self._round = asyncio.get_running_loop().create_task(self._one_round(source))
+        except Exception as failed:
+            self._round_failed(failed)
+
+    async def _one_round(self, source: IbkrMarketStatusSource) -> None:
+        """Read the books, then keep the quotes of what they hold. Each is waited for no longer than the
+        step budget."""
+        try:
+            reading = self._read_the_books()
+            if reading is not None:
+                await self._within_budget({reading}, key=("books", None), what="the read of the Clerks' books")
+            await self.keep(source)
+        except asyncio.CancelledError:
+            raise
+        except Exception as failed:
+            self._round_failed(failed)
+        else:
+            self._faults.cleared(
+                ("round", None), "The keeping of held option quotes is running again",
+                extra={"action": "held_option_quotes_round_again"},
+            )
+
+    def _round_failed(self, failed: BaseException) -> None:
+        self._faults.failed(
+            ("round", None), "A round of the keeping of held option quotes failed; the next pass begins another",
+            kind=type(failed).__name__, error=failed, extra={"action": "held_option_quotes_round_failed"},
+        )
+
+    async def _within_budget(self, work: set[asyncio.Task[Any]], *, key: Hashable, what: str) -> set[asyncio.Task[Any]]:
+        """Wait for ``work`` no longer than the step budget, and return what finished. What did not is left
+        to finish: it is on a worker thread, which nothing can stop."""
+        done, late = await asyncio.wait(work, timeout=self._step_budget_ms / 1000)
+        if late:
+            self._faults.failed(
+                key, f"A round of the keeping of held option quotes went on without {what}, which is late",
+                kind="late", extra={"action": "held_option_quotes_step_late", "budget_ms": self._step_budget_ms},
+            )
+        else:
+            self._faults.cleared(
+                key, f"A round of the keeping of held option quotes has {what} in time again",
+                extra={"action": "held_option_quotes_step_in_time"},
+            )
+        return done
+
+    async def settled(self) -> None:
+        """Wait until the round under way, and any work an earlier round went on without, has ended.
+
+        For a caller that must see what the last pass led to. The
+        supervisor's own pass never asks.
+        """
+        while True:
+            under_way = [
+                task
+                for task in (self._round, self._reading, *(account.writing for account in self._accounts.values()))
+                if _under_way(task)
+            ]
+            if not under_way:
+                return
+            await asyncio.wait(under_way)
+
+    async def stop(self) -> None:
+        """End the round under way, as the supervisor that drives it closes. What the books last said stands."""
+        under_way = [
+            task
+            for task in (self._round, self._reading, *(account.writing for account in self._accounts.values()))
+            if _under_way(task)
+        ]
+        for task in under_way:
+            task.cancel()
+        if under_way:
+            await asyncio.gather(*under_way, return_exceptions=True)
+
     # ---- what is kept -----------------------------------------------------------
 
     async def keep(self, source: IbkrMarketStatusSource) -> int:
-        """Hand each account the newest usable quote of every contract it holds whose last hand-over is due.
+        """Hand each account the mark of every contract it holds whose last hand-over is due.
 
-        Returns how many quotes were handed over. The file is written off the
-        event loop.
+        Returns how many quotes were handed over while this waited. Each
+        account's file is written off the event loop, and a write still
+        under way from an earlier round is not started again beside itself.
         """
         now_ms = self._clock()
         still_trading = self._still_trading(now_ms)
         if not still_trading:
             return 0
+        session_open_ms = _session_open_now(now_ms)
+        if session_open_ms is None:
+            # No session is open: nothing is restated, and a quote from the last one is no mark of the next.
+            return 0
         feed = source.option_feed()
+        trouble = (
+            "this process has no IBKR quote source for options" if feed is None
+            else None if feed.unhealthy is None
+            else f"the quote feed is not healthy: {feed.unhealthy}"
+        )
+        self._say_feed_trouble(trouble)
+        if feed is None or trouble is not None:
+            return 0
         due: dict[str, tuple[_Account, dict[str, HeldQuote]]] = {}
         for underlying, held in still_trading.items():
-            chain = None if feed is None else source.option_chain(underlying)
+            chain = source.option_chain(underlying)
             for account, contract in held:
                 symbol = contract.occ_symbol
                 last = account.kept_at_ms.get(symbol)
                 if last is not None and now_ms - last < self._keep_every_ms:
                     continue
                 watched = None if chain is None else chain.watched.get(symbol)
-                usable = self._usable(feed, None if watched is None else watched.quote, now_ms)
-                if isinstance(usable, HeldQuote):
-                    due.setdefault(account.account_id, (account, {}))[1][symbol] = usable
-                else:
-                    self._say_once(account, symbol, usable)
-        handed_over = 0
-        for account, quotes in due.values():
-            try:
-                await to_thread(partial(account.kept.keep_all, quotes, kept_at_ms=now_ms))
-            except Exception:
-                # Tried again on the next round. A mark that lapses meanwhile says so itself.
-                logger.exception(
-                    "Could not keep the quotes of held option contracts",
-                    extra={"action": "held_option_quotes_not_written", "account_id": account.account_id},
+                quote = None if watched is None else watched.quote
+                fault = None if quote is None else mark_fault(
+                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms
                 )
+                if quote is not None and fault is None:
+                    due.setdefault(account.account_id, (account, {}))[1][symbol] = quote
+                else:
+                    self._say_once(account, symbol, fault)
+        writes: set[asyncio.Task[int]] = set()
+        for account, quotes in due.values():
+            if _under_way(account.writing):
+                # Its file is still being written from an earlier round: the disk, or its lock, is slow.
                 continue
-            for symbol in quotes:
-                account.kept_at_ms[symbol] = now_ms
-                if self._not_kept.pop((account.account_id, symbol), None) is not None:
-                    logger.info(
-                        "A held option contract's quote is being kept again",
-                        extra={"action": "held_option_quote_kept_again", "account_id": account.account_id, "contract": symbol},
-                    )
-            handed_over += len(quotes)
-        return handed_over
+            account.writing = asyncio.get_running_loop().create_task(self._write(account, quotes, now_ms))
+            writes.add(account.writing)
+        if not writes:
+            return 0
+        written = await self._within_budget(writes, key=("writes", None), what="a write of kept quotes")
+        return sum(write.result() for write in written)
 
-    def _usable(self, feed: FeedState | None, quote: HeldQuote | None, now_ms: int) -> HeldQuote | str:
-        """``quote`` when it is one a decision could use at ``now_ms``, or why it is not handed over."""
-        if feed is None:
-            return "this process has no IBKR quote source for options"
-        if feed.unhealthy is not None:
-            return f"the quote feed is not healthy: {feed.unhealthy}"
-        if quote is None:
-            return "no quote is held for it"
-        fault = quote_fault(
-            quote, at_ms=now_ms, generation=feed.generation, max_age_ms=self._max_quote_age_ms, needs_a_bid=False
+    async def _write(self, account: _Account, quotes: dict[str, HeldQuote], now_ms: int) -> int:
+        """Append one account's hand-over to its file, and note when each quote was handed over."""
+        key = ("write", account.account_id)
+        try:
+            await to_thread(partial(account.kept.keep_all, quotes, kept_at_ms=now_ms))
+        except Exception as failed:
+            # Tried again on the next round. A mark that lapses meanwhile says so itself.
+            self._faults.failed(
+                key, "Could not keep the quotes of held option contracts; tried again on the next round",
+                kind=type(failed).__name__, error=failed,
+                extra={"action": "held_option_quotes_not_written", "account_id": account.account_id},
+            )
+            return 0
+        self._faults.cleared(
+            key, "The quotes of held option contracts are being kept again",
+            extra={"action": "held_option_quotes_written_again", "account_id": account.account_id},
         )
-        return quote if fault is None else f"its quote fails as {fault}"
+        for symbol in quotes:
+            # Never back: a late write of an earlier round must not undo a later one's note.
+            account.kept_at_ms[symbol] = max(now_ms, account.kept_at_ms.get(symbol, now_ms))
+            if self._not_kept.pop((account.account_id, symbol), None) is not None:
+                logger.info(
+                    "A held option contract's quote is being kept",
+                    extra={"action": "held_option_quote_kept", "account_id": account.account_id, "contract": symbol},
+                )
+        return len(quotes)
 
-    def _say_once(self, account: _Account, symbol: str, why: str) -> None:
+    def _say_feed_trouble(self, trouble: str | None) -> None:
+        """Said once for the feed, not once for each contract, and once more when it is over."""
+        if trouble == self._feed_trouble:
+            return
+        self._feed_trouble = trouble
+        if trouble is None:
+            logger.info("Held option contracts can be marked again", extra={"action": "held_option_quotes_feed_back"})
+        else:
+            logger.warning(
+                "No held option contract can be marked; each mark lapses until this is over",
+                extra={"action": "held_option_quotes_no_feed", "why": trouble},
+            )
+
+    def _say_once(self, account: _Account, symbol: str, fault: QuoteFault | None) -> None:
+        """Say why a held contract has no mark, once for each reason. A contract only waiting for its first
+        ticks of the session, or since a reconnect, has nothing wrong with it and is not a warning."""
+        waiting = fault is None or fault in _WAITING_FOR_A_TICK
+        why = (
+            "no quote has arrived on its line" if fault is None
+            else "a side has not ticked since today's session opened" if fault is QuoteFault.STALE
+            else f"its quote fails as {fault.value}"
+        )
         key = (account.account_id, symbol)
         if self._not_kept.get(key) == why:
             return
         self._not_kept[key] = why
-        logger.warning(
-            "A held option contract has no usable quote to keep; its mark lapses until one arrives",
+        logger.log(
+            logging.INFO if waiting else logging.WARNING,
+            "A held option contract has no quote to keep as its mark yet",
             extra={"action": "held_option_quote_not_kept", "account_id": account.account_id, "contract": symbol, "why": why},
         )
 
@@ -310,10 +568,12 @@ def reset_held_option_quotes_for_testing() -> None:
 
 
 __all__ = [
-    "HELD_QUOTE_MAX_AGE_MS",
+    "FAULT_REPEAT_MS",
     "KEEP_EVERY_MS",
+    "STEP_BUDGET_MS",
     "FollowedBooks",
     "HeldOptionQuotes",
     "get_held_option_quotes",
+    "mark_fault",
     "reset_held_option_quotes_for_testing",
 ]

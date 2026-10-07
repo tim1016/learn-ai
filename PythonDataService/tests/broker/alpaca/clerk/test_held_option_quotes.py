@@ -7,15 +7,19 @@ are.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
+import time
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.held_option_quotes import HELD_QUOTE_MAX_AGE_MS, KEEP_EVERY_MS, HeldOptionQuotes
+from app.broker.alpaca.clerk.held_option_quotes import FAULT_REPEAT_MS, KEEP_EVERY_MS, HeldOptionQuotes
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import Chain, FeedState, WatchedContract
@@ -25,6 +29,8 @@ from app.options.watch import LineClass, LineWant, plan_lines
 from tests.options import test_resolver as scenes
 
 NOW = scenes._at(scenes._TUESDAY, 10, 31, 2)
+TUESDAY_OPEN, TUESDAY_CLOSE = session_open_ms_utc(scenes._TUESDAY), session_close_ms_utc(scenes._TUESDAY)
+MINUTE = 60_000
 GENERATION = 3
 CALL = scenes._contract("call", 585)
 PUT = scenes._contract("put", 580)
@@ -70,11 +76,15 @@ class _Account:
         self.holds: list[str] = []
         self.reads = 0
         self.unreadable = False
+        # Set: the books do not answer until it is released, as when another thread holds their lock.
+        self.blocked: threading.Event | None = None
         self.kept = KeptOptionQuotes.of_account(artifacts_root=tmp_path, account_id=account_id)
         self.followed = held.follow(account_id, books=self._books, kept=self.kept)
 
     def _books(self) -> list[str]:
         self.reads += 1
+        if self.blocked is not None:
+            self.blocked.wait(30)
         if self.unreadable:
             raise RuntimeError("the books could not be read")
         return list(self.holds)
@@ -130,25 +140,31 @@ async def test_the_newest_quote_of_a_held_contract_is_kept_and_again_fifteen_sec
 
 
 @pytest.mark.parametrize(
-    "unusable",
+    "no_mark",
     [
-        pytest.param(lambda now: _quote("4.08", "4.12", now - HELD_QUOTE_MAX_AGE_MS - 1), id="gone quiet"),
+        pytest.param(lambda now: _quote("4.08", "4.12", TUESDAY_OPEN - 1), id="last ticked before today's session"),
+        pytest.param(
+            lambda now: replace(_quote("4.08", "4.12", now - 300), bid=QuoteSide(Decimal("4.08"), TUESDAY_OPEN - 1)),
+            id="one side last ticked before today's session",
+        ),
+        pytest.param(lambda now: _quote("4.08", "4.12", now + 1), id="stamped after now"),
         pytest.param(lambda now: _quote("4.08", "4.12", now - 300, data_type=QuoteDataType.DELAYED), id="delayed data"),
+        pytest.param(lambda now: _quote("4.08", "4.12", now - 300, data_type=QuoteDataType.FROZEN), id="frozen data"),
         pytest.param(lambda now: _quote("4.08", "4.12", now - 300, generation=GENERATION - 1), id="from before a reconnect"),
         pytest.param(lambda now: _quote("4.08", None, now - 300), id="one side only"),
         pytest.param(lambda now: _quote("4.20", "4.12", now - 300), id="crossed"),
         pytest.param(lambda now: _quote("4.08", "0", now - 300), id="nothing offered"),
     ],
 )
-async def test_a_quote_no_decision_could_use_is_not_handed_over_and_the_next_usable_one_is_at_once(
-    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, unusable
+async def test_a_quote_that_is_no_mark_is_not_handed_over_and_the_next_whole_one_is_at_once(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, no_mark
 ) -> None:
-    """A hand-over says "this is the newest held", and a mark is judged by the hand-over's own time. Restating a
-    line that has gone quiet, or one from before a reconnect, would pass it off as a fresh mark."""
+    """A hand-over says "this is the newest held". A quote from before a reconnect, from another day, of
+    delayed data, or with a side missing is not that, however lately it was read."""
     account, ibkr = _Account(held, tmp_path), _Supervisor()
     account.holds = [CALL.occ_symbol]
     await held.read_books()
-    ibkr.quotes[CALL.occ_symbol] = unusable(NOW)
+    ibkr.quotes[CALL.occ_symbol] = no_mark(NOW)
 
     not_kept = await held.keep(ibkr)
     nothing = account.last_handed_over(CALL, NOW)
@@ -159,6 +175,97 @@ async def test_a_quote_no_decision_could_use_is_not_handed_over_and_the_next_usa
     assert (not_kept, nothing) == (0, None)
     assert await held.keep(ibkr) == 1
     assert account.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW + 1_000)
+
+
+async def test_a_quiet_contracts_standing_quote_is_its_mark_at_every_hand_over_with_its_own_receipt_times(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path
+) -> None:
+    """Neither side has ticked for ten minutes: nobody has changed the bid. It is still what the call could be
+    sold for, on a healthy line of the current generation, so it is stated again every fifteen seconds. Each
+    row says when its sides were really received, so nothing takes the quote for a fresh one."""
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    last_ticked = NOW - 10 * MINUTE
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", last_ticked)
+
+    handed_over = []
+    for _ in range(4):
+        handed_over.append(await held.keep(ibkr))
+        stated = account.kept.last_stated(CALL.occ_symbol, at_or_before_ms=clock.value, with_side="bid")
+        assert stated is not None
+        assert (stated.quote.bid, stated.kept_at_ms) == (Decimal("4.08"), clock.value)
+        assert (stated.quote.bid_received_ms, stated.quote.ask_received_ms) == (last_ticked, last_ticked)
+        clock.value += KEEP_EVERY_MS
+
+    assert handed_over == [1, 1, 1, 1]
+    # By receipt it is one quote, ten minutes old and older by the minute.
+    newest = account.kept.newest(CALL.occ_symbol, at_or_before_ms=clock.value, with_side="bid")
+    assert newest is not None and newest.received_ms == last_ticked
+
+
+async def test_a_quiet_contract_has_its_mark_stated_as_the_session_closes(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path
+) -> None:
+    """The call last ticked at half past three. The hand-over made as the session closes is that session's mark."""
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.20", "4.24", TUESDAY_CLOSE - 30 * MINUTE)
+    clock.value = TUESDAY_CLOSE
+
+    assert await held.keep(ibkr) == 1
+    assert account.last_handed_over(CALL, TUESDAY_CLOSE) == (Decimal("4.20"), Decimal("4.24"), TUESDAY_CLOSE)
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        pytest.param(TUESDAY_OPEN - 1, id="a millisecond before the open"),
+        pytest.param(TUESDAY_CLOSE + 1, id="a millisecond after the close"),
+        pytest.param(scenes._at(scenes._FRIDAY, 12, 0) + 24 * 3_600_000, id="a Saturday"),
+    ],
+)
+async def test_outside_the_session_nothing_is_restated(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, when: int
+) -> None:
+    """A line still holds the last quote of the session after it closes, and all night. Restating it would
+    pass yesterday's bid off as a mark of a market that is not open."""
+    far = OptionContract.of(root="SPY", expiry_date=scenes._FRIDAY.replace(year=scenes._FRIDAY.year + 1), right="call", strike=585)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [far.occ_symbol]
+    await held.read_books()
+    clock.value = when
+    ibkr.quotes[far.occ_symbol] = _quote("4.08", "4.12", when - 300)
+
+    assert await held.keep(ibkr) == 0
+    assert account.last_handed_over(far, when) is None
+    assert [request.held for request in held.requests()] == [(far,)], "its line is still asked for"
+
+
+async def test_the_quote_a_line_held_before_a_reconnect_is_no_mark_until_it_ticks_again(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path
+) -> None:
+    """A reconnect, or a recovery from a data loss, moves the feed's generation. What the line held before it
+    is never stated again, though it is seconds old; the first whole quote of the new generation is."""
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
+    before = await held.keep(ibkr)
+
+    ibkr.generation += 1
+    clock.value += KEEP_EVERY_MS
+    after_the_reconnect = await held.keep(ibkr)
+    clock.value += KEEP_EVERY_MS
+    still_waiting = await held.keep(ibkr)
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.00", "4.04", clock.value - 100, generation=ibkr.generation)
+    ticked_again = await held.keep(ibkr)
+
+    assert (before, after_the_reconnect, still_waiting, ticked_again) == (1, 0, 0, 1)
+    assert account.last_handed_over(CALL, clock.value) == (Decimal("4.00"), Decimal("4.04"), clock.value)
+    # Nothing between the reconnect and the tick states the old quote as current.
+    assert account.last_handed_over(CALL, clock.value - 1) == (Decimal("4.08"), Decimal("4.12"), NOW)
 
 
 @pytest.mark.parametrize("trouble", ["the feed is not healthy", "no option quote source", "no line for the contract"])
@@ -287,7 +394,8 @@ async def test_a_contract_past_its_last_session_is_neither_asked_for_nor_kept(
     ibkr.quotes = {symbol: _quote("0.40", "0.44", clock.value - 300) for symbol in account.holds}
     (in_its_last_minute,) = held.requests()
     kept_in_its_last_minute = await held.keep(ibkr)
-    clock.value = last_trade + KEEP_EVERY_MS
+    # The next morning the other contract still trades, and the expired one is nobody's to ask for.
+    clock.value = scenes._at(scenes._WEDNESDAY, 10, 0)
     ibkr.quotes = {symbol: _quote("0.40", "0.44", clock.value - 300) for symbol in account.holds}
     (after_it,) = held.requests()
 
@@ -420,3 +528,288 @@ async def test_a_handle_closed_after_its_account_was_opened_again_does_not_stop_
     current.followed.close()
     current.followed.close()
     assert (held.requests(), current.reads) == ((), 2), "and closing twice reads the books once"
+
+
+# ---- A round beside the supervisor's pass: begun, never waited for ----------------
+
+
+LOGGER = "app.broker.alpaca.clerk.held_option_quotes"
+
+
+def _said(caplog: pytest.LogCaptureFixture, action: str) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.name == LOGGER and getattr(record, "action", None) == action]
+
+
+async def _eventually(true: object, *, within_s: float = 5.0) -> None:
+    """Wait until ``true()`` holds, without waiting for work that is blocked."""
+    deadline = time.monotonic() + within_s
+    while not true():  # type: ignore[operator]
+        assert time.monotonic() < deadline, "it never happened"
+        await asyncio.sleep(0.005)
+
+
+async def test_with_no_dry_run_account_open_a_pass_begins_no_round(held: HeldOptionQuotes, tmp_path: Path) -> None:
+    """A process whose bots trade shares pays nothing for this: no task, no thread, no read."""
+    ibkr = _Supervisor()
+    tasks_before = asyncio.all_tasks()
+
+    held.drive(ibkr)
+    nothing_followed = asyncio.all_tasks() == tasks_before
+    account = _Account(held, tmp_path)
+    account.followed.close()
+    read_at_the_close = account.reads
+    held.drive(ibkr)
+
+    assert nothing_followed
+    assert asyncio.all_tasks() == tasks_before, "a closed account that holds nothing begins no round either"
+    assert (account.reads, held.requests()) == (read_at_the_close, ())
+
+
+async def test_a_pass_begins_a_round_that_reads_the_books_and_keeps_the_marks_and_does_not_wait_for_it(
+    held: HeldOptionQuotes, tmp_path: Path
+) -> None:
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
+
+    held.drive(ibkr)
+    as_the_pass_returns = (account.reads, held.requests(), account.last_handed_over(CALL, NOW))
+    await held.settled()
+
+    assert as_the_pass_returns == (0, (), None), "the pass waited for nothing"
+    assert account.reads == 1
+    assert [request.held for request in held.requests()] == [(CALL,)]
+    assert account.last_handed_over(CALL, NOW) == (Decimal("4.08"), Decimal("4.12"), NOW)
+
+
+async def test_books_that_do_not_answer_hold_up_no_pass_and_no_mark_and_are_not_read_twice_at_once(
+    clock: _Clock, tmp_path: Path
+) -> None:
+    """One account's books are stuck behind a lock. Every pass returns at once. The round goes on without
+    them after its wait, so the contract another account holds keeps its mark. No second read is begun
+    beside the stuck one, which would take a worker thread a second for as long as it lasted."""
+    held = HeldOptionQuotes(clock=clock, step_budget_ms=40)
+    holder, stuck, ibkr = _Account(held, tmp_path), _Account(held, tmp_path, "sim:stuck-books"), _Supervisor()
+    holder.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
+    stuck.blocked = threading.Event()
+    reads_before = stuck.reads
+    try:
+        longest_pass_s = 0.0
+        for _ in range(6):
+            began = time.monotonic()
+            held.drive(ibkr)
+            longest_pass_s = max(longest_pass_s, time.monotonic() - began)
+            await asyncio.sleep(0.03)
+        await _eventually(lambda: holder.last_handed_over(CALL, clock.value) is not None)
+        reads_while_stuck = stuck.reads - reads_before
+    finally:
+        stuck.blocked.set()
+    await held.settled()
+    stuck.blocked = None
+    held.drive(ibkr)
+    await held.settled()
+
+    assert longest_pass_s < 0.02, "a pass waited on the books"
+    assert reads_while_stuck == 1
+    assert holder.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW)
+    assert stuck.reads - reads_before == 2, "once the stuck read answered, the next round read the books again"
+
+
+async def test_a_file_that_cannot_be_written_in_time_holds_up_no_pass_and_is_not_written_twice_at_once(
+    clock: _Clock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    held = HeldOptionQuotes(clock=clock, step_budget_ms=40)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
+    slow_disk, writes, write = threading.Event(), [], account.kept.keep_all
+
+    def slowly(quotes: object, *, kept_at_ms: int) -> None:
+        writes.append(kept_at_ms)
+        slow_disk.wait(30)
+        write(quotes, kept_at_ms=kept_at_ms)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(account.kept, "keep_all", slowly)
+    try:
+        longest_pass_s = 0.0
+        for _ in range(6):
+            began = time.monotonic()
+            held.drive(ibkr)
+            longest_pass_s = max(longest_pass_s, time.monotonic() - began)
+            await asyncio.sleep(0.03)
+        begun_while_slow = len(writes)
+    finally:
+        slow_disk.set()
+    await held.settled()
+
+    assert longest_pass_s < 0.02, "a pass waited on the file"
+    assert begun_while_slow == 1
+    assert account.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW)
+    # The late write is noted as the hand-over it was: the next is due fifteen seconds after it, not at once.
+    assert await held.keep(ibkr) == 0
+
+
+async def test_a_round_that_fails_reaches_no_pass_is_logged_once_and_the_next_pass_begins_another(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The supervisor's own read fails under the keeping. No pass hears of it. It is logged with its stack
+    once, not every second, and the keeping is back the moment the fault is."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
+    feed = ibkr.option_feed
+
+    def broken() -> None:
+        raise LookupError("the option lines are part way through a change")
+
+    ibkr.option_feed = broken  # type: ignore[method-assign]
+    for _ in range(30):
+        held.drive(ibkr)
+        await held.settled()
+        clock.value += 1_000
+    failures = _said(caplog, "held_option_quotes_round_failed")
+    ibkr.option_feed = feed  # type: ignore[method-assign]
+    held.drive(ibkr)
+    await held.settled()
+
+    assert [(record.levelno, record.exc_info is not None) for record in failures] == [(logging.ERROR, True)]
+    assert len(_said(caplog, "held_option_quotes_round_again")) == 1
+    assert account.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), clock.value)
+
+
+async def test_a_round_that_cannot_even_begin_fails_no_pass(
+    held: HeldOptionQuotes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+
+    def cannot_begin(_source: object) -> None:
+        raise RuntimeError("no round can be made")
+
+    monkeypatch.setattr(held, "_one_round", cannot_begin)
+
+    held.drive(ibkr)
+    held.drive(ibkr)
+
+    assert len(_said(caplog, "held_option_quotes_round_failed")) == 1
+
+
+# ---- What is logged of a fault that lasts ------------------------------------------
+
+
+async def test_a_file_that_cannot_be_written_is_logged_once_with_its_stack_then_seldom_and_once_when_it_can(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A full disk for six minutes is tried again every second. It is one stack in the log, one reminder
+    after five minutes with no stack, and one line when the quotes are kept again: not 360 stacks."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    writes = account.kept.keep_all
+
+    def full_disk(*_: object, **__: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(account.kept, "keep_all", full_disk)
+    for _ in range(FAULT_REPEAT_MS // 1_000 + 60):
+        ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", clock.value - 300)
+        assert await held.keep(ibkr) == 0
+        clock.value += 1_000
+    while_it_lasted = _said(caplog, "held_option_quotes_not_written")
+    monkeypatch.setattr(account.kept, "keep_all", writes)
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", clock.value - 300)
+    kept_again = await held.keep(ibkr)
+
+    assert [(record.levelno, record.exc_info is not None) for record in while_it_lasted] == [
+        (logging.ERROR, True), (logging.WARNING, False),
+    ]
+    assert kept_again == 1
+    assert len(_said(caplog, "held_option_quotes_written_again")) == 1
+
+
+async def test_books_that_cannot_be_read_are_logged_once_not_at_every_pass(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account = _Account(held, tmp_path)
+    account.holds = [CALL.occ_symbol]
+    account.unreadable = True
+
+    for _ in range(40):
+        await held.read_books()
+        clock.value += 1_000
+    while_it_lasted = _said(caplog, "held_option_books_read_failed")
+    account.unreadable = False
+    await held.read_books()
+
+    assert [(record.levelno, record.exc_info is not None) for record in while_it_lasted] == [(logging.ERROR, True)]
+    assert len(_said(caplog, "held_option_books_read_again")) == 1
+    assert [request.held for request in held.requests()] == [(CALL,)]
+
+
+async def test_a_feed_that_is_down_is_said_once_for_the_feed_not_at_every_pass_for_every_contract(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol, PUT.occ_symbol]
+    await held.read_books()
+    ibkr.unhealthy = "the IBKR market-data connection is not up"
+
+    for _ in range(40):
+        assert await held.keep(ibkr) == 0
+        clock.value += 1_000
+    while_down = [record for record in caplog.records if record.name == LOGGER]
+    ibkr.unhealthy = None
+    ibkr.quotes = {symbol: _quote("4.08", "4.12", clock.value - 300) for symbol in account.holds}
+    assert await held.keep(ibkr) == 2
+
+    assert [(record.levelno, record.action) for record in while_down] == [(logging.WARNING, "held_option_quotes_no_feed")]
+    assert len(_said(caplog, "held_option_quotes_feed_back")) == 1
+
+
+async def test_a_quiet_contract_is_marked_every_fifteen_seconds_and_logs_nothing(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Its quote stands for an hour. Nothing lapses and returns, so nothing is said of it."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
+
+    handed_over = 0
+    for _ in range(3_600):
+        handed_over += await held.keep(ibkr)
+        clock.value += 1_000
+
+    assert handed_over == 3_600_000 // KEEP_EVERY_MS
+    assert [record for record in caplog.records if record.name == LOGGER] == []
+
+
+async def test_a_contract_waiting_for_its_first_ticks_of_the_day_is_said_once_and_is_no_warning(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    clock.value = TUESDAY_OPEN
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", TUESDAY_OPEN - 18 * 3_600_000)
+
+    for _ in range(120):
+        assert await held.keep(ibkr) == 0
+        clock.value += 1_000
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.10", "4.14", clock.value - 200)
+    assert await held.keep(ibkr) == 1
+
+    waiting = _said(caplog, "held_option_quote_not_kept")
+    assert [record.levelno for record in waiting] == [logging.INFO]
+    assert len(_said(caplog, "held_option_quote_kept")) == 1

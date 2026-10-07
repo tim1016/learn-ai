@@ -1,10 +1,11 @@
 """The option quotes a simulated account was handed, kept so a later fill or mark can be priced from them.
 
 A Dry Run has no option market of its own. What it knows of a contract's
-price is the quotes its Clerk was handed: with an entry, with an exit
-decision, and whenever the runner passes on the newest one it holds for a
-contract the bot holds. Each is appended here, beside the account's
-simulated orders, with both sides' receipt times as they arrived.
+price is the quotes kept for it: an entry's as its order is sent, an exit
+decision's as its close is priced, and the mark the Clerk's own keeping
+states of each contract a bot holds (``held_option_quotes``). Each is
+appended here, beside the account's simulated orders, with both sides'
+receipt times as they arrived.
 
 Two questions are asked of what is kept, and they are not the same:
 
@@ -14,7 +15,9 @@ Two questions are asked of what is kept, and they are not the same:
 - **What was last stated to be the newest held, and when?** By when it was
   handed over. The simulated account marks an open contract from it. A quiet
   contract's bid can stand unchanged for minutes: its receipt time grows old
-  while it is still the bid, and each hand-over says so again.
+  while it is still the bid, and each hand-over says so again. The row
+  keeps the receipt times as they were, so a close priced from it knows
+  the quote's true age.
 
 So a hand-over is written every time, even of a quote already kept
 (``keep``). A quote the Clerk hands back from its own durable facts, in case
@@ -22,8 +25,9 @@ this file was lost, says nothing of what is current: it is written as of its
 own receipt (``restore``).
 
 Nothing here judges a quote. Whether one is usable for a decision is
-``app.options.quotes.quote_fault``'s to say, and how a fill is priced from
-one is ``app.options.simulated_fill``'s.
+``app.options.quotes.quote_fault``'s to say, whether one may be stated as a
+held contract's mark is ``held_option_quotes.mark_fault``'s, and how a fill
+is priced from one is ``app.options.simulated_fill``'s.
 
 **What is kept is bounded.** A hand-over every few seconds would otherwise
 grow the file without end, and every reader would pay for all of it. So the

@@ -397,8 +397,9 @@ class AlpacaMarketLivenessConsumer:
 
         ``option_watch`` is what this process's option bots and pages ask to
         have watched. ``held_option_quotes`` is what its Dry Run Clerks' books
-        say their bots hold: those contracts are asked for too, and their
-        quotes kept, on each pass of the local source (ADR 0076).
+        say their bots hold: those contracts are asked for too. Each pass of
+        the local source begins a round of their keeping and does not wait
+        for it (ADR 0076).
         """
         resolved = settings or resolved_alpaca_settings()
         store = store or get_market_liveness_store()
@@ -448,9 +449,6 @@ class AlpacaMarketLivenessConsumer:
             # seam. The stable projection is invalidated by custody/lifecycle
             # commits; no per-bot files are read by the market-data loop.
             durable = await to_thread(durable_demand)
-            # The option side of the same demand: the contracts each Dry Run's bots hold, read
-            # from its books before this pass asks what is wanted.
-            await _contained(held.read_books(), "held_option_books_round_failed")
             feed = get_market_data_feed()
             active = () if feed is None else feed.active_symbols()
             return tuple(dict.fromkeys((*active, *durable, *store.requested_symbols())))
@@ -471,10 +469,15 @@ class AlpacaMarketLivenessConsumer:
 
         async def local_status() -> MarketStatusSnapshot:
             snapshot = await local_source()
-            # The Clerk's own keeping, after the pass: the newest usable quote of every contract a
-            # Dry Run here holds, so a close, a Flatten and a mark have one with no runner alive.
-            await _contained(held.keep(local_source), "held_option_quotes_round_failed")
+            # The Clerk's own keeping, begun by the pass and never waited for: the books of each Dry
+            # Run here are read for what its bots hold, and the mark of each contract kept, so a
+            # close, a Flatten and a mark have a quote with no runner alive (ADR 0076).
+            held.drive(local_source)
             return snapshot
+
+        async def close_local() -> None:
+            await held.stop()
+            await local_source.close()
 
         status_source = local_status
         if resolved.market_status_upstream_url is not None:
@@ -499,21 +502,9 @@ class AlpacaMarketLivenessConsumer:
             store=store,
             journal=journal,
             status_snapshot_source=status_source,
-            status_source_close=local_source.close,
+            status_source_close=close_local,
             option_quotes=local_source,
         )
-
-
-async def _contained(step: Awaitable[object], action: str) -> None:
-    """Run one step of the option side beside the stock quotes. A fault there is logged with its stack and
-    never takes the stock evidence down with it: the status source this runs inside blocks every entry
-    when it raises."""
-    try:
-        await step
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("A step of the held option quotes failed", extra={"action": action})
 
 
 async def read_shared_market_status(
