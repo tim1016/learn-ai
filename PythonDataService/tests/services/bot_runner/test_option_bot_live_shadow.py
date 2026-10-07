@@ -591,3 +591,25 @@ async def test_kept_quotes_that_cannot_be_read_leave_a_shadow_with_no_reading_an
     assert CALL in str(unreadable.value)
     assert not shadow.clerk._trade.recovery_price_available(CALL, side="sell")
     assert shadow.holds() == {CALL: 1.0}
+
+
+# ---- What a screen can read of a Shadow's fills -------------------------------------------------------
+
+
+async def test_the_clerk_says_how_the_shadow_priced_what_each_decision_filled(shadow: ShadowFloor) -> None:
+    """Each simulated fill keeps its model, the age of the quote it used and its limit. Asked by a
+    decision's own name, a Shadow's Clerk answers as a Dry Run's does."""
+    ran = await shadow.run(_round_trip())
+    decided = {outcome: facts["evaluation_id"] for outcome, facts in ran.receipts if outcome != "no_action"}
+
+    (bought,) = shadow.clerk.option_fills_of_decision(shadow.sid, decided["enter_intent"])
+    (sold,) = shadow.clerk.option_fills_of_decision(shadow.sid, decided["exit_intent"])
+
+    assert (bought.contract, bought.side, bought.quantity, bought.price, bought.multiplier) == (CALL, "buy", 1.0, 4.12, 100)
+    assert (sold.contract, sold.side, sold.quantity, sold.price, sold.multiplier) == (CALL, "sell", 1.0, 4.08, 100)
+    assert (bought.fill_model, bought.quote_age_ms, bought.filled_at_ms) == ("natural_price", 0, ENTER_MS + 300)
+    assert (sold.fill_model, sold.quote_age_ms, sold.filled_at_ms) == ("natural_price", 0, EXIT_MS + 300)
+    assert bought.order_ref != sold.order_ref
+    by_order = shadow.clerk.synthesized_option_fills()
+    assert by_order[bought.order_ref].request.limit_price == Decimal("4.12")
+    assert by_order[sold.order_ref].request.limit_price is None
