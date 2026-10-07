@@ -27,12 +27,13 @@ under ``SCHEDULED_CLOSE_DECISION_PREFIX``, keyed on the session's date and
 the entry, so asking again drives the same EXIT and never makes a second.
 Its acceptance records which close it is and when it was due. It is accepted
 while the bot's run is ACTIVE, in one locked run that first asks: is the
-contract still held, is no other EXIT of the bot working, and has the Clerk
-not stopped exiting this bot by itself? A deciding program's EXIT is accepted
-under the same lock, so when the two meet only one is accepted and one
-closing order is made. The EXIT machine then does what it does for every
-option close: a market order in the regular session, held on a halt of the
-underlying, never sent for a contract past its last session.
+close still owed, its own session not yet closed at the Clerk's clock now,
+is the contract still held, is no other EXIT of the bot working, and has
+the Clerk not stopped exiting this bot by itself? A deciding program's EXIT
+is accepted under the same lock, so when the two meet only one is accepted
+and one closing order is made. The EXIT machine then does what it does for
+every option close: a market order in the regular session, held on a halt
+of the underlying, never sent for a contract past its last session.
 
 **Who runs it.** The deadline keeper, on time, and the account's
 reconciliation pass, as its backstop (:func:`drive_scheduled_closes`). Once
@@ -546,6 +547,14 @@ def _accept_while_still_owed(repo: ClerkSqliteRepository, item: HeldContract) ->
     A Clerk that has begun to close takes none. It says so under this same
     lock, so a close is accepted before that or not at all.
 
+    The close is asked of the Clerk's clock again too. It was read as due,
+    and its turn can come late: behind four other closes a slow broker has
+    not answered, or behind this lock. A close is owed only until its own
+    session closes (``ScheduledClose.due``). Once that has come it is not
+    accepted, in that session's name or any other's. The next run reads the
+    contract as held past its close and records the close as missed, and a
+    holding with a sold leg owes the next session's close at its own time.
+
     A close that failed is taken again as a decision of its own, numbered
     after the first. It is asked one thing more: has the retry wait passed
     since the bot's newest exit, as the books show it now?
@@ -553,6 +562,8 @@ def _accept_while_still_owed(repo: ClerkSqliteRepository, item: HeldContract) ->
     assert item.owed is not None and item.holding is not None
     sid = item.strategy_instance_id
     if repo.closing:
+        return None
+    if not item.owed.due(repo.clock()):
         return None
     if not position_quantity_is_nonzero(repo.position(sid, item.symbol)):
         return None

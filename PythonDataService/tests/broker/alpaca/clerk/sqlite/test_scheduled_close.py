@@ -19,15 +19,18 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite import deadline_keeper as keeper_module
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite import scheduled_close as scheduled_close_module
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter
@@ -39,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.residue_discharge import discharge_attributed_residue
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
+    MAX_CLOSES_AT_ONCE,
     CloseStanding,
     ScheduledCloseRound,
     _accept_while_still_owed,
@@ -89,6 +93,7 @@ from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     PaperOptions,
     paper,  # noqa: F401 -- pytest fixture, used by name
 )
+from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _gate
 from tests.broker.alpaca.clerk.sqlite.test_resting_entries import _the_flatten_offered
 from tests.broker.alpaca.clerk.sqlite.test_resting_entry_facts import _PINNED_OPTION
 
@@ -1441,6 +1446,150 @@ async def test_a_close_read_as_owed_is_not_taken_once_the_clerk_has_stopped_exit
 
     assert _accept_while_still_owed(paper.repo, owed) is None
     assert len(paper.venue.option_submit_calls) == sent
+
+
+# ── a close whose turn comes late: asked again whether it is still owed ───
+
+FIVE_BOTS = ("a", "b", "c", "d", "e")
+
+
+async def _five_bots_each_hold_one_call(paper: PaperOptions) -> None:  # noqa: F811
+    """Three more bots are deployed beside ``a`` and ``b``, and each of the five buys one call."""
+    for sid in FIVE_BOTS[2:]:
+        paper.repo.register_strategy_instance(
+            strategy_instance_id=sid, symbol="SPY", config_hash=f"seal-{sid}", exit_terms=TERMS
+        )
+        submit_budgeted_deploy(
+            paper.repo, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}", world="real_paper",
+            committed_cents=50_000, configuration_hash=f"seal-{sid}",
+            exit_terms_hash=canonical_sha256(TERMS.model_dump(mode="json")), risk_revision=1, actor="owner",
+            envelope=_gate(cash=10_000), minimum_position_cost=Decimal("100.01"),
+        )
+    for sid in FIVE_BOTS:
+        # The account is read again after each fill, as its own cadence reads it, before the next bot enters.
+        paper.wait(1_000)
+        paper.account.account_observed_at_ms = paper.clock()
+        assert await paper.sync.tick() == "observed"
+        await _holds_one_call(paper, sid)
+
+
+def _exit_taken(paper: PaperOptions, sid: str) -> dict | None:  # noqa: F811
+    """The newest exit of the bot the Clerk accepted, of any kind, or None when it never accepted one."""
+    return paper.repo.last_strategy_transition(strategy_instance_id=sid, transition_kind="EXIT_ACCEPTED")
+
+
+async def _a_round_whose_fifth_close_waits_for_its_turn(
+    paper: PaperOptions,  # noqa: F811
+) -> tuple[asyncio.Task, str, asyncio.Event]:
+    """A round begins with five closes due. Alpaca takes four orders and answers none, so the fifth waits.
+
+    Returns the round, the bot whose close has not had its turn, and what
+    makes Alpaca answer.
+    """
+    alpaca_answers = asyncio.Event()
+    real_send = paper.venue.submit_option_order
+
+    async def send_that_alpaca_is_slow_to_answer(order: object, *, client_order_id: str) -> object:
+        sent = await real_send(order, client_order_id=client_order_id)  # type: ignore[arg-type]
+        await alpaca_answers.wait()
+        return sent
+
+    paper.venue.submit_option_order = send_that_alpaca_is_slow_to_answer  # type: ignore[method-assign]
+    round_ = asyncio.create_task(paper.round())
+    four_are_out = await _comes_true(lambda: len(_closes_sent(paper)) == MAX_CLOSES_AT_ONCE)
+    waiting = [sid for sid in FIVE_BOTS if _exit_taken(paper, sid) is None]
+    if not four_are_out or len(waiting) != 1:
+        # Judged only once Alpaca has answered, so that a failure leaves no round waiting.
+        alpaca_answers.set()
+        await round_
+    assert four_are_out and len(waiting) == 1
+    return round_, waiting[0], alpaca_answers
+
+
+async def test_a_close_whose_turn_comes_once_its_session_has_closed_is_not_taken_and_is_recorded_as_missed(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Five closes are due at 15:15 and Alpaca answers none of the first four until four o'clock."""
+    await _five_bots_each_hold_one_call(paper)
+    _until(paper, DUE)
+    round_, waiting, alpaca_answers = await _a_round_whose_fifth_close_waits_for_its_turn(paper)
+
+    _until(paper, CLOSE)
+    alpaca_answers.set()
+    done = await asyncio.wait_for(round_, timeout=5)
+
+    # Its turn came with the session closed. No close is owed any more: none is accepted, and no exit failed.
+    assert len(done.closes.taken) == MAX_CLOSES_AT_ONCE and len(_closes_sent(paper)) == MAX_CLOSES_AT_ONCE
+    assert _exit_taken(paper, waiting) is None and _closing_refs(paper, waiting) == []
+    assert _notice(paper, waiting, EXIT_NOT_FLAT_REASON_CODE) is None
+
+    after = await paper.round()
+
+    # The next round finds a contract held past its close, as it finds any, and records the close as missed.
+    assert (waiting, SYMBOL) in after.closes.missed and _notice(paper, waiting) is not None
+    assert _exit_taken(paper, waiting) is None and _notice(paper, waiting, EXIT_NOT_FLAT_REASON_CODE) is None
+    assert len(_closes_sent(paper)) == MAX_CLOSES_AT_ONCE
+
+
+async def test_a_close_whose_turn_comes_a_millisecond_before_its_session_closes_is_taken(paper: PaperOptions) -> None:  # noqa: F811
+    await _five_bots_each_hold_one_call(paper)
+    _until(paper, DUE)
+    round_, waiting, alpaca_answers = await _a_round_whose_fifth_close_waits_for_its_turn(paper)
+
+    _until(paper, CLOSE - 1)
+    alpaca_answers.set()
+    done = await asyncio.wait_for(round_, timeout=5)
+
+    # The session is still open, so the close is still owed: it is accepted, as that session's close. What
+    # becomes of a close taken in a session's last seconds is the rule of every option close, not asked here.
+    assert len(done.closes.taken) == 5
+    [its_close] = [effect for effect in done.closes.taken if effect.startswith(f"effect:{waiting}:")]
+    assert _accepted_as(paper, its_close).the_scheduled_close == ScheduledCloseFacts(
+        kind="expiry_day_close", due_ms=DUE, session_open_ms=OPEN
+    )
+
+
+async def test_a_sold_legs_close_whose_turn_comes_at_the_next_open_is_not_taken_and_that_days_close_is_owed_anew(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """Five holdings with a sold leg, each written by hand, owe a close at 15:50 on Wednesday. Alpaca answers
+    none of the first four until Thursday's open."""
+    await _five_bots_each_hold_one_call(paper)
+    _its_leg_is_sold(paper, monkeypatch)
+    wednesday, thursday = date(2026, 9, 9), date(2026, 9, 10)
+    _until(paper, et_minute_of_day_ms(wednesday, 15 * 60 + 50))
+    round_, waiting, alpaca_answers = await _a_round_whose_fifth_close_waits_for_its_turn(paper)
+
+    thursdays_open = et_minute_of_day_ms(thursday, 9 * 60 + 30)
+    _until(paper, thursdays_open)
+    alpaca_answers.set()
+    done = await asyncio.wait_for(round_, timeout=5)
+
+    # Wednesday's decision is not taken on Thursday morning: nothing is accepted for the bot and nothing is sent.
+    assert len(done.closes.taken) == MAX_CLOSES_AT_ONCE and len(_closes_sent(paper)) == MAX_CLOSES_AT_ONCE
+    assert _exit_taken(paper, waiting) is None and _closing_refs(paper, waiting) == []
+
+    at_the_open = await paper.round()
+
+    # Wednesday's close is recorded as missed, and Thursday's is not due until ten to four.
+    assert (waiting, SYMBOL) in at_the_open.closes.missed and _notice(paper, waiting) is not None
+    assert _exit_taken(paper, waiting) is None
+    thursdays_due = et_minute_of_day_ms(thursday, 15 * 60 + 50)
+    _until(paper, thursdays_due - 1)
+    early = await paper.round()
+    taken_early = _exit_taken(paper, waiting)
+    _until(paper, thursdays_due)
+    on_time = await paper.round()
+
+    # Thursday's close is owed anew, and is taken at its own time as Thursday's decision.
+    assert early.closes.taken == () and taken_early is None
+    [its_close] = [effect for effect in on_time.closes.taken if effect.startswith(f"effect:{waiting}:")]
+    accepted = _accepted_as(paper, its_close)
+    assert accepted.decision_id.startswith("scheduled-close-20260910-")
+    assert accepted.the_scheduled_close == ScheduledCloseFacts(
+        kind="sold_leg_close", due_ms=thursdays_due, session_open_ms=thursdays_open
+    )
+    assert len(_closing_refs(paper, waiting)) == 1
 
 
 async def test_a_contract_no_longer_held_when_the_notice_is_written_is_not_named_in_it(paper: PaperOptions) -> None:  # noqa: F811

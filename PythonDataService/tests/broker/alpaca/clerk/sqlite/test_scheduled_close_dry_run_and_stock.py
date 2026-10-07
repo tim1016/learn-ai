@@ -321,6 +321,27 @@ async def test_a_failed_close_read_as_ready_is_not_taken_again_once_the_bot_has_
     assert taken is None and dry_run.orders() == orders_made
 
 
+async def test_a_failed_close_read_as_ready_is_not_taken_again_once_its_session_has_closed_since(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Read as ready with half a minute of the session left. Its turn comes at the close, with a bid kept."""
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, CLOSE - 60_000)
+    _hand_over(dry_run, "0", "0.05")
+    await _keeper(dry_run).tick()
+    dry_run.wait(30_000)
+    [ready] = held_contracts(dry_run.repo, dry_run.clock()).held
+    assert ready.to_be_taken_again(dry_run.clock())
+    _until(dry_run, CLOSE)
+    _hand_over(dry_run, "2.10", "2.16")
+    orders_made = dry_run.orders()
+
+    taken = _accept_while_still_owed(dry_run.repo, ready)
+
+    # No try is made in the name of a session that is over. The contract is still held, for the missed-close notice.
+    assert taken is None and dry_run.orders() == orders_made and dry_run.held() == {SYMBOL: 1.0}
+
+
 async def test_a_dry_runs_keeper_still_sleeps_while_a_failed_close_is_ready_and_another_exit_keeps_it_from_being_taken(
     dry_run: _DryRun,  # noqa: F811
 ) -> None:
