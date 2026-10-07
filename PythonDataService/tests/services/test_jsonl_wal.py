@@ -139,6 +139,21 @@ def test_a_rewrite_leaves_exactly_the_records_given_under_the_sequences_they_had
     assert [entry.name for entry in tmp_path.iterdir() if entry.name.endswith(".tmp")] == []
 
 
+def test_after_a_rewrite_that_drops_the_tail_the_next_sequence_is_the_one_a_fresh_reader_of_the_file_gives(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wal.jsonl"
+    wal = _wal(path, tmp_path)
+    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
+
+    wal.replace_all([_Record(seq=1, value="1"), _Record(seq=2, value="2")])
+
+    # The writer that rewrote and a process started afterwards must agree, or one of them refuses the other's append.
+    assert wal.allocate_seq() == _wal(path, tmp_path).allocate_seq() == 3
+    wal.append(_Record(seq=3, value="3"))
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [1, 2, 3]
+
+
 def test_a_rewrite_refuses_sequences_that_do_not_rise_and_leaves_the_file_as_it_was(tmp_path: Path) -> None:
     wal = _wal(tmp_path / "wal.jsonl", tmp_path)
     wal.append_many([_Record(seq=1, value="a"), _Record(seq=2, value="b")])

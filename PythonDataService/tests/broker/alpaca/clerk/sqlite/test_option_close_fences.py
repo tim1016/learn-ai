@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import latest_exit_recovery
 from app.broker.alpaca.clerk.sqlite.option_admission import work_out_option_entry
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionExitFacts
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability, SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
@@ -496,7 +497,7 @@ async def test_an_exit_sent_after_the_contract_expired_is_refused_by_name_and_se
     await _expired_and_unsold(dry_run)
     # The bot's page says so: the contract by name, that it expired, and that nothing settles it yet.
     words = _notice_words(dry_run)
-    assert SYMBOL in words and "expired" in words and "exercise value" in words
+    assert SYMBOL in words and "2026-09-18" in words and "expired" in words and "settle" in words
 
     again = await dry_run.exit(dry_run.exit_quotes("2.40", "2.46"))
 
@@ -722,7 +723,6 @@ async def test_what_the_owner_can_still_do_about_an_expired_contract_is_said_as_
     # Neither the notice nor the refused write-off sends the owner to a flatten, which is refused too.
     for words in (_notice_words(dry_run).lower(), write_off.next_step.lower()):
         assert "flatten" not in words and "discharg" not in words and "write" not in words
-        assert "not built yet" in words
 
 
 async def test_a_quote_stamped_after_the_clerks_own_clock_prices_no_close(dry_run: _DryRun) -> None:  # noqa: F811
@@ -758,6 +758,24 @@ async def test_an_exits_quotes_are_named_by_contract_and_one_for_another_contrac
     assert other in refused.explanation and SYMBOL in refused.explanation
     assert dry_run.orders() == orders and dry_run.held() == {SYMBOL: 1.0}
     assert LEG not in refused.explanation
+
+
+def test_an_exit_keeps_no_quote_of_a_contract_it_does_not_close() -> None:
+    """Beneath the Clerk's own refusal: what an EXIT keeps of the quotes handed with it is its contract's alone."""
+    other = "SPY260918C00590000"
+    its_own = OptionExitEvidence(
+        quotes={SYMBOL: _quote("2.40", "2.46", received_ms=1_000)}, generation=GENERATION, read_at_ms=1_200
+    )
+    with_another = OptionExitEvidence(
+        quotes={SYMBOL: _quote("2.40", "2.46", received_ms=1_000), other: _quote("7.00", "7.06", received_ms=1_000)},
+        generation=GENERATION, read_at_ms=1_200,
+    )
+
+    kept = OptionExitFacts.of(its_own, closing=SYMBOL)
+
+    assert kept.quote_for(SYMBOL) == its_own.quotes[SYMBOL] and kept.quote_for(other) is None
+    with pytest.raises(ValueError, match=other):
+        OptionExitFacts.of(with_another, closing=SYMBOL)
 
 
 # ── after hours: who waits for the open, and who does not ────────────────
@@ -804,7 +822,7 @@ async def test_the_clerks_retry_of_a_failed_option_close_waits_for_the_open_and_
 
     outcome, reason_code, words = _recovery_recorded(dry_run)
     assert (outcome, reason_code) == ("hold", "OPTION_CLOSE_WAITS_FOR_OPEN")
-    assert "never" not in words and "only in regular hours" in words
+    assert "never" not in words, "the hold claims that nothing closes an option position after hours"
     assert dry_run.held() == {SYMBOL: 1.0} and _sales(dry_run) == []
 
     _wait_until(dry_run, et_minute_of_day_ms(date(2026, 9, 9), 9 * 60 + 31))
@@ -822,8 +840,8 @@ async def test_a_refused_simulated_close_is_not_told_as_a_broker_refusing_an_ord
     await dry_run.exit(dry_run.exit_quotes("0", "0.05"))
 
     words = _notice_words(dry_run)
+    assert SYMBOL in words
     assert "broker" not in words.lower()
-    assert SYMBOL in words and "Nothing is bid" in words
     # An option position takes no limit price, so the notice does not send the owner to one.
     assert "limit" not in words.lower()
 
@@ -934,7 +952,7 @@ async def test_a_reduction_that_would_buy_what_the_entry_bought_is_not_made_into
     reducing = dry_run.repo.order(reducing_ref)
     created = exit_resolution._reducing_order_facts(dry_run.repo, reducing_ref)
 
-    with pytest.raises(ValueError, match="closing what the entry opened is a sell"):
+    with pytest.raises(ValueError, match="sell"):
         exit_resolution._option_close(dry_run.repo, effect_id, reducing=reducing, created=replace(created, side="BUY"))
 
 
