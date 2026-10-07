@@ -10,8 +10,9 @@ stored stage output and attaches the closed copy of ``guidance``; no number
 is computed in the browser.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Compare
   candidates and weaknesses"; the series math is
-  ``app/research/golden_search/evidence.py``.
-Canonical implementation: this file (shapes); evidence.py (series math);
+  ``app/research/sweep/daily_equity.py`` and the months are ``evidence.py``.
+Canonical implementation: this file (shapes); sweep/daily_equity.py (series
+  math); evidence.py (the months);
   compare_measures.py (the Compare charts' measures); concentration.py (the
   concentration curve); trade_charts.py (the trade charts); final_measures.py
   (the final test against development).
@@ -34,12 +35,7 @@ from app.research.golden_search.concentration import (
 )
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
-from app.research.golden_search.evidence import (
-    CANDIDATE_LABELS,
-    cumulative_return_series,
-    drawdown_series,
-    monthly_results,
-)
+from app.research.golden_search.evidence import CANDIDATE_LABELS, monthly_results
 from app.research.golden_search.final_measures import final_comparison
 from app.research.golden_search.final_test import fit_for, fits_to_test, pick_of, recorded_fits
 from app.research.golden_search.guidance import (
@@ -61,6 +57,7 @@ from app.research.golden_search.repository import metrics_of
 from app.research.golden_search.selection import Metrics, ineligibility
 from app.research.golden_search.trade_charts import decision_bar_span_ms, entry_rsi_gates, trade_charts
 from app.research.golden_search.zoom import ProcedureResult
+from app.research.sweep.daily_equity import cumulative_return_series, drawdown_series
 
 NOT_EVALUATED = "NOT_EVALUATED"
 # Read in this order when several fits are summarized by one outcome: the strongest result first.

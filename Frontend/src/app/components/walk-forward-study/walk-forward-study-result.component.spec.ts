@@ -1,15 +1,17 @@
 import { provideRouter } from '@angular/router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RESEARCH_DEFAULT_FILL_MODE } from '../../models/fill-mode';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../services/jobs.service';
+import { etMidnightMs } from '../../shared/date/et-midnight';
+import { fakeCharts } from '../golden-search/testing/fake-charts';
 import { GridSearchService } from '../grid-search/grid-search.service';
 import { gridSearchDetail } from '../grid-search/testing/fixtures';
 import { WalkForwardStudyResultComponent } from './walk-forward-study-result.component';
 import { WalkForwardStudyService } from './walk-forward-study.service';
-import type { Fold, WalkForwardStudyDetail } from './walk-forward-study.types';
+import type { Fold, FoldTestCurve, WalkForwardFoldCurves, WalkForwardStudyDetail } from './walk-forward-study.types';
 
 function fold(overrides: Partial<Fold> = {}): Fold {
   return {
@@ -66,18 +68,40 @@ function detail(overrides: Partial<WalkForwardStudyDetail> = {}): WalkForwardStu
   };
 }
 
+const SESSION_DATES = ['2025-04-01', '2025-04-02', '2025-05-01', '2025-05-02', '2025-06-02', '2025-06-03'];
+const SESSIONS_MS = SESSION_DATES.map((day) => etMidnightMs(day));
+
+/** A fold's test-window curve over two sessions, ending at `end`. */
+function foldCurve(foldIndex: number, firstSession: number, end: number): FoldTestCurve {
+  return { fold_index: foldIndex, first_session: firstSession, cumulative_return: [end / 2, end], drawdown: [0, 0], deepest_drawdown: 0 };
+}
+
+function foldCurves(overrides: Partial<WalkForwardFoldCurves> = {}): WalkForwardFoldCurves {
+  return { sessions_ms: SESSIONS_MS.slice(0, 2), curves: [foldCurve(0, 0, 0.02)], not_recorded: [], ...overrides };
+}
+
 async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<WalkForwardStudyService> = {}) {
   const gridGet = vi.fn(async (id: string) => gridSearchDetail({ id, owner: { kind: 'walk_forward', owner_id: 'study-1', fold_index: 0, phase: 'test' }, leader_params: { short_window: 5 }, resume_refusal: null }));
+  const charts = fakeCharts();
   const view = await render(WalkForwardStudyResultComponent, {
     inputs: { studyId: row.id, pollMs: 0 },
     providers: [
       provideRouter([]),
-      { provide: WalkForwardStudyService, useValue: { get: vi.fn(async () => row), finish: vi.fn(), delete: vi.fn(async () => undefined), ...overrides } },
-      { provide: GridSearchService, useValue: { get: gridGet, cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', cells: [] })) } },
+      ...charts.providers,
+      { provide: WalkForwardStudyService, useValue: { get: vi.fn(async () => row), foldCurves: vi.fn(async () => foldCurves()), finish: vi.fn(), delete: vi.fn(async () => undefined), ...overrides } },
+      {
+        provide: GridSearchService,
+        useValue: {
+          get: gridGet,
+          cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', without_curve: 0, cells: [] })),
+          // An opened sweep draws its winner's curve; this one kept none.
+          cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] })),
+        },
+      },
       { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
     ],
   });
-  return { view, gridGet };
+  return { view, gridGet, charts: charts.charts };
 }
 
 describe('WalkForwardStudyResultComponent', () => {
@@ -97,6 +121,102 @@ describe('WalkForwardStudyResultComponent', () => {
 
     expect(await screen.findByText(new RegExp(formatReceiptLabel(ranUnder)))).not.toBeNull();
     expect(screen.queryByText(new RegExp(formatReceiptLabel(RESEARCH_DEFAULT_FILL_MODE)))).toBeNull();
+  });
+
+  it('draws each completed fold over its own test window, fold after fold, and names it by its winner', async () => {
+    const completed = [fold(), fold({ fold_index: 1, train_search_id: 'train-1', test_search_id: 'test-1', winner_params: { short_window: 10, long_window: 30 } })];
+    const read = foldCurves({ sessions_ms: SESSIONS_MS.slice(0, 4), curves: [foldCurve(0, 0, 0.02), foldCurve(1, 2, -0.01)] });
+    await renderResult(detail({ completed_folds: 2, failed_folds: 0, folds: completed }), { foldCurves: vi.fn(async () => read) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    await waitFor(() => expect(within(panel).getByRole('img').getAttribute('aria-label')).toContain('2 folds drawn'));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Show as table' }));
+    const rows = within(panel).getAllByRole('row').map((row) => [...row.querySelectorAll('th, td')].map((item) => item.textContent?.trim()));
+    // Each fold spans only its own sessions and ends where its own run ended: neither carries the other's gain.
+    expect(rows).toEqual([
+      ['Fold', 'Settings', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
+      ['Fold 1', 'short_window=5, long_window=30', '2025-04-01', '2025-04-02', '+2.0%', '0.0%'],
+      ['Fold 2', 'short_window=10, long_window=30', '2025-05-01', '2025-05-02', '-1.0%', '0.0%'],
+    ]);
+  });
+
+  it('leaves the sessions of a fold that did not complete empty on the date axis, between the folds that did', async () => {
+    // Folds 1 and 3 ran; fold 2 (the May sessions) failed. The read's sessions cover all three test windows.
+    const read = foldCurves({ sessions_ms: SESSIONS_MS, curves: [foldCurve(0, 0, 0.02), foldCurve(2, 4, 0.03)] });
+    const third = fold({ fold_index: 2, train_search_id: 'train-2', test_search_id: 'test-2' });
+    const { charts } = await renderResult(detail({ fold_count: 3, completed_folds: 2, folds: [...detail().folds, third] }), { foldCurves: vi.fn(async () => read) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    await waitFor(() => expect(within(panel).getByRole('img').getAttribute('aria-label')).toContain('2 folds drawn'));
+    const option = charts.at(-1)?.options.at(-1);
+    const axis = Array.isArray(option?.xAxis) ? option.xAxis[0] : option?.xAxis;
+    expect(axis !== undefined && 'data' in axis ? axis.data : null).toEqual(SESSION_DATES);
+    const drawn = (Array.isArray(option?.series) ? option.series : []).filter((series) => String(series.id).startsWith('equity:')).map((series) => series.data);
+    expect(drawn).toEqual([
+      [0.01, 0.02, '-', '-', '-', '-'],
+      ['-', '-', '-', '-', 0.015, 0.03],
+    ]);
+    // A hover names the one fold that scored the session, and says so on a session none did.
+    const tooltip = option?.tooltip;
+    const formatter = !Array.isArray(tooltip) && typeof tooltip?.formatter === 'function' ? tooltip.formatter : null;
+    const hoverAt = (dataIndex: number): unknown => (formatter === null ? null : Reflect.apply(formatter, undefined, [[{ dataIndex }]]));
+    expect(hoverAt(0)).toContain('Fold 1 · short_window=5, long_window=30');
+    expect(hoverAt(0)).not.toContain('did not score');
+    expect(hoverAt(2)).toContain('No fold has a curve at this session.');
+  });
+
+  it('says no curve was recorded when the completed folds kept none, and draws nothing', async () => {
+    await renderResult(detail(), { foldCurves: vi.fn(async () => foldCurves({ curves: [], not_recorded: [0] })) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    expect(await within(panel).findByText('No curve was recorded for this study’s folds.')).not.toBeNull();
+    expect(within(panel).queryByRole('img')).toBeNull();
+  });
+
+  it('does not promise a curve to a finished study in which no fold completed', async () => {
+    const failed = detail().folds.map((item) => ({ ...item, status: 'failed' as const }));
+    await renderResult(detail({ completed_folds: 0, failed_folds: 2, folds: failed }), { foldCurves: vi.fn(async () => foldCurves({ curves: [] })) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    expect(await within(panel).findByText('No fold completed, so there is no curve to draw.')).not.toBeNull();
+  });
+
+  it('names a completed fold that has no curve beside the folds that are drawn', async () => {
+    await renderResult(detail(), { foldCurves: vi.fn(async () => foldCurves({ not_recorded: [1] })) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    await waitFor(() => expect(within(panel).getByRole('img').getAttribute('aria-label')).toContain('1 fold drawn'));
+    expect(within(panel).getByText(/No curve recorded for fold 2\./)).not.toBeNull();
+  });
+
+  it('waits for a fold to run before it draws, and offers the read again when it fails', async () => {
+    const read = vi.fn(async (): Promise<WalkForwardFoldCurves> => {
+      throw new Error('offline');
+    });
+    await renderResult(detail({ status: 'running', verdict: null }), { foldCurves: read });
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    expect((await within(panel).findByRole('alert')).textContent).toContain('The folds’ curves could not be loaded.');
+
+    read.mockImplementation(async () => foldCurves({ curves: [] }));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Try again' }));
+
+    expect(await within(panel).findByText('A fold’s curve appears here once its test window has run.')).not.toBeNull();
+  });
+
+  it('reads the folds’ curves again when another fold completes, and not on a poll that completes none', async () => {
+    let row = detail({ status: 'running', verdict: null });
+    const read = vi.fn(async () => foldCurves());
+    const { view } = await renderResult(row, { get: vi.fn(async () => row), foldCurves: read });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+
+    await view.fixture.componentInstance.reload();
+    await view.fixture.whenStable();
+    expect(read).toHaveBeenCalledTimes(1);
+
+    row = detail({ status: 'running', verdict: null, completed_folds: 2 });
+    await view.fixture.componentInstance.reload();
+
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
 
   it('opens a fold sweep in place through the Grid Search result view and returns to the study', async () => {

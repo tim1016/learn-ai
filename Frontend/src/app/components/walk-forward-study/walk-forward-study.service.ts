@@ -6,6 +6,7 @@ import { environment } from '../../../environments/environment';
 import { JobsService } from '../../services/jobs.service';
 import { toRefusal } from '../grid-search/grid-search.service';
 import type {
+  WalkForwardFoldCurves,
   WalkForwardStudyDetail,
   WalkForwardStudyHistoryFilters,
   WalkForwardStudyPreflight,
@@ -57,6 +58,11 @@ export class WalkForwardStudyService {
 
   async get(id: string): Promise<WalkForwardStudyDetail> {
     return firstValueFrom(this.http.get<WalkForwardStudyDetail>(`${this.base}/${encodeURIComponent(id)}`));
+  }
+
+  /** Each completed fold's winner over its test window, as a daily curve from the study's starting capital afresh. */
+  async foldCurves(id: string): Promise<WalkForwardFoldCurves> {
+    return firstValueFrom(this.http.get<WalkForwardFoldCurves>(`${this.base}/${encodeURIComponent(id)}/fold-curves`));
   }
 
   async delete(id: string): Promise<void> {

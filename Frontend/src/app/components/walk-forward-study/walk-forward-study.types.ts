@@ -100,3 +100,27 @@ export interface WalkForwardStudyHistoryFilters {
   status?: WalkForwardStudyStatus;
   job_id?: string;
 }
+
+/** One fold's winner over its test window: its values from `first_session` on along the read's `sessions_ms`, null at a session it did not score. */
+export interface FoldTestCurve {
+  fold_index: number;
+  first_session: number;
+  cumulative_return: (number | null)[];
+  /** Null as a whole when the run's peak equity never rose above 0. */
+  drawdown: (number | null)[] | null;
+  deepest_drawdown: number | null;
+}
+
+export interface WalkForwardFoldCurves {
+  /** Every session close of every fold's test window, in order. */
+  sessions_ms: number[];
+  /** In fold order; a fold that did not complete has none, and its sessions stand empty. */
+  curves: FoldTestCurve[];
+  /** The completed folds whose winner's test run kept no daily equity. */
+  not_recorded: number[];
+}
+
+/** A fold's winning settings as the page writes them; a dash for a fold with no winner. */
+export function winnerText(fold: Fold): string {
+  return fold.winner_params ? Object.entries(fold.winner_params).map(([k, v]) => `${k}=${v}`).join(', ') : '—';
+}

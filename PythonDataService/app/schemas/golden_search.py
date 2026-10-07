@@ -42,6 +42,7 @@ from app.research.sweep.ranking import RankingMeasure
 from app.research.walk_forward_study.verdict import VerdictLabel
 from app.schemas.engine_backtest import COMMISSION_PER_ORDER_DESCRIPTION
 from app.schemas.grid_search import FillModeName
+from app.schemas.session_curves import SessionCurve, SessionsMs
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
@@ -1176,24 +1177,12 @@ class GoldenSearchRunsPage(_Wire):
     rows: list[GoldenSearchRun]
 
 
-class GoldenSearchRunCurve(_Wire):
-    """One run's daily curve against the read's ``sessions_ms``: its values from ``first_session`` to its last session."""
-
+class GoldenSearchRunCurve(SessionCurve):
     evaluation_key: str
-    first_session: int = Field(ge=0, description="The index in sessions_ms of the run's first session close.")
-    cumulative_return: list[float | None] = Field(
-        description="Equity over the study's starting capital, less 1, at each session close from first_session on; null at a session the run did not score."
-    )
-    drawdown: list[float | None] | None = Field(
-        description="Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0."
-    )
-    deepest_drawdown: float | None = Field(
-        description="The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown."
-    )
 
 
 class GoldenSearchRunCurves(_Wire):
-    sessions_ms: list[InstantMs] = Field(description="Every session close any returned curve scored, in order, sent once.")
+    sessions_ms: SessionsMs = Field(description="Every session close any returned curve scored, in order, sent once.")
     curves: list[GoldenSearchRunCurve]
     not_recorded: list[str] = Field(description="The runs asked for that kept no daily equity; never drawn as a flat line.")
 
@@ -1209,7 +1198,7 @@ class GoldenSearchCurveLine(_Wire):
 
 
 class GoldenSearchCurveSet(_Wire):
-    sessions_ms: list[InstantMs] = Field(description="Every session close any line of the set scored, in order, sent once.")
+    sessions_ms: SessionsMs = Field(description="Every session close any line of the set scored, in order, sent once.")
     lines: list[GoldenSearchCurveLine]
     left_out: int = Field(description="Other scored points with a curve that this read did not return, past its cap; named lines are never left out.")
     not_recorded: int = Field(description="Completed runs of the set that kept no daily equity.")

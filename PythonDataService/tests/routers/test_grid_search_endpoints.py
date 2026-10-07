@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import date
 from pathlib import Path
@@ -10,7 +11,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.main import app
 from app.research.grid_search import service
 from app.research.grid_search.models import CellResult
@@ -166,6 +167,50 @@ async def test_launch_lists_immediately_and_the_result_pages_on_the_server(clien
         assert (await c.get(f"/api/research/grid-search/{search_id}")).status_code == 404
 
     assert ran["job_id"] == f"job-http-1-{id(monkeypatch)}"
+
+
+async def test_a_cells_curve_is_read_by_its_hash_on_the_searchs_capital_and_a_cell_without_one_is_named(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: None)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
+    job = f"job-http-curves-{id(monkeypatch)}"
+    days = [session_close_ms_utc(day) for day in SESSIONS[:3]]
+
+    async with client as c:
+        launched = await c.post("/api/jobs-internal/grid-search", json={**_body(initial_cash=50_000.0), "jobId": job})
+        assert launched.status_code == 202, launched.text
+        search_id = launched.json()["search_id"]
+
+        def engine(candidate) -> CellResult:
+            # One cell keeps its curve; the other is recorded without one, as a cell from before cells kept theirs.
+            kept = candidate.params["short_window"] == 2.0
+            curve = [(days[0], 50_500.0), (days[1], 49_995.0), (days[2], 51_005.0)] if kept else None
+            return CellResult(params_hash=candidate.params_hash, params=dict(candidate.params), status="completed", total_trades=3, sharpe_ratio=1.0, daily_equity=curve)
+
+        await asyncio.to_thread(service.execute, search_id, job_id=job, execute_cell=engine)
+
+        cells = f"/api/research/grid-search/{search_id}/cells"
+        page = (await c.get(cells)).json()
+        by_window = {cell["params"]["short_window"]: cell for cell in page["cells"]}
+        drawn, undrawn = by_window[2.0]["params_hash"], by_window[3.0]["params_hash"]
+        assert (by_window[2.0]["has_curve"], by_window[3.0]["has_curve"], page["without_curve"]) == (True, False, 1)
+
+        curves = await c.get(f"{cells}/curves", params=[("params_hash", undrawn), ("params_hash", drawn), ("params_hash", "no-such-cell"), ("params_hash", drawn)])
+        assert curves.status_code == 200, curves.text
+        body = curves.json()
+        assert body["sessions_ms"] == days and body["not_recorded"] == [undrawn, "no-such-cell"]
+        (curve,) = body["curves"]
+        assert (curve["params_hash"], curve["first_session"]) == (drawn, 0)
+        # On the search's own starting capital, 50,000: 50,500 is +1%.
+        assert curve["cumulative_return"] == pytest.approx([0.01, -0.0001, 0.0201], abs=1e-12, rel=0)
+        assert curve["drawdown"] == pytest.approx([0.0, 49_995.0 / 50_500.0 - 1.0, 0.0], abs=1e-12, rel=0)
+        assert curve["deepest_drawdown"] == pytest.approx(49_995.0 / 50_500.0 - 1.0, abs=1e-12, rel=0)
+
+        assert (await c.get("/api/research/grid-search/no-such-search/cells/curves", params={"params_hash": drawn})).status_code == 404
+        assert (await c.get(f"{cells}/curves")).status_code == 422
+        too_many = [("params_hash", f"cell-{index}") for index in range(grid_search_router.MAX_CURVES + 1)]
+        assert (await c.get(f"{cells}/curves", params=too_many)).status_code == 422
+        await c.delete(f"/api/research/grid-search/{search_id}")
 
 
 async def test_finish_of_a_completed_search_is_refused(client, lake, monkeypatch) -> None:

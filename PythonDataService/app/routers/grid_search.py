@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from anyio import to_thread
 from fastapi import APIRouter, HTTPException, Query, Response, status
@@ -22,12 +22,14 @@ from app.jobs.runner import run_in_thread
 from app.research.grid_search import repository as repo
 from app.research.grid_search import service
 from app.research.grid_search.engine_adapter import default_execute_cell
-from app.research.grid_search.models import CellRow, SearchRow
+from app.research.grid_search.models import CellRow, GridSearchSpec, SearchRow
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
+from app.research.session_curves import curves_read
 from app.research.sweep.ranking import is_eligible
 from app.routers import research_records as records
 from app.schemas.grid_search import (
+    GridSearchCellCurvesResponse,
     GridSearchCellPageResponse,
     GridSearchCellResponse,
     GridSearchDetailResponse,
@@ -45,6 +47,8 @@ router = APIRouter()
 jobs_router = APIRouter()
 logger = logging.getLogger(__name__)
 NOUN = "search"
+#: The most curves one read returns: an overlay past this is unreadable.
+MAX_CURVES = 200
 
 
 def _summary(row: SearchRow, *, live: bool | None) -> dict[str, Any]:
@@ -196,11 +200,24 @@ async def list_grid_search_cells(
         page_size=page_result.page_size,
         sort_by=sort_by,
         direction=direction,
+        without_curve=page_result.without_curve,
         cells=[
             _cell_response(cell, leader_hash=row.leader_params_hash, measure=row.request["measure"], min_trades=int(row.request["min_trades"]))
             for cell in page_result.cells
         ],
     )
+
+
+@router.get("/{search_id}/cells/curves", response_model=GridSearchCellCurvesResponse)
+async def get_grid_search_cell_curves(
+    search_id: str,
+    params_hash: Annotated[list[str], Query(description="The params hash of each cell to draw.", max_length=MAX_CURVES)],
+) -> GridSearchCellCurvesResponse:
+    """The named cells' daily curves: cumulative return and fall from peak at each session close (#2935)."""
+    row = await _load(search_id)
+    asked = list(dict.fromkeys(params_hash))
+    stored = await with_connection(repo.cell_curves, search_id, asked)
+    return GridSearchCellCurvesResponse.model_validate(curves_read(asked, stored, GridSearchSpec.from_request_dict(row.request).initial_cash, key="params_hash"))
 
 
 @router.delete("/{search_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)

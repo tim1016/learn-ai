@@ -93,6 +93,15 @@ describe('GridSearchService', () => {
     await expect(pending).resolves.toMatchObject({ total: 0 });
   });
 
+  it('asks for the named cells\' curves, one params_hash a cell', async () => {
+    const pending = service.cellCurves('abc', ['h1', 'h2']);
+    const request = http.expectOne((req) => req.url === `${BASE}/abc/cells/curves`);
+    expect(request.request.params.getAll('params_hash')).toEqual(['h1', 'h2']);
+    request.flush({ sessions_ms: [1], curves: [], not_recorded: ['h1', 'h2'] });
+
+    expect((await pending).not_recorded).toEqual(['h1', 'h2']);
+  });
+
   it('deletes by id', async () => {
     const pending = service.delete('abc');
     const req = http.expectOne(`${BASE}/abc`);

@@ -5417,6 +5417,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/grid-search/{search_id}/cells/curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Grid Search Cell Curves
+         * @description The named cells' daily curves: cumulative return and fall from peak at each session close (#2935).
+         */
+        get: operations["get_grid_search_cell_curves_api_research_grid_search__search_id__cells_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/indicator-params/{indicator_name}": {
         parameters: {
             query?: never;
@@ -5845,6 +5865,31 @@ export interface paths {
          * @description Cancel a running study first and wait for the worker's acknowledgement, then remove it and its sweeps.
          */
         delete: operations["delete_walk_forward_study_api_research_walk_forward_studies__study_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/walk-forward-studies/{study_id}/fold-curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Walk Forward Fold Curves
+         * @description Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).
+         *
+         *     Every fold's test run starts from the study's starting capital, so each
+         *     curve starts flat. The sessions are those of every fold's test window, so
+         *     a fold with no curve — failed, not yet run, or recorded without one —
+         *     stands on the axis as a gap and nothing is drawn across it.
+         */
+        get: operations["get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -13175,6 +13220,31 @@ export interface components {
             /** Training Candidates */
             training_candidates?: components["schemas"]["TrainingCandidateResult"][];
         };
+        /** FoldTestCurve */
+        FoldTestCurve: {
+            /**
+             * Cumulative Return
+             * @description Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.
+             */
+            cumulative_return: (number | null)[];
+            /**
+             * Deepest Drawdown
+             * @description The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.
+             */
+            deepest_drawdown: number | null;
+            /**
+             * Drawdown
+             * @description Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.
+             */
+            drawdown: (number | null)[] | null;
+            /**
+             * First Session
+             * @description The index in sessions_ms of the run's first session close.
+             */
+            first_session: number;
+            /** Fold Index */
+            fold_index: number;
+        };
         /** FreshCross */
         FreshCross: {
             /**
@@ -15666,14 +15736,11 @@ export interface components {
             /** Window Start Ms */
             window_start_ms: number;
         };
-        /**
-         * GoldenSearchRunCurve
-         * @description One run's daily curve against the read's ``sessions_ms``: its values from ``first_session`` to its last session.
-         */
+        /** GoldenSearchRunCurve */
         GoldenSearchRunCurve: {
             /**
              * Cumulative Return
-             * @description Equity over the study's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.
+             * @description Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.
              */
             cumulative_return: (number | null)[];
             /**
@@ -16628,6 +16695,49 @@ export interface components {
             /** Vega */
             vega?: number | null;
         };
+        /** GridSearchCellCurve */
+        GridSearchCellCurve: {
+            /**
+             * Cumulative Return
+             * @description Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.
+             */
+            cumulative_return: (number | null)[];
+            /**
+             * Deepest Drawdown
+             * @description The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.
+             */
+            deepest_drawdown: number | null;
+            /**
+             * Drawdown
+             * @description Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.
+             */
+            drawdown: (number | null)[] | null;
+            /**
+             * First Session
+             * @description The index in sessions_ms of the run's first session close.
+             */
+            first_session: number;
+            /** Params Hash */
+            params_hash: string;
+        };
+        /**
+         * GridSearchCellCurvesResponse
+         * @description The named cells' daily curves on the search's starting capital (#2935).
+         */
+        GridSearchCellCurvesResponse: {
+            /** Curves */
+            curves: components["schemas"]["GridSearchCellCurve"][];
+            /**
+             * Not Recorded
+             * @description The cells asked for that kept no daily equity; never drawn as a flat line.
+             */
+            not_recorded: string[];
+            /**
+             * Sessions Ms
+             * @description Every session close any returned curve scored, in order, sent once.
+             */
+            sessions_ms: number[];
+        };
         /** GridSearchCellPageResponse */
         GridSearchCellPageResponse: {
             /** Cells */
@@ -16645,6 +16755,11 @@ export interface components {
             sort_by: string;
             /** Total */
             total: number;
+            /**
+             * Without Curve
+             * @description Completed cells of the whole search that kept no daily equity; they are listed and cannot be drawn.
+             */
+            without_curve: number;
         };
         /** GridSearchCellResponse */
         GridSearchCellResponse: {
@@ -16660,6 +16775,11 @@ export interface components {
             error: string | null;
             /** Exploratory */
             exploratory: boolean;
+            /**
+             * Has Curve
+             * @description The cell kept its daily equity; a failed cell never does.
+             */
+            has_curve: boolean;
             /** Is Leader */
             is_leader: boolean;
             /** Max Drawdown Pct */
@@ -25039,6 +25159,27 @@ export interface components {
             symbol: string;
             /** Walk Forward Id */
             walk_forward_id: string;
+        };
+        /**
+         * WalkForwardFoldCurvesResponse
+         * @description Each completed fold's winner over its test window, from the study's starting capital afresh (#2936).
+         */
+        WalkForwardFoldCurvesResponse: {
+            /**
+             * Curves
+             * @description In fold order. A fold that did not complete has none: its sessions stand empty.
+             */
+            curves: components["schemas"]["FoldTestCurve"][];
+            /**
+             * Not Recorded
+             * @description The completed folds whose winner's test run kept no daily equity; never drawn as a flat line.
+             */
+            not_recorded: number[];
+            /**
+             * Sessions Ms
+             * @description Every session close of every fold's test window, in order, sent once.
+             */
+            sessions_ms: number[];
         };
         /**
          * WalkForwardHttpRequest
@@ -36082,6 +36223,40 @@ export interface operations {
             };
         };
     };
+    get_grid_search_cell_curves_api_research_grid_search__search_id__cells_curves_get: {
+        parameters: {
+            query: {
+                /** @description The params hash of each cell to draw. */
+                params_hash: string[];
+            };
+            header?: never;
+            path: {
+                search_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GridSearchCellCurvesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_indicator_params_api_research_indicator_params__indicator_name__get: {
         parameters: {
             query?: never;
@@ -36935,6 +37110,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalkForwardFoldCurvesResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

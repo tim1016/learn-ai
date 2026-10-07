@@ -7,8 +7,9 @@ import { percentText, signedPercentText } from './golden-search-display';
  * The two-part session chart every equity view shares (#2821, #2930): each
  * line's cumulative return on top and its fall from its own peak beneath, on
  * one axis of session closes, with the worst-fall limit dashed on the fall
- * axis. A caller decides which lines to draw and how each looks, and writes
- * its own hover and table; the grids, axes, limit line and gaps are here.
+ * axis when the page has one. A caller decides which lines to draw and how
+ * each looks, and writes its own hover and table; the grids, axes, limit line
+ * and gaps are here.
  */
 
 /** One drawn line: its values at each session of the shared axis, and how it looks. */
@@ -63,11 +64,16 @@ export interface ReadCurve {
  * and fall at each. The axis holds the sessions a drawn curve scored and no
  * other, so it does not depend on which curves were read together. Curves of
  * one read already share its sessions; curves of several reads are joined by
- * instant. A curve with no fall recorded has none at any session.
+ * instant. A curve with no fall recorded has none at any session. `also`
+ * names sessions the axis holds though no curve scored them: a window no
+ * curve covers then shows as a gap.
  */
-export function onOneAxis(curves: readonly ReadCurve[]): { readonly dates: string[]; readonly lines: { readonly returns: (number | null)[]; readonly falls: (number | null)[] }[] } {
+export function onOneAxis(
+  curves: readonly ReadCurve[],
+  also: readonly number[] = [],
+): { readonly dates: string[]; readonly lines: { readonly returns: (number | null)[]; readonly falls: (number | null)[] }[] } {
   const closes = curves.map(({ sessions, curve }) => sessions.slice(curve.first_session, curve.first_session + curve.cumulative_return.length));
-  const { sessions, dates } = sessionAxis(curves.map(({ curve }, i) => closes[i].filter((_, at) => curve.cumulative_return[at] !== null)));
+  const { sessions, dates } = sessionAxis([...curves.map(({ curve }, i) => closes[i].filter((_, at) => curve.cumulative_return[at] !== null)), also]);
   return {
     dates,
     lines: curves.map(({ curve }, i) => ({
@@ -94,8 +100,8 @@ export function lastValue(values: readonly (number | null)[]): number | null {
   return null;
 }
 
-/** The drawn option: `hover` writes the tooltip for the session at an index. The limit is marked on the first line. */
-export function sessionCurvesOption(lines: readonly SessionLine[], dates: readonly string[], ceiling: number, hover: (index: number) => string, theme: ChartTheme): ChartOption {
+/** The drawn option: `hover` writes the tooltip for the session at an index. A limit (`ceiling`, null for none) is marked on the first line. */
+export function sessionCurvesOption(lines: readonly SessionLine[], dates: readonly string[], ceiling: number | null, hover: (index: number) => string, theme: ChartTheme): ChartOption {
   const axisLabel = { color: theme.textSecondary, fontSize: 11 };
   const axisLine = { lineStyle: { color: theme.axis } };
   const splitLine = { lineStyle: { color: theme.gridLine } };
@@ -126,7 +132,7 @@ export function sessionCurvesOption(lines: readonly SessionLine[], dates: readon
         gridIndex: 1,
         max: 0,
         // Room for the limit line when every fall stays above it.
-        min: (extent: { min: number }) => Math.min(extent.min, -ceiling),
+        ...(ceiling === null ? {} : { min: (extent: { min: number }) => Math.min(extent.min, -ceiling) }),
         splitNumber: 2,
         axisLabel: { ...axisLabel, formatter: (value: number) => signedPercentText(value) },
         splitLine,
@@ -146,7 +152,7 @@ export function sessionCurvesOption(lines: readonly SessionLine[], dates: readon
           yAxisIndex: 1,
           data: plotted(line.falls),
           ...(line.filled ? { areaStyle: { color, opacity: 0.15 } } : {}),
-          ...(index === 0
+          ...(index === 0 && ceiling !== null
             ? {
                 markLine: {
                   silent: true,

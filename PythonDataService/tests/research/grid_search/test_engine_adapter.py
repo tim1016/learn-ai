@@ -22,11 +22,12 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.data_lake.path_policy import lake_subpath
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.research.backtest_runs.service import SAVE_FAILED
 from app.research.grid_search import engine_adapter, service
+from app.research.sweep.daily_equity import daily_equity
 from app.research.sweep.grid import RunSpec, StrategyGridConfig, ValueListRange, expand_grid
-from app.schemas.engine_backtest import EngineBacktestRequest
+from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.services import engine_backtest_service as engine_service
 from app.services.engine_backtest_service import execute_engine_backtest
 from tests._helpers.lean_store import seed_store_day
@@ -197,6 +198,38 @@ def test_a_summary_run_is_byte_identical_to_a_full_run_without_a_database(lake: 
     assert summary.insights == []
     assert summary.lean_statistics is None
     assert summary.validation_analytics is None
+    # The cell keeps the run's equity at each session close: the full run's per-bar curve, one point a session (#2935).
+    candidate = RunSpec(symbol="SPY", strategy_key="sma_crossover", params={"short_window": 2.0, "long_window": 5.0}, params_hash="cell")
+    cell = engine_adapter.cell_from_response(candidate, summary)
+    assert cell.daily_equity == daily_equity(full.equity_curve)
+    assert [ms for ms, _ in cell.daily_equity] == [session_close_ms_utc(day) for day in SESSIONS[1:]]
+
+
+def test_a_day_end_the_calendar_refuses_costs_the_cell_its_curve_and_never_its_numbers() -> None:
+    saturday = service.et_midnight_ms(date(2025, 1, 11)) + 12 * 60 * 60 * 1000
+    candidate = RunSpec(symbol="SPY", strategy_key="sma_crossover", params={"short_window": 2.0}, params_hash="cell")
+    response = EngineBacktestResponse(
+        success=True,
+        strategy_name="sma_crossover",
+        fill_mode="decision_minute_open",
+        initial_cash=100_000.0,
+        final_equity=100_750.0,
+        net_profit=750.0,
+        total_fees=0.0,
+        total_trades=4,
+        winning_trades=3,
+        losing_trades=1,
+        win_rate=0.75,
+        statistics={"net_profit": 750.0, "net_profit_pct": 0.0075, "sharpe_ratio": 1.25},
+        equity_day_ends=[{"timestamp": saturday, "equity": 100_000.0}],
+    )
+
+    cell = engine_adapter.cell_from_response(candidate, response)
+    without_day_ends = engine_adapter.cell_from_response(candidate, response.model_copy(update={"equity_day_ends": []}))
+
+    assert (cell.status, cell.net_profit, cell.daily_equity) == ("completed", 750.0, None)
+    # No curve, not an empty one: the cell counts among those with no curve recorded.
+    assert without_day_ends.daily_equity is None
 
 
 def test_a_summary_run_cannot_ask_for_a_persisted_study() -> None:
