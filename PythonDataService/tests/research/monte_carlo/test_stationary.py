@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
-import pyarrow.ipc as ipc
 import pytest
 
 from app.research.monte_carlo.stationary import CHUNK_REPLICATIONS, stationary_index_chunks, stationary_indices
-
-SB_001 = Path(__file__).resolve().parents[2] / "fixtures" / "golden" / "resampling" / "SB-001" / "v1"
+from tests.fixtures.golden_support.io import read_arrow
+from tests.fixtures.golden_support.registry import default as registry
 
 
 def _ar1(n: int, seed: int) -> np.ndarray:
@@ -39,6 +36,15 @@ def test_stationary_indices_same_seed_same_indices() -> None:
     assert first.dtype == np.int64
     assert np.array_equal(first, again)
     assert first.min() >= 0 and first.max() < 50
+
+
+def test_stationary_indices_seeded_draw_is_pinned() -> None:
+    # The raw draws under this seed: starts 5 5 2 2 3 6 6 1 / 6 3 0 1 6 4 5 1 / 0 6 4 6 6 1 1 2, and a new block at
+    # positions 4 and 7 / 1 and 2 / 2, 6 and 7 (each row also starts one at 0). Rows 0 and 2 wrap from 6 to 0.
+    # A stored reading replays to the same numbers only while this holds, so a failure calls for a new
+    # convention name, never a new literal.
+    drawn = stationary_indices(7, size=8, mean_block=3, replications=3, rng=np.random.default_rng(20261006))
+    assert drawn.tolist() == [[5, 6, 0, 1, 3, 4, 5, 1], [6, 3, 0, 1, 2, 3, 4, 5], [0, 1, 4, 5, 6, 0, 1, 2]]
 
 
 def test_stationary_indices_mean_block_one_is_the_ordinary_bootstrap() -> None:
@@ -91,9 +97,8 @@ def test_stationary_draws_refuse_bad_arguments(kwargs: dict[str, float]) -> None
         stationary_index_chunks(n, rng=np.random.default_rng(0), **arguments)  # type: ignore[arg-type]
 
 
-def _read(name: str) -> dict[str, np.ndarray]:
-    with ipc.open_file(str(SB_001 / name)) as reader:
-        table = reader.read_all()
+def _read(file_key: str) -> dict[str, np.ndarray]:
+    table = read_arrow(registry.resolve("SB-001", file_key))
     return {column: table[column].to_numpy() for column in table.schema.names}
 
 
@@ -101,7 +106,7 @@ def test_stationary_bootstrap_agrees_with_arch_fixture_sb_001() -> None:
     # The statistic the readings score a resampled path on, so the fixture holds the draw and it together.
     from app.research.golden_search.chance import path_sharpe
 
-    series, reference = _read("input.arrow"), _read("output.arrow")
+    series, reference = _read("input"), _read("output")
     a, b = series["a"], series["b"]
     means, sharpes, differences = [], [], []
     for index in stationary_index_chunks(a.size, size=a.size, mean_block=5, replications=200_000, rng=np.random.default_rng(1)):
@@ -112,6 +117,6 @@ def test_stationary_bootstrap_agrees_with_arch_fixture_sb_001() -> None:
     for name, ours in (("mean", means), ("sharpe", sharpes), ("sharpe_difference", differences)):
         drawn = np.concatenate(ours)
         shares = [float(np.mean(drawn <= threshold)) for threshold in reference[name]]
-        # Monte Carlo agreement, not float equality: each side places a share to sqrt(p(1-p)/200,000) <= 0.0011,
+        # Monte Carlo agreement, not float equality: each side places a share to sqrt(p(1-p)/200,000) <= 0.00112,
         # so their difference has a standard error of at most 0.0016, and 0.008 is five of them.
         assert np.allclose(shares, reference["level"], atol=0.008, rtol=0.0), name

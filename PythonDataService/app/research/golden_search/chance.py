@@ -2,7 +2,9 @@
 
 Formula: a detail run's sessions s = 1..n carry its daily return r_s
   (r_1 = E_1 / capital - 1, r_s = E_s / E_{s-1} - 1) and x_s, the trades that
-  exited in session s. A resample is a stationary-bootstrap draw of m session
+  exited in session s. A session the run has no equity point for is not in
+  the series: its move is in the next session's return, as in the engine's
+  own daily returns. A resample is a stationary-bootstrap draw of m session
   indices (``monte_carlo/stationary.py``, mean block MEAN_BLOCK_SESSIONS); two
   runs over the same sessions take the same indices, so they stay paired. On
   a resampled path:
@@ -10,8 +12,8 @@ Formula: a detail run's sessions s = 1..n carry its daily return r_s
   * Sharpe = mean(r) / sd(r) x sqrt(252), sd over m - 1; undefined on fewer
     than two sessions or when every r is equal;
   * worst fall = max_t (peak_t - e_t) / peak_t over e_0 = 1,
-    e_t = prod_{u<=t}(1 + r_u): session closes only, so never above the
-    engine's per-bar figure;
+    e_t = prod_{u<=t}(1 + r_u): the starting capital and the session closes
+    only, so a fall inside a day can be deeper;
   * trades = sum of x.
   An undefined statistic is NaN, and so is one that overflows: never an
   infinity. NaN loses every comparison, so it never counts as beating
@@ -30,10 +32,15 @@ Validated against: tests/research/golden_search/test_chance.py (the engine's
   ``_daily_returns``, ``_sharpe`` and ``_max_drawdown``, ``atol=1e-12``; and
   hand-computed paths).
 
-One accepted difference from the engine: its Sharpe is undefined when the sd
-it computes is exactly 0, which rounding can miss on a constant non-zero
-series. Here "every return equal" is tested directly. The two agree on a flat
-run and whenever the returns differ.
+Two differences from the engine's own figures:
+  * its worst fall reads every bar and starts its peak at the first bar, not
+    at the starting capital. It is usually the deeper of the two, but a run
+    already below its starting capital on the first bar has that first loss
+    counted here and not there;
+  * its Sharpe is undefined when the sd it computes is exactly 0, which
+    rounding can miss on a constant non-zero series. Here "every return
+    equal" is tested directly. The two agree on a flat run and whenever the
+    returns differ.
 
 Only a detail run can be read. Every run keeps its daily curve, but the trades
 that exited in each session come from the trade list, which a detail run
@@ -70,11 +77,11 @@ REHEARSAL_TARGET = 0.80
 #: Below this many sessions a resample says nothing worth reading.
 MIN_SESSIONS = 20
 
-NO_TRADE_LIST = "The run kept no trade list, so its trades cannot be counted session by session. Only a detail run keeps one."
+NO_TRADE_LIST = "The run kept no trade list, so the trades that exited in each session cannot be counted. A daily curve alone does not record them."
 NOT_POSITIVE_CAPITAL = "The run's starting capital is not a positive amount, so returns cannot be measured against it."
 NOT_FINITE = "The run's daily equity holds a value that is not a finite number."
 REACHED_ZERO = "The account fell to zero or below, so its returns cannot be resampled."
-NOT_ONE_POINT_A_SESSION = "The run's daily equity is not one point for each session, in order."
+OUT_OF_ORDER = "The run's daily equity has two points on one day, or days out of order."
 UNPLACED_EXIT = "A trade exited on a day with no equity point, so trades cannot be counted by session."
 
 
@@ -92,9 +99,9 @@ def reading_basis() -> dict[str, Any]:
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class SessionSeries:
-    """One detail run, session by session."""
+    """One detail run, session by session. Its arrays are read-only."""
 
     # Each session's close, int64 ms UTC. Two runs are paired when these are equal.
     session_ms: tuple[int, ...]
@@ -105,7 +112,11 @@ class SessionSeries:
 
 
 def session_series(detail: Mapping[str, Any] | None) -> SessionSeries | str:
-    """A detail run's sessions, or why they cannot be resampled."""
+    """A detail run's sessions, or why they cannot be resampled.
+
+    ``None`` is a run with no detail payload: one that was not a detail run, that failed, or that was never
+    evaluated. A caller that knows which should say so before asking here.
+    """
     if detail is None:
         return NO_TRADE_LIST
     capital = float(detail["initial_cash"])
@@ -122,7 +133,7 @@ def session_series(detail: Mapping[str, Any] | None) -> SessionSeries | str:
         return REACHED_ZERO
     days = [et_date_at_ms(ms) for ms, _ in daily]
     if any(later <= earlier for earlier, later in pairwise(days)):
-        return NOT_ONE_POINT_A_SESSION
+        return OUT_OF_ORDER
     position = {day: index for index, day in enumerate(days)}
     exits = np.zeros(len(daily), dtype=np.int64)
     for trade in detail["trades"]:
@@ -130,7 +141,9 @@ def session_series(detail: Mapping[str, Any] | None) -> SessionSeries | str:
         if index is None:
             return UNPLACED_EXIT
         exits[index] += 1
-    return SessionSeries(session_ms=tuple(ms for ms, _ in daily), returns=equity[1:] / equity[:-1] - 1.0, exits=exits, capital=capital)
+    returns = equity[1:] / equity[:-1] - 1.0
+    returns.flags.writeable = exits.flags.writeable = False
+    return SessionSeries(session_ms=tuple(ms for ms, _ in daily), returns=returns, exits=exits, capital=capital)
 
 
 def _defined(values: np.ndarray) -> np.ndarray:

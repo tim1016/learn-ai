@@ -16,8 +16,8 @@ from app.research.golden_search.chance import (
     MIN_SESSIONS,
     NO_TRADE_LIST,
     NOT_FINITE,
-    NOT_ONE_POINT_A_SESSION,
     NOT_POSITIVE_CAPITAL,
+    OUT_OF_ORDER,
     REACHED_ZERO,
     UNPLACED_EXIT,
     path_net_return,
@@ -138,8 +138,17 @@ def test_session_series_counts_each_trade_in_the_session_it_exited() -> None:
     assert series.exits.sum() == 4 and series.exits[4] == 2 and series.exits[29] == 1
 
 
+def test_session_series_cannot_be_altered_once_read() -> None:
+    series = session_series(_detail(_equity(30, seed=11), exits=(3,)))
+    assert not isinstance(series, str)
+    with pytest.raises(ValueError, match="read-only"):
+        series.returns[0] = 0.0
+    with pytest.raises(ValueError, match="read-only"):
+        series.exits[3] += 1
+
+
 def test_session_series_needs_a_trade_list_and_enough_sessions() -> None:
-    # Every run keeps a daily curve, but only a detail run says when each trade exited.
+    # Every run keeps a daily curve, but only a detail payload says when each trade exited.
     assert session_series(None) == NO_TRADE_LIST
     short = session_series(_detail(_equity(MIN_SESSIONS - 1, seed=4)))
     assert isinstance(short, str) and str(MIN_SESSIONS - 1) in short and str(MIN_SESSIONS) in short
@@ -160,7 +169,7 @@ def test_session_series_refuses_equity_it_cannot_take_returns_of(position: int, 
 
 @pytest.mark.parametrize(("first", "second"), [(5, 6), (5, 9), (9, 5)])
 def test_session_series_refuses_sessions_repeated_or_out_of_order(first: int, second: int) -> None:
-    assert session_series(_reordered(first, second)) == NOT_ONE_POINT_A_SESSION
+    assert session_series(_reordered(first, second)) == OUT_OF_ORDER
 
 
 def test_session_series_refuses_a_trade_that_exited_outside_its_sessions() -> None:

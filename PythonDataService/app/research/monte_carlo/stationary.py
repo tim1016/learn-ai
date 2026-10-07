@@ -18,6 +18,9 @@ Validated against: tests/research/monte_carlo/test_stationary.py (the variance
 Draw order is part of the contract: each chunk of ``CHUNK_REPLICATIONS``
 resamples draws its block starts (``rng.integers``) and then its new-block
 uniforms (``rng.random``), chunks in order, so a seed fixes every index.
+A stored result names a convention for that chunked order, so it draws
+through ``stationary_index_chunks``. One ``stationary_indices`` call of more
+than ``CHUNK_REPLICATIONS`` resamples is a different seeded draw.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ def _check(n: int, size: int, mean_block: float, replications: int) -> None:
 
 
 def stationary_indices(n: int, *, size: int, mean_block: float, replications: int, rng: np.random.Generator) -> np.ndarray:
-    """``replications`` resamples of length ``size`` over ``n`` observations, as int64 row indices."""
+    """One chunk's draw: ``replications`` resamples of length ``size`` over ``n`` observations, as int64 row indices."""
     _check(n, size, mean_block, replications)
     starts = rng.integers(0, n, size=(replications, size))
     new_block = rng.random((replications, size)) < 1.0 / mean_block
@@ -50,7 +53,7 @@ def stationary_indices(n: int, *, size: int, mean_block: float, replications: in
 
 
 def stationary_index_chunks(n: int, *, size: int, mean_block: float, replications: int, rng: np.random.Generator) -> Iterator[np.ndarray]:
-    """The same resamples, ``CHUNK_REPLICATIONS`` rows at a time, so a long series never holds every index at once.
+    """``replications`` resamples, one ``stationary_indices`` draw of ``CHUNK_REPLICATIONS`` rows at a time, so a long series never holds every index at once.
 
     Bad arguments are refused here, before any chunk is taken. Each chunk is drawn as it is taken, so
     nothing else may draw from ``rng`` until the last one has been.

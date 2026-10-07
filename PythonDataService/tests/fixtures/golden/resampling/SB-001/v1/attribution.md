@@ -31,7 +31,7 @@ arch is generation-only: it is in no requirements file and nothing under `app/` 
 
 `atol=0.008, rtol=0` on a share (the owner's decision 4 on issue #2932). This is a Monte Carlo band, not float equality.
 
-The test draws 200,000 resamples with the canonical draw and takes the share of them at or below each of arch's quantiles. That share should be the quantile's level. Each side places a share to sqrt(p(1 - p) / 200,000), at most 0.0011, so their difference has a standard error of at most 0.0016. The tolerance is five of those.
+The test draws 200,000 resamples with the canonical draw and takes the share of them at or below each of arch's quantiles. That share should be the quantile's level. Each side places a share to sqrt(p(1 - p) / 200,000), at most 0.00112, so their difference has a standard error of at most 0.0016. The tolerance is five of those.
 
 Measured on generation: the largest gap was 0.0024, and 0.0023 to 0.0024 on three other seeds of the canonical draw.
 
