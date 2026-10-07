@@ -24,8 +24,9 @@ own screens, in order:
 4. the picks' quotes are tested again at that moment (``recheck``), on a
    third read.
 
-Each await is given no longer than the decision has left. The runner then
-judges lateness once more, and hands the Clerk the facts: the contracts, their
+Each await is given no longer than the decision has left, and a decision
+whose time ran out on the way is refused as late. The runner then judges
+lateness once more, and hands the Clerk the facts: the contracts, their
 listed multipliers and the recheck's quotes. It hands over no price.
 
 **A refusal at any step is one answer**: a reason code and a sentence. The
@@ -79,6 +80,7 @@ from app.options.resolver import (
 )
 from app.options.watch import LineClass, expiries_wanted, lines_a_plan_can_need
 from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg, traded_instrument
+from app.services.feed_continuity_policy import DECISION_LATE_REASON_CODE
 from app.services.option_model_inputs import ModelInputsRead, off_the_loop, read_option_model_inputs
 from app.services.option_search import OptionSearchLane, SearchNotRun, get_option_searches
 from app.services.option_watch import OptionWatchList, get_option_watch_list
@@ -393,6 +395,12 @@ class OptionRun:
         model = await self._model(first, decision_bar_close_ms=decision_bar_close_ms, time_left_ms=time_left_ms)
         if isinstance(model, OptionEntryBlocked):
             return model
+        if time_left_ms() <= 0:
+            # Said as what it is. A search given no time would only be told it was late.
+            return _blocked(
+                DECISION_LATE_REASON_CODE,
+                f"This decision's time ran out while the rate and the dividends for {self._underlying} were read",
+            )
         # The read of the rate and dividends took time: a search is handed quotes as they stand now.
         selected = self._read()
         if isinstance(selected, OptionEntryBlocked):

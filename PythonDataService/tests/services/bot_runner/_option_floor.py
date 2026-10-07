@@ -44,10 +44,11 @@ from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, get_cle
 from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
-from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOptionFill
+from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOptionFill, SynthesizedOrderLedger
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.market_liveness import AlpacaMarketLivenessConsumer
 from app.broker.capture.journal import CaptureJournal
+from app.broker.contract.models import OrderSide
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.options.contract import OptionContract
 from app.options.resolver import Resolution
@@ -282,6 +283,11 @@ class Floor:
         # A two-cent market around the model's own price for each strike, unless a test sets one: by strike.
         self.markets: dict[int, tuple[str, str]] = {585: ("4.08", "4.12")}
         self.spy_quote: tuple[float, float] = (585.10, 585.12)
+        # Whether every open option line ticks afresh at each step of time passing, as a busy contract's does.
+        self.option_lines_tick = False
+        # IBKR answers a new request for a line with the contract's current prices. False: its lines stay silent.
+        self.new_lines_are_answered = True
+        self._lines_answered: set[str] = set()
 
         self.binding = binding_for(plan or one_call(), listens_to=listens_to)
         self.running = True
@@ -291,6 +297,8 @@ class Floor:
             runtime_in_use=lambda _sid: self.running, brokers={}, clock=timestamps.now_ms_utc,
         )
         self._evaluations_finished = 0
+        # The feed of the run last started, there for a test whose run is refused.
+        self.feed: ScriptedFeed | None = None
 
     # ---- pacing -----------------------------------------------------------------
 
@@ -363,7 +371,22 @@ class Floor:
                 runtime.sqlite_repository.renew_execution_lease()
             if "SPY" in self.ibkr.lines:
                 self.spy()
+            if self.option_lines_tick:
+                self.quote_every_line()
             await self.supervisor_passes(1)
+
+    async def hours_pass_to(self, at_ms: int) -> None:
+        """Move the clock in one stride over hours nothing is watched through. The Clerk's hold on its
+        account is taken up again where it was left, and the supervisor finds its lines as they stand then."""
+        assert at_ms >= self.clock.value
+        self.clock.value = at_ms
+        runtime = self.runtime
+        if runtime is not None and runtime.sqlite_repository is not None:
+            runtime.sqlite_repository.revive_execution_lease()
+        await self.supervisor_passes()
+        if "SPY" in self.ibkr.lines:
+            self.spy()
+        await self.supervisor_passes()
 
     async def supervisor_passes(self, passes: int = 3) -> None:
         """The supervisor's own pass, as the consumer's loop makes it once a second, with nothing swallowed:
@@ -372,6 +395,11 @@ class Floor:
             await self.consumer._status_snapshot_source()  # type: ignore[misc]
             for _ in range(12):
                 await asyncio.sleep(0)
+            opened = self.ibkr.open_option_lines()
+            if self.new_lines_are_answered:
+                for name in sorted(opened - self._lines_answered):
+                    self._quote_line(name)
+            self._lines_answered = opened
 
     async def account_is_read(self) -> None:
         """One tick of the account's own reading cadence, which an entry is admitted on."""
@@ -391,14 +419,17 @@ class Floor:
 
     def quote_every_line(self) -> None:
         """A fresh quote on every open option line: the test's own market for a strike, else the scene's."""
-        self.ibkr.now = self.clock.value
         for name in sorted(self.ibkr.open_option_lines()):
-            contract = OptionContract.from_occ_symbol(name)
-            market = self.markets.get(int(contract.strike)) if contract.right == "call" else None
-            if market is None:
-                held = _scene_quotes()[name].quote
-                market = (str(held.bid.price), str(held.ask.price))
-            self.ibkr.tick(name, bid=float(market[0]), ask=float(market[1]))
+            self._quote_line(name)
+
+    def _quote_line(self, name: str) -> None:
+        contract = OptionContract.from_occ_symbol(name)
+        market = self.markets.get(int(contract.strike)) if contract.right == "call" else None
+        if market is None:
+            held = _scene_quotes()[name].quote
+            market = (str(held.bid.price), str(held.ask.price))
+        self.ibkr.now = self.clock.value
+        self.ibkr.tick(name, bid=float(market[0]), ask=float(market[1]))
 
     async def bar_arrives(self, at_ms: int, *, quotes: bool = True) -> None:
         """Everything that is true by the time a bar is delivered at ``at_ms``.
@@ -421,7 +452,7 @@ class Floor:
 
     async def run(self, script: list[Step], **runner: Any) -> Ran:
         """Run the bot over ``script`` to the end of its Signal stream."""
-        feed = ScriptedFeed(self, script, signal=self.binding.symbol)
+        feed = self.feed = ScriptedFeed(self, script, signal=self.binding.symbol)
         instance_dir = self.tmp_path / "instance"
         bars = self.authority.source_bars()
         try:
@@ -475,6 +506,23 @@ class Floor:
 
     def kept_quotes(self) -> KeptOptionQuotes:
         return KeptOptionQuotes.of_account(artifacts_root=self.tmp_path, account_id=ACCOUNT)
+
+    def sales_the_simulation_made(self) -> list[SynthesizedOptionFill]:
+        """Every sale in the simulation's own ledger, read from its file: there with the Clerk's runtime closed."""
+        bars = self.authority.source_bars()
+        try:
+            ledger = SynthesizedOrderLedger.beside_source_bars(account_id=ACCOUNT, source_bars=bars, label="test")
+            fills = [fill for fill in ledger.option_fills().values() if fill.request.side is OrderSide.SELL]
+        finally:
+            bars.close()
+        return sorted((fill for fill in fills if fill.fill_price is not None), key=lambda fill: fill.filled_at_ms or 0)
+
+    async def stop_is_pressed(self) -> None:
+        """The owner's Stop: the run is ended on the Clerk's books, what it left is closed, and its authority
+        is released, as the registry does once the runner's task is gone."""
+        self.running = False
+        await self.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN)
+        await self.authority.release_after_run_end()
 
     def what_the_resolver_picks(self, search: int = -1) -> Resolution:
         """The resolver's own answer, worked out here, from exactly what one of the run's searches was handed."""
