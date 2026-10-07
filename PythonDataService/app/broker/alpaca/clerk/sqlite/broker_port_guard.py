@@ -40,7 +40,11 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from typing import Literal
 
-    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
+    from app.broker.alpaca.clerk.synthesized_orders import (
+        SimulatedOptionSettlements,
+        SynthesizedAnchor,
+        SynthesizedOptionFill,
+    )
     from app.options.quotes import HeldQuote
     from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -173,6 +177,14 @@ class GuardedBrokerReadPort:
     ) -> BrokerPortfolioHistory:
         self._assert_unfenced("get_portfolio_history")
         return await self._inner.get_portfolio_history(history_range)
+
+    def simulated_option_settlements(self) -> SimulatedOptionSettlements | None:
+        """A simulation's own record of the contracts it settled past expiry. None from a vendor's port.
+
+        It reads the simulation's order ledger and reaches no broker, so it is not fenced.
+        """
+        read = getattr(self._inner, "simulated_option_settlements", None)
+        return read() if callable(read) else None
 
     def _assert_unfenced(self, method: str) -> None:
         if self._intake.current_scope_depth() != 0:

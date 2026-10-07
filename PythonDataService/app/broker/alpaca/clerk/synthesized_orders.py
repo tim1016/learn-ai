@@ -19,6 +19,12 @@ the order as it was asked, and the quote, model and age its fill was priced
 with (ADR 0076). It is left out of a record that has none, so a ledger with
 no option order still reads on a build from before the field existed.
 
+A contract a simulation still holds after its last session is settled by the
+simulation itself (ADR 0076 decision 22). Each record of that settlement
+carries a ``SynthesizedOptionSettlement``: the rule, the underlying's price it
+read and the bar that price is the close of. It too is left out of a record
+that has none.
+
 Math Provenance Contract
 ------------------------
 Formula: for each symbol, the projected position is an average-cost fold of
@@ -40,7 +46,7 @@ from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, NamedTuple, TypeGuard
+from typing import Any, Literal, NamedTuple, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
@@ -49,6 +55,8 @@ from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker.contract.options import SingleOptionOrderRequest
+from app.options.contract import OptionContract
+from app.options.event_allocation import OptionEventKind
 from app.options.simulated_fill import SimulatedFillModel
 from app.services.jsonl_wal import JsonlWal
 from app.services.session_authority import order_session_state_at_ms
@@ -163,6 +171,60 @@ class SynthesizedOptionFill(BaseModel):
     filled_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
 
+class SynthesizedOptionSettlement(BaseModel):
+    """How a simulation settled a contract it held past the contract's last session (ADR 0076 decision 22).
+
+    A real broker exercises an option that is in the money at expiry and
+    lets the rest expire. A simulation has no broker to do it, so it applies
+    the same rule to its own position, from the last price of the underlying
+    it kept from the contract's last session. This is the record of that
+    rule and that price. It is a simulation's settlement, never a broker's.
+
+    One settlement writes one record that removes the option position, at a
+    price of zero. An exercise writes a second, for the shares at the
+    strike; both carry the same settlement.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    contract: OptionContract
+    kind: OptionEventKind
+    # Contracts settled: one or more. A simulation holds only what it bought.
+    contracts: int = Field(ge=1, strict=True)
+    multiplier: int = Field(ge=1, strict=True)
+    # The underlying's price the rule read, dollars a share, exact.
+    underlying_price: Decimal
+    # The retained bar that price is the close of, and when that bar ended.
+    bar_ref: str
+    bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # When the contract stopped trading, and when the simulation settled it.
+    last_session_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    settled_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # The rule applied, in plain words.
+    rule: str
+
+    def note(self) -> dict[str, Any]:
+        """The settlement as plain values, for the books' own record of the event."""
+        return {
+            "rule": self.rule,
+            "underlying_price": str(self.underlying_price),
+            "price_from": "the close of the last bar the simulation kept for the underlying in the contract's last session",
+            "bar_ref": self.bar_ref,
+            "bar_end_ms": self.bar_end_ms,
+            "last_session_close_ms": self.last_session_close_ms,
+            "settled_at_ms": self.settled_at_ms,
+        }
+
+
+class SimulatedOptionSettlements(NamedTuple):
+    """What a simulation says of the contracts it held past expiry."""
+
+    # Its record of each settlement, by the id of the activity it reports for it.
+    notes: Mapping[str, Mapping[str, Any]]
+    # Each contract it still holds past its last session and could not settle, with why.
+    not_settled: Mapping[str, str]
+
+
 class SynthesizedOrderRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -171,12 +233,14 @@ class SynthesizedOrderRecord(BaseModel):
     leg: BrokerOrderLeg | None = None
     anchor: SynthesizedAnchor | None = None
     option: SynthesizedOptionFill | None = None
+    settlement: SynthesizedOptionSettlement | None = None
 
     @model_serializer(mode="wrap")
     def _leave_out_an_absent_option_fill(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         data: dict[str, object] = handler(self)
-        if data.get("option") is None:
-            data.pop("option", None)
+        for absent in ("option", "settlement"):
+            if data.get(absent) is None:
+                data.pop(absent, None)
         return data
 
 
@@ -466,6 +530,7 @@ class SynthesizedOrderLedger:
         leg: BrokerOrderLeg | None = None,
         anchor: SynthesizedAnchor | None = None,
         option: SynthesizedOptionFill | None = None,
+        settlement: SynthesizedOptionSettlement | None = None,
     ) -> SynthesizedOrderRecord:
         """Append inside :meth:`transaction`; ``records`` is that transaction's read."""
         if not getattr(self._transaction, "held", False):
@@ -478,7 +543,9 @@ class SynthesizedOrderLedger:
         # write. Refresh the WAL's sequence cache while holding the
         # cross-process transaction lock so it cannot reuse a sequence.
         self._orders.reset_seq(next_seq)
-        record = SynthesizedOrderRecord(seq=next_seq, order=order, leg=leg, anchor=anchor, option=option)
+        record = SynthesizedOrderRecord(
+            seq=next_seq, order=order, leg=leg, anchor=anchor, option=option, settlement=settlement
+        )
         self._orders.append(record)
         records.append(record)
         return record

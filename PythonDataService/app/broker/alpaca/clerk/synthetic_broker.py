@@ -44,6 +44,16 @@ close of one is, from the newest quote kept. ``recovery_price_available``
 answers for a contract from those quotes. The stock quote source is never
 asked about a contract's symbol, so a contract never joins the shares the
 IBKR supervisor watches.
+
+A contract this simulation still holds after its last session is settled by
+the simulation itself (ADR 0076 decision 22): no broker exists to do it, and
+nothing trades in the contract any more. When it is asked for the account's
+option events it applies Alpaca's stated rule to its own position: exercised
+when in the money by a cent or more, otherwise expired. The price it reads
+is the close of the last bar it kept for the underlying that ended inside
+the contract's last session. It writes the settlement to its own order
+ledger first, so its positions show it, and then reports it as an activity,
+as a broker would. With no such bar it settles nothing and says why.
 """
 
 from __future__ import annotations
@@ -71,9 +81,11 @@ from app.broker.alpaca.clerk.sqlite.order_projection import (
 )
 from app.broker.alpaca.clerk.synthesized_orders import (
     BoundBar,
+    SimulatedOptionSettlements,
     SynthesizedAnchor,
     SynthesizedBarBindingError,
     SynthesizedOptionFill,
+    SynthesizedOptionSettlement,
     SynthesizedOrderLedger,
     SynthesizedOrderRecord,
     observed_in_send_session,
@@ -93,7 +105,13 @@ from app.broker.contract.models import (
     OrderSide,
     PortfolioHistoryRange,
 )
-from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
+from app.broker.contract.option_events import (
+    BrokerOptionEventActivity,
+    BrokerOptionEventEvidence,
+    BrokerOptionEventResume,
+    BrokerOptionShareTradeActivity,
+    OptionActivityStatus,
+)
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -103,9 +121,11 @@ from app.broker.contract.options import (
     OptionPositionIntent,
     SingleOptionOrderRequest,
 )
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.options.contract import OptionContract
-from app.options.deadlines import past_last_session
+from app.options.deadlines import last_session_close_ms, past_last_session
+from app.options.event_allocation import OptionEventKind, OptionEventRefused, expected_share_trade
 from app.options.quotes import HeldQuote
 from app.options.simulated_fill import SimulatedFillModel, simulated_entry_fills, simulated_exit_fills
 from app.options.structure import LegPosition, ResolvedLeg, ResolvedStructure
@@ -119,6 +139,7 @@ from app.services.source_bar_ledger import (
     SourceBarConflictError,
     SourceBarLedger,
 )
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -142,6 +163,23 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     max_concurrent_streams=0,
     rest_rate_limit_per_min=0,
 )
+
+
+# What a simulated settlement reports itself as, where a broker's activity carries the broker's own code.
+SIMULATED_EXPIRY_ACTIVITY = "SIMULATED_EXPIRY"
+SIMULATED_EXERCISE_ACTIVITY = "SIMULATED_EXERCISE"
+SIMULATED_SHARE_TRADE_ACTIVITY = "SIMULATED_SHARE_TRADE"
+# Alpaca's Trading API page: it exercises a contract at expiry when it is in the money by a cent or more.
+EXERCISED_WHEN_IN_THE_MONEY_BY = Decimal("0.01")
+SIMULATED_SETTLEMENT_RULE = (
+    "A simulation's rule, after the one Alpaca states: exercised when in the money by a cent or more at the "
+    "underlying's last price of the contract's last session, otherwise expired."
+)
+
+
+def settlement_activity_id(symbol: str) -> str:
+    """The id this simulation reports the settlement of one contract under."""
+    return f"sim-option-event:{symbol}"
 
 
 class SimulatedPriceUnavailableError(RuntimeError):
@@ -244,6 +282,8 @@ class SyntheticBroker(OptionOrdersNotTaken):
         )
         self._bound_option_quotes: dict[str, _BoundOptionQuote] = {}
         self._option_binding_lock = threading.Lock()
+        # Each contract held past its last session that the last settlement could not settle, with why.
+        self._options_not_settled: dict[str, str] = {}
 
     def capabilities(self) -> BrokerCapabilities:
         return SYNTHETIC_CAPABILITIES
@@ -304,9 +344,180 @@ class SyntheticBroker(OptionOrdersNotTaken):
     async def read_option_event_activities(
         self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
     ) -> BrokerOptionEventEvidence:
-        """None, and that is all of them: the simulation takes no option order, so it holds no option to end."""
-        del after_ms, resume
-        return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
+        """What ended an option position here: each contract this simulation settled past its last session.
+
+        Asking is what settles: the simulation has no task of its own, so a
+        contract held past its last session is settled now, before the
+        answer is read. Every settlement fits one answer, so there is no
+        walk to go on with and the answer is always the whole of it.
+        """
+        del resume
+        if self._ledger is None:
+            return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
+        self._settle_what_expired()
+        window_start_ms = et_midnight_ms(et_date_at_ms(after_ms))
+        observed_at_ms = self._clock()
+        events: list[BrokerOptionEventActivity] = []
+        share_trades: list[BrokerOptionShareTradeActivity] = []
+        for record in self._ledger.latest_records().values():
+            settlement = record.settlement
+            if settlement is None or record.order.symbol != settlement.contract.occ_symbol:
+                continue
+            contract = settlement.contract
+            dated_ms = et_midnight_ms(contract.expiry_date)
+            if dated_ms < window_start_ms:
+                continue
+            exercised = settlement.kind is OptionEventKind.EXERCISED
+            events.append(
+                BrokerOptionEventActivity(
+                    broker=self.broker_id,
+                    activity_id=settlement_activity_id(contract.occ_symbol),
+                    activity_type=SIMULATED_EXERCISE_ACTIVITY if exercised else SIMULATED_EXPIRY_ACTIVITY,
+                    kind=settlement.kind,
+                    status=OptionActivityStatus.EXECUTED,
+                    activity_date_ms=dated_ms,
+                    contract=contract,
+                    position_change=-settlement.contracts,
+                    net_amount=Decimal(0),
+                    group_id=settlement_activity_id(contract.occ_symbol),
+                    created_at_ms=settlement.settled_at_ms,
+                    observed_at_ms=observed_at_ms,
+                )
+            )
+            moved = expected_share_trade(
+                settlement.kind, contract, contracts=settlement.contracts, multiplier=settlement.multiplier
+            )
+            if moved is not None:
+                share_trades.append(
+                    BrokerOptionShareTradeActivity(
+                        broker=self.broker_id,
+                        activity_id=f"sim-option-share-trade:{contract.occ_symbol}",
+                        activity_type=SIMULATED_SHARE_TRADE_ACTIVITY,
+                        status=OptionActivityStatus.EXECUTED,
+                        activity_date_ms=dated_ms,
+                        underlying_symbol=moved.root,
+                        shares=moved.shares,
+                        price=moved.price,
+                        net_amount=Decimal(moved.cash_cents).scaleb(-2),
+                        group_id=settlement_activity_id(contract.occ_symbol),
+                        created_at_ms=settlement.settled_at_ms,
+                        observed_at_ms=observed_at_ms,
+                    )
+                )
+        return BrokerOptionEventEvidence(events=tuple(events), share_trades=tuple(share_trades), history_complete=True)
+
+    def simulated_option_settlements(self) -> SimulatedOptionSettlements:
+        """This simulation's own record of each contract it settled, and each it holds past expiry and could not."""
+        records = [] if self._ledger is None else list(self._ledger.latest_records().values())
+        return SimulatedOptionSettlements(
+            notes={
+                settlement_activity_id(record.order.symbol): record.settlement.note()
+                for record in records
+                if record.settlement is not None and record.order.symbol == record.settlement.contract.occ_symbol
+            },
+            not_settled=dict(self._options_not_settled),
+        )
+
+    def _settle_what_expired(self) -> None:
+        """Settle every contract this simulation holds past its last session, once, in its own ledger."""
+        assert self._ledger is not None
+        at_ms = self._clock()
+        not_settled: dict[str, str] = {}
+        with self._ledger.transaction() as records:
+            latest = list(self._ledger.latest_records_from(records).values())
+            multipliers = _contract_multipliers(latest)
+            held = project_positions([record.order for record in latest])
+            for symbol, (quantity, _notional) in held.items():
+                # A contract is a symbol this ledger opened with a multiplier. Shares are never settled.
+                if symbol not in multipliers or not position_quantity_is_nonzero(quantity):
+                    continue
+                contract = OptionContract.from_occ_symbol(symbol)
+                if not past_last_session(contract.expiry_date, at_ms):
+                    continue
+                why_not = self._settle_one(
+                    records, contract, held=quantity, multiplier=multipliers[symbol], at_ms=at_ms
+                )
+                if why_not is not None:
+                    not_settled[symbol] = why_not
+        self._options_not_settled = not_settled
+
+    def _settle_one(
+        self,
+        records: list[SynthesizedOrderRecord],
+        contract: OptionContract,
+        *,
+        held: float,
+        multiplier: int,
+        at_ms: int,
+    ) -> str | None:
+        """Settle one expired contract in the ledger. None when it was settled; else why it could not be.
+
+        Formula: with the underlying's last price ``S`` of the contract's last
+          session and the strike ``K``: a call is in the money by ``S - K``, a
+          put by ``K - S``. In the money by 0.01 or more: exercised, the shares
+          at the strike (``app/options/event_allocation.py``). Otherwise: expired.
+        Reference: Alpaca, "Options Trading" (Trading API), read 2026-10-06:
+          a contract in the money by $0.01 or more at expiry is exercised.
+          That it is read from the last bar kept, and not from an official
+          closing price, is this simulation's own rule (ADR 0076 decision 22).
+        Canonical implementation: this file; the shares and cash are
+          ``event_allocation.expected_share_trade``'s.
+        Validated against: tests/broker/alpaca/clerk/sqlite/test_dry_run_option_expiry.py.
+        """
+        assert self._ledger is not None
+        symbol = contract.occ_symbol
+        if held < 0 or not float(held).is_integer():
+            return "This simulation settles only whole contracts it bought."
+        if self._source_bars is None:
+            return "This simulation keeps no prices of the underlying, so it cannot say whether the contract was in the money."
+        close_ms = last_session_close_ms(contract.expiry_date)
+        open_ms = session_open_ms_utc(et_date_at_ms(close_ms - 1))
+        bar = self._source_bars.latest_for_symbol(contract.root, market_only=True, at_or_before_ms=close_ms)
+        if bar is None or bar.end_ms <= open_ms:
+            return (
+                f"This simulation kept no price of {contract.root} from the contract's last session, so it "
+                "cannot say whether the contract was in the money. It stays on the books until one is kept."
+            )
+        price = Decimal(str(bar.close))
+        in_the_money_by = price - contract.strike if contract.right == "call" else contract.strike - price
+        kind = OptionEventKind.EXERCISED if in_the_money_by >= EXERCISED_WHEN_IN_THE_MONEY_BY else OptionEventKind.EXPIRED
+        contracts = int(held)
+        try:
+            moved = expected_share_trade(kind, contract, contracts=contracts, multiplier=multiplier)
+        except OptionEventRefused as refused:
+            return f"The exercise of {symbol} cannot be counted: {refused}"
+        settlement = SynthesizedOptionSettlement(
+            contract=contract, kind=kind, contracts=contracts, multiplier=multiplier, underlying_price=price,
+            bar_ref=bar.bar_ref, bar_end_ms=bar.end_ms, last_session_close_ms=close_ms, settled_at_ms=at_ms,
+            rule=SIMULATED_SETTLEMENT_RULE,
+        )
+        # The option position goes, at a price of zero: the premium stays in what it cost.
+        self._ledger.append_locked(
+            records,
+            order=_settlement_order(
+                self.broker_id, f"sim-settlement:{symbol}:option", symbol=symbol, asset_class="us_option",
+                side="sell", quantity=float(contracts), price=0.0, happened_at_ms=close_ms, observed_at_ms=at_ms,
+            ),
+            settlement=settlement,
+        )
+        if moved is not None:
+            self._ledger.append_locked(
+                records,
+                order=_settlement_order(
+                    self.broker_id, f"sim-settlement:{symbol}:shares", symbol=moved.root, asset_class="us_equity",
+                    side="buy" if moved.shares > 0 else "sell", quantity=float(abs(moved.shares)),
+                    price=float(moved.price), happened_at_ms=close_ms, observed_at_ms=at_ms,
+                ),
+                settlement=settlement,
+            )
+        logger.info(
+            "the simulation settled a contract it held past its last session",
+            extra={
+                "action": "simulated_option_settled", "account_id": self._account_id, "symbol": symbol,
+                "kind": kind.value, "contracts": contracts, "underlying_price": str(price), "bar_ref": bar.bar_ref,
+            },
+        )
+        return None
 
     async def list_assets(
         self,
@@ -937,6 +1148,50 @@ def _option_order_evidence(
             if fill_price is not None
             else []
         ),
+    )
+
+
+def _settlement_order(
+    broker_id: str,
+    client_order_id: str,
+    *,
+    symbol: str,
+    asset_class: str,
+    side: str,
+    quantity: float,
+    price: float,
+    happened_at_ms: int,
+    observed_at_ms: int,
+) -> BrokerOrder:
+    """One side of a settlement, in the shape the ledger's position fold reads: an order filled once, in full.
+
+    It is no order anyone sent. It is written as one so that the
+    simulation's positions, which are a fold of its orders, show what the
+    settlement did. It is stamped at the close of the contract's last session.
+    """
+    return BrokerOrder(
+        broker=broker_id,
+        order_id=f"sim-order:{client_order_id}",
+        client_order_id=client_order_id,
+        symbol=symbol,
+        asset_class=asset_class,
+        side=side,
+        order_type="market",
+        time_in_force="day",
+        quantity=quantity,
+        limit_price=None,
+        stop_price=None,
+        extended_hours=False,
+        submitted_at_ms=happened_at_ms,
+        created_at_ms=happened_at_ms,
+        updated_at_ms=happened_at_ms,
+        expired_at_ms=None,
+        observed_at_ms=observed_at_ms,
+        filled_quantity=quantity,
+        filled_avg_price=price,
+        status="filled",
+        filled_at_ms=happened_at_ms,
+        canceled_at_ms=None,
     )
 
 

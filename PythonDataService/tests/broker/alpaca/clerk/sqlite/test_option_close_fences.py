@@ -1104,7 +1104,8 @@ async def test_a_stopped_bot_the_clerk_gave_up_closing_is_told_its_contract_expi
     await _passes(dry_run, 2)
 
     notices = await _page_notices(dry_run)
-    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK"}
+    # The simulation kept no price of the underlying from the last session, so it settled nothing and says so.
+    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK", "OPTION_EXPIRED_NOT_SETTLED"}
     for notice in notices.values():
         _says_only_what_is_true_of_an_expired_contract(
             notice.headline, notice.explanation, notice.operator_impact, notice.next_step
@@ -1169,11 +1170,13 @@ async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_
     await _passes(dry_run, 2)
 
     notices = await _page_notices(dry_run)
-    assert set(notices) == {"EXIT_NOT_FLAT"}
+    # The simulation kept no price of the underlying from the last session, so it settled nothing and says so.
+    assert set(notices) == {"EXIT_NOT_FLAT", "OPTION_EXPIRED_NOT_SETTLED"}
+    for said in notices.values():
+        _says_only_what_is_true_of_an_expired_contract(
+            said.headline, said.explanation, said.operator_impact, said.next_step
+        )
     notice = notices["EXIT_NOT_FLAT"]
-    _says_only_what_is_true_of_an_expired_contract(
-        notice.headline, notice.explanation, notice.operator_impact, notice.next_step
-    )
     assert notice.recovery_status is not None
     assert (notice.recovery_status.kind, notice.recovery_status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
     await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
