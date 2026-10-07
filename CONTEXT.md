@@ -1620,9 +1620,9 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Resolved structure** — the contracts a structure's rules picked at one entry, leg by leg. The exit closes these contracts and never asks the rules again.
 - **Watched window** — the contracts a quote line is open for. A rule can pick only inside it; a contract that could be the pick and is outside it, or whose quote has not arrived yet, makes the search incomplete, never "nothing close enough". A rule by delta that finds every watched contract's quote faulty is refused for the quotes, not the window.
 - **Quote line** — one contract's standing request for quotes at the provider. The provider grants the account a number of them, shared by every session under it.
-- **Line budget** — the most option quote lines one Clerk asks for beyond the contracts its bots hold. The Clerk's own count; it cannot see what other sessions use, and it is zero until the owner sets it.
+- **Line budget** — the most option quote lines one Clerk asks for at once. Contracts its bots hold count toward it and are asked for even past it. The Clerk's own count; it cannot see what other sessions use, and it is zero until the owner sets it.
   _Avoid_: capacity (that is the provider's, and no session can see it).
-- **Feed generation** — one number for the quote connection's epoch. It moves on every reconnect and every recovery from a data loss, and no quote from before it is used.
+- **Feed generation** — one number for the quote connection's epoch. It moves on every reconnect and every recovery from a data loss, and no quote from before it is used: after it each side waits for a price of its own.
 - **Entry cutoff** — how long before a contract's last trade an entry on it must be selected. Nothing is opened inside it, half days included.
 - **Named structure** — one of twelve structures an option structure may be named for, such as a bull call spread. The name fixes what the legs are and what shape the picked contracts must have; strikes and expiries stay the owner's.
 - **Custom (structure)** — an option structure with no name. Its picked contracts are checked as any structure's are, and for no shape.

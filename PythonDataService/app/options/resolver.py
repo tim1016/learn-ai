@@ -98,6 +98,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from fractions import Fraction
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Literal, NoReturn, assert_never
 
@@ -433,6 +434,7 @@ def _signed_thousandths(dollars: float) -> int:
     return strike_thousandths(abs(dollars)) * (-1 if dollars < 0 else 1)
 
 
+@lru_cache(maxsize=1024)
 def _ends_its_week(day: date) -> bool:
     """Whether ``day`` is the last session of its Monday-to-Sunday week."""
     monday = day - timedelta(days=day.weekday())

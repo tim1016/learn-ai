@@ -27,6 +27,15 @@ DECISION_DATA_MAX_AGE_MS = 5_000
 # Establishment/stall recovery has its own budget. A stale decision input
 # already blocks ENTER; waiting for repair never grants additional trading time.
 SUBSCRIPTION_TIMEOUT_MS = 30_000
+MAX_RETRY_MS = 30_000
+# IBKR's answers that refuse a market-data request: 101 is "too many tickers", the rest name the
+# instrument or the account's permissions.
+REQUEST_FAILURE_CODES = frozenset({101, 200, 354, 10089, 10090, 10167, 10186})
+
+
+def retry_delay_ms(attempt: int) -> int:
+    """How long a failed request waits before it is tried again: 1, 2, 4, 8, 16, then at most 30 seconds."""
+    return min(1_000 * 2 ** min(attempt, 5), MAX_RETRY_MS)
 
 
 def install_market_data_callbacks(wrapper: Any) -> None:
@@ -82,6 +91,10 @@ class MarketSubscription:
     last_received_at_ms: int | None = None
     bid_received_at_ms: int | None = None
     ask_received_at_ms: int | None = None
+    # Whether a tick of the side's price, not only of its size, has arrived in this subscription: until
+    # then the price the library holds for it may be from before the subscription began.
+    bid_priced: bool = False
+    ask_priced: bool = False
     trade_timestamp_ms: int | None = None
     trade_received_at_ms: int | None = None
     status: SymbolTradingStatusEvidence | None = None
@@ -93,6 +106,7 @@ class MarketSubscription:
         self.last_received_at_ms = now
         if self.market_data_type != ticker.marketDataType:
             self.bid_received_at_ms = self.ask_received_at_ms = None
+            self.bid_priced = self.ask_priced = False
             self.trade_timestamp_ms = self.trade_received_at_ms = None
             self.market_data_type = ticker.marketDataType
         transitions: list[SymbolTradingStatusEvidence] = []
@@ -104,8 +118,10 @@ class MarketSubscription:
                 continue
             if tick.tickType in (0, 1):
                 self.bid_received_at_ms = now
+                self.bid_priced = self.bid_priced or tick.tickType == 1
             elif tick.tickType in (2, 3):
                 self.ask_received_at_ms = now
+                self.ask_priced = self.ask_priced or tick.tickType == 2
             elif tick.tickType in (48, 77) and ticker.rtTime is not None:
                 trade_ms = int(ticker.rtTime.timestamp() * 1000)
                 if self.trade_timestamp_ms is None or trade_ms > self.trade_timestamp_ms:
@@ -139,8 +155,11 @@ class MarketSubscription:
 
     def held(self, generation: int) -> HeldQuote | None:
         """The book as it was received, each side with its own receipt time, untested: for a reader that
-        asks the usability tests itself (ADR 0076). None until both sides have been received live."""
+        asks the usability tests itself (ADR 0076). None until a live price tick has arrived for each side
+        in this subscription: a tick of a side's size alone would hand over a price from before it."""
         if self.ticker is None or self.failure or self.ticker.marketDataType != 1:
+            return None
+        if not (self.bid_priced and self.ask_priced):
             return None
         if self.bid_received_at_ms is None or self.ask_received_at_ms is None:
             return None

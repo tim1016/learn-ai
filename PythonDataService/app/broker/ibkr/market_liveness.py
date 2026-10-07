@@ -14,7 +14,7 @@ from copy import copy
 from decimal import Decimal
 from inspect import isawaitable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter
 
@@ -22,24 +22,28 @@ from app.broker.ibkr.client import IbkrClient, get_client
 from app.broker.ibkr.contracts import qualify_underlying
 from app.broker.ibkr.market_subscription import (
     DECISION_DATA_MAX_AGE_MS,
+    REQUEST_FAILURE_CODES,
     SOURCE,
     SUBSCRIPTION_TIMEOUT_MS,
     MarketSubscription,
     install_market_data_callbacks,
+    retry_delay_ms,
 )
-from app.broker.ibkr.option_quotes import OptionQuoteLines
 from app.options.quotes import HeldQuote, quote_fault
-from app.options.resolver import FeedState
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import Clock, now_ms_utc
+
+if TYPE_CHECKING:
+    # The option side brings the resolver, the calendar and the pricer with it. A Clerk that watches no
+    # option contract never loads them.
+    from app.broker.ibkr.option_quotes import OptionQuoteLines
+    from app.options.resolver import FeedState
 
 logger = logging.getLogger(__name__)
 _HALT_RECORDS = TypeAdapter(dict[str, SymbolTradingStatusEvidence])
 _MAX_SUBSCRIPTIONS = 64
 _MAX_PARALLEL_QUALIFICATIONS = 4
-_MAX_RETRY_MS = 30_000
-_REQUEST_FAILURE_CODES = frozenset({101, 200, 354, 10089, 10090, 10167, 10186})
 
 
 class IbkrMarketStatusSource:
@@ -238,7 +242,11 @@ class IbkrMarketStatusSource:
                 self._subscriptions[symbol] = subscription
                 self._pending[symbol] = asyncio.create_task(self._subscribe(subscription, client, generation))
         if self._options is not None:
-            await self._options.reconcile(client, now, self._underlying_mid)
+            try:
+                self._options.reconcile(client, now, self._underlying_mid)
+            except Exception:
+                # The option side never takes the stock quotes down with it.
+                logger.exception("The option quote lines failed their pass", extra={"action": "option_lines_pass_failed"})
         return self._snapshot(self._clock(), connected=self._connected())
 
     def underlying_quote(self, symbol: str) -> HeldQuote | None:
@@ -254,6 +262,8 @@ class IbkrMarketStatusSource:
         this Clerk watches no option contract."""
         if self._options is None:
             return None
+        from app.options.resolver import FeedState
+
         return FeedState(
             generation=self._options.generation,
             unhealthy=None if self._connected() else "the IBKR market-data connection is not up",
@@ -276,7 +286,7 @@ class IbkrMarketStatusSource:
     def _retry_delay(self, symbol: str) -> int:
         attempt = self._attempts.get(symbol, 0)
         self._attempts[symbol] = attempt + 1
-        return min(1_000 * 2 ** min(attempt, 5), _MAX_RETRY_MS)
+        return retry_delay_ms(attempt)
 
     async def _subscribe(self, subscription: MarketSubscription, client: IbkrClient, generation: tuple[int, int, int, int]) -> None:
         symbol = subscription.symbol
@@ -318,7 +328,7 @@ class IbkrMarketStatusSource:
     def _on_error(self, req_id: int, code: int, _message: str, _contract: Any) -> None:
         if self._options is not None:
             self._options.on_error(req_id, code)
-        if code in _REQUEST_FAILURE_CODES:
+        if code in REQUEST_FAILURE_CODES:
             for subscription in self._subscriptions.values():
                 if subscription.request_id == req_id:
                     subscription.failure = "IBKR refused this symbol's live market-data subscription. Check permissions and instrument availability."
