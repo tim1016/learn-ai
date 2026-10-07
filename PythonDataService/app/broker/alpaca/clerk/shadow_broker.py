@@ -70,6 +70,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
+    OptionOrdersNotTaken,
     filter_synthesized_orders,
     shape_immediate_order,
     synthesized_positions,
@@ -87,6 +88,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import BrokerOptionAccountSnapshot, BrokerOptionContract
 from app.broker.contract.ports import BrokerReadPort
 from app.engine.live.order_identity import (
     NAMESPACE_ROOT,
@@ -95,6 +97,7 @@ from app.engine.live.order_identity import (
     build_bot_order_namespace,
     parse_order_ref,
 )
+from app.options.contract import OptionContract
 from app.services.session_authority import (
     declared_session_bounds,
     scheduled_extended_session_bounds,
@@ -569,10 +572,11 @@ def _execution_window_witnessed(bars: list[RetainedSourceBar], *, start_ms: int,
     return covered_until >= end_ms and end_ms > start_ms
 
 
-class NoSubmitAlpacaTradePort:
+class NoSubmitAlpacaTradePort(OptionOrdersNotTaken):
     """``BrokerTradePort`` that synthesizes every order and never reaches Alpaca (ADR 0059 D2)."""
 
     broker_id = SHADOW_BROKER_ID
+    _named_in_option_refusals = "The shadow order book"
 
     def __init__(self, book: ShadowOrderBook) -> None:
         self._book = book
@@ -615,7 +619,11 @@ class ShadowAccountReadPort:
         self._book = book
 
     def capabilities(self) -> BrokerCapabilities:
-        return self._live.capabilities()
+        # The live broker's own, less what the shadow order book does not do:
+        # it synthesizes stock orders and takes no option order yet (#2913).
+        return self._live.capabilities().revised(
+            supports_option_orders=False, supports_multi_leg_option_orders=False
+        )
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return await self._live.get_account()
@@ -661,6 +669,12 @@ class ShadowAccountReadPort:
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         return await self._live.get_asset(symbol)
+
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        return await self._live.get_option_contract(contract)
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        return await self._live.get_option_account()
 
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         return await self._live.get_clock_evidence()

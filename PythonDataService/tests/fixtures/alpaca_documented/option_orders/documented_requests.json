@@ -1,0 +1,228 @@
+{
+  "single_leg": {
+    "sell_a_covered_call": {
+      "symbol": "AAPL231201C00195000",
+      "qty": "2",
+      "side": "sell",
+      "type": "limit",
+      "limit_price": "1.05",
+      "time_in_force": "day"
+    },
+    "sell_a_cash_secured_put": {
+      "symbol": "AAPL231201P00175000",
+      "qty": "1",
+      "side": "sell",
+      "type": "market",
+      "time_in_force": "day"
+    },
+    "buy_a_call": {
+      "symbol": "AAPL240119C00190000",
+      "qty": "1",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "day"
+    },
+    "buy_a_put": {
+      "symbol": "AAPL240119P00170000",
+      "qty": "1",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "day"
+    }
+  },
+  "multi_leg": {
+    "how_to_submit_a_multi_leg_order": {
+      "order_class": "mleg",
+      "qty": "1",
+      "type": "limit",
+      "limit_price": "0.6",
+      "time_in_force": "day",
+      "legs": [
+        {
+          "symbol": "AAPL250117P00200000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        },
+        {
+          "symbol": "AAPL250117C00250000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        }
+      ]
+    },
+    "long_call_spread": {
+      "order_class": "mleg",
+      "qty": "1",
+      "type": "limit",
+      "limit_price": "1.00",
+      "time_in_force": "day",
+      "legs": [
+        {
+          "symbol": "AAPL250117C00190000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        },
+        {
+          "symbol": "AAPL250117C00210000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_open"
+        }
+      ]
+    },
+    "long_put_spread": {
+      "order_class": "mleg",
+      "qty": "1",
+      "type": "limit",
+      "limit_price": "1.25",
+      "time_in_force": "day",
+      "legs": [
+        {
+          "symbol": "AAPL250117P00210000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        },
+        {
+          "symbol": "AAPL250117P00190000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_open"
+        }
+      ]
+    },
+    "iron_condor": {
+      "order_class": "mleg",
+      "qty": "1",
+      "type": "limit",
+      "limit_price": "1.80",
+      "time_in_force": "day",
+      "legs": [
+        {
+          "symbol": "AAPL250117P00190000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        },
+        {
+          "symbol": "AAPL250117P00195000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_open"
+        },
+        {
+          "symbol": "AAPL250117C00205000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_open"
+        },
+        {
+          "symbol": "AAPL250117C00210000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        }
+      ]
+    },
+    "roll_a_call_spread_strike_price": {
+      "order_class": "mleg",
+      "qty": "1",
+      "type": "limit",
+      "limit_price": "2.05",
+      "time_in_force": "day",
+      "legs": [
+        {
+          "symbol": "AAPL250117C00200000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_close"
+        },
+        {
+          "symbol": "AAPL250117C00205000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_close"
+        },
+        {
+          "symbol": "AAPL250117C00210000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_open"
+        },
+        {
+          "symbol": "AAPL250117C00215000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        }
+      ]
+    },
+    "roll_a_call_spread_expiration_date": {
+      "order_class": "mleg",
+      "qty": "1",
+      "type": "limit",
+      "limit_price": "2.05",
+      "time_in_force": "day",
+      "legs": [
+        {
+          "symbol": "AAPL250117C00200000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_close"
+        },
+        {
+          "symbol": "AAPL250117C00205000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_close"
+        },
+        {
+          "symbol": "AAPL250124C00200000",
+          "ratio_qty": "1",
+          "side": "sell",
+          "position_intent": "sell_to_open"
+        },
+        {
+          "symbol": "AAPL250124C00205000",
+          "ratio_qty": "1",
+          "side": "buy",
+          "position_intent": "buy_to_open"
+        }
+      ]
+    }
+  },
+  "order_reference": {
+    "Options": {
+      "limit_price": "10",
+      "qty": "2",
+      "side": "buy",
+      "symbol": "AAPL250620C00100000",
+      "time_in_force": "day",
+      "type": "limit"
+    },
+    "MultilegOptions": {
+      "legs": [
+        {
+          "position_intent": "buy_to_open",
+          "ratio_qty": "3",
+          "side": "buy",
+          "symbol": "AAPL241213C00250000"
+        },
+        {
+          "position_intent": "sell_to_open",
+          "ratio_qty": "1",
+          "side": "sell",
+          "symbol": "AAPL241213C00260000"
+        }
+      ],
+      "limit_price": "10",
+      "order_class": "mleg",
+      "qty": "3",
+      "time_in_force": "day",
+      "type": "limit"
+    }
+  }
+}

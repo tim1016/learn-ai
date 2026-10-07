@@ -1,0 +1,42 @@
+{
+  "reference_example": {
+    "expiration_date": "2025-06-20",
+    "id": "98359ef7-5124-49f3-85ea-5cf02df6defa",
+    "multiplier": "100",
+    "name": "AAPL Jun 20 2025 100 Call",
+    "ppind": true,
+    "root_symbol": "AAPL",
+    "size": "100",
+    "status": "active",
+    "strike_price": "100",
+    "style": "american",
+    "symbol": "AAPL250620C00100000",
+    "tradable": true,
+    "type": "call",
+    "underlying_asset_id": "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415",
+    "underlying_symbol": "AAPL"
+  },
+  "options_trading_page_example": {
+    "id": "6e58f870-fe73-4583-81e4-b9a37892c36f",
+    "symbol": "AAPL240119C00100000",
+    "name": "AAPL Jan 19 2024 100 Call",
+    "status": "active",
+    "tradable": true,
+    "expiration_date": "2024-01-19",
+    "root_symbol": "AAPL",
+    "underlying_symbol": "AAPL",
+    "underlying_asset_id": "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415",
+    "type": "call",
+    "style": "american",
+    "strike_price": "100",
+    "size": "100",
+    "open_interest": "6168",
+    "open_interest_date": "2024-01-12",
+    "close_price": "85.81",
+    "close_price_date": "2024-01-12"
+  },
+  "not_found": {
+    "code": 40410000,
+    "message": "option contract TSLA231110C00021000 not found"
+  }
+}
