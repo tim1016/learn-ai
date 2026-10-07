@@ -37,7 +37,11 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.scheduled_end import ScheduledEnd, install_bot_end_schedule
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import SCHEDULED_CLOSE_MISSED_REASON_CODE
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    SCHEDULED_CLOSE_MISSED_REASON_CODE,
+)
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.config import reset_settings_for_testing
@@ -151,7 +155,10 @@ async def test_on_a_live_shadow_an_option_bot_buys_the_call_at_its_ask_marks_it_
     assert (bought.request.side, bought.fill_model, bought.request.limit_price) == (
         OrderSide.BUY, SimulatedFillModel.NATURAL_PRICE, Decimal("4.12")
     )
-    assert (sold.request.side, sold.fill_price) == (OrderSide.SELL, Decimal("4.30"))
+    # The EXIT handed over the quote its decision could use, so the sale is at that quote's own bid.
+    assert (sold.request.side, sold.fill_model, sold.fill_price) == (
+        OrderSide.SELL, SimulatedFillModel.NATURAL_PRICE, Decimal("4.30")
+    )
     # Marked while held: $4.30 bid against $4.12 paid is $18.00 on one contract, less nothing yet.
     observation, named_by_the_run = marked
     assert observation is not None and observation.unrealized_pl_usd == Decimal("18.00")
@@ -331,6 +338,12 @@ async def test_a_close_owed_with_nothing_bid_is_not_made_and_the_session_that_en
 
     await shadow.keeper.tick()
     assert shadow.holds() == {CALL: 1.0}
+    # What the owner can do about it is a simulation's: wait for a quote with something bid. A real
+    # account's close needs no quote of ours, and is told otherwise.
+    not_flat = shadow.repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code=EXIT_NOT_FLAT_REASON_CODE, strategy_instance_id=shadow.sid
+    )
+    assert not_flat is not None and "quote" in json.loads(not_flat["facts_json"])["next_step"]
 
     await shadow.hours_pass_to(scenes._at(EXPIRY_DAY, 16, 0) + 1_000)
     await shadow.keeper.tick()
@@ -560,3 +573,21 @@ async def test_a_halt_of_the_underlying_holds_a_shadows_close_and_the_pass_sells
 
     assert shadow.holds() == {}
     assert shadow.fills()[-1] == (CALL, "sell", 1.0, 2.10, 100, Decimal("210.00"))
+
+
+async def test_kept_quotes_that_cannot_be_read_leave_a_shadow_with_no_reading_and_say_whose_they_are(
+    shadow: ShadowFloor,
+) -> None:
+    """A whole line of the shadow account's file is not a kept quote. The contract cannot be marked, the
+    account's reading says the Live Shadow's quotes need repair, and the EXIT sells nothing from them."""
+    await _holding_one_call(shadow)
+    with open(shadow.kept_quotes().path, "a", encoding="utf-8") as spoiled:
+        spoiled.write(f'{{"seq":99,"symbol":"{CALL}","quote":"not a quote","kept_at_ms":1}}\n')
+    reading = SimulatedAccountProjection(repo=shadow.repo, artifacts_root=shadow.root)
+
+    with pytest.raises(SimulationEvidenceUnavailable, match="Live Shadow") as unreadable:
+        reading.observe(reference_cash=100_000, observed_at_ms=shadow.clock.value, now_ms=shadow.clock.value)
+
+    assert CALL in str(unreadable.value)
+    assert not shadow.clerk._trade.recovery_price_available(CALL, side="sell")
+    assert shadow.holds() == {CALL: 1.0}
