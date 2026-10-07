@@ -34,8 +34,8 @@ const COLUMN_LABELS: Readonly<Record<CellSortColumn, string>> = {
   win_rate: 'Win rate',
   params_hash: 'Settings',
 };
-/** The most cells drawn at once; the server returns no more curves in one read. */
-const MAX_DRAWN = 200;
+/** What a ticked cell is drawn from: its identity and its settings. */
+type TickedCell = Pick<GridSearchCell, 'params_hash' | 'params'>;
 
 function settingsText(params: Readonly<Record<string, number>>): string {
   return Object.entries(params).map(([key, value]) => `${key}=${value}`).join(', ');
@@ -46,7 +46,8 @@ function settingsText(params: Readonly<Record<string, number>>): string {
  * in-sample statement, the leader, Finish and Delete, a route into
  * Walk-Forward, and the server-sorted, server-paged cell table. Polls while
  * the search is still running. Ticked cells draw their equity curves
- * together (#2935); the leader's is drawn until the owner ticks or clears.
+ * together (#2935); the leader's is drawn until the owner ticks or clears,
+ * whichever page of the table lists its row.
  */
 @Component({
   selector: 'app-grid-search-result',
@@ -68,6 +69,8 @@ export class GridSearchResultComponent {
   readonly backLabel = input('History');
   /** A study-owned sweep is evidence: no Cancel, Finish or Delete here — the study manages it. */
   readonly readonly = input(false);
+  /** The most cells drawn at once; the server returns no more curves in one read. */
+  readonly maxDrawn = input(200);
   readonly deleted = output<string>();
   readonly closed = output();
 
@@ -79,7 +82,6 @@ export class GridSearchResultComponent {
 
   protected readonly sortable = SORTABLE;
   protected readonly columnLabels = COLUMN_LABELS;
-  protected readonly maxDrawn = MAX_DRAWN;
   protected readonly strategyName = computed(() => {
     const key = this.detail()?.strategy_key;
     return key ? (this.strategies().find((s) => s.name === key)?.display_name ?? null) : null;
@@ -108,19 +110,25 @@ export class GridSearchResultComponent {
   });
 
   /** The cells the owner ticked, in the order ticked; null until the owner ticks or clears, while the leader is drawn. */
-  private readonly chosen = signal<readonly GridSearchCell[] | null>(null);
-  /** The leader's cell, kept from the page it was last listed on: a sort or a page turn can take it off the table. */
-  private readonly leader = signal<GridSearchCell | null>(null);
-  protected readonly ticked = computed<readonly GridSearchCell[]>(() => {
+  private readonly chosen = signal<readonly TickedCell[] | null>(null);
+  /** The leader as the search record names it; the same leader across polls is the same value, so nothing redraws. */
+  private readonly leader = computed<TickedCell | null>(
+    () => {
+      const detail = this.detail();
+      return detail?.leader_params_hash && detail.leader_params ? { params_hash: detail.leader_params_hash, params: detail.leader_params } : null;
+    },
+    { equal: (a, b) => a?.params_hash === b?.params_hash },
+  );
+  protected readonly ticked = computed<readonly TickedCell[]>(() => {
     const leader = this.leader();
-    return this.chosen() ?? (leader?.has_curve ? [leader] : []);
+    return this.chosen() ?? (leader === null ? [] : [leader]);
   });
   protected readonly tickedHashes = computed(() => new Set(this.ticked().map((cell) => cell.params_hash)));
-  protected readonly full = computed(() => this.ticked().length >= MAX_DRAWN);
+  protected readonly full = computed(() => this.ticked().length >= this.maxDrawn());
   protected readonly drawn = computed<DrawnCell[]>(() => {
-    const leaderHash = this.detail()?.leader_params_hash;
+    const leaderHash = this.leader()?.params_hash;
     const leaderWord = this.readonly() ? 'Winner' : 'Leader';
-    return this.ticked().map((cell) => ({ params_hash: cell.params_hash, label: cell.params_hash === leaderHash ? leaderWord : '', settings: settingsText(cell.params) }));
+    return this.ticked().map((cell) => ({ params_hash: cell.params_hash, label: cell.params_hash === leaderHash ? leaderWord : null, settings: settingsText(cell.params) }));
   });
   /** The cells on this page that can still be ticked. */
   protected readonly drawable = computed(() => (this.page()?.cells ?? []).filter((cell) => cell.has_curve && !this.tickedHashes().has(cell.params_hash)));
@@ -135,7 +143,6 @@ export class GridSearchResultComponent {
       untracked(() => {
         this.page.set(null);
         this.chosen.set(null);
-        this.leader.set(null);
         void this.reload(id);
       });
     });
@@ -156,8 +163,6 @@ export class GridSearchResultComponent {
       if (revision !== this.revision) return;
       this.detail.set(detail);
       this.page.set(page);
-      // A leader that changed and is not on this page is not drawn until a page lists it.
-      if (this.leader()?.params_hash !== detail.leader_params_hash) this.leader.set(page.cells.find((cell) => cell.params_hash === detail.leader_params_hash) ?? null);
       this.error.set(null);
       if (!isTerminal(detail.status)) this.awaitingAttempt = false;
       this.schedulePoll();
@@ -191,7 +196,7 @@ export class GridSearchResultComponent {
   /** Ticks every cell on this page that has a curve, up to the most that can be drawn. */
   drawPage(): void {
     const ticked = this.ticked();
-    const more = this.drawable().slice(0, MAX_DRAWN - ticked.length);
+    const more = this.drawable().slice(0, this.maxDrawn() - ticked.length);
     if (more.length > 0) this.chosen.set([...ticked, ...more]);
   }
 

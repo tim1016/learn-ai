@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RESEARCH_DEFAULT_FILL_MODE } from '../../models/fill-mode';
 import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../services/jobs.service';
+import { fakeCharts } from '../golden-search/testing/fake-charts';
 import { GridSearchService } from '../grid-search/grid-search.service';
 import { gridSearchDetail } from '../grid-search/testing/fixtures';
 import { WalkForwardStudyResultComponent } from './walk-forward-study-result.component';
@@ -72,8 +73,17 @@ async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<Walk
     inputs: { studyId: row.id, pollMs: 0 },
     providers: [
       provideRouter([]),
+      ...fakeCharts().providers,
       { provide: WalkForwardStudyService, useValue: { get: vi.fn(async () => row), finish: vi.fn(), delete: vi.fn(async () => undefined), ...overrides } },
-      { provide: GridSearchService, useValue: { get: gridGet, cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', cells: [] })) } },
+      {
+        provide: GridSearchService,
+        useValue: {
+          get: gridGet,
+          cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', without_curve: 0, cells: [] })),
+          // An opened sweep draws its winner's curve; this one kept none.
+          cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] })),
+        },
+      },
       { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
     ],
   });

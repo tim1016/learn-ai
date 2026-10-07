@@ -8,6 +8,7 @@ import { GoldenSearchChartComponent } from './charts/golden-search-chart.compone
 import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { reloadOnProgress } from './charts/golden-search-reload';
+import { curveStore } from './golden-search-curve-store';
 import { percentText, ratioText, signedPercentText } from './golden-search-display';
 import { runCurvesSpec, type RunLine } from './golden-search-run-curves-chart';
 import { GoldenSearchService } from './golden-search.service';
@@ -99,31 +100,23 @@ export class GoldenSearchRunsComponent {
   /** The read for the controls now set failed, so the page last read answers other controls: its rows are not shown. */
   protected readonly mismatched = computed(() => this.listError() !== null && this.shown()?.query !== this.query());
 
-  /** Each read curve by run, with the session closes of its read; null for a run that kept none. Curves never change once recorded. */
-  private readonly cache = signal<ReadonlyMap<string, { readonly sessions: readonly number[]; readonly curve: RunCurve } | null>>(new Map());
-  private readonly curves = resource({
-    // Nothing ticked reads nothing.
-    params: () => (this.ticked().length === 0 ? undefined : { studyId: this.studyId(), keys: this.ticked().map((run) => run.evaluation_key) }),
-    loader: async ({ params }) => {
-      const held = this.cache();
-      const missing = params.keys.filter((key) => !held.has(key));
-      if (missing.length === 0) return;
-      const read = await this.service.runCurves(params.studyId, missing);
-      this.cache.update((cache) => new Map([...cache, ...read.curves.map((curve) => [curve.evaluation_key, { sessions: read.sessions_ms, curve }] as const), ...read.not_recorded.map((key) => [key, null] as const)]));
-    },
+  private readonly curves = curveStore<RunCurve>({
+    scope: this.studyId,
+    keys: () => this.ticked().map((run) => run.evaluation_key),
+    read: (studyId, keys) => this.service.runCurves(studyId, keys),
+    keyOf: (curve) => curve.evaluation_key,
   });
   protected readonly curvesError = computed(() => {
-    const error = this.curves.error();
+    const error = this.curves.reads.error();
     return error === undefined ? null : extractServerMessage(error, 'The ticked runs’ curves could not be loaded.');
   });
   /** The ticked runs whose curves are read, in the order ticked. */
-  private readonly lines = computed<RunLine[]>(() => {
-    const cache = this.cache();
-    return this.ticked().flatMap((run) => {
-      const held = cache.get(run.evaluation_key);
+  private readonly lines = computed<RunLine[]>(() =>
+    this.ticked().flatMap((run) => {
+      const held = this.curves.of(run.evaluation_key);
       return held === undefined || held === null ? [] : [{ key: run.evaluation_key, label: run.label, settings: run.params_sentence, ...held }];
-    });
-  });
+    }),
+  );
   /** Read on its own, so a study poll that changes nothing else does not rebuild the chart. */
   private readonly ceiling = computed(() => this.study().protocol.policy.max_drawdown_ceiling);
   protected readonly chart = computed(
@@ -133,7 +126,7 @@ export class GoldenSearchRunsComponent {
     },
     { equal: sameChart },
   );
-  protected readonly loadingCurves = computed(() => this.curves.isLoading());
+  protected readonly loadingCurves = computed(() => this.curves.reads.isLoading());
 
   private readonly tickedKeys = computed(() => new Set(this.ticked().map((run) => run.evaluation_key)));
   protected readonly full = computed(() => this.ticked().length >= MAX_DRAWN);
@@ -226,6 +219,6 @@ export class GoldenSearchRunsComponent {
   }
 
   protected retryCurves(): void {
-    this.curves.reload();
+    this.curves.reads.reload();
   }
 }

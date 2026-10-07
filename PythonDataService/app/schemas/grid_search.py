@@ -187,7 +187,7 @@ class GridSearchCellResponse(BaseModel):
     error: str | None
     exploratory: bool
     completed_at_ms: int
-    has_curve: bool = Field(description="The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it.")
+    has_curve: bool = Field(description="The cell kept its daily equity; a failed cell never does.")
     is_leader: bool
     eligible: bool
 

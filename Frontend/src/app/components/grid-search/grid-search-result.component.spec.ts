@@ -48,9 +48,9 @@ function curves(hashes: readonly string[]): GridSearchCellCurves {
   };
 }
 
-async function renderResult(service: Partial<GridSearchService>) {
+async function renderResult(service: Partial<GridSearchService>, inputs: { maxDrawn?: number } = {}) {
   return render(GridSearchResultComponent, {
-    inputs: { searchId: 'abc', pollMs: 0 },
+    inputs: { searchId: 'abc', pollMs: 0, ...inputs },
     providers: [
       provideRouter([]),
       ...fakeCharts().providers,
@@ -140,6 +140,45 @@ describe('GridSearchResultComponent', () => {
     expect((screen.getByRole('checkbox', { name: 'Draw short_window=5, long_window=30' }) as HTMLInputElement).checked).toBe(false);
   });
 
+  it('draws the leader though the page listed does not hold its row', async () => {
+    // The fixture search's leader is h2; a sort or a page turn has left only h1 on the table.
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+    await renderResult({ cells: vi.fn(async () => page([cell()])), cellCurves });
+
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('1 cell drawn'));
+    expect(cellCurves.mock.calls).toEqual([['abc', ['h2']]]);
+    const panel = screen.getByRole('region', { name: 'Equity curves' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Show as table' }));
+    expect(within(panel).getByRole('cell', { name: 'short_window=5, long_window=30' })).not.toBeNull();
+    // Ticking the listed cell adds it beside the leader.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Draw short_window=10, long_window=30' }));
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('2 cells drawn'));
+  });
+
+  it('reads a cell’s curve again for another search that holds the same cell', async () => {
+    // A walk-forward fold's training and test sweeps hold the same cells: one's curve is never shown for the other.
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+    const view = await renderResult({ cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
+    await waitFor(() => expect(cellCurves.mock.calls).toEqual([['abc', ['h2']]]));
+
+    view.fixture.componentRef.setInput('searchId', 'xyz');
+
+    await waitFor(() => expect(cellCurves.mock.calls).toEqual([['abc', ['h2']], ['xyz', ['h2']]]));
+  });
+
+  it('draws no more cells than the most it can hold', async () => {
+    const three = [...leaderAndAnother(), cell({ params_hash: 'h3', params: { short_window: 20, long_window: 30 } })];
+    await renderResult({ cells: vi.fn(async () => page(three)) }, { maxDrawn: 2 });
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('1 cell drawn'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Draw every cell on this page' }));
+
+    await waitFor(() => expect(screen.getByText('2 of at most 2 drawn')).not.toBeNull());
+    // The page held two more; only one fitted, and the other can no longer be ticked.
+    expect((screen.getByRole('checkbox', { name: 'Draw short_window=20, long_window=30' }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Draw every cell on this page' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('draws every cell on the page that has a curve at one click', async () => {
     const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
     await renderResult({ cells: vi.fn(async () => page([...leaderAndAnother(), cell({ params_hash: 'h3', params: { short_window: 20, long_window: 30 }, has_curve: false })])), cellCurves });
@@ -152,24 +191,17 @@ describe('GridSearchResultComponent', () => {
     expect((screen.getByRole('button', { name: 'Draw every cell on this page' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('lists a cell recorded before cells kept their curve, says so, and never draws it', async () => {
-    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+  it('lists the cells of a search that kept no curves, says so, and never draws one flat', async () => {
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]): Promise<GridSearchCellCurves> => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] }));
     const old = leaderAndAnother().map((item) => ({ ...item, has_curve: false }));
     await renderResult({ cells: vi.fn(async () => page(old, { without_curve: 2 })), cellCurves });
 
     expect(await screen.findByText('Completed cells with no curve recorded: 2. They are listed with their numbers and cannot be drawn.')).not.toBeNull();
     expect(screen.getAllByText('Curve not recorded')).toHaveLength(2);
-    expect((screen.getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.disabled)).toEqual([true, true]);
-    // The leader has no curve, so nothing is drawn and nothing is asked for.
-    expect(screen.getByText('Tick cells in the table below to draw them here.')).not.toBeNull();
-    expect(cellCurves).not.toHaveBeenCalled();
-  });
-
-  it('says a ticked cell kept no curve when the server names it so, and never draws it flat', async () => {
-    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]): Promise<GridSearchCellCurves> => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] }));
-    await renderResult({ cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
-
-    expect(await screen.findByText('Curve not recorded for this cell.')).not.toBeNull();
+    // No cell can be ticked, and the leader's row shows no tick for a curve that cannot be drawn.
+    expect((screen.getAllByRole('checkbox') as HTMLInputElement[]).map((box) => [box.disabled, box.checked])).toEqual([[true, false], [true, false]]);
+    expect(await screen.findByText('No curve was recorded for this cell.')).not.toBeNull();
+    expect(screen.getByText('0 of at most 200 drawn')).not.toBeNull();
     expect(within(screen.getByRole('region', { name: 'Equity curves' })).queryByRole('img')).toBeNull();
   });
 
@@ -202,7 +234,12 @@ describe('GridSearchResultComponent', () => {
     const get = vi.fn(async (_id: string) => detail({ status: 'running', completed_cells: 1, expected_cells: 2 }));
     await render(GridSearchResultComponent, {
       inputs: { searchId: 'abc', pollMs: 0 },
-      providers: [provideRouter([]), { provide: JobsService, useValue: { cancelJob } }, { provide: GridSearchService, useValue: { get, cells: vi.fn(async () => page([cell()])), delete: vi.fn(), finish: vi.fn() } }],
+      providers: [
+        provideRouter([]),
+        ...fakeCharts().providers,
+        { provide: JobsService, useValue: { cancelJob } },
+        { provide: GridSearchService, useValue: { get, cells: vi.fn(async () => page([cell()])), cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes)), delete: vi.fn(), finish: vi.fn() } },
+      ],
     });
 
     await waitFor(() => expect(screen.getByRole('button', { name: /cancel/i })).not.toBeNull());

@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.research.session_curves import session_curves
+from app.research.session_curves import curves_read, session_curves
 from app.research.sweep.daily_equity import drawdown_series
 
 
@@ -42,3 +42,14 @@ def test_a_read_sends_its_sessions_once_and_each_curve_starts_at_its_own_first_s
     # A session inside a run's span that it did not score is a gap, never a carried value.
     assert curves["gapped"]["first_session"] == 0 and curves["gapped"]["cumulative_return"][2] is None and curves["gapped"]["drawdown"][2] is None
     assert curves["gapped"]["drawdown"][3] == pytest.approx(84.0 / 105.0 - 1.0, abs=1e-12, rel=0) == curves["gapped"]["deepest_drawdown"]
+
+
+def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_not_drawn() -> None:
+    stored = {"b": [(1, 100.0)], "a": [(1, 110.0)], "unasked": [(9, 100.0)]}
+
+    read = curves_read(["a", "old", "b"], stored, 100.0, key="params_hash")
+
+    assert [curve["params_hash"] for curve in read["curves"]] == ["a", "b"]
+    assert read["not_recorded"] == ["old"]
+    # The sessions are those of the runs asked for, not of every run that kept a curve.
+    assert read["sessions_ms"] == [1]

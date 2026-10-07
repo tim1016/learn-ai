@@ -12,7 +12,6 @@ from app.research.golden_search.procedure_history import FoldWindow
 from app.research.golden_search.run_curves import (
     MAX_OTHER_LINES,
     curve_set_lines,
-    curves_view,
     group_of,
     named_points,
     runs_page,
@@ -144,17 +143,6 @@ def test_two_unnamed_points_that_differ_only_in_the_bps_gap_read_differently() -
     assert [row["label"] for row in rows] == ["All-period search", "All-period search"]
     assert rows[0]["params_sentence"] != rows[1]["params_sentence"]
     assert "normalized gap 2.5 bps" in rows[1]["params_sentence"] and "bps" not in rows[0]["params_sentence"]
-
-
-def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_not_drawn() -> None:
-    stored = {"b": [(1, 100.0)], "a": [(1, 110.0)], "unasked": [(9, 100.0)]}
-
-    view = curves_view(["a", "old", "b"], stored, 100.0)
-
-    assert [curve["evaluation_key"] for curve in view["curves"]] == ["a", "b"]
-    assert view["not_recorded"] == ["old"]
-    # The sessions are those of the runs asked for, not of every run that kept a curve.
-    assert view["sessions_ms"] == [1]
 
 
 # ── A step's set of lines ────────────────────────────────────────────────

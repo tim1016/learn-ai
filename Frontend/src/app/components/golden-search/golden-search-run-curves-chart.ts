@@ -6,8 +6,8 @@ import { lastValue, onOneAxis, recordedSpan, sessionCurvesOption, type SessionCu
 /** One run to draw: what it is called, its settings in words, and its curve as the server sent it. */
 export interface RunLine {
   readonly key: string;
-  /** What asked for the run, or what it is among the others; empty for a run its settings alone name. */
-  readonly label: string;
+  /** What asked for the run, or what it is among the others; null for a run its settings alone name. */
+  readonly label: string | null;
   /** The run's settings sentence: with the label it tells any two runs apart. */
   readonly settings: string;
   /** The session closes of the read that returned the curve. */
@@ -59,7 +59,7 @@ export function runCurvesSpec(lines: readonly RunLine[], ceiling: number | null,
       columns: [titled, 'Settings', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
       rows: aligned.map(({ line, returns }) => ({
         key: line.key,
-        cells: [line.label === '' ? '—' : line.label, line.settings, sessionDate(returns, 0), sessionDate(returns, 1), signedPercentText(lastValue(returns)), signedPercentText(line.curve.deepest_drawdown)],
+        cells: [line.label ?? '—', line.settings, sessionDate(returns, 0), sessionDate(returns, 1), signedPercentText(lastValue(returns)), signedPercentText(line.curve.deepest_drawdown)],
       })),
     },
   };
@@ -70,7 +70,7 @@ function colorOf(index: number, theme: ChartTheme): string {
 }
 
 function nameOf(line: RunLine): string {
-  return line.label === '' ? line.settings : `${line.label} · ${line.settings}`;
+  return line.label === null ? line.settings : `${line.label} · ${line.settings}`;
 }
 
 /** Each run in the next palette colour; a crowd of them thins out and loses its end labels. */
@@ -78,7 +78,7 @@ function drawn(aligned: readonly AlignedRun[], theme: ChartTheme): SessionLine[]
   const crowded = aligned.length > END_LABELS;
   return aligned.map(({ line, returns, falls }, index) => ({
     key: line.key,
-    name: line.label === '' ? line.settings : line.label,
+    name: line.label ?? line.settings,
     returns,
     falls,
     color: colorOf(index, theme),

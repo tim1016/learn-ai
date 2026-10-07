@@ -25,7 +25,7 @@ from app.research.grid_search.engine_adapter import default_execute_cell
 from app.research.grid_search.models import CellRow, GridSearchSpec, SearchRow
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
-from app.research.session_curves import session_curves
+from app.research.session_curves import curves_read
 from app.research.sweep.ranking import is_eligible
 from app.routers import research_records as records
 from app.schemas.grid_search import (
@@ -217,12 +217,7 @@ async def get_grid_search_cell_curves(
     row = await _load(search_id)
     asked = list(dict.fromkeys(params_hash))
     stored = await with_connection(repo.cell_curves, search_id, asked)
-    sessions, curves = session_curves({key: stored[key] for key in asked if key in stored}, GridSearchSpec.from_request_dict(row.request).initial_cash)
-    return GridSearchCellCurvesResponse(
-        sessions_ms=sessions,
-        curves=[{"params_hash": key, **curves[key]} for key in asked if key in curves],
-        not_recorded=[key for key in asked if key not in stored],
-    )
+    return GridSearchCellCurvesResponse.model_validate(curves_read(asked, stored, GridSearchSpec.from_request_dict(row.request).initial_cash, key="params_hash"))
 
 
 @router.delete("/{search_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
