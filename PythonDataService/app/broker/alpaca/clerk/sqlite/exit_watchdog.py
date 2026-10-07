@@ -120,6 +120,7 @@ from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
+from app.broker.alpaca.clerk.sqlite.option_entry import order_contract
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -640,15 +641,27 @@ def clerk_work_in_flight(repo: ClerkSqliteRepository, symbol: str) -> bool:
     Any nonterminal effect of a strategy instance on the symbol (an ENTER in
     flight, another EXIT, a recovery flatten) or any nonterminal manual order
     (manual tickets are account-wide custody, so conservatively any symbol).
+
+    A bot in shares works the symbol it is registered under. A bot in option
+    contracts is registered under their underlying, so its work on a
+    contract is read from the orders themselves: an effect is on a contract
+    when an order it owns or is linked to is bound to it (ADR 0076).
     """
+    wanted = symbol.upper()
+    if repo.has_nonterminal_manual_order():
+        return True
+    effects = repo.reconcilable_effect_operations()
+    if is_option_contract_symbol(wanted):
+        return any(
+            (bound := order_contract(repo, order.order_ref)) is not None and bound.symbol == wanted
+            for effect in effects
+            for order in repo.orders_for_effect_operation(effect.effect_operation_id)
+        )
     instance_symbols = {
         instance["strategy_instance_id"]: str(instance["symbol"]).upper()
         for instance in repo.strategy_instances()
     }
-    return repo.has_nonterminal_manual_order() or any(
-        instance_symbols.get(effect.strategy_instance_id or "") == symbol.upper()
-        for effect in repo.reconcilable_effect_operations()
-    )
+    return any(instance_symbols.get(effect.strategy_instance_id or "") == wanted for effect in effects)
 
 
 def bots_with_an_unconfirmed_closing_order(

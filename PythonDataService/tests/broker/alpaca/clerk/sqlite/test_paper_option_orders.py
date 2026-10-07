@@ -259,6 +259,23 @@ async def test_a_paper_exit_is_a_market_order_sent_with_no_quote_and_it_closes_w
     assert paper.repo.active_exit_for_strategy("a") is None
 
 
+async def test_a_closing_order_alpaca_shows_only_by_its_own_id_is_still_read_as_an_option_order(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != order_ref)
+    # Alpaca fills the close, then answers "no such order" to its client order id and still has it by its own id.
+    paper.venue.option_order_fills(closing_ref, contracts=1, average_price="1.90")
+    paper.venue.option_orders["shown-by-its-own-id-only"] = paper.venue.option_orders.pop(closing_ref)
+
+    await paper.pass_()
+
+    assert paper.order_state(closing_ref) == "filled"
+    assert paper.held() == {} and paper.venue.lookup_calls == []
+
+
 async def test_an_exit_while_the_entry_still_rests_cancels_it_first_and_closes_only_what_filled(paper: PaperOptions) -> None:  # noqa: F811
     order_ref = await paper.resting(units=2)
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")

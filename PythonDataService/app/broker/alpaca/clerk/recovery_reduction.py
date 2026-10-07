@@ -64,6 +64,7 @@ from app.broker.alpaca.marketable_limit import (
     marketable_limit_price,
 )
 from app.broker.contract.models import OrderSide, OrderType, TimeInForce
+from app.options.contract import OptionContract
 from app.schemas.market_liveness import MarketLivenessFact, TopOfBookQuote
 from app.services.market_liveness import compose_market_liveness
 from app.services.session_authority import (
@@ -560,8 +561,27 @@ class RecoveryPricing:
         )
 
     def read_liveness(self, symbol: str, now_ms: int) -> MarketLivenessFact | None:
-        """Read on the event loop immediately before creating or sending a leg."""
-        return None if self.liveness_source is None else self.liveness_source(symbol, now_ms)
+        """Read on the event loop immediately before creating or sending a leg.
+
+        An option contract has no market status of its own. Whether its
+        market is halted is asked of its underlying, read from the
+        contract's own symbol (ADR 0076).
+        """
+        return None if self.liveness_source is None else self.liveness_source(market_status_symbol(symbol), now_ms)
+
+
+def market_status_symbol(symbol: str) -> str:
+    """The symbol whose market status answers for ``symbol``: an option contract's underlying, else itself.
+
+    The underlying is the contract's root as its symbol writes it. A ticker
+    with a share class is written without its dot there, and is not matched
+    back to it.
+    """
+    try:
+        contract = OptionContract.from_occ_symbol(symbol.upper())
+    except ValueError:
+        return symbol
+    return contract.root
 
 
 def reduction_market_hold(*, now_ms: int, fact: MarketLivenessFact | None) -> LegRefusal | None:

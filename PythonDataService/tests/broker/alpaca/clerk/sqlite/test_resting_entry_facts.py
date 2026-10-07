@@ -19,6 +19,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionEntryEvidence
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
@@ -156,3 +158,23 @@ def test_an_entry_handed_something_that_is_not_order_terms_is_refused() -> None:
 
     assert isinstance(refused, OptionEntryRefused)
     assert refused.reason_code == OptionEffectRefusal.ENTRY_EVIDENCE_INCOMPLETE.value
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        # A cancel time with no terms, terms with no cancel time, and a cancel time that is not the wait.
+        {"cancel_at_ms": _NOW + 20_000},
+        {"terms": {
+            "entry_wait_ms": 20_000, "cancel_allowance_ms": 30_000, "entry_margin_ms": 30_000,
+            "expiry_close_lead_ms": 2_700_000, "sold_leg_close_lead_ms": 600_000,
+        }},
+        {"cancel_at_ms": _NOW + 20_001, "terms": {
+            "entry_wait_ms": 20_000, "cancel_allowance_ms": 30_000, "entry_margin_ms": 30_000,
+            "expiry_close_lead_ms": 2_700_000, "sold_leg_close_lead_ms": 600_000,
+        }},
+    ],
+)
+def test_an_entry_whose_cancel_time_and_terms_do_not_agree_is_not_read_as_an_entry(changed: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="cancel time"):
+        OptionEntryFacts.from_facts({**json.loads(_PINNED_OPTION), **changed})

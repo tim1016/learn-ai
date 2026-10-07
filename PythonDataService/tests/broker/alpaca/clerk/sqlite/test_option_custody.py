@@ -41,6 +41,9 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import OPTION_DAY_FEE_NOT_ATTRI
 from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement, fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
+    ExecutionCoverageResolutionUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.simulated_account import _cash_after_fills
 from app.broker.contract.models import BrokerActivity, BrokerOrderLeg, OrderSide
 from app.lean_sidecar.trading_calendar import session_window_for_date
@@ -496,7 +499,8 @@ def test_an_execution_in_another_symbol_cannot_take_the_place_of_a_contracts_rec
         _recover_total(repo, order, symbol=AAPL_CALL.symbol, wanted=2, filled=2, price=1.50)
         conflict = _hold_aside(repo, order, reported=reported)
 
-        with pytest.raises(ContractTermsConflict, match=f"which trades {AAPL_CALL.symbol}"):
+        # Refused as the operator's route can answer it, with the contract's own reason in it.
+        with pytest.raises(ExecutionCoverageResolutionUnavailable, match=f"which trades {AAPL_CALL.symbol}"):
             _put_in_the_recovered_fills_place(repo, conflict)
 
         (kept,) = repo.fills_for_order(order.order_ref or "")

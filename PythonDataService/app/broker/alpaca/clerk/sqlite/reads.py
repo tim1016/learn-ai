@@ -299,6 +299,10 @@ def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
     Strategy identity supplies bot symbols without decoding historical order
     legs or fills. Only manual orders need their immutable acceptance symbol.
     Retired strategies remain watched while they still have custody.
+
+    A position in an option contract (ADR 0076) is watched through the symbol
+    its bot is registered under, the underlying: a contract's own symbol is
+    never a stock line to watch.
     """
     working = ",".join("?" for _ in WORKING_BROKER_STATES)
     pending = ",".join("?" for _ in NONTERMINAL_EFFECT_STATES)
@@ -310,7 +314,12 @@ def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
         "JOIN orders o ON o.effect_operation_id = e.effect_operation_id "
         f"WHERE lower(o.broker_state) IN ({working})), demand AS ("
         "SELECT symbol, 1 AS priority FROM strategy_instances WHERE retired_at_ms IS NULL "
-        "UNION ALL SELECT symbol, 0 FROM positions WHERE attributed_qty != 0 "
+        "UNION ALL SELECT p.symbol, 0 FROM positions p WHERE p.attributed_qty != 0 "
+        "AND NOT EXISTS (SELECT 1 FROM option_contracts c WHERE c.symbol = p.symbol) "
+        "UNION ALL SELECT i.symbol, 0 FROM positions p "
+        "JOIN option_contracts c ON c.symbol = p.symbol "
+        "JOIN strategy_instances i ON i.strategy_instance_id = p.strategy_instance_id "
+        "WHERE p.attributed_qty != 0 "
         "UNION ALL SELECT i.symbol, 0 FROM strategy_instances i "
         "JOIN live_effects e ON e.strategy_instance_id = i.strategy_instance_id "
         "UNION ALL SELECT json_extract(t.facts_json, '$.leg.symbol') AS symbol, 0 "

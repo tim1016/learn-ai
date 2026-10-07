@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.deadline_keeper import (
     UNPROVEN_RETRY_MS,
     UNPROVEN_RETRY_WINDOW_MS,
     DeadlineKeeper,
+    rest_until_nudged,
 )
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
@@ -135,6 +136,29 @@ async def test_accepting_an_entry_wakes_a_sleeping_keeper(paper: PaperOptions) -
     await running
 
     assert woken == [True]
+
+
+async def test_a_nudge_is_spent_by_the_round_that_follows_it(paper: PaperOptions) -> None:  # noqa: F811
+    """A nudge that was never cleared would end every rest at once, and the keeper would spin."""
+    seen: list[bool] = []
+
+    async def rest(_seconds: float, nudged: asyncio.Event) -> None:
+        seen.append(nudged.is_set())
+
+    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, rest=rest, off_loop=run_inline, max_rounds=2)
+    keeper.nudge()
+
+    await keeper.run()
+
+    assert seen == [False, False]
+
+
+async def test_the_keepers_rest_ends_at_its_time_or_at_a_nudge_whichever_is_first() -> None:
+    quiet, nudged = asyncio.Event(), asyncio.Event()
+    nudged.set()
+
+    await asyncio.wait_for(rest_until_nudged(0.01, quiet), timeout=2)
+    await asyncio.wait_for(rest_until_nudged(30, nudged), timeout=2)
 
 
 async def test_a_round_that_fails_does_not_end_the_keeper(paper: PaperOptions, monkeypatch) -> None:  # noqa: F811

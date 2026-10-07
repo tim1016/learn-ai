@@ -197,9 +197,13 @@ class PaperOptions:
     async def stream_fill(self, order_ref: str, *, contracts: int, filled_in_all: int, price: str, execution_id: str) -> None:
         """The venue fills ``contracts`` more at ``price`` and Alpaca's stream delivers that one execution."""
         self.venue.option_order_fills(order_ref, contracts=filled_in_all, average_price=price)
+        await self.stream_execution(order_ref, contracts=contracts, price=price, execution_id=execution_id)
+
+    async def stream_execution(self, order_ref: str, *, contracts: int, price: str, execution_id: str) -> Any:
+        """Alpaca's stream delivers one execution of an order the venue has already filled that much of."""
         frame = alpaca_adapter.from_alpaca_order(self.venue.option_orders[order_ref])
         sink = SqliteTradeUpdateEvidenceSink(repo=self.repo, intake=self.clerk.intake, reconciler=self.clerk)
-        await sink.record_lifecycle_event(
+        return await sink.record_lifecycle_event(
             client_order_id=order_ref,
             event=BrokerOrderEvent(
                 event_type="fill" if frame.status == "filled" else "partial_fill", occurred_at_ms=self.clock(),

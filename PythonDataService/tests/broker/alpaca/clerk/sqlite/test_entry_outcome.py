@@ -160,6 +160,20 @@ async def test_a_part_filled_order_cancelled_before_all_its_fills_are_on_the_boo
     assert settlement_for(outcome) is EntrySettlement.ENTERED
 
 
+async def test_an_order_alpaca_calls_filled_with_fewer_contracts_on_the_books_than_asked_is_unknown(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting(units=2)
+    # The frame says filled and reports no count; nothing of it is on the books.
+    paper.venue.option_orders[order_ref].update(status="filled")
+
+    paper.frame_without_its_execution(order_ref)
+
+    outcome = paper.outcome(order_ref)
+    assert paper.order_state(order_ref) == "filled"
+    assert (outcome.standing, outcome.proven, outcome.units_filled) == (EntryStanding.OUTCOME_UNKNOWN, False, 0)
+
+
 def _outcome(standing: EntryStanding, *, units_filled: int) -> EntryOutcome:
     return EntryOutcome(
         standing=standing, order_refs=("ref",), units_asked=3, units_filled=units_filled,
