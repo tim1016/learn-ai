@@ -181,7 +181,7 @@ def test_a_half_dollar_strike_and_price_are_read_exactly() -> None:
     ids=["summer", "winter", "the day the clocks go back"],
 )
 def test_an_activitys_date_is_new_york_midnight_in_summer_and_in_winter(written: str, day: date) -> None:
-    event = from_alpaca_option_activity(_expiry(date=written, symbol="AAPL241220C00150000"), observed_at_ms=_OBSERVED)
+    event = from_alpaca_option_activity(_assignment(date=written, symbol="AAPL241220C00150000"), observed_at_ms=_OBSERVED)
 
     assert event.activity_date_ms == et_midnight_ms(day)
     assert event.activity_date == day
@@ -291,6 +291,8 @@ _UNREADABLE_EVENTS: dict[str, dict[str, Any]] = {
     "another currency": {"currency": "EUR"},
     "a group id that is not text": {"group_id": 7},
     "a creation time that is not one": {"created_at": "yesterday"},
+    "a time of its own beside the date": {"transaction_time": "2023-07-21T13:30:00Z"},
+    "a time of its own that is not one": {"transaction_time": ""},
 }
 
 
@@ -304,6 +306,18 @@ def test_an_assignment_that_removes_contracts_is_refused() -> None:
     """An assignment adds back to a sold position; one signed the other way is not an assignment the pages show."""
     with pytest.raises(ValueError, match="an assignment takes from a sold position"):
         from_alpaca_option_activity(_assignment(qty="-2"), observed_at_ms=_OBSERVED)
+
+
+def test_an_expiry_dated_before_its_contract_expires_is_refused() -> None:
+    """The documented contract expires 2023-07-21. A row that has it expire the day before is not an expiry."""
+    with pytest.raises(ValueError, match="this expiry is dated 2023-07-20"):
+        from_alpaca_option_activity(_expiry(date="2023-07-20"), observed_at_ms=_OBSERVED)
+
+
+def test_an_expiry_reported_after_the_expiry_date_is_read() -> None:
+    event = from_alpaca_option_activity(_expiry(date="2023-07-22"), observed_at_ms=_OBSERVED)
+
+    assert event.activity_date == date(2023, 7, 22)
 
 
 def test_an_expiry_is_read_with_either_sign() -> None:
@@ -330,6 +344,7 @@ _UNREADABLE_SHARE_TRADES: dict[str, dict[str, Any]] = {
     "no date": {"date": ...},
     "no id": {"id": ...},
     "another currency": {"currency": "CAD"},
+    "a time of its own beside the date": {"transaction_time": "2023-07-01T13:30:00Z"},
 }
 
 
@@ -360,6 +375,25 @@ def test_a_code_no_page_lists_is_named_and_not_passed_over() -> None:
     assert alpaca_option_activity_type(row) == "OPEXR"
     with pytest.raises(ValueError, match="'OPEXR' is an option activity this app does not read"):
         from_alpaca_option_activity(row, observed_at_ms=_OBSERVED)
+
+
+_CODES_NOT_WRITTEN_EXACTLY = ["opexp", " OPEXP", "OPEXP ", "Opasn", "opexc", "\tOPXRC", "optrd", " opca "]
+
+
+@pytest.mark.parametrize("code", _CODES_NOT_WRITTEN_EXACTLY)
+def test_a_code_not_written_as_alpaca_writes_it_is_still_an_option_activity_and_is_read_as_nothing(code: str) -> None:
+    """A lower-case or padded ``OPEXP`` may be an expiry. It is named as unread, never passed over as a fee might be."""
+    row = _expiry(activity_type=code)
+
+    # The code is kept as it arrived.
+    assert alpaca_option_activity_type(row) == code
+    with pytest.raises(ValueError, match="is not written as Alpaca's pages write an option activity code"):
+        from_alpaca_option_activity(row, observed_at_ms=_OBSERVED)
+
+
+@pytest.mark.parametrize("code", ["FEE", "fee", " DIV ", "JNLC", "CSD", "P", "O", "", "  "])
+def test_a_code_that_does_not_begin_as_an_option_code_does_is_not_an_option_activity(code: str) -> None:
+    assert alpaca_option_activity_type(_expiry(activity_type=code)) is None
 
 
 # ── Taken once: the id ──────────────────────────────────────────────────────
@@ -586,6 +620,102 @@ async def test_a_sign_the_kind_cannot_have_is_explained_in_plain_words() -> None
     assert evidence.events == ()
     (unreadable,) = evidence.unreadable
     assert unreadable.reason == "an exercise takes from a bought position; this one adds 1"
+
+
+@pytest.mark.parametrize("code", _CODES_NOT_WRITTEN_EXACTLY)
+async def test_an_option_code_not_written_exactly_is_listed_as_unreadable_and_not_skipped(code: str) -> None:
+    odd = _row("broker_api", "put_expiration", activity_type=code)
+    broker, _client = _broker({None: [_QS_ROWS[0], odd]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[0]["id"]]
+    (unreadable,) = evidence.unreadable
+    # The code is listed as it arrived, so the owner sees what Alpaca sent.
+    assert (unreadable.activity_id, unreadable.activity_type) == (odd["id"], code)
+    assert "is not written as Alpaca's pages write an option activity code" in unreadable.reason
+    assert evidence.read_whole is False
+
+
+@pytest.mark.parametrize(
+    "transaction_time",
+    [
+        # Midnight UTC on the row's own date: the evening before in New York, so a day before the window.
+        "2024-03-01T00:00:00Z",
+        "2024-03-01T15:00:00Z",
+        # Weeks before the window.
+        "2024-02-01T15:00:00Z",
+        "",
+    ],
+    ids=["the evening before in New York", "that afternoon", "weeks before", "blank"],
+)
+async def test_an_option_row_that_states_a_time_is_unreadable_and_is_not_placed_outside_its_own_date(
+    transaction_time: str,
+) -> None:
+    """The row is dated the day the window starts. Its instant must not skip it and leave the read whole."""
+    timed = _row("broker_api", "put_expiration", transaction_time=transaction_time)
+    broker, _client = _broker({None: [_QS_ROWS[0], timed]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[0]["id"]]
+    (unreadable,) = evidence.unreadable
+    assert unreadable.activity_id == timed["id"]
+    # It is placed by the date it carries, not by the instant.
+    assert unreadable.activity_date_ms == _FRIDAY
+    assert "'transaction_time' is on an option activity" in unreadable.reason
+    assert evidence.read_whole is False
+
+
+async def test_an_option_row_that_states_a_time_and_no_date_cannot_be_placed_outside_the_window() -> None:
+    timed = _row("broker_api", "put_expiration", date=..., transaction_time="2024-01-05T15:00:00Z")
+    broker, _client = _broker({None: [timed]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    (unreadable,) = evidence.unreadable
+    assert (unreadable.activity_id, unreadable.activity_date_ms) == (timed["id"], None)
+    assert evidence.read_whole is False
+
+
+async def test_a_time_on_some_other_activity_still_places_it_as_it_always_did() -> None:
+    """A fee row with an instant weeks before the window is walked past, and refuses nothing."""
+    timed_fee = {**_fee("2024-03-01", 3), "transaction_time": "2024-02-01T15:00:00Z"}
+    broker, _client = _broker({None: [_QS_ROWS[2], timed_fee]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
+    assert evidence.read_whole is True
+
+
+@pytest.mark.parametrize("status", ["correct", "canceled"])
+async def test_a_row_the_broker_no_longer_stands_by_is_listed_and_the_read_is_not_whole(status: str) -> None:
+    not_stood_by = _row("broker_api", "put_expiration", status=status)
+    broker, _client = _broker({None: [_QS_ROWS[0], _QS_ROWS[1], not_stood_by]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[0]["id"], not_stood_by["id"]]
+    assert [activity.activity_id for activity in evidence.not_executed] == [not_stood_by["id"]]
+    assert evidence.unreadable == ()
+    # The walk reached the window's start, and the read still does not explain everything.
+    assert evidence.history_complete is True
+    assert evidence.read_whole is False
+
+
+async def test_an_expiry_dated_before_its_contract_expires_is_listed_as_unreadable() -> None:
+    """``QS240301P00000500`` expires 2024-03-01; the row has it expire on 2024-02-29."""
+    early = _row("broker_api", "put_expiration", date="2024-02-29")
+    broker, _client = _broker({None: [_QS_ROWS[0], early]})
+
+    evidence = await broker.read_option_event_activities(after_ms=et_midnight_ms(date(2024, 2, 26)))
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[0]["id"]]
+    (unreadable,) = evidence.unreadable
+    assert unreadable.activity_id == early["id"]
+    assert "this expiry is dated 2024-02-29" in unreadable.reason
+    assert evidence.read_whole is False
 
 
 @pytest.mark.parametrize("code", ["OPCA", "OPCSH"])

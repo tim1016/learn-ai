@@ -5,9 +5,12 @@ is assigned, a bought option is exercised, or an option expires worthless.
 The broker reports each against the account, by contract and by count. This
 says whose lots it took, and what each owner's books then show (ADR 0076).
 
-Formula: with the event's ``n`` contracts, the multiplier ``m``, the strike
-  ``K``, and the lots it may take sorted oldest first, each holding ``q_j``
-  contracts (bought positive, sold negative):
+Formula: with the change ``c`` the broker reports to the account's position
+  (negative ends a bought position, positive a sold one), ``n = |c|``
+  contracts, the multiplier ``m``, the strike ``K``, and the lots it may
+  take in the order it takes them (oldest first for an assignment or an
+  exercise, newest first for an expiry), each holding ``q_j`` contracts
+  (bought positive, sold negative):
   taken_j  = min(|q_j|, n - Σ taken_i for i < j),  refused unless Σ taken_j = n
   and for ``t`` contracts taken from one lot:
   option position change = -t for a bought lot, +t for a sold one, at a price of zero
@@ -49,10 +52,16 @@ What is Alpaca's documented behaviour, and what is not:
   so the premium paid or received when it opened stays in the lot's cost and
   is not moved into the shares' cost. Alpaca's zero net amount on the event
   is consistent with that and does not prescribe it.
-- **This repo's rule (#2913):** the oldest lot is taken first when more than
-  one holds the contract, and a lot opened on a later New York date than the
-  event is passed over, because it did not exist when the event happened.
-  The broker reports an event against the account and names no lot.
+- **This repo's rule (#2913):** an assignment or an exercise takes the
+  oldest lot first when more than one holds the contract. An expiry takes
+  the newest first: it is what is left once the oldest were assigned or
+  exercised, so which bot is assigned is the same whichever row is matched
+  first. A lot opened on a later New York date than the event is passed
+  over, because it did not exist when the event happened. The broker
+  reports an event against the account and names no lot.
+- **This repo's rule (ADR 0076):** an expiry of a contract held on both
+  sides is refused. The broker's row is the account's net, bought less
+  sold, and no count of it says how many contracts each side lost.
 
 Shares sold are sold whether or not the owner held them. A call assigned to
 a bot with no shares leaves that bot short the stock, and its books must show
@@ -62,7 +71,9 @@ with such an account; that the shares are sold at the strike is the
 contract's meaning.
 
 Every figure is a whole number of contracts, shares or cents, and no step
-rounds. Cash that does not come to whole cents is refused.
+rounds. Cash that does not come to whole cents is refused by name: the
+event's total first, before any lot is looked at, and then any lot's part
+of a whole total that is not whole itself.
 """
 
 from __future__ import annotations
@@ -102,6 +113,10 @@ class OptionEventRefusal(StrEnum):
     WRONG_SIDE = "OPTION_EVENT_WRONG_SIDE"
     # The event is for more contracts than the lots it may take hold.
     MORE_CONTRACTS_THAN_HELD = "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD"
+    # An expiry of a contract held bought and sold at once. The broker's row is the account's net.
+    HELD_ON_BOTH_SIDES = "OPTION_EVENT_HELD_ON_BOTH_SIDES"
+    # The shares at the strike do not come to whole cents.
+    CASH_NOT_WHOLE_CENTS = "OPTION_EVENT_CASH_NOT_WHOLE_CENTS"
     # The broker did not report the event as executed. Raised where a broker's activity is allocated.
     NOT_EXECUTED = "OPTION_EVENT_NOT_EXECUTED"
 
@@ -119,6 +134,13 @@ class OptionEventRefused(ValueError):
 def _require_whole(name: str, value: object, *, at_least: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < at_least:
         raise ValueError(f"{name} must be a whole number, {at_least} or more; got {value!r}")
+
+
+def _require_a_change(position_change: object) -> None:
+    if isinstance(position_change, bool) or not isinstance(position_change, int) or position_change == 0:
+        raise ValueError(
+            f"an event's position change is a whole number of contracts, never zero; got {position_change!r}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +203,7 @@ class LotAllocation:
 
 @dataclass(frozen=True, slots=True)
 class OptionEventAllocation:
-    """One event matched to lots, oldest first. The lots' contracts sum to the event's."""
+    """One event matched to lots, in the order they were taken. The lots' contracts sum to the event's."""
 
     kind: OptionEventKind
     contract: OptionContract
@@ -204,9 +226,13 @@ class OptionEventAllocation:
 
 
 def _shares_and_cash_cents(
-    kind: OptionEventKind, contract: OptionContract, *, contracts: int, multiplier: int
+    kind: OptionEventKind, contract: OptionContract, *, contracts: int, multiplier: int, event_contracts: int
 ) -> tuple[int, int]:
-    """Signed shares and signed whole cents for ``contracts`` of an event; an expiry moves neither."""
+    """Signed shares and signed whole cents for ``contracts`` of an event; an expiry moves neither.
+
+    ``event_contracts`` is the whole event's count, which a refusal names:
+    cash that is not whole cents refuses the event, not a part of it.
+    """
     if kind is OptionEventKind.EXPIRED:
         return 0, 0
     # A call's holder buys and a put's holder sells; the one assigned takes the other side.
@@ -215,9 +241,11 @@ def _shares_and_cash_cents(
     shares = contracts * multiplier
     cents, part_of_a_cent = divmod(contract.strike_thousandths * shares, _THOUSANDTHS_PER_CENT)
     if part_of_a_cent:
-        raise ValueError(
-            f"{shares} shares at a strike of {contract.strike} do not come to whole cents; "
-            "the amount is refused, never rounded"
+        raise OptionEventRefused(
+            OptionEventRefusal.CASH_NOT_WHOLE_CENTS,
+            f"{shares} shares of {contract.occ_symbol} at a strike of {contract.strike} do not come to whole "
+            "cents; the amount is refused, never rounded.",
+            unmatched_contracts=event_contracts,
         )
     return (shares, -cents) if buys else (-shares, cents)
 
@@ -228,28 +256,41 @@ def expected_share_trade(
     """The share trade ``contracts`` of an event create in all, or ``None`` for an expiry.
 
     What a broker reports as the trade must agree with this: the same shares,
-    at the strike, for the same cash.
+    at the strike, for the same cash. Cash that does not come to whole cents
+    is refused by name (``CASH_NOT_WHOLE_CENTS``).
     """
+    # A plain string is read as the kind it spells, or refused: never taken for an assignment.
+    kind = OptionEventKind(kind)
     _require_whole("an event's contracts", contracts, at_least=1)
     _require_whole("a contract's multiplier", multiplier, at_least=1)
     if kind is OptionEventKind.EXPIRED:
         return None
-    shares, cash_cents = _shares_and_cash_cents(kind, contract, contracts=contracts, multiplier=multiplier)
+    shares, cash_cents = _shares_and_cash_cents(
+        kind, contract, contracts=contracts, multiplier=multiplier, event_contracts=contracts
+    )
     return ShareTrade(root=contract.root, shares=shares, price=contract.strike, cash_cents=cash_cents)
 
 
-_SIDE_AN_EVENT_ENDS: dict[OptionEventKind, str] = {
-    OptionEventKind.ASSIGNED: "sold",
-    OptionEventKind.EXERCISED: "bought",
+_BOUGHT = "bought"
+_SOLD = "sold"
+_THE_OTHER_SIDE = {_BOUGHT: _SOLD, _SOLD: _BOUGHT}
+
+# The side of a position each kind of event can end. Only a sold option is
+# assigned and only a bought one exercised; either expires.
+_SIDES_A_KIND_ENDS: dict[OptionEventKind, tuple[str, ...]] = {
+    OptionEventKind.ASSIGNED: (_SOLD,),
+    OptionEventKind.EXERCISED: (_BOUGHT,),
+    OptionEventKind.EXPIRED: (_BOUGHT, _SOLD),
 }
 
 
-def _on_the_side_ended(kind: OptionEventKind, lot: HeldOptionLot) -> bool:
-    if kind is OptionEventKind.ASSIGNED:
-        return lot.quantity < 0
-    if kind is OptionEventKind.EXERCISED:
-        return lot.quantity > 0
-    return True
+def _side_held(lot: HeldOptionLot) -> str:
+    return _BOUGHT if lot.quantity > 0 else _SOLD
+
+
+def _side_a_change_ends(position_change: int) -> str:
+    """The side a broker's signed change ends: it takes from a bought position or adds back to a sold one."""
+    return _BOUGHT if position_change < 0 else _SOLD
 
 
 def _require_one_contract_and_distinct_lots(contract: OptionContract, lots: Sequence[HeldOptionLot]) -> None:
@@ -266,31 +307,61 @@ def allocate_option_event(
     *,
     kind: OptionEventKind,
     contract: OptionContract,
-    contracts: int,
+    position_change: int,
     event_date_ms: int,
     multiplier: int,
     lots: Sequence[HeldOptionLot],
 ) -> OptionEventAllocation:
-    """Match one event to the open lots of its contract, oldest first, with each owner's book effects.
+    """Match one event to the open lots of its contract, with each owner's book effects.
 
-    ``lots`` are every open lot of ``contract``, across owners. An assignment
-    takes sold lots only and an exercise takes bought lots only; an expiry
-    takes either. A lot is taken in part when the event ends before it does.
-    ``event_date_ms`` is any instant on the event's New York date; only the
-    date is read, and a lot opened on a later date is passed over.
+    ``position_change`` is the change the broker reports to the account's
+    position, in whole contracts and signed as the broker signs it: negative
+    ends a bought position, positive a sold one. ``lots`` are every open lot
+    of ``contract``, across owners. ``event_date_ms`` is any instant on the
+    event's New York date; only the date is read, and a lot opened on a
+    later date is passed over. A lot is taken in part when the event ends
+    before it does.
+
+    **Which side.** An assignment takes sold lots only and an exercise
+    bought lots only; a change signed for the other side is not that kind of
+    event and raises ``ValueError``. An expiry takes the side its sign
+    names. When lots are held on one side only, an expiry signed for the
+    other side still closes them: Alpaca's pages show only a bought option
+    expiring, so the sign of a sold one is an inference, and the books hold
+    nothing else the row could mean. When lots are held on both sides an
+    expiry is refused (``HELD_ON_BOTH_SIDES``): the broker's row is the
+    account's net, and no count of it can be matched to lots.
+
+    **Which lots.** An assignment or an exercise takes the oldest lots
+    first. An expiry takes the newest first, because it is what is left once
+    the oldest were assigned or exercised. So the lots that are assigned are
+    the same whether the expiry or the assignment is matched first.
 
     The rule chooses among the lots it is given and no others. A holding of
     the contract that is on nobody's books here, such as one the owner
     opened by hand, must be offered as a lot of its own, or an event that
     took it is matched to a bot's lot.
 
-    The lots taken hold exactly ``contracts``, or the event is refused with
-    the reason and the count that found no lot: a contract nobody holds, lots
-    on the wrong side only, or more contracts than the lots hold.
+    The lots taken hold exactly the event's contracts, or the event is
+    refused with the reason and the count that found no lot: cash that is
+    not whole cents, a contract nobody holds, lots on the wrong side only,
+    an expiry of a contract held on both sides, or more contracts than the
+    lots hold. Nothing is allocated when an event is refused.
     """
-    _require_whole("an event's contracts", contracts, at_least=1)
+    # A plain string is read as the kind it spells, or refused: never taken for an assignment.
+    kind = OptionEventKind(kind)
+    _require_a_change(position_change)
     _require_whole("a contract's multiplier", multiplier, at_least=1)
     _require_one_contract_and_distinct_lots(contract, lots)
+    contracts = abs(position_change)
+    side = _side_a_change_ends(position_change)
+    if side not in _SIDES_A_KIND_ENDS[kind]:
+        raise ValueError(
+            f"an option that is {kind.value} ends a {_THE_OTHER_SIDE[side]} position; "
+            f"a change of {position_change:+d} would end a {side} one"
+        )
+    # The cash is the event's own, whatever the books hold: refused before any lot is looked at.
+    _shares_and_cash_cents(kind, contract, contracts=contracts, multiplier=multiplier, event_contracts=contracts)
     symbol = contract.occ_symbol
     if not lots:
         raise OptionEventRefused(
@@ -298,18 +369,32 @@ def allocate_option_event(
             f"{contracts} of {symbol} were {kind.value}, and no bot holds that contract.",
             unmatched_contracts=contracts,
         )
-    on_side = [lot for lot in lots if _on_the_side_ended(kind, lot)]
+    on_side = [lot for lot in lots if _side_held(lot) == side]
+    on_the_other_side = [lot for lot in lots if _side_held(lot) != side]
+    expired = kind is OptionEventKind.EXPIRED
+    if expired and on_side and on_the_other_side:
+        raise OptionEventRefused(
+            OptionEventRefusal.HELD_ON_BOTH_SIDES,
+            f"{contracts} of {symbol} expired, and the books hold it both bought and sold. The broker reports "
+            "the account's net, so no count of it can be matched to lots.",
+            unmatched_contracts=contracts,
+        )
+    if expired and not on_side:
+        # Held on one side only: the row can mean nothing else, whatever its sign.
+        on_side = on_the_other_side
     if not on_side:
         raise OptionEventRefused(
             OptionEventRefusal.WRONG_SIDE,
-            f"{contracts} of {symbol} were {kind.value}, which ends a {_SIDE_AN_EVENT_ENDS[kind]} option; "
-            f"every lot of it on the books is {'bought' if kind is OptionEventKind.ASSIGNED else 'sold'}.",
+            f"{contracts} of {symbol} were {kind.value}, which ends a {side} option; "
+            f"every lot of it on the books is {_THE_OTHER_SIDE[side]}.",
             unmatched_contracts=contracts,
         )
     event_date = et_date_at_ms(event_date_ms)
+    # An assignment or an exercise takes the oldest lots. An expiry is what they leave, so it takes the newest.
     open_then = sorted(
         (lot for lot in on_side if et_date_at_ms(lot.opened_at_ms) <= event_date),
         key=lambda lot: (lot.opened_at_ms, lot.sequence, lot.owner),
+        reverse=expired,
     )
     held = sum(abs(lot.quantity) for lot in open_then)
     if held < contracts:
@@ -328,7 +413,9 @@ def allocate_option_event(
         take = min(abs(lot.quantity), left)
         left -= take
         bought = lot.quantity > 0
-        shares, cash_cents = _shares_and_cash_cents(kind, contract, contracts=take, multiplier=multiplier)
+        shares, cash_cents = _shares_and_cash_cents(
+            kind, contract, contracts=take, multiplier=multiplier, event_contracts=contracts
+        )
         taken.append(
             LotAllocation(
                 owner=lot.owner,

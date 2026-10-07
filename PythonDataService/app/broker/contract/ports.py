@@ -95,8 +95,10 @@ class BrokerReadPort(Protocol):
         ``page_token`` resumes it from the last read's ``next_page_token``.
 
         Each activity is read whole or listed as unreadable, never in part.
-        A broker whose book can hold no option position answers with none,
-        complete.
+        No event in the window means nothing happened only when the
+        evidence's ``read_whole`` is true: the walk is complete, no row is
+        unreadable, and the broker reports every row as executed. A broker
+        whose book can hold no option position answers with none, complete.
         """
         ...
 

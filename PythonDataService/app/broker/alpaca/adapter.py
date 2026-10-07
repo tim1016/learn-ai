@@ -1110,19 +1110,31 @@ _ALPACA_ACTIVITY_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _ALPACA_OPTION_ACTIVITY_CURRENCY = "USD"
 
 
+def _as_alpaca_writes_a_code(code: str) -> str:
+    """A code without padding and in capitals, the way every one of Alpaca's pages writes it."""
+    return code.strip().upper()
+
+
 def alpaca_option_activity_type(payload: Any) -> str | None:
-    """Alpaca's code for the row when it is an option activity, else ``None``.
+    """Alpaca's code for the row, as written, when it is an option activity, else ``None``.
 
     An option activity is any whose code begins ``OP``: the three events, the
     share trade, and the kinds this app does not read (``OPCA``, an option
     corporate action, and ``OPCSH``, a cash deliverable). The prefix is this
     repo's guard, not a statement of Alpaca's: a new code, or a third
     spelling of the exercise, is then refused by name and not skipped.
+
+    The prefix is looked for without regard to padding or case, so a code
+    that is not written exactly (``opexp``, ``" OPEXP"``) is still an option
+    activity. It is returned as written and is read as nothing: a row that
+    may be an expiry must be named, never passed over as some other kind.
     """
     if not isinstance(payload, Mapping):
         return None
     code = payload.get("activity_type")
-    return code if isinstance(code, str) and code.startswith(_ALPACA_OPTION_ACTIVITY_PREFIX) else None
+    if not isinstance(code, str) or not _as_alpaca_writes_a_code(code).startswith(_ALPACA_OPTION_ACTIVITY_PREFIX):
+        return None
+    return code
 
 
 def _signed_whole(value: Any, *, field: str) -> int:
@@ -1149,6 +1161,14 @@ def _option_activity_status(value: Any) -> OptionActivityStatus:
 
 def _option_activity_header(payload: Mapping[str, Any], code: str) -> dict[str, Any]:
     """What an event and its share trade both carry: who, when, and whether the broker stands by it."""
+    # Every documented option activity carries a date and no time. One that
+    # states an instant is dated in a way this does not read: the instant
+    # could put it on another New York date than the one it carries.
+    if payload.get("transaction_time") is not None:
+        raise ValueError(
+            "Alpaca field 'transaction_time' is on an option activity, which is read by its date alone; "
+            f"got {payload['transaction_time']!r}"
+        )
     currency = _opt_text(payload.get("currency"), field="currency")
     if currency not in (None, _ALPACA_OPTION_ACTIVITY_CURRENCY):
         raise ValueError(f"Alpaca field 'currency' is {currency!r}; an option activity is read in dollars only")
@@ -1181,15 +1201,22 @@ def from_alpaca_option_activity(
     contract by OCC symbol and carries the change to the account's position
     in contracts. Its share trade (``OPTRD``) names the underlying and carries
     signed shares, the price a share and the cash. The date becomes 00:00 New
-    York time on it, here, once.
+    York time on it, here, once. A row that also states a
+    ``transaction_time`` is refused: it is read by its date alone.
 
     An option activity of another code (``OPCA``, ``OPCSH``) is refused by
-    name: this app reads no such kind. A row that is not an option activity
+    name: this app reads no such kind. So is a code that is not written
+    exactly as Alpaca's pages write it. A row that is not an option activity
     at all is the caller's mistake and raises too.
     """
     code = alpaca_option_activity_type(payload)
     if code is None:
         raise ValueError("Alpaca's row is not an option activity")
+    if code != _as_alpaca_writes_a_code(code):
+        raise ValueError(
+            f"Alpaca activity type {code!r} is not written as Alpaca's pages write an option activity code "
+            f"({_as_alpaca_writes_a_code(code)!r}); a code is read exactly or not at all"
+        )
     if code in _ALPACA_OPTION_EVENT_KIND:
         return BrokerOptionEventActivity(
             **_option_activity_header(payload, code),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -72,10 +73,14 @@ def _share_trade(**changes: Any) -> BrokerOptionShareTradeActivity:
     return BrokerOptionShareTradeActivity(**{**fields, **changes})
 
 
-def _sold(owner: str, contracts: int, *, opened: date, sequence: int) -> HeldOptionLot:
+def _sold(owner: str, contracts: int, *, opened: date, sequence: int, contract: OptionContract = _CALL) -> HeldOptionLot:
     return HeldOptionLot(
-        owner=owner, contract=_CALL, quantity=-contracts, opened_at_ms=et_midnight_ms(opened) + 36_000_000, sequence=sequence
+        owner=owner, contract=contract, quantity=-contracts, opened_at_ms=et_midnight_ms(opened) + 36_000_000, sequence=sequence
     )
+
+
+def _bought(owner: str, contracts: int, *, opened: date, sequence: int, contract: OptionContract = _CALL) -> HeldOptionLot:
+    return replace(_sold(owner, contracts, opened=opened, sequence=sequence, contract=contract), quantity=contracts)
 
 
 # ── What an activity cannot be ──────────────────────────────────────────────
@@ -123,6 +128,36 @@ def test_an_expiry_may_end_a_bought_position_or_a_sold_one(position_change: int)
     event = _event(kind=OptionEventKind.EXPIRED, activity_type="OPEXP", position_change=position_change)
 
     assert event.contracts == 2
+
+
+def test_an_option_cannot_expire_before_its_own_expiry_date() -> None:
+    """The contract expires on Friday 2024-03-01. An expiry dated the Thursday is about something else."""
+    with pytest.raises(ValidationError, match="this expiry is dated 2024-02-29"):
+        _event(
+            kind=OptionEventKind.EXPIRED,
+            activity_type="OPEXP",
+            position_change=-1,
+            activity_date_ms=et_midnight_ms(date(2024, 2, 29)),
+        )
+
+
+@pytest.mark.parametrize("day", [date(2024, 3, 1), date(2024, 3, 2), date(2024, 3, 4)], ids=["the day", "the Saturday", "the Monday"])
+def test_an_expiry_is_dated_on_its_contracts_expiry_date_or_after(day: date) -> None:
+    event = _event(
+        kind=OptionEventKind.EXPIRED, activity_type="OPEXP", position_change=-1, activity_date_ms=et_midnight_ms(day)
+    )
+
+    assert event.activity_date == day
+
+
+def test_an_assignment_or_an_exercise_may_come_before_the_expiry_date() -> None:
+    """An American option can be exercised, and so assigned, on any day it is open."""
+    early = et_midnight_ms(date(2024, 2, 20))
+
+    assert _event(activity_date_ms=early).activity_date == date(2024, 2, 20)
+    assert _event(
+        kind=OptionEventKind.EXERCISED, activity_type="OPEXC", position_change=-1, activity_date_ms=early
+    ).activity_date == date(2024, 2, 20)
 
 
 @pytest.mark.parametrize("net_amount", [Decimal("-450"), Decimal("0.01")])
@@ -183,6 +218,38 @@ def test_one_unreadable_row_means_the_read_is_not_whole_however_complete_the_wal
     assert evidence.read_whole is False
 
 
+@pytest.mark.parametrize("status", [OptionActivityStatus.CORRECT, OptionActivityStatus.CANCELED])
+def test_an_event_the_broker_does_not_report_as_executed_means_the_read_is_not_whole(
+    status: OptionActivityStatus,
+) -> None:
+    """What a corrected or cancelled row does to a position is not known, so the read explains less than it shows."""
+    stood_by = _event(activity_id="20240301000000000::executed")
+    not_stood_by = _event(status=status)
+    evidence = BrokerOptionEventEvidence(events=(stood_by, not_stood_by), share_trades=(), history_complete=True)
+
+    assert evidence.read_whole is False
+    # The row is still listed, so a hold can name it.
+    assert evidence.not_executed == (not_stood_by,)
+    assert not_stood_by in evidence.events
+
+
+@pytest.mark.parametrize("status", [OptionActivityStatus.CORRECT, OptionActivityStatus.CANCELED])
+def test_a_share_trade_the_broker_does_not_report_as_executed_means_the_read_is_not_whole(
+    status: OptionActivityStatus,
+) -> None:
+    not_stood_by = _share_trade(status=status)
+    evidence = BrokerOptionEventEvidence(events=(_event(),), share_trades=(not_stood_by,), history_complete=True)
+
+    assert evidence.read_whole is False
+    assert evidence.not_executed == (not_stood_by,)
+
+
+def test_a_whole_read_has_no_row_the_broker_does_not_stand_by() -> None:
+    evidence = BrokerOptionEventEvidence(events=(_event(),), share_trades=(_share_trade(),), history_complete=True)
+
+    assert evidence.not_executed == ()
+
+
 # ── A broker's activity matched to lots ─────────────────────────────────────
 
 
@@ -206,11 +273,48 @@ def test_an_executed_assignment_held_by_two_bots_is_allocated_oldest_first_with_
     assert allocation == allocate_option_event(
         kind=OptionEventKind.ASSIGNED,
         contract=_CALL,
-        contracts=3,
+        position_change=3,
         event_date_ms=et_midnight_ms(_ASSIGNED_ON),
         multiplier=100,
         lots=lots,
     )
+
+
+def test_an_exercise_the_broker_reports_takes_bought_lots_because_its_sign_reaches_the_rule() -> None:
+    exercise = _event(kind=OptionEventKind.EXERCISED, activity_type="OPEXC", position_change=-2)
+    lots = [
+        _bought("bot-a", 1, opened=date(2024, 2, 26), sequence=5),
+        _bought("bot-b", 4, opened=date(2024, 2, 28), sequence=8),
+    ]
+
+    allocation = allocation_of(exercise, multiplier=100, lots=lots)
+
+    assert [(lot.owner, lot.contracts, lot.option_quantity_change) for lot in allocation.lots] == [
+        ("bot-a", 1, -1),
+        ("bot-b", 1, -1),
+    ]
+    # Each bot buys its shares at $4.50.
+    assert [(lot.share_quantity_change, lot.cash_change_cents) for lot in allocation.lots] == [(100, -45_000), (100, -45_000)]
+
+
+@pytest.mark.parametrize("position_change", [-1, 1], ids=["the net, as Alpaca would sign it", "signed the other way"])
+def test_an_expiry_of_a_contract_two_bots_hold_on_opposite_sides_is_matched_to_neither(position_change: int) -> None:
+    """Bot A sold 1 and bot B bought 2: the account is net long 1, and that net is all the row reports.
+
+    Taking one contract from either bot would leave the books holding an
+    expired contract the broker does not. The event is refused by name.
+    """
+    lots = [
+        _sold("bot-a", 1, opened=date(2024, 2, 26), sequence=5),
+        _bought("bot-b", 2, opened=date(2024, 2, 27), sequence=8),
+    ]
+    expiry = _event(kind=OptionEventKind.EXPIRED, activity_type="OPEXP", position_change=position_change)
+
+    with pytest.raises(OptionEventRefused) as refused:
+        allocation_of(expiry, multiplier=100, lots=lots)
+
+    assert refused.value.reason is OptionEventRefusal.HELD_ON_BOTH_SIDES
+    assert refused.value.unmatched_contracts == 1
 
 
 @pytest.mark.parametrize("status", [OptionActivityStatus.CORRECT, OptionActivityStatus.CANCELED])
@@ -331,22 +435,62 @@ def test_the_order_does_not_depend_on_how_the_rows_arrived() -> None:
     assert in_allocation_order(reversed(events)) == in_allocation_order(events)
 
 
-def test_an_assignment_and_an_expiry_on_one_date_take_the_lots_the_order_gives_them() -> None:
-    """Bot A sold first. One of three is assigned and two expire: A is the one assigned."""
+# ── Which bot is assigned, whichever row is matched first ───────────────────
+
+_AAPL_CALL = OptionContract.from_occ_symbol("AAPL230721C00150000")
+_EXPIRY_FRIDAY = date(2023, 7, 21)
+_THE_SATURDAY = date(2023, 7, 22)
+
+
+def _booked(lots: list[HeldOptionLot], allocation: Any) -> list[HeldOptionLot]:
+    """The open lots once an allocation is booked: what the books hand to the next event."""
+    left = {(taken.owner, taken.sequence): taken.remaining_quantity for taken in allocation.lots}
+    after = []
+    for lot in lots:
+        quantity = left.get((lot.owner, lot.sequence), lot.quantity)
+        if quantity:
+            after.append(replace(lot, quantity=quantity))
+    return after
+
+
+@pytest.mark.parametrize("expiry_first", [True, False], ids=["the expiry first", "the assignment first"])
+def test_the_bot_that_sold_first_is_assigned_whether_the_expiry_or_the_assignment_is_matched_first(
+    expiry_first: bool,
+) -> None:
+    """Bot A sold 2, then bot B sold 3. On expiry night 2 are assigned and 3 expire.
+
+    Alpaca dates the expiry the Friday and, as in its own example, the
+    assignment the Saturday, so the expiry is first by date. A's lots, the
+    oldest, are the ones assigned all the same.
+    """
     lots = [
-        _sold("bot-a", 1, opened=date(2024, 2, 26), sequence=5),
-        _sold("bot-b", 2, opened=date(2024, 2, 28), sequence=8),
+        _sold("bot-a", 2, opened=date(2023, 7, 10), sequence=5, contract=_AAPL_CALL),
+        _sold("bot-b", 3, opened=date(2023, 7, 12), sequence=8, contract=_AAPL_CALL),
     ]
     expiry = _event(
-        kind=OptionEventKind.EXPIRED, activity_type="OPEXP", activity_id="a-first-by-id", position_change=2
+        kind=OptionEventKind.EXPIRED,
+        activity_type="OPEXP",
+        activity_id="20230721000000000::expiry",
+        contract=_AAPL_CALL,
+        position_change=3,
+        activity_date_ms=et_midnight_ms(_EXPIRY_FRIDAY),
     )
-    assignment = _event(activity_id="z-last-by-id", position_change=1)
+    assignment = _event(
+        activity_id="20230722000000000::assignment",
+        contract=_AAPL_CALL,
+        position_change=2,
+        activity_date_ms=et_midnight_ms(_THE_SATURDAY),
+    )
+    # By date the expiry comes first: the order alone would hand it the oldest lots.
+    assert in_allocation_order([assignment, expiry]) == (expiry, assignment)
 
-    first, second = in_allocation_order([expiry, assignment])
-    assigned = allocation_of(first, multiplier=100, lots=lots)
-    # The books then hold only what the assignment left.
-    expired = allocation_of(second, multiplier=100, lots=lots[1:])
+    taken: dict[OptionEventKind, list[tuple[str, int, int]]] = {}
+    for event in (expiry, assignment) if expiry_first else (assignment, expiry):
+        allocation = allocation_of(event, multiplier=100, lots=lots)
+        taken[event.kind] = [(lot.owner, lot.contracts, lot.share_quantity_change) for lot in allocation.lots]
+        lots = _booked(lots, allocation)
 
-    assert first is assignment
-    assert [(lot.owner, lot.contracts, lot.share_quantity_change) for lot in assigned.lots] == [("bot-a", 1, -100)]
-    assert [(lot.owner, lot.contracts, lot.share_quantity_change) for lot in expired.lots] == [("bot-b", 2, 0)]
+    # Bot A delivers 200 shares; bot B's three lapse and move none.
+    assert taken[OptionEventKind.ASSIGNED] == [("bot-a", 2, -200)]
+    assert taken[OptionEventKind.EXPIRED] == [("bot-b", 3, 0)]
+    assert lots == []

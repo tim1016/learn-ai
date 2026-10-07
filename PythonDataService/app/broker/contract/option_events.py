@@ -118,6 +118,13 @@ class BrokerOptionEventActivity(_OptionActivityModel):
         # settled in a way they do not follow, and would leave them out by it.
         if self.net_amount is not None and self.net_amount != 0:
             raise ValueError(f"an option event moves no cash of its own; this one states {self.net_amount}")
+        # An option cannot expire before its own expiry date. A row that says
+        # so is about something else, and would close lots still alive.
+        if self.kind is OptionEventKind.EXPIRED and self.activity_date < self.contract.expiry_date:
+            raise ValueError(
+                f"an option expires on its expiry date, {self.contract.expiry_date.isoformat()}, or is reported "
+                f"after it; this expiry is dated {self.activity_date.isoformat()}"
+            )
         return self
 
     @property
@@ -193,6 +200,15 @@ class BrokerOptionEventEvidence(_OptionActivityModel):
     ``BrokerActivityEvidence``: complete only when the walk proved it reached
     the window's start, and otherwise the token continues it from where it
     stopped.
+
+    **What a caller must do.** No event in the window means nothing happened
+    only when ``read_whole`` is true. While it is false the caller holds: it
+    follows ``next_page_token`` until the walk is complete, and it keeps a
+    hold for every row in ``unreadable`` and every row in ``not_executed``
+    until the owner has settled what that row did. Neither kind of row is
+    ever booked. A row the broker marks ``correct`` or ``canceled`` stays in
+    ``events`` or ``share_trades`` so it can be shown; ``allocation_of``
+    refuses it.
     """
 
     events: tuple[BrokerOptionEventActivity, ...]
@@ -202,20 +218,37 @@ class BrokerOptionEventEvidence(_OptionActivityModel):
     next_page_token: str | None = None
 
     @property
+    def not_executed(self) -> tuple[BrokerOptionEventActivity | BrokerOptionShareTradeActivity, ...]:
+        """The events and share trades the broker does not report as executed.
+
+        Alpaca's reference does not say which row a ``correct`` or a
+        ``canceled`` one replaces or undoes, so the books cannot account
+        for one.
+        """
+        return tuple(
+            activity
+            for activity in (*self.events, *self.share_trades)
+            if activity.status is not OptionActivityStatus.EXECUTED
+        )
+
+    @property
     def read_whole(self) -> bool:
-        """Whether every option activity in the window is in hand and was read."""
-        return self.history_complete and not self.unreadable
+        """Whether every option activity in the window is in hand, was read, and is one the books can account for."""
+        return self.history_complete and not self.unreadable and not self.not_executed
 
 
 def in_allocation_order(events: Iterable[BrokerOptionEventActivity]) -> tuple[BrokerOptionEventActivity, ...]:
-    """Events in the order they are matched to lots: the oldest date first, and on one date an expiry last.
+    """The events of one read in one fixed order: the oldest date first, on one date an expiry last, then by id.
 
-    A read returns the newest first, and lots are taken oldest first, so an
-    older event must take its lots before a newer one does. On one date an
-    expiry is what is left once that day's assignments and exercises are
-    done, so it comes after them: which bot's lot was assigned must not turn
-    on which row was matched first. The id settles any other tie, so the
-    order never depends on how the rows arrived.
+    A read returns the newest first. This puts its rows in the same order
+    however they arrived, so the same rows give the same allocation, row
+    for row: of two assignments, the one dated earlier takes the older lot.
+
+    It does not decide which bot is assigned. That is the rule's doing: an
+    assignment or an exercise takes the oldest lots and an expiry the
+    newest, whichever is matched first. And it orders only the rows it is
+    given. An event that arrives in a later read is matched after these,
+    whatever its date.
     """
     return tuple(
         sorted(
@@ -228,12 +261,13 @@ def in_allocation_order(events: Iterable[BrokerOptionEventActivity]) -> tuple[Br
 def allocation_of(
     activity: BrokerOptionEventActivity, *, multiplier: int, lots: Sequence[HeldOptionLot]
 ) -> OptionEventAllocation:
-    """The lots a broker's activity takes, oldest first, with each owner's book effects.
+    """The lots a broker's activity takes, with each owner's book effects.
 
     ``lots`` are every open lot of the activity's contract, across owners,
     and ``multiplier`` is that contract's. The rule is
-    ``app.options.event_allocation.allocate_option_event``; this refuses,
-    before it, an activity the broker does not report as executed.
+    ``app.options.event_allocation.allocate_option_event``, which is given
+    the activity's signed position change; this refuses, before it, an
+    activity the broker does not report as executed.
     """
     if activity.status is not OptionActivityStatus.EXECUTED:
         raise OptionEventRefused(
@@ -245,7 +279,7 @@ def allocation_of(
     return allocate_option_event(
         kind=activity.kind,
         contract=activity.contract,
-        contracts=activity.contracts,
+        position_change=activity.position_change,
         event_date_ms=activity.activity_date_ms,
         multiplier=multiplier,
         lots=lots,

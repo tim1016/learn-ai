@@ -229,6 +229,18 @@ def _activity_page_oldest_ms(
 
 # What places a row in a walk: its id, its code, its symbol and its date. None is a figure.
 _ACTIVITY_PLACEMENT_FIELDS = ("id", "activity_type", "symbol", "date", "transaction_time")
+# An option activity is placed by its date alone. An instant on one makes it
+# unreadable, and must not place it before a window its date is in.
+_OPTION_ACTIVITY_PLACEMENT_FIELDS = ("id", "activity_type", "symbol", "date")
+
+
+def _placement(payload: Mapping[str, Any]) -> dict[str, Any]:
+    fields = (
+        _ACTIVITY_PLACEMENT_FIELDS
+        if adapter.alpaca_option_activity_type(payload) is None
+        else _OPTION_ACTIVITY_PLACEMENT_FIELDS
+    )
+    return {field: payload[field] for field in fields if field in payload}
 
 
 def _placed_activities(payloads: list[Mapping[str, Any]]) -> list[BrokerActivity]:
@@ -240,11 +252,7 @@ def _placed_activities(payloads: list[Mapping[str, Any]]) -> list[BrokerActivity
     id, no code or an unreadable date still does: it cannot be placed.
     """
     return _mapped_evidence(
-        "activity",
-        lambda: [
-            adapter.from_alpaca_activity({field: payload[field] for field in _ACTIVITY_PLACEMENT_FIELDS if field in payload})
-            for payload in payloads
-        ],
+        "activity", lambda: [adapter.from_alpaca_activity(_placement(payload)) for payload in payloads]
     )
 
 
@@ -728,6 +736,10 @@ class AlpacaBroker:
         with the reason, never read in part. A row of any kind whose id, code
         or date cannot be read refuses the whole read: it cannot be placed in
         the walk. No other row's figures are read at all.
+
+        An option activity is placed in the window by its ``date`` alone. One
+        that also states a ``transaction_time`` is unreadable, and that
+        instant never puts it outside a window its date is in.
         """
         since = et_date_at_ms(after_ms)
         events: dict[str, BrokerOptionEventActivity] = {}
