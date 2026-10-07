@@ -200,7 +200,7 @@ async def test_a_quiet_contracts_standing_quote_is_its_mark_at_every_hand_over_w
 
     assert handed_over == [1, 1, 1, 1]
     # By receipt it is one quote, ten minutes old and older by the minute.
-    newest = account.kept.newest(CALL.occ_symbol, at_or_before_ms=clock.value, with_side="bid")
+    newest = account.kept.newest(CALL.occ_symbol, at_or_before_ms=clock.value)
     assert newest is not None and newest.received_ms == last_ticked
 
 

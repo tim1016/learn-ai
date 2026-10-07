@@ -36,10 +36,11 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_re
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _OptionQuoteBoundTradePort
 from app.broker.alpaca.clerk.sqlite.scheduled_end import end_sales_waiting_for_open
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
-from app.broker.contract.models import OrderSide
+from app.broker.contract.models import OrderSide, OrderType
+from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.simulated_fill import SimulatedFillModel
@@ -466,6 +467,44 @@ async def test_the_books_and_the_simulated_broker_agree_on_what_the_bot_holds(dr
     assert await dry_run.clerk.reconcile_once() == "clean"
     assert dry_run.held() == {SYMBOL: 1.0}
     assert dry_run.repo.active_holds_for_admission(strategy_instance_id=SID) == []
+
+
+async def test_the_simulated_broker_states_the_contract_in_dollars_by_the_multiplier_the_books_record(
+    dry_run: _DryRun,
+) -> None:
+    """One contract at $1.94 a share costs $194.00 at the simulated broker as it does on the books, not $1.94."""
+    bought = await dry_run.enter(dry_run.evidence())
+
+    [position] = await dry_run.clerk._read.list_positions()
+
+    assert (position.symbol, position.asset_class, position.quantity) == (SYMBOL, "us_option", 1.0)
+    # The price stays a share's. The simulation states no current price, so the value is the cost.
+    assert (position.average_entry_price, position.cost_basis, position.market_value) == (1.94, 194.0, 194.0)
+    # The multiplier the simulation counts by is the one the books record for the order's contract.
+    [order_ref] = bought.child_order_refs
+    recorded = order_contract(dry_run.repo, order_ref)
+    assert recorded == ContractTerms(symbol=SYMBOL, multiplier=100)
+    assert dry_run.clerk.synthesized_option_fills()[order_ref].multiplier == recorded.multiplier
+
+
+async def test_the_multiplier_the_clerks_port_hands_the_simulation_is_the_terms_own_and_never_a_hundred_assumed(
+    dry_run: _DryRun,
+) -> None:
+    """Beneath the Clerk's doors, which take a standard contract only: the port that binds an entry's quote is
+    given terms of ten shares a contract. The simulation counts the position by ten, whatever the symbol looks like."""
+    port = _OptionQuoteBoundTradePort(
+        dry_run.clerk._trade, terms=ContractTerms(symbol=SYMBOL, multiplier=10),
+        quote=_quote("1.90", "1.94", received_ms=dry_run.clock() - 300),
+    )
+    one_call = SingleOptionOrderRequest(
+        contract=CALL, side=OrderSide.BUY, intent=OptionPositionIntent.OPEN, quantity=1, order_type=OrderType.LIMIT,
+        limit_price=Decimal("1.94"),
+    )
+
+    await port.submit_option_order(one_call, client_order_id="ref-of-ten")
+
+    [position] = await dry_run.clerk._read.list_positions()
+    assert (position.average_entry_price, position.cost_basis, position.market_value) == (1.94, 19.4, 19.4)
 
 
 def _decision(name: str, outcome: str, at_ms: int) -> EffectDecisionEvidence:

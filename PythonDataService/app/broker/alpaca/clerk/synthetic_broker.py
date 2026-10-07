@@ -26,6 +26,12 @@ and the order's record keeps the quote, the model and the quote's age. An
 order with no quote bound is refused: the simulation invents no fill. An
 option order of several legs is not taken.
 
+The simulation holds no listing of contracts. What one contract multiplies
+by comes with an opening order's quote, as the Clerk's books record it, and
+is kept with the order. A position in a contract is stated by it: the
+average entry price stays a share's, and the cost basis and market value are
+dollars (``synthesized_positions``). A multiplier is never read off a symbol.
+
 Three more things this simulation refuses of an option order, each before
 it records a fill. A contract past its last session: nothing trades in it
 any more, and no kept quote says what it is then worth. A closing order
@@ -56,7 +62,7 @@ from app.broker.alpaca.clerk.kept_option_quotes import (
     KeptOptionQuotes,
     KeptOptionQuotesUnavailable,
 )
-from app.broker.alpaca.clerk.money import normalize_money
+from app.broker.alpaca.clerk.money import contract_multiplier, money_context, normalize_money
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
 from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -151,6 +157,9 @@ class _BoundOptionQuote(NamedTuple):
     quote_ref: str | None
     # For a close: the generation its exit decision read quotes in, or None when it read none.
     usable_generation: int | None
+    # For an opening order: the shares one contract's price stands for, as the Clerk's books record
+    # it. None for a close, which opens nothing.
+    multiplier: int | None
 
 
 # The one leg of a single option order, as the fill model names it.
@@ -260,7 +269,13 @@ class SyntheticBroker(OptionOrdersNotTaken):
         )
 
     async def list_positions(self) -> list[BrokerPosition]:
-        return synthesized_positions(self.broker_id, self._latest_orders(), observed_at_ms=self._clock())
+        records = [] if self._ledger is None else list(self._ledger.latest_records().values())
+        return synthesized_positions(
+            self.broker_id,
+            [record.order for record in records],
+            observed_at_ms=self._clock(),
+            contract_multipliers=_contract_multipliers(records),
+        )
 
     async def list_orders(
         self,
@@ -369,8 +384,17 @@ class SyntheticBroker(OptionOrdersNotTaken):
         """How each option order this world answered was priced, by client order id."""
         return {} if self._ledger is None else self._ledger.option_fills()
 
-    def bind_option_entry_quote(self, client_order_id: str, *, symbol: str, quote: HeldQuote) -> None:
-        """Bind an opening order to the one quote its limit price was worked out from, and keep that quote."""
+    def bind_option_entry_quote(
+        self, client_order_id: str, *, symbol: str, quote: HeldQuote, multiplier: int
+    ) -> None:
+        """Bind an opening order to the one quote its limit price was worked out from, and keep that quote.
+
+        ``multiplier`` is the shares one contract's price stands for, as the
+        Clerk's books record the contract. The simulation holds no listing
+        to read it from, and never reads it off the symbol: it is kept with
+        the order, and the position the order opens is counted in dollars
+        by it (``synthesized_positions``).
+        """
         if self._ledger is None or self._kept_quotes is None:
             raise SynthesizedBarBindingError("A simulated option fill requires the account's order ledger.")
         if not client_order_id:
@@ -378,7 +402,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
         self._kept_quotes.keep(symbol, quote, kept_at_ms=self._clock())
         with self._option_binding_lock:
             self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
-                symbol, RecordedQuote.of(quote), None, quote.generation
+                symbol, RecordedQuote.of(quote), None, quote.generation, multiplier
             )
 
     def bind_option_close_quotes(
@@ -398,8 +422,8 @@ class SyntheticBroker(OptionOrdersNotTaken):
         newest of everything the account was ever handed for the contract. ``usable_generation`` is the generation the exit
         decision read its quotes in; None says it read none, and the close is
         then priced from an older quote. ``False`` leaves the close unsent:
-        nothing kept by now has the side this close fills at, or the
-        contract is past its last session and nothing trades in it.
+        the newest quote kept by now has not the side this close fills at,
+        or the contract is past its last session and nothing trades in it.
         """
         if self._ledger is None or self._kept_quotes is None:
             return False
@@ -414,7 +438,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
             return False
         with self._option_binding_lock:
             self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
-                symbol, newest.quote, newest.ref, usable_generation
+                symbol, newest.quote, newest.ref, usable_generation, None
             )
         return True
 
@@ -429,21 +453,21 @@ class SyntheticBroker(OptionOrdersNotTaken):
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
     def _closing_quote(self, symbol: str, *, side: Literal["buy", "sell"]) -> KeptOptionQuote | None:
-        """The newest quote kept for a contract that a close of it made now may be priced from, or None.
+        """The quote kept for a contract that a close of it made now is filled from, or None.
 
         None for a contract past its last session. Otherwise the quote whose
-        sides were received last among those with the side the close fills
-        at, the bid for a sale. A quote stamped later than this simulation's
-        clock is left out: it is not a price the close could have met.
+        sides were received last, when it has the side the close fills at,
+        the bid for a sale: an older quote does not stand in for a newest
+        one that lacks it (``KeptOptionQuotes.closing_quote``). A quote
+        stamped later than this simulation's clock is left out: it is not a
+        price the close could have met.
         """
         if self._kept_quotes is None:
             return None
         now_ms = self._clock()
         if past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms):
             return None
-        return self._kept_quotes.newest(
-            symbol, at_or_before_ms=now_ms, with_side="bid" if side == "sell" else "ask"
-        )
+        return self._kept_quotes.closing_quote(symbol, side=side, at_ms=now_ms)
 
     def recovery_price_available(self, symbol: str, *, side: Literal["buy", "sell"] = "sell") -> bool:
         """Whether a recovery EXIT for ``symbol`` sent now has a price to fill at.
@@ -455,7 +479,8 @@ class SyntheticBroker(OptionOrdersNotTaken):
         Shares are priced from the live IBKR quote. An option contract is
         priced from the newest quote kept for it, and only when that quote
         has something on the side the close fills at: a bid above zero for a
-        sale. The stock quote source is not asked about a contract.
+        sale. An older quote's bid does not count once a newer quote has
+        none. The stock quote source is not asked about a contract.
         """
         contract_symbol = symbol.upper()
         if is_option_contract_symbol(contract_symbol):
@@ -695,6 +720,13 @@ class SyntheticBroker(OptionOrdersNotTaken):
                     f"The simulation was handed no quote of {symbol} to fill this order from, and it invents no fill.",
                     broker=self.broker_id,
                 )
+            if order.intent is OptionPositionIntent.OPEN and bound.multiplier is None:
+                # Its position could be counted only as shares: a hundred times too small.
+                raise BrokerOrderRejected(
+                    f"The simulation was not told how many shares one contract of {symbol} stands for, so it "
+                    "could not count the position this order opens. It fills no such order.",
+                    broker=self.broker_id,
+                )
             fill = self._simulated_option_fill(order, bound, at_ms=at_ms)
             within_limit = order.limit_price is None or (
                 fill.price <= order.limit_price if order.side is OrderSide.BUY else fill.price >= order.limit_price
@@ -708,6 +740,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
                 option=SynthesizedOptionFill(
                     request=order,
                     quote=bound.quote,
+                    multiplier=bound.multiplier,
                     quote_ref=bound.quote_ref,
                     fill_model=fill.model if within_limit else None,
                     fill_price=fill.price if within_limit else None,
@@ -990,12 +1023,52 @@ def shape_immediate_order(
     )
 
 
+def _contract_multipliers(records: Sequence[SynthesizedOrderRecord]) -> dict[str, int]:
+    """The multiplier each option contract was opened with, by OCC symbol, from the orders' own records."""
+    return {
+        record.order.symbol: record.option.multiplier
+        for record in records
+        if record.option is not None and record.option.multiplier is not None
+    }
+
+
+def _position_dollars(per_share: float, multiplier: int | None) -> float:
+    """A position's cost as the fold counts it, in dollars: itself for shares, times the multiplier for a contract."""
+    if multiplier is None:
+        return per_share
+    with money_context():
+        return float(normalize_money(per_share) * contract_multiplier(multiplier))
+
+
 def synthesized_positions(
-    broker_id: str, orders: list[BrokerOrder], *, observed_at_ms: int | None = None,
+    broker_id: str,
+    orders: list[BrokerOrder],
+    *,
+    observed_at_ms: int | None = None,
+    contract_multipliers: Mapping[str, int] | None = None,
 ) -> list[BrokerPosition]:
-    """Shape the canonical projection as broker positions (shared with the shadow read port)."""
+    """Shape the canonical projection as broker positions (shared with the shadow read port).
+
+    ``contract_multipliers`` names the option contracts among the symbols,
+    each with the shares one contract's price stands for. A position in one
+    keeps its average entry price a share, as a broker states it, and its
+    cost basis and market value are that price times the contracts times the
+    multiplier. Every other symbol is shares, counted as it always was.
+
+    Formula: cost basis = market value = |signed notional| of the average-cost
+      fold; for an option contract, |signed notional a share| x multiplier.
+      A simulation states no current price, so a position is valued at cost.
+    Reference: ADR 0076 decision 13 (an option's notional is contracts x
+      premium a share x the contract's multiplier).
+    Canonical implementation: ``synthesized_orders.project_positions`` (the
+      fold) and ``clerk/money.py`` (the exact product).
+    Validated against: tests/broker/alpaca/clerk/test_synthetic_broker_option_orders.py
+      (the multiplier's product exact; what the fold's own floats carry into
+      it to ``atol=1e-9``) and tests/services/test_source_bar_ledger.py (the fold).
+    """
     quantities = project_positions(orders)
     observed_at_ms = now_ms_utc() if observed_at_ms is None else observed_at_ms
+    multipliers = contract_multipliers or {}
     # A position is in what its orders were in: shares, or an option contract.
     asset_classes = {order.symbol: order.asset_class for order in orders if order.asset_class is not None}
     return [
@@ -1007,8 +1080,8 @@ def synthesized_positions(
             quantity=quantity,
             side="long" if quantity > 0 else "short",
             average_entry_price=(abs(cost / quantity) if quantity else 0.0),
-            market_value=abs(cost),
-            cost_basis=abs(cost),
+            market_value=_position_dollars(abs(cost), multipliers.get(symbol)),
+            cost_basis=_position_dollars(abs(cost), multipliers.get(symbol)),
             current_price=None,
             unrealized_pl=0.0,
             unrealized_plpc=None,

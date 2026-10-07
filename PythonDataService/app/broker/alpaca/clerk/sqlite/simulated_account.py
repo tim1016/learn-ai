@@ -23,7 +23,10 @@ with no fresh bar. A bid of zero is a mark: nothing is bid for the contract.
 
 A contract past its last session is quoted by no feed again, and settling
 it at its exercise value is not built. A Dry Run that still holds one has no
-reading until it is, and the reading says that, not to wait for a feed.
+reading until it is, and the reading says that, not to wait for a feed. That
+holds from the last session's close itself: a bid handed over seconds before
+it marks nothing after it, and a reading taken before it is good no longer
+than the contract trades.
 """
 from __future__ import annotations
 
@@ -57,7 +60,7 @@ from app.broker.contract.models import OrderSide
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from app.marketdata.feed import DELIVERY_ALLOWANCE_MS
 from app.options.contract import OptionContract
-from app.options.deadlines import past_last_session
+from app.options.deadlines import last_session_close_ms, past_last_session
 from app.services.decision_clock import SOURCE_BAR_MS
 from app.services.source_bar_ledger import SourceBarLedger, SourceBarLedgerCorruptError, SourceBarLedgerMissingError
 
@@ -179,11 +182,23 @@ class SimulatedAccountProjection:
         bid. The quote must have been handed over as the newest held no
         longer before ``at_ms`` than a share bar may close before it, which
         also holds a previous close's mark to that close.
+
+        From its last session's close on a contract has no mark, whatever
+        was handed over and however lately: a bid from before the close is
+        not what an expired contract is worth. That is asked first.
         """
         if not long:
             raise SimulationEvidenceUnavailable(f"A sold option position in {symbol} cannot be marked yet.")
         if not self.repo.account_id.startswith("sim:"):
             raise SimulationEvidenceUnavailable(f"Only a Dry Run keeps option quotes; {symbol} cannot be marked here.")
+        expiry = OptionContract.from_occ_symbol(symbol).expiry_date
+        if past_last_session(expiry, at_ms):
+            # No feed quotes it again, so waiting brings nothing (ADR 0076).
+            raise SimulationEvidenceUnavailable(
+                f"The option contract {symbol} expired on {expiry.isoformat()}. This simulation does not "
+                "settle an expired contract yet, so it has no value to read the position at, and this "
+                "account's reading stays unavailable until it does."
+            )
         try:
             kept = self._kept_option_quotes().last_stated(symbol, at_or_before_ms=at_ms, with_side="bid")
         except KeptOptionQuotesUnavailable as exc:
@@ -191,14 +206,6 @@ class SimulatedAccountProjection:
                 f"The option quotes kept for this Dry Run need repair; {symbol} cannot be marked from them."
             ) from exc
         if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
-            expiry = OptionContract.from_occ_symbol(symbol).expiry_date
-            if past_last_session(expiry, at_ms):
-                # No feed quotes it again, so waiting brings nothing (ADR 0076).
-                raise SimulationEvidenceUnavailable(
-                    f"The option contract {symbol} expired on {expiry.isoformat()}. This simulation does not "
-                    "settle an expired contract yet, so it has no value to read the position at, and this "
-                    "account's reading stays unavailable until it does."
-                )
             raise SimulationEvidenceUnavailable(
                 f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
             )
@@ -218,7 +225,11 @@ class SimulatedAccountProjection:
                 assert kept.quote.bid is not None
                 marks[symbol] = normalize_money(kept.quote.bid)
                 refs.append(kept.ref)
-                expires = kept.kept_at_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
+                # Good while its hand-over is fresh, and never into the contract's expiry.
+                expires = min(
+                    kept.kept_at_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS,
+                    last_session_close_ms(OptionContract.from_occ_symbol(symbol).expiry_date) - 1,
+                )
                 valid_until = expires if valid_until is None else min(valid_until, expires)
                 continue
             if self.repo.account_id.startswith("sim:"):

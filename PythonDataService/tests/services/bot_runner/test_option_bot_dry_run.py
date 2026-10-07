@@ -1034,7 +1034,7 @@ async def test_after_a_restart_the_close_made_as_the_account_opens_is_priced_fro
     not_sold = before.sales_the_simulation_made()
     before.markets[585] = ("4.50", "4.54")
     await before.time_passes_to(ENTER_MS + 4 * MINUTE)
-    last_kept = before.kept_quotes().newest(CALL, with_side="bid")
+    last_kept = before.kept_quotes().newest(CALL)
     assert last_kept is not None and last_kept.quote.bid == Decimal("4.5")
     # The process stops. Nothing it held in memory is left; the account's files are.
     await before.held.stop()
@@ -1175,7 +1175,7 @@ async def test_delayed_data_on_a_held_calls_line_is_never_its_mark(floor: Floor)
 
     assert stated_before is not None
     assert floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid") == stated_before
-    assert floor.kept_quotes().newest(CALL, with_side="bid").quote.bid == Decimal("4.08")  # type: ignore[union-attr]
+    assert floor.kept_quotes().newest(CALL).quote.bid == Decimal("4.08")  # type: ignore[union-attr]
 
 
 async def test_a_call_bought_in_the_second_its_run_ended_is_asked_for_and_marked_from_the_next_pass_on(

@@ -11,7 +11,8 @@ Two questions are asked of what is kept, and they are not the same:
 
 - **Which is the newest quote?** By when its sides were received. A simulated
   close with no usable quote of its own, and the run-end close, are priced
-  from it, and carry its age.
+  from it, and carry its age. It alone prices a close: when it has nothing
+  on the side the close fills at, no older quote stands in for it.
 - **What was last stated to be the newest held, and when?** By when it was
   handed over. The simulated account marks an open contract from it. A quiet
   contract's bid can stand unchanged for minutes: its receipt time grows old
@@ -77,6 +78,11 @@ type _Side = Literal["bid", "ask"]
 _SIDES: tuple[_Side, ...] = ("bid", "ask")
 
 
+def _closing_side(side: Literal["buy", "sell"]) -> _Side:
+    """The side of a quote a close is filled at: a sale at the bid, a purchase at the ask."""
+    return "bid" if side == "sell" else "ask"
+
+
 class KeptOptionQuote(BaseModel):
     """One quote as it was handed over, for one contract."""
 
@@ -139,14 +145,16 @@ def _session_closes(first_ms: int, last_ms: int) -> list[int]:
 def rows_still_answerable(rows: Sequence[KeptOptionQuote], *, as_of_ms: int) -> list[KeptOptionQuote]:
     """The rows a reader at ``as_of_ms`` or later can still be answered from, in the order they were written.
 
-    A reader asks one of three things, each for one contract and, when it
-    names one, for a side that had arrived:
+    A reader asks one of three things, each for one contract:
 
-    - the newest quote by receipt, as of now or later. Kept: for each side,
-      the one received last by ``as_of_ms``, and every one stamped later
-      than that, any of which may yet become the newest;
-    - the quote last handed over, as of now or later. Kept: for each side,
-      the last one handed over by ``as_of_ms``, and every one stamped later;
+    - the newest quote by receipt, as of now or later, whatever sides it
+      has. Kept: the one received last by ``as_of_ms``, and every one
+      received later than that, any of which may yet become the newest. An
+      older one is not kept for a side the newest lacks: it prices nothing
+      once a newer quote is kept (``closing_quote``);
+    - the quote last handed over, as of now or later, when asked for with a
+      side that had arrived. Kept: for each side, the last one handed over
+      by ``as_of_ms``, and every one stamped later;
     - the quote last handed over at or before a session's close: the mark
       the next day starts from. Kept: for each side and each close, the last
       one handed over between the close before it and that close.
@@ -163,21 +171,21 @@ def rows_still_answerable(rows: Sequence[KeptOptionQuote], *, as_of_ms: int) -> 
         return []
     closes = _session_closes(min(as_of_ms, *(row.kept_at_ms for row in rows)), as_of_ms)
     kept = {rows[-1].seq}
-    newest: dict[tuple[str, _Side], KeptOptionQuote] = {}
+    newest: dict[str, KeptOptionQuote] = {}
     stated: dict[tuple[str, _Side, int], KeptOptionQuote] = {}
     for row in rows:
         received_ms = row.received_ms
+        if received_ms > as_of_ms:
+            kept.add(row.seq)
+        else:
+            best = newest.get(row.symbol)
+            if best is None or (received_ms, row.seq) > (best.received_ms, best.seq):
+                newest[row.symbol] = row
         # The close this hand-over is the mark of, if no later one comes before it.
         before_close = bisect_left(closes, row.kept_at_ms)
         for side in _SIDES:
             if getattr(row.quote, side) is None:
                 continue
-            if received_ms > as_of_ms:
-                kept.add(row.seq)
-            else:
-                best = newest.get((row.symbol, side))
-                if best is None or (received_ms, row.seq) > (best.received_ms, best.seq):
-                    newest[row.symbol, side] = row
             if row.kept_at_ms > as_of_ms:
                 # Stamped ahead of the clock: it is nobody's statement about now, and may yet be the last.
                 kept.add(row.seq)
@@ -369,42 +377,44 @@ class KeptOptionQuotes:
         with _KEEP_LOCK:
             return list(self._held().by_symbol.get(symbol, ()))
 
-    def newest(
-        self,
-        symbol: str,
-        *,
-        at_or_before_ms: int | None = None,
-        with_side: Literal["bid", "ask"] | None = None,
-    ) -> KeptOptionQuote | None:
-        """The quote kept for ``symbol`` whose sides were received last.
+    def newest(self, symbol: str, *, at_or_before_ms: int | None = None) -> KeptOptionQuote | None:
+        """The quote kept for ``symbol`` whose sides were received last, whatever sides it has.
 
         ``at_or_before_ms`` leaves out one received later than an instant.
-        ``with_side`` leaves out one that side had not arrived for: a quote
-        with an ask alone says nothing of what the contract could be sold at.
         """
         candidates = [
-            row
-            for row in self._kept_for(symbol)
-            if (at_or_before_ms is None or row.received_ms <= at_or_before_ms)
-            and (with_side is None or getattr(row.quote, with_side) is not None)
+            row for row in self._kept_for(symbol) if at_or_before_ms is None or row.received_ms <= at_or_before_ms
         ]
         return max(candidates, key=lambda row: (row.received_ms, row.seq), default=None)
+
+    def closing_quote(self, symbol: str, *, side: Literal["buy", "sell"], at_ms: int) -> KeptOptionQuote | None:
+        """The quote a close of ``symbol`` made at ``at_ms`` is filled from, or ``None`` when none kept can fill it.
+
+        The newest quote received by then decides, and it alone. A sale to
+        close is filled at its bid and a purchase to close at its ask. When
+        that side has not arrived on it, the close has nothing to be filled
+        from: what an older quote had there says nothing of what is there
+        now, so no older quote is looked for.
+        """
+        newest = self.newest(symbol, at_or_before_ms=at_ms)
+        if newest is None or getattr(newest.quote, _closing_side(side)) is None:
+            return None
+        return newest
 
     def prices_a_close(self, symbol: str, *, side: Literal["buy", "sell"], at_ms: int) -> bool:
         """Whether a close of ``symbol`` made at ``at_ms`` has a price in what is kept.
 
-        A sale to close is filled at the bid and a purchase to close at the
-        ask, of the newest quote received by then that has that side. It has
-        a price when that quote has something there: above zero. An older
-        quote with a bid prices nothing once a newer one says nothing is bid.
+        It has one when the quote it would be filled from (``closing_quote``)
+        has something on the side it fills at: above zero. A newest quote
+        with nothing bid, or with no bid at all, prices no sale, whatever an
+        older quote had bid.
 
         The one answer both the simulation and the recovery catalog give to
         "can this contract be closed now", so an owner is never offered a
         Flatten the simulation would then refuse for want of a price.
         """
-        wanted: _Side = "bid" if side == "sell" else "ask"
-        newest = self.newest(symbol, at_or_before_ms=at_ms, with_side=wanted)
-        price = None if newest is None else getattr(newest.quote, wanted)
+        quote = self.closing_quote(symbol, side=side, at_ms=at_ms)
+        price = None if quote is None else getattr(quote.quote, _closing_side(side))
         return price is not None and price > 0
 
     def last_stated(
