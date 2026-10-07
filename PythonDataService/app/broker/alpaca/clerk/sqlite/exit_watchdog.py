@@ -246,8 +246,13 @@ class _StaleExit:
     scheduled_close: ScheduledCloseFacts | None = None
 
     @property
+    def failed_redrives(self) -> int:
+        """Every regular-session re-drive of the episode that was sent and failed, under whichever rule."""
+        return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
+
+    @property
     def regular_failures(self) -> int:
-        """Failed regular-session re-drives that count toward giving up.
+        """The failed regular-session re-drives that count toward giving up.
 
         A re-drive made under a scheduled close's own rule is not one of
         them: that rule has the session's end for its limit (ADR 0076).
@@ -828,7 +833,8 @@ def _escalate_to_exit_stuck(
     """
     sid = stale_exit.strategy_instance_id
     cause = stale_exit.cause
-    redrives = stale_exit.regular_failures
+    # What the owner is told is every re-drive that was sent, also those not counted toward giving up.
+    redrives = stale_exit.failed_redrives
     if deferred_since_ms is None:
         headline = "A stuck EXIT exhausted automatic re-drives"
         why = f"after {redrives} automatic EXIT re-drives."

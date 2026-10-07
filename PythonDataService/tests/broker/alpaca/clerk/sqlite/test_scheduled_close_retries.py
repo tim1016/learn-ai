@@ -25,7 +25,7 @@ from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     _StaleExit,
     evaluate_recovery_wait,
 )
-from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
+from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts, UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     SCHEDULED_CLOSE_RETRY_AFTER_MS,
     CloseStanding,
@@ -35,7 +35,11 @@ from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     scheduled_close_state,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import open_exit_stuck
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE, ExitNotFlatCause
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    ExitNotFlatCause,
+    ExitStuckCause,
+)
 from app.broker.contract.errors import BrokerOrderRejected
 from app.services.session_authority import et_minute_of_day_ms
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
@@ -307,6 +311,32 @@ async def test_after_a_session_of_refused_closes_the_close_is_sent_again_at_the_
     await _the_close_fills(paper)
     await paper.round()
     assert paper.held() == {} and _notice(paper) is None
+
+
+async def test_a_bot_still_refused_the_next_session_is_given_up_after_three_ordinary_tries_and_told_every_try(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    tried = await _a_session_of_refused_closes(paper, monkeypatch)
+
+    _until(paper, DAY_TWO_OPEN + 1_000)
+    await paper.pass_()
+    await _passes(paper, 25)
+
+    # Three tries two minutes apart from the open, and then the Clerk stops exiting the bot by itself.
+    assert [sent - (DAY_TWO_OPEN + 1_000) for sent in _sent_at(paper)[tried:]] == [0, 120_000, 240_000]
+    stuck = open_exit_stuck(paper.repo, "a")
+    assert stuck is not None
+    # The notice counts every re-drive that was sent: nineteen under the close's own rule, and these three.
+    assert ExitStuckCause.from_mapping(
+        UncertaintyRaisedFacts.from_facts_json(stuck["facts_json"]).cause_facts
+    ).redrive_count == tried - 1 + 3
+
+    # That afternoon's close is left to the owner: nothing is taken and nothing is sent.
+    _until(paper, DAY_TWO_DUE)
+    afternoon = await paper.round()
+    assert afternoon.closes.taken == () and len(_sent_at(paper)) == tried + 3
+    [left] = scheduled_close_state(paper.repo, "a")
+    assert left.left_to_owner
 
 
 async def test_time_failed_under_the_rule_is_not_carried_into_the_next_session(
