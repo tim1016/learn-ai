@@ -7,12 +7,17 @@ got this far. The books and every fold that keeps them take a
 module is the one conversion between the two, and the one place an answer
 is held to the order the books asked for.
 
-- ``option_order_evidence`` turns one answer into the evidence of each order
-  it speaks for. It returns a tuple: a single-leg order is one order, and a
-  multi-leg parent will be one for each leg once the books can tell several
-  orders of one entry apart. Until then a multi-leg answer is refused.
+- ``option_order_evidence`` turns the answer about an order of one contract
+  into its evidence. It returns a tuple of one, and refuses a multi-leg
+  parent, which is not one order's evidence.
+- ``multi_leg_order_evidence`` turns the answer about one order of several
+  legs into a ``MultiLegOrderEvidence``: the parent's own state, with each
+  leg's evidence nested under it, so it travels through every caller as the
+  order evidence it is and is folded leg by leg (``multi_leg_evidence``).
 - ``asked_option_order`` reads what the books asked for under an order
-  reference: the contract, the side and the contracts.
+  reference: the contract, the side and the contracts of an order of one
+  contract, or the units and each leg's contract and side of an order of
+  several legs.
 - ``evidence_of_the_order_asked`` is both: the answer's evidence, once it
   names that contract, that side and that many contracts. An answer that
   differs in one of those is about something the books did not ask for, so
@@ -200,8 +205,18 @@ def asked_of_a_real_option_order(
     return asked_option_order(repo, order_ref) if on_a_simulation_only_a_parent else None
 
 
+async def _as_evidence(
+    trade: BrokerTradePort, answer: BrokerOptionOrder, *, asked: AskedOptionOrder | AskedMultiLegOrder
+) -> BrokerOrder:
+    """``answer`` held to what was asked; a simulation's order of several legs with its own record of each leg."""
+    evidence = evidence_of_the_order_asked(answer, asked=asked)
+    if isinstance(evidence, MultiLegOrderEvidence) and trade_port_folds_simulated_evidence(trade):
+        return await with_the_simulations_own_leg_records(trade, evidence)
+    return evidence
+
+
 async def look_up_by_client_order_id(
-    trade: BrokerTradePort, client_order_id: str, *, asked: AskedOptionOrder | None
+    trade: BrokerTradePort, client_order_id: str, *, asked: AskedOptionOrder | AskedMultiLegOrder | None
 ) -> BrokerOrder | None:
     """The broker's record of the order sent under ``client_order_id``, or ``None`` when it has none.
 
@@ -214,11 +229,15 @@ async def look_up_by_client_order_id(
     if asked is None:
         return await trade.get_order_by_client_order_id(client_order_id)
     answer = await trade.get_option_order_by_client_order_id(client_order_id)
-    return None if answer is None else evidence_of_the_order_asked(answer, asked=asked)
+    return None if answer is None else await _as_evidence(trade, answer, asked=asked)
 
 
 async def look_up_by_broker_order_id(
-    trade: BrokerTradePort, broker_order_id: str, *, asked: AskedOptionOrder | None, held_to_it: bool = True
+    trade: BrokerTradePort,
+    broker_order_id: str,
+    *,
+    asked: AskedOptionOrder | AskedMultiLegOrder | None,
+    held_to_it: bool = True,
 ) -> BrokerOrder | None:
     """The broker's record of the order it holds under ``broker_order_id``: :func:`look_up_by_client_order_id`'s twin.
 
@@ -232,20 +251,126 @@ async def look_up_by_broker_order_id(
     answer = await trade.get_option_order_by_broker_order_id(broker_order_id)
     if answer is None:
         return None
-    return evidence_of_the_order_asked(answer, asked=asked) if held_to_it else option_order_evidence(answer)[0]
+    return await _as_evidence(trade, answer, asked=asked) if held_to_it else option_order_evidence(answer)[0]
+
+
+class MultiLegOrderEvidence(BrokerOrder):
+    """The answer about one option order of several legs, as order evidence: the parent's state, and each leg's.
+
+    It is a ``BrokerOrder``, so no caller between the port and the folds
+    changes type, and the folds hand it to the one fold that takes it apart
+    (``multi_leg_evidence.fold_multi_leg_order_evidence``).
+
+    The parent's own fields: ``symbol`` and ``side`` are empty, because a
+    parent has neither. ``quantity`` is whole structures. ``filled_quantity``
+    is zero and ``filled_avg_price`` is absent: a parent has no fill of its
+    own, so nothing ever counts one against it. Its ``limit_price`` is
+    absent too: a net price is not a price a share.
+    """
+
+    # Each leg's own evidence: its contract, side, broker order id, status, filled quantity and average price.
+    legs: tuple[BrokerOrder, ...]
+    # The parent's own count of whole structures filled.
+    units_filled: int
+    # Signed, as the broker states it: paid above zero, received below.
+    net_filled_avg_price: Decimal | None
+
+
+def multi_leg_order_evidence(answer: BrokerOptionOrder) -> MultiLegOrderEvidence:
+    """``answer``, a multi-leg parent with its legs, as the order evidence the folds take."""
+    if not answer.multi_leg:
+        raise BrokerEvidenceUnavailable(
+            "The broker answered with an option order of one contract where one of several legs was asked about.",
+            broker=answer.broker,
+        )
+    when = {
+        "submitted_at_ms": answer.submitted_at_ms, "created_at_ms": answer.created_at_ms,
+        "updated_at_ms": answer.updated_at_ms, "filled_at_ms": answer.filled_at_ms,
+        "canceled_at_ms": answer.canceled_at_ms, "expired_at_ms": answer.expired_at_ms,
+    }
+    return MultiLegOrderEvidence(
+        broker=answer.broker,
+        order_id=answer.order_id,
+        client_order_id=answer.client_order_id,
+        symbol="",
+        asset_class=_OPTION_ASSET_CLASS,
+        side="",
+        order_type=answer.order_type,
+        time_in_force=answer.time_in_force,
+        quantity=float(answer.quantity),
+        filled_quantity=0.0,
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=None,
+        status=answer.status,
+        **when,
+        observed_at_ms=answer.observed_at_ms,
+        legs=tuple(
+            BrokerOrder(
+                broker=answer.broker,
+                order_id=leg.order_id,
+                client_order_id=leg.client_order_id,
+                symbol=leg.contract.occ_symbol,
+                asset_class=_OPTION_ASSET_CLASS,
+                side=leg.side.value,
+                order_type=answer.order_type,
+                time_in_force=answer.time_in_force,
+                quantity=None if leg.quantity is None else float(leg.quantity),
+                filled_quantity=float(leg.filled_quantity),
+                limit_price=None,
+                stop_price=None,
+                filled_avg_price=None if leg.filled_avg_price is None else float(leg.filled_avg_price),
+                status=leg.status,
+                submitted_at_ms=leg.submitted_at_ms,
+                created_at_ms=leg.created_at_ms,
+                updated_at_ms=leg.updated_at_ms,
+                filled_at_ms=leg.filled_at_ms,
+                canceled_at_ms=leg.canceled_at_ms,
+                expired_at_ms=leg.expired_at_ms,
+                observed_at_ms=answer.observed_at_ms,
+            )
+            for leg in answer.legs
+        ),
+        units_filled=answer.filled_quantity,
+        net_filled_avg_price=answer.filled_avg_price,
+    )
+
+
+async def with_the_simulations_own_leg_records(
+    trade: BrokerTradePort, evidence: MultiLegOrderEvidence
+) -> MultiLegOrderEvidence:
+    """``evidence`` from a simulation, with each leg's evidence read from the simulation's own record of that leg.
+
+    A simulation keeps a record for each leg, under the leg's own client
+    order id, and that record carries the simulation's execution identity:
+    what the Clerk folds a simulated fill by. A leg with no record behind
+    it leaves the outcome unknown.
+    """
+    legs = []
+    for leg in evidence.legs:
+        recorded = None if leg.client_order_id is None else await trade.get_order_by_client_order_id(leg.client_order_id)
+        if recorded is None or recorded.order_id != leg.order_id:
+            raise BrokerEvidenceUnavailable(
+                "The simulation answered about a leg of an option order it holds no record of.",
+                broker=evidence.broker,
+                detail=f"Leg {leg.client_order_id!r} of order {evidence.client_order_id!r}.",
+            )
+        legs.append(recorded)
+    return evidence.model_copy(update={"legs": tuple(legs)})
 
 
 def option_order_evidence(order: BrokerOptionOrder) -> tuple[BrokerOrder, ...]:
-    """The order evidence of each order ``order`` speaks for: one, for a single-leg order.
+    """The order evidence of the one order ``order`` speaks for: an order of one contract.
 
-    A multi-leg parent is refused as evidence nothing can be made of yet:
-    its legs fill as orders of their own, which the books do not keep apart.
+    A multi-leg parent is refused here: it is not one order's evidence. It
+    is read by :func:`multi_leg_order_evidence`, for a caller that asked
+    about an order of several legs.
     """
     if order.multi_leg or order.contract is None or order.side is None:
         raise BrokerEvidenceUnavailable(
-            "The broker answered with a multi-leg option order, which the account Clerk does not take yet.",
+            "The broker answered with a multi-leg option order where an order of one contract was asked about.",
             broker=order.broker,
-            detail="Its legs are orders of their own, and the books keep one order for one entry.",
+            detail="Its legs are orders of their own, and the books asked about one contract.",
         )
     return (
         BrokerOrder(
@@ -274,8 +399,57 @@ def option_order_evidence(order: BrokerOptionOrder) -> tuple[BrokerOrder, ...]:
     )
 
 
-def evidence_of_the_order_asked(answer: BrokerOptionOrder, *, asked: AskedOptionOrder) -> BrokerOrder:
+def _evidence_of_the_multi_leg_order_asked(answer: BrokerOptionOrder, *, asked: AskedMultiLegOrder) -> MultiLegOrderEvidence:
+    """A multi-leg parent's answer as order evidence, once it is about the order of several legs the books asked for.
+
+    Held to the parent's units and to each leg's contract and side. A leg's
+    own quantity is not held to its ratio times the units: what a leg says
+    for more than one structure is not yet a recording (ADR 0076 decision
+    10). An answer that states another kind of order or another net limit is
+    taken and logged, as for an order of one contract; one that states no
+    limit states nothing to differ from.
+    """
+    evidence = multi_leg_order_evidence(answer)
+    answered = AskedMultiLegOrder(
+        units=answer.quantity,
+        legs=tuple((leg.contract.occ_symbol, leg.side.value) for leg in answer.legs),
+        order_type=answer.order_type.lower(),
+        net_limit_price=answer.limit_price,
+    )
+    if answered.what_was_traded() != asked.what_was_traded():
+        raise BrokerEvidenceUnavailable(
+            "The broker answered about a different option order from the one the account Clerk asked for.",
+            broker=answer.broker,
+            detail=f"Asked for {asked.words()}; the answer is for {answered.words()}.",
+        )
+    if answered.order_type != asked.order_type or (
+        answered.net_limit_price is not None and answered.net_limit_price != asked.net_limit_price
+    ):
+        logger.warning(
+            "The broker states another kind of order or another net limit than the account Clerk sent; its answer is taken.",
+            extra={
+                "action": "option_order_answer_states_other_terms",
+                "broker": answer.broker,
+                "client_order_id": answer.client_order_id,
+                "broker_order_id": answer.order_id,
+                "asked_order_type": asked.order_type,
+                "answered_order_type": answered.order_type,
+                "asked_limit_price": None if asked.net_limit_price is None else str(asked.net_limit_price),
+                "answered_limit_price": None if answered.net_limit_price is None else str(answered.net_limit_price),
+            },
+        )
+    return evidence
+
+
+def evidence_of_the_order_asked(
+    answer: BrokerOptionOrder, *, asked: AskedOptionOrder | AskedMultiLegOrder
+) -> BrokerOrder:
     """``answer`` as order evidence, once it is about the order the books asked for.
+
+    For an order of several legs the evidence is a ``MultiLegOrderEvidence``,
+    held to the parent's units and to each leg's contract and side
+    (:func:`_evidence_of_the_multi_leg_order_asked`). What follows is the
+    rule for an order of one contract.
 
     Raises ``BrokerEvidenceUnavailable``, an unknown outcome, when the answer
     names another contract, another side or another number of contracts: a
@@ -287,6 +461,8 @@ def evidence_of_the_order_asked(answer: BrokerOptionOrder, *, asked: AskedOption
     with a close that is never sent (ADR 0076 decision 19). The limit is
     compared as the exact decimal, so ``1.9`` and ``1.90`` are one price.
     """
+    if isinstance(asked, AskedMultiLegOrder):
+        return _evidence_of_the_multi_leg_order_asked(answer, asked=asked)
     (evidence,) = option_order_evidence(answer)
     answered = AskedOptionOrder(
         symbol=evidence.symbol.upper(), side=evidence.side.lower(), contracts=answer.quantity,
@@ -319,10 +495,13 @@ def evidence_of_the_order_asked(answer: BrokerOptionOrder, *, asked: AskedOption
 __all__ = [
     "AskedMultiLegOrder",
     "AskedOptionOrder",
+    "MultiLegOrderEvidence",
     "asked_of_a_real_option_order",
     "asked_option_order",
     "evidence_of_the_order_asked",
     "look_up_by_broker_order_id",
     "look_up_by_client_order_id",
+    "multi_leg_order_evidence",
     "option_order_evidence",
+    "with_the_simulations_own_leg_records",
 ]

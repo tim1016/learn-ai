@@ -78,6 +78,12 @@ from app.broker.alpaca.clerk.kept_option_quotes import (
 )
 from app.broker.alpaca.clerk.money import contract_multiplier, money_context, normalize_money
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.clerk.simulated_multi_leg_orders import (
+    BoundLegQuote,
+    filled_multi_leg_order,
+    legs_recorded,
+    multi_leg_order_view,
+)
 from app.broker.alpaca.clerk.simulated_option_settlement import (
     SETTLEMENT_BAR_MAX_AGE_MS,
     SETTLEMENT_GRACE_MS,
@@ -113,7 +119,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
 from app.broker.alpaca.option_fees import fees_for_option_fill, option_fee_provision_cents
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerOrderRejected
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOptionsNotSupported, BrokerOrderRejected
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -173,10 +179,10 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     supports_extended_hours=True,
     extended_hours_window=ALPACA_EXTENDED_HOURS_WINDOW,
     supported_order_types=("market", "limit"),
-    # The simulation fills an option order of one leg from a quote handed to it. One of several
-    # legs it does not take (#2913).
+    # The simulation fills an option order from the quotes handed to it: one leg, or an opening
+    # order of several legs, every leg at once or none (#2913).
     supports_option_orders=True,
-    supports_multi_leg_option_orders=False,
+    supports_multi_leg_option_orders=True,
     data_feed="retained_source_bars",
     bars_may_gap=False,
     max_stream_symbols=0,
@@ -203,6 +209,8 @@ class _BoundOptionQuote(NamedTuple):
     multiplier: int | None
 
 
+# How this simulation names an order: the prefix, then the client order id it was sent under.
+_SIM_ORDER_ID_PREFIX = "sim-order:"
 # The one leg of a single option order, as the fill model names it.
 _THE_LEG = "leg"
 # What the order's leg is in the structure it opens or closes: a closing sale closes a bought leg.
@@ -284,6 +292,9 @@ class SyntheticBroker(OptionOrdersNotTaken):
             None if source_bars is None else KeptOptionQuotes.beside(source_bars.path)
         )
         self._bound_option_quotes: dict[str, _BoundOptionQuote] = {}
+        # Every quote bound under one order id, by contract: what an order of several legs is
+        # filled from, a quote for each leg. An order of one leg reads the one above.
+        self._bound_leg_quotes: dict[str, dict[str, _BoundOptionQuote]] = {}
         self._option_binding_lock = threading.Lock()
 
     def capabilities(self) -> BrokerCapabilities:
@@ -682,6 +693,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
             self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
                 symbol, RecordedQuote.of(quote), None, quote.generation, multiplier
             )
+            self._bound_leg_quotes.setdefault(client_order_id, {})[symbol] = self._bound_option_quotes[client_order_id]
 
     def bind_option_close_quotes(
         self,
@@ -718,6 +730,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
             self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
                 symbol, newest.quote, newest.ref, usable_generation, None
             )
+            self._bound_leg_quotes.setdefault(client_order_id, {})[symbol] = self._bound_option_quotes[client_order_id]
         return True
 
     def bind_evaluated_bar(
@@ -970,10 +983,10 @@ class SyntheticBroker(OptionOrdersNotTaken):
         contract's own symbol, so the stock lookups, the open orders and the
         positions all show it.
         """
-        if isinstance(order, MultiLegOptionOrderRequest):
-            raise self._option_orders_not_taken("takes no option orders of several legs")
         if self._ledger is None:
             raise self._option_orders_not_taken("takes no option orders without its order ledger")
+        if isinstance(order, MultiLegOptionOrderRequest):
+            return self._submit_multi_leg_option_order(order, client_order_id=client_order_id, ledger=self._ledger)
         symbol = order.contract.occ_symbol
         with self._ledger.transaction() as records:
             existing = self._ledger.find_record(records, client_order_id)
@@ -1085,13 +1098,85 @@ class SyntheticBroker(OptionOrdersNotTaken):
 
     def _consume_option_binding(self, client_order_id: str) -> _BoundOptionQuote | None:
         with self._option_binding_lock:
+            self._bound_leg_quotes.pop(client_order_id, None)
             return self._bound_option_quotes.pop(client_order_id, None)
 
+    def _consume_leg_bindings(self, client_order_id: str) -> dict[str, _BoundOptionQuote]:
+        """Every quote bound under one order id, by contract, taken once: an order of several legs' own."""
+        with self._option_binding_lock:
+            self._bound_option_quotes.pop(client_order_id, None)
+            return self._bound_leg_quotes.pop(client_order_id, {})
+
+    def _submit_multi_leg_option_order(
+        self, order: MultiLegOptionOrderRequest, *, client_order_id: str, ledger: SynthesizedOrderLedger
+    ) -> BrokerOptionOrder:
+        """Fill an opening order of several legs, every leg at once from the quote bound for it, or none.
+
+        The fill is ``simulated_multi_leg_orders``'s. Here the bindings are
+        taken, the order is answered again from its legs' records when it
+        was already answered, and every leg's record is written in one
+        ledger write.
+        """
+        with ledger.transaction() as records:
+            bound = self._consume_leg_bindings(client_order_id)
+            if ledger.find_record(records, client_order_id) is not None:
+                raise BrokerOrderRejected(
+                    "That client order id already names an order of one leg in this simulation.", broker=self.broker_id
+                )
+            at_ms = self._clock()
+            already = legs_recorded(ledger.latest_records_from(records), client_order_id)
+            if already:
+                return self._multi_leg_order_view(already, client_order_id, observed_at_ms=at_ms)
+            legs = filled_multi_leg_order(
+                order,
+                client_order_id=client_order_id,
+                bound={
+                    symbol: BoundLegQuote(quoted.quote, quoted.quote_ref, quoted.multiplier)
+                    for symbol, quoted in bound.items()
+                },
+                at_ms=at_ms,
+                broker_id=self.broker_id,
+                shape_leg_order=lambda request, leg_client_order_id, fill_price, order_type: _option_order_evidence(
+                    request, client_order_id=leg_client_order_id, broker_id=self.broker_id, at_ms=at_ms,
+                    fill_price=fill_price,
+                ).model_copy(update={"order_type": order_type}),
+            )
+            appended = ledger.append_option_legs_locked(records, legs)
+            return self._multi_leg_order_view(appended, client_order_id, observed_at_ms=at_ms)
+
+    def _multi_leg_order_view(
+        self, legs: Sequence[SynthesizedOrderRecord], client_order_id: str, *, observed_at_ms: int
+    ) -> BrokerOptionOrder:
+        if len(legs) < 2:
+            # Every leg of an order is written in one ledger write. A part of one is a torn ledger.
+            raise BrokerEvidenceUnavailable(
+                "The simulation's ledger holds a part of an option order of several legs.",
+                broker=self.broker_id,
+                detail=f"Order {client_order_id!r} has {len(legs)} of its legs on record.",
+            )
+        return multi_leg_order_view(
+            legs, parent_client_order_id=client_order_id, parent_order_id=f"{_SIM_ORDER_ID_PREFIX}{client_order_id}",
+            broker_id=self.broker_id, observed_at_ms=observed_at_ms,
+        )
+
+    def _multi_leg_order_sent_as(self, client_order_id: str) -> BrokerOptionOrder | None:
+        """The order of several legs this simulation answered under ``client_order_id``, or None."""
+        if self._ledger is None:
+            return None
+        legs = legs_recorded(self._ledger.latest_records(), client_order_id)
+        return self._multi_leg_order_view(legs, client_order_id, observed_at_ms=self._clock()) if legs else None
+
     async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
-        return self._option_order_where(lambda record: record.order.client_order_id == client_order_id)
+        return self._option_order_where(
+            lambda record: record.order.client_order_id == client_order_id
+        ) or self._multi_leg_order_sent_as(client_order_id)
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
-        return self._option_order_where(lambda record: record.order.order_id == order_id)
+        one_leg = self._option_order_where(lambda record: record.order.order_id == order_id)
+        if one_leg is not None or not order_id.startswith(_SIM_ORDER_ID_PREFIX):
+            return one_leg
+        # An order of several legs has no record of its own: its id is the prefix and its client order id.
+        return self._multi_leg_order_sent_as(order_id.removeprefix(_SIM_ORDER_ID_PREFIX))
 
     def _option_order_where(self, matches: Callable[[SynthesizedOrderRecord], bool]) -> BrokerOptionOrder | None:
         """The option order this simulation holds that ``matches``, or None: it holds no such option order."""
