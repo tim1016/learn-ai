@@ -44,6 +44,23 @@ def test_uppercase_ibkr_env_vars_are_honored(monkeypatch: pytest.MonkeyPatch) ->
     assert s.realtime_bar_max_active == 75
 
 
+def test_a_clerk_watches_no_option_contract_until_a_line_budget_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every option line comes out of the allowance the stock quotes draw on, so none is asked for unasked."""
+    for key in list(os.environ):
+        if key.startswith("IBKR_"):
+            monkeypatch.delenv(key, raising=False)
+    unset = IbkrSettings(_env_file=None)
+    monkeypatch.setenv("IBKR_OPTION_LINE_BUDGET", "40")
+    monkeypatch.setenv("IBKR_OPTION_WINDOW_STRIKES_EACH_SIDE", "6")
+
+    chosen = IbkrSettings(_env_file=None)
+
+    assert (unset.option_line_budget, unset.option_window_strikes_each_side) == (0, 10)
+    assert (chosen.option_line_budget, chosen.option_window_strikes_each_side) == (40, 6)
+    with pytest.raises(ValidationError):
+        IbkrSettings(option_line_budget=-1, _env_file=None)
+
+
 def test_paper_mode_with_live_gateway_port_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
         IbkrSettings(mode="paper", port=4001, _env_file=None)

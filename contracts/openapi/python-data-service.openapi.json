@@ -33245,6 +33245,60 @@
         "title": "NamedStructure",
         "type": "string"
       },
+      "NamedStructureGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "structures": {
+            "items": {
+              "$ref": "#/components/schemas/NamedStructureStart"
+            },
+            "title": "Structures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "structures"
+        ],
+        "title": "NamedStructureGroup",
+        "type": "object"
+      },
+      "NamedStructureStart": {
+        "additionalProperties": false,
+        "description": "One named structure as the builder offers it: what it is, and the legs it starts from.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/OptionLegRules"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "structure": {
+            "$ref": "#/components/schemas/NamedStructure"
+          }
+        },
+        "required": [
+          "structure",
+          "label",
+          "description",
+          "legs"
+        ],
+        "title": "NamedStructureStart",
+        "type": "object"
+      },
       "NavigateAction": {
         "additionalProperties": false,
         "description": "Move: navigate to another operator page.",
@@ -34113,6 +34167,47 @@
         "title": "OperatorMove",
         "type": "object"
       },
+      "OptionContractView": {
+        "additionalProperties": false,
+        "properties": {
+          "expiry_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "occ_symbol": {
+            "title": "Occ Symbol",
+            "type": "string"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "strike": {
+            "title": "Strike",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "occ_symbol",
+          "underlying",
+          "expiry_ms",
+          "right",
+          "strike"
+        ],
+        "title": "OptionContractView",
+        "type": "object"
+      },
       "OptionEntryLeg": {
         "additionalProperties": false,
         "description": "Option ``ActionEntity`` \u2014 Slice 1C.\n\nAdds ``right``, ``strike``, ``expiry`` on top of the common entry-leg\nfields. ``leg_id`` is the same stable identity stock legs carry \u2014\neach option leg of a multi-leg structure resolves to its own\n``conId`` at consumption time, even when several legs share the same\nexpiry-selector inputs.",
@@ -34219,6 +34314,43 @@
         "title": "OptionEntryLeg",
         "type": "object"
       },
+      "OptionExpiryRule": {
+        "additionalProperties": false,
+        "description": "One way of choosing a leg's expiry, as the builder offers it.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "selector": {
+            "enum": [
+              "min_dte",
+              "nearest_weekly",
+              "same_day",
+              "absolute"
+            ],
+            "title": "Selector",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionRuleValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "label",
+          "value"
+        ],
+        "title": "OptionExpiryRule",
+        "type": "object"
+      },
       "OptionInstrument": {
         "additionalProperties": false,
         "properties": {
@@ -34237,6 +34369,1307 @@
           "underlying"
         ],
         "title": "OptionInstrument",
+        "type": "object"
+      },
+      "OptionLegRules": {
+        "additionalProperties": false,
+        "description": "One leg as the owner builds it: an Action Plan option leg without its instrument, which is the\nstructure's one underlying.",
+        "properties": {
+          "expiry": {
+            "discriminator": {
+              "mapping": {
+                "absolute": "#/components/schemas/AbsoluteExpiry",
+                "min_dte": "#/components/schemas/MinDteExpiry",
+                "nearest_weekly": "#/components/schemas/NearestWeeklyExpiry",
+                "same_day": "#/components/schemas/SameDayExpiry"
+              },
+              "propertyName": "selector"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MinDteExpiry"
+              },
+              {
+                "$ref": "#/components/schemas/NearestWeeklyExpiry"
+              },
+              {
+                "$ref": "#/components/schemas/SameDayExpiry"
+              },
+              {
+                "$ref": "#/components/schemas/AbsoluteExpiry"
+              }
+            ],
+            "title": "Expiry"
+          },
+          "leg_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "position": {
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Position",
+            "type": "string"
+          },
+          "qty_ratio": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Qty Ratio",
+            "type": "integer"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "strike": {
+            "discriminator": {
+              "mapping": {
+                "absolute": "#/components/schemas/AbsoluteStrike",
+                "atm": "#/components/schemas/AtmStrike",
+                "atm_offset": "#/components/schemas/AtmOffsetStrike",
+                "delta": "#/components/schemas/DeltaStrike",
+                "leg_distance": "#/components/schemas/LegDistanceStrike",
+                "percent": "#/components/schemas/PercentStrike"
+              },
+              "propertyName": "selector"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AtmStrike"
+              },
+              {
+                "$ref": "#/components/schemas/AtmOffsetStrike"
+              },
+              {
+                "$ref": "#/components/schemas/AbsoluteStrike"
+              },
+              {
+                "$ref": "#/components/schemas/DeltaStrike"
+              },
+              {
+                "$ref": "#/components/schemas/LegDistanceStrike"
+              },
+              {
+                "$ref": "#/components/schemas/PercentStrike"
+              }
+            ],
+            "title": "Strike"
+          }
+        },
+        "required": [
+          "leg_id",
+          "position",
+          "qty_ratio",
+          "right",
+          "strike",
+          "expiry"
+        ],
+        "title": "OptionLegRules",
+        "type": "object"
+      },
+      "OptionOrderTermDefaults": {
+        "additionalProperties": false,
+        "description": "The option order terms a Deploy starts from. Each is fixed for the bot's life once it is deployed.",
+        "properties": {
+          "cost_limit_percent": {
+            "$ref": "#/components/schemas/OptionPercentTerm"
+          },
+          "entry_wait_seconds": {
+            "$ref": "#/components/schemas/OptionWholeNumberTerm"
+          },
+          "expiry_close_lead_minutes": {
+            "$ref": "#/components/schemas/OptionWholeNumberTerm"
+          },
+          "gap_limit_percent": {
+            "$ref": "#/components/schemas/OptionPercentTerm"
+          }
+        },
+        "required": [
+          "gap_limit_percent",
+          "entry_wait_seconds",
+          "cost_limit_percent",
+          "expiry_close_lead_minutes"
+        ],
+        "title": "OptionOrderTermDefaults",
+        "type": "object"
+      },
+      "OptionPercentTerm": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "unit_label",
+          "default"
+        ],
+        "title": "OptionPercentTerm",
+        "type": "object"
+      },
+      "OptionPreviewAtExpiry": {
+        "additionalProperties": false,
+        "description": "Estimates, for the structures asked: every leg held to one shared expiry, never exercised or assigned\nearly, settled at its exercise value, before fees. None of them bounds a market exit before expiry.",
+        "properties": {
+          "assumptions_sentence": {
+            "title": "Assumptions Sentence",
+            "type": "string"
+          },
+          "break_even_prices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Break Even Prices",
+            "type": "array"
+          },
+          "break_even_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Break Even Sentence"
+          },
+          "estimated": {
+            "title": "Estimated",
+            "type": "boolean"
+          },
+          "gain_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain Cents"
+          },
+          "gain_has_no_limit": {
+            "title": "Gain Has No Limit",
+            "type": "boolean"
+          },
+          "gain_holds": {
+            "items": {
+              "$ref": "#/components/schemas/PriceRangeView"
+            },
+            "title": "Gain Holds",
+            "type": "array"
+          },
+          "gain_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain Sentence"
+          },
+          "loss_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Cents"
+          },
+          "loss_holds": {
+            "items": {
+              "$ref": "#/components/schemas/PriceRangeView"
+            },
+            "title": "Loss Holds",
+            "type": "array"
+          },
+          "loss_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Sentence"
+          },
+          "warning_sentence": {
+            "title": "Warning Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "estimated",
+          "loss_cents",
+          "loss_holds",
+          "gain_cents",
+          "gain_has_no_limit",
+          "gain_holds",
+          "break_even_prices",
+          "loss_sentence",
+          "gain_sentence",
+          "break_even_sentence",
+          "assumptions_sentence",
+          "warning_sentence"
+        ],
+        "title": "OptionPreviewAtExpiry",
+        "type": "object"
+      },
+      "OptionPreviewDividend": {
+        "additionalProperties": false,
+        "properties": {
+          "cash_per_share": {
+            "title": "Cash Per Share",
+            "type": "number"
+          },
+          "ex_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ex Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ex_ms",
+          "cash_per_share"
+        ],
+        "title": "OptionPreviewDividend",
+        "type": "object"
+      },
+      "OptionPreviewLean": {
+        "additionalProperties": false,
+        "properties": {
+          "about_flat_below_shares_per_structure": {
+            "title": "About Flat Below Shares Per Structure",
+            "type": "number"
+          },
+          "direction": {
+            "enum": [
+              "up",
+              "down",
+              "about_flat"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "gains_when_underlying_falls": {
+            "title": "Gains When Underlying Falls",
+            "type": "boolean"
+          },
+          "net_delta": {
+            "title": "Net Delta",
+            "type": "number"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "shares": {
+            "title": "Shares",
+            "type": "number"
+          },
+          "shares_per_structure": {
+            "title": "Shares Per Structure",
+            "type": "number"
+          },
+          "warning_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning Sentence"
+          }
+        },
+        "required": [
+          "net_delta",
+          "shares_per_structure",
+          "shares",
+          "direction",
+          "about_flat_below_shares_per_structure",
+          "sentence",
+          "gains_when_underlying_falls",
+          "warning_sentence"
+        ],
+        "title": "OptionPreviewLean",
+        "type": "object"
+      },
+      "OptionPreviewLeg": {
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "$ref": "#/components/schemas/OptionContractView"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "delta_status": {
+            "title": "Delta Status",
+            "type": "string"
+          },
+          "gap_percent_of_mid": {
+            "title": "Gap Percent Of Mid",
+            "type": "string"
+          },
+          "ibkr_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ibkr Delta"
+          },
+          "implied_volatility": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Implied Volatility"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "position": {
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Position",
+            "type": "string"
+          },
+          "quote": {
+            "$ref": "#/components/schemas/OptionPreviewQuote"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "leg_id",
+          "position",
+          "ratio",
+          "contract",
+          "quote",
+          "gap_percent_of_mid",
+          "delta",
+          "implied_volatility",
+          "delta_status",
+          "ibkr_delta"
+        ],
+        "title": "OptionPreviewLeg",
+        "type": "object"
+      },
+      "OptionPreviewMoney": {
+        "additionalProperties": false,
+        "description": "What entering would mean in cash, for the structures asked. Whole cents.",
+        "properties": {
+          "broker_requirement_cents": {
+            "title": "Broker Requirement Cents",
+            "type": "integer"
+          },
+          "cost_limit_percent": {
+            "title": "Cost Limit Percent",
+            "type": "string"
+          },
+          "cost_sentence": {
+            "title": "Cost Sentence",
+            "type": "string"
+          },
+          "entry_commitment_cents": {
+            "title": "Entry Commitment Cents",
+            "type": "integer"
+          },
+          "fee_estimate_cents": {
+            "title": "Fee Estimate Cents",
+            "type": "integer"
+          },
+          "fees_sentence": {
+            "title": "Fees Sentence",
+            "type": "string"
+          },
+          "multiplier": {
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "net_entry_premium_cents": {
+            "title": "Net Entry Premium Cents",
+            "type": "integer"
+          },
+          "net_entry_premium_per_structure_cents": {
+            "title": "Net Entry Premium Per Structure Cents",
+            "type": "integer"
+          },
+          "net_price": {
+            "title": "Net Price",
+            "type": "string"
+          },
+          "over_cost_limit": {
+            "title": "Over Cost Limit",
+            "type": "boolean"
+          },
+          "premium_is": {
+            "enum": [
+              "paid",
+              "received",
+              "nothing"
+            ],
+            "title": "Premium Is",
+            "type": "string"
+          },
+          "round_trip_cost_cents": {
+            "title": "Round Trip Cost Cents",
+            "type": "integer"
+          },
+          "round_trip_cost_percent": {
+            "title": "Round Trip Cost Percent",
+            "type": "string"
+          },
+          "structures": {
+            "title": "Structures",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "structures",
+          "multiplier",
+          "net_price",
+          "premium_is",
+          "net_entry_premium_cents",
+          "net_entry_premium_per_structure_cents",
+          "broker_requirement_cents",
+          "fee_estimate_cents",
+          "entry_commitment_cents",
+          "round_trip_cost_cents",
+          "round_trip_cost_percent",
+          "cost_limit_percent",
+          "over_cost_limit",
+          "cost_sentence",
+          "fees_sentence"
+        ],
+        "title": "OptionPreviewMoney",
+        "type": "object"
+      },
+      "OptionPreviewPricingInputs": {
+        "additionalProperties": false,
+        "description": "What the pricing model was given beside the quotes.",
+        "properties": {
+          "dividends": {
+            "items": {
+              "$ref": "#/components/schemas/OptionPreviewDividend"
+            },
+            "title": "Dividends",
+            "type": "array"
+          },
+          "dividends_known": {
+            "title": "Dividends Known",
+            "type": "boolean"
+          },
+          "dividends_read_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Dividends Read Ms",
+            "type": "integer"
+          },
+          "dividends_source": {
+            "title": "Dividends Source",
+            "type": "string"
+          },
+          "rate": {
+            "title": "Rate",
+            "type": "number"
+          },
+          "rate_is_default": {
+            "title": "Rate Is Default",
+            "type": "boolean"
+          },
+          "rate_source": {
+            "title": "Rate Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rate",
+          "rate_source",
+          "rate_is_default",
+          "dividends_known",
+          "dividends",
+          "dividends_source",
+          "dividends_read_ms"
+        ],
+        "title": "OptionPreviewPricingInputs",
+        "type": "object"
+      },
+      "OptionPreviewQuote": {
+        "additionalProperties": false,
+        "description": "A two-sided quote as it was held when it was read: each side with its own age.",
+        "properties": {
+          "ask": {
+            "title": "Ask",
+            "type": "string"
+          },
+          "ask_age_ms": {
+            "title": "Ask Age Ms",
+            "type": "integer"
+          },
+          "bid": {
+            "title": "Bid",
+            "type": "string"
+          },
+          "bid_age_ms": {
+            "title": "Bid Age Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bid",
+          "bid_age_ms",
+          "ask",
+          "ask_age_ms"
+        ],
+        "title": "OptionPreviewQuote",
+        "type": "object"
+      },
+      "OptionPreviewVerdict": {
+        "additionalProperties": false,
+        "description": "The builder's verdict, in two halves.",
+        "properties": {
+          "can_be_deployed": {
+            "title": "Can Be Deployed",
+            "type": "boolean"
+          },
+          "deploy_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deploy Reason Code"
+          },
+          "deploy_sentence": {
+            "title": "Deploy Sentence",
+            "type": "string"
+          },
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "red": {
+            "title": "Red",
+            "type": "boolean"
+          },
+          "resolves_as_built": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolves As Built"
+          },
+          "resolves_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolves Reason Code"
+          },
+          "resolves_sentence": {
+            "title": "Resolves Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "can_be_deployed",
+          "deploy_sentence",
+          "deploy_reason_code",
+          "resolves_as_built",
+          "resolves_sentence",
+          "resolves_reason_code",
+          "leg_ids",
+          "red"
+        ],
+        "title": "OptionPreviewVerdict",
+        "type": "object"
+      },
+      "OptionPreviewWatched": {
+        "additionalProperties": false,
+        "properties": {
+          "line_budget": {
+            "title": "Line Budget",
+            "type": "integer"
+          },
+          "lines_held": {
+            "title": "Lines Held",
+            "type": "integer"
+          },
+          "lines_open": {
+            "title": "Lines Open",
+            "type": "integer"
+          },
+          "lines_refused": {
+            "title": "Lines Refused",
+            "type": "integer"
+          },
+          "lines_wanted": {
+            "title": "Lines Wanted",
+            "type": "integer"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/OptionPreviewWatchedRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ranges",
+          "lines_wanted",
+          "lines_held",
+          "lines_refused",
+          "line_budget",
+          "lines_open"
+        ],
+        "title": "OptionPreviewWatched",
+        "type": "object"
+      },
+      "OptionPreviewWatchedRange": {
+        "additionalProperties": false,
+        "description": "How far the search reached for one kind of contract on one expiry.",
+        "properties": {
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "expiry_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "highest_strike": {
+            "title": "Highest Strike",
+            "type": "string"
+          },
+          "lowest_strike": {
+            "title": "Lowest Strike",
+            "type": "string"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          }
+        },
+        "required": [
+          "right",
+          "expiry_ms",
+          "lowest_strike",
+          "highest_strike",
+          "contracts"
+        ],
+        "title": "OptionPreviewWatchedRange",
+        "type": "object"
+      },
+      "OptionRuleTolerance": {
+        "additionalProperties": false,
+        "description": "How far from its target a rule's pick may be: the builder's \"Within\".",
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "number"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "delta",
+              "dollars",
+              "percent"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "unit",
+          "unit_label",
+          "default"
+        ],
+        "title": "OptionRuleTolerance",
+        "type": "object"
+      },
+      "OptionRuleValue": {
+        "additionalProperties": false,
+        "description": "What the box beside a rule holds.",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "delta",
+              "strikes",
+              "dollars",
+              "percent",
+              "days",
+              "date"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "unit",
+          "unit_label"
+        ],
+        "title": "OptionRuleValue",
+        "type": "object"
+      },
+      "OptionStrikeRule": {
+        "additionalProperties": false,
+        "description": "One way of choosing a leg's strike, as the builder offers it.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "selector": {
+            "enum": [
+              "delta",
+              "atm_offset",
+              "leg_distance",
+              "percent"
+            ],
+            "title": "Selector",
+            "type": "string"
+          },
+          "tolerance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionRuleTolerance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/OptionRuleValue"
+          }
+        },
+        "required": [
+          "selector",
+          "label",
+          "value",
+          "tolerance"
+        ],
+        "title": "OptionStrikeRule",
+        "type": "object"
+      },
+      "OptionStructureCatalogue": {
+        "additionalProperties": false,
+        "description": "What the builder offers: the named structures in their groups, the rules a leg may be given, and the\norder terms a Deploy starts from. Custom starts from no legs.",
+        "properties": {
+          "custom_description": {
+            "title": "Custom Description",
+            "type": "string"
+          },
+          "custom_label": {
+            "title": "Custom Label",
+            "type": "string"
+          },
+          "expiry_rules": {
+            "items": {
+              "$ref": "#/components/schemas/OptionExpiryRule"
+            },
+            "title": "Expiry Rules",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/NamedStructureGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "max_legs": {
+            "title": "Max Legs",
+            "type": "integer"
+          },
+          "order_terms": {
+            "$ref": "#/components/schemas/OptionOrderTermDefaults"
+          },
+          "strike_rules": {
+            "items": {
+              "$ref": "#/components/schemas/OptionStrikeRule"
+            },
+            "title": "Strike Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "groups",
+          "custom_label",
+          "custom_description",
+          "max_legs",
+          "strike_rules",
+          "expiry_rules",
+          "order_terms"
+        ],
+        "title": "OptionStructureCatalogue",
+        "type": "object"
+      },
+      "OptionStructurePreview": {
+        "additionalProperties": false,
+        "properties": {
+          "ask_again_in_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Again In Ms"
+          },
+          "at_expiry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewAtExpiry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionContractView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_limit_percent": {
+            "title": "Cost Limit Percent",
+            "type": "string"
+          },
+          "fault": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fault"
+          },
+          "feed_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feed Generation"
+          },
+          "gap_limit_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Limit Percent"
+          },
+          "lean": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewLean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lean_unknown_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lean Unknown Sentence"
+          },
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/OptionPreviewLeg"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "money": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewMoney"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "oldest_quote_age_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Quote Age Ms"
+          },
+          "preview_sentence": {
+            "title": "Preview Sentence",
+            "type": "string"
+          },
+          "pricing_inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewPricingInputs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quotes_read_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Quotes Read Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "state": {
+            "enum": [
+              "plan_refused",
+              "no_quote_source",
+              "feed_not_up",
+              "no_quote_line",
+              "listing_not_read",
+              "quotes_arriving",
+              "underlying_quote_unusable",
+              "pricing_inputs_unknown",
+              "search_not_done",
+              "not_resolved",
+              "resolved"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "structure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NamedStructure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "structure_label": {
+            "title": "Structure Label",
+            "type": "string"
+          },
+          "structures": {
+            "title": "Structures",
+            "type": "integer"
+          },
+          "the_money": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "The Money"
+          },
+          "the_money_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "The Money Sentence"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "underlying_quote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewQuote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/OptionPreviewVerdict"
+          },
+          "watched": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewWatched"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "reason_code",
+          "notice",
+          "fault",
+          "leg_ids",
+          "contract",
+          "ask_again_in_ms",
+          "underlying",
+          "structure",
+          "structure_label",
+          "structures",
+          "gap_limit_percent",
+          "cost_limit_percent",
+          "quotes_read_ms",
+          "feed_generation",
+          "oldest_quote_age_ms",
+          "underlying_quote",
+          "the_money",
+          "the_money_sentence",
+          "verdict",
+          "legs",
+          "money",
+          "at_expiry",
+          "lean",
+          "lean_unknown_sentence",
+          "watched",
+          "pricing_inputs",
+          "preview_sentence"
+        ],
+        "title": "OptionStructurePreview",
+        "type": "object"
+      },
+      "OptionStructurePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_limit_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "10",
+            "title": "Cost Limit Percent"
+          },
+          "gap_limit_percent": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Limit Percent"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/OptionLegRules"
+            },
+            "maxItems": 8,
+            "title": "Legs",
+            "type": "array"
+          },
+          "listens_to": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listens To"
+          },
+          "preview_key": {
+            "pattern": "^[A-Za-z0-9_-]{8,64}$",
+            "title": "Preview Key",
+            "type": "string"
+          },
+          "structure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NamedStructure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "structures": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Structures",
+            "type": "integer"
+          },
+          "underlying": {
+            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview_key",
+          "underlying",
+          "legs"
+        ],
+        "title": "OptionStructurePreviewRequest",
         "type": "object"
       },
       "OptionTemplatePosition": {
@@ -34286,6 +35719,30 @@
           "template"
         ],
         "title": "OptionTemplatePosition",
+        "type": "object"
+      },
+      "OptionWholeNumberTerm": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "unit_label",
+          "default"
+        ],
+        "title": "OptionWholeNumberTerm",
         "type": "object"
       },
       "OptionsChainSnapshotRequest": {
@@ -35632,6 +37089,33 @@
           "prediction_set_id"
         ],
         "title": "PredictionRef",
+        "type": "object"
+      },
+      "PriceRangeView": {
+        "additionalProperties": false,
+        "description": "Underlying prices from one to another, both included.",
+        "properties": {
+          "from_price": {
+            "title": "From Price",
+            "type": "string"
+          },
+          "to_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Price"
+          }
+        },
+        "required": [
+          "from_price",
+          "to_price"
+        ],
+        "title": "PriceRangeView",
         "type": "object"
       },
       "PricingCompareRequest": {
@@ -54594,6 +56078,151 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/option-structure-preview": {
+      "post": {
+        "description": "Reads only. It is a POST because the structure being built is its body.",
+        "operationId": "preview_option_structure_scoped_api_brokers__broker__accounts__account_id__bots_option_structure_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionStructurePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionStructurePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deploy: what an option structure's rules would pick right now, and what it would cost (#2913)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/option-structures": {
+      "get": {
+        "operationId": "get_option_structure_catalogue_api_brokers__broker__accounts__account_id__bots_option_structures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionStructureCatalogue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deploy: the named option structures the builder offers, with the legs each starts from (#2913)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/traded-asset": {
       "get": {
         "operationId": "get_deploy_traded_asset_api_brokers__broker__accounts__account_id__bots_traded_asset_get",
@@ -57656,6 +59285,173 @@
           }
         },
         "summary": "Fleet Bot End Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/option-structure-preview": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/bots/option-structure-preview (deploy).",
+        "operationId": "fleet_bot_option_structure_preview_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_option_structure_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Option Structure Preview",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/option-structures": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/option-structures (deploy).",
+        "operationId": "fleet_bot_option_structures_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots_option_structures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Option Structures Read",
         "tags": [
           "broker-clerks"
         ]

@@ -102,6 +102,16 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/live-stream",
       "requires_account": true
     },
+    "bot_option_structure_preview": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/bots/option-structure-preview",
+      "requires_account": true
+    },
+    "bot_option_structures_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/option-structures",
+      "requires_account": true
+    },
     "bot_panel_action": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots/{sid}/actions",

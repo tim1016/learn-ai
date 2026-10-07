@@ -15,6 +15,15 @@ Formula:
     Open P&L:
         open_pnl = Σ_remaining_lots (mark_price - lot.cost) × lot.qty   [long]
                    Σ_remaining_lots (lot.cost - mark_price) × lot.qty   [short]
+    Option contracts (ADR 0076): a fill that carries a contract ``multiplier``
+        m counts contracts, at a premium per share.  Every product above is
+        then taken over ``qty × m`` shares:
+        realized_pnl_lot = signed_delta × closed_qty × m
+        open_pnl         = Σ signed_delta × lot.qty × m
+        cost basis       = lot.qty × lot.cost × m
+        A fill without one is shares and the arithmetic is unchanged.  A
+        symbol holds one multiplier: a fill that disagrees with its symbol's
+        open lots is refused.
     Fees: rendered only when the broker reports them; ``None`` = "not reported",
         never $0.00.  The engine propagates ``None`` through — callers display
         the string "Fees not reported" when the field is None.
@@ -38,7 +47,9 @@ Reference:
     Validated against:
         PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py
         (hand-derived fixtures at atol=1e-9 for float views; an exact
-        ``Fraction`` oracle for the ``exact_*`` fields).
+        ``Fraction`` oracle for the ``exact_*`` fields);
+        PythonDataService/tests/broker/alpaca/clerk/test_option_custody_money.py
+        (the multiplier, exact).
 Canonical implementation: this file.
 
 Usage::
@@ -64,7 +75,13 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
+from app.broker.alpaca.clerk.money import (
+    ZERO,
+    MoneyInputError,
+    contract_multiplier,
+    money_context,
+    normalize_money,
+)
 from app.broker.contract.models import OrderSide
 
 # ── Lot-closing share tolerance ───────────────────────────────────────────────
@@ -86,6 +103,13 @@ class _Lot:
     opened_at_ms: int   # int64 ms UTC
     side: OrderSide     # BUY (long lot) or SELL (short lot)
     strategy_instance_id: str
+    # The contract's multiplier when the lot is option contracts; None for shares.
+    multiplier: int | None = None
+
+
+def _shares(qty: Decimal, multiplier: int | None) -> Decimal:
+    """The shares a quantity stands for: itself, or contracts by their multiplier."""
+    return qty if multiplier is None else qty * multiplier
 
 
 # ── Output models ─────────────────────────────────────────────────────────────
@@ -105,6 +129,8 @@ class ClosedLot:
     fee: float | None     # None = not reported
     entry_strategy_instance_id: str = ""
     exit_strategy_instance_id: str = ""
+    # Set when ``qty`` is option contracts and the prices are premiums per share.
+    multiplier: int | None = None
 
     @property
     def realized_pnl(self) -> float:
@@ -121,6 +147,14 @@ class OpenLot:
     exact_cost: Decimal   # cost per share
     opened_at_ms: int     # int64 ms UTC
     side: OrderSide
+    # Set when ``exact_qty`` is option contracts and ``exact_cost`` a premium per share.
+    multiplier: int | None = None
+
+    @property
+    def exact_cost_basis(self) -> Decimal:
+        """What the lot's remaining quantity cost to open, exact: qty × cost, by the multiplier for contracts."""
+        with money_context():
+            return _shares(self.exact_qty, self.multiplier) * self.exact_cost
 
     @property
     def qty(self) -> float:
@@ -238,9 +272,18 @@ def apply_fill_to_lots(
     price = normalize_money(fill.fill_price)
     qty = normalize_money(fill.quantity)
     ts = fill.filled_at_ms
+    multiplier = None if fill.multiplier is None else contract_multiplier(fill.multiplier)
 
     queue = lots.setdefault(sym, deque())
     remaining = qty
+
+    if queue and queue[0].multiplier != multiplier:
+        # One symbol is one instrument. Lots of contracts and of shares, or of
+        # two multipliers, under one symbol cannot be closed against each other.
+        raise MoneyInputError(
+            f"A fill of {sym} counts {_counted_as(multiplier)}, "
+            f"but its open lots count {_counted_as(queue[0].multiplier)}."
+        )
 
     if not queue:
         queue.append(
@@ -250,6 +293,7 @@ def apply_fill_to_lots(
                 opened_at_ms=ts,
                 side=fill.side,
                 strategy_instance_id=fill.sid,
+                multiplier=multiplier,
             )
         )
         remaining = ZERO
@@ -263,6 +307,7 @@ def apply_fill_to_lots(
                     opened_at_ms=ts,
                     side=fill.side,
                     strategy_instance_id=fill.sid,
+                    multiplier=multiplier,
                 )
             )
             remaining = ZERO
@@ -271,9 +316,9 @@ def apply_fill_to_lots(
                 lot = queue[0]
                 close_qty = min(remaining, lot.qty)
                 if lot.side is OrderSide.BUY:
-                    r_pnl = (price - lot.cost) * close_qty
+                    r_pnl = (price - lot.cost) * _shares(close_qty, multiplier)
                 else:
-                    r_pnl = (lot.cost - price) * close_qty
+                    r_pnl = (lot.cost - price) * _shares(close_qty, multiplier)
                 closed_out.append(
                     ClosedLot(
                         symbol=sym,
@@ -286,6 +331,7 @@ def apply_fill_to_lots(
                         fee=fill.fee,
                         entry_strategy_instance_id=lot.strategy_instance_id,
                         exit_strategy_instance_id=fill.sid,
+                        multiplier=multiplier,
                     )
                 )
                 remaining -= close_qty
@@ -301,8 +347,13 @@ def apply_fill_to_lots(
                         opened_at_ms=ts,
                         side=fill.side,
                         strategy_instance_id=fill.sid,
+                        multiplier=multiplier,
                     )
                 )
+
+
+def _counted_as(multiplier: int | None) -> str:
+    return "shares" if multiplier is None else f"contracts of {multiplier} shares"
 
 
 @money_context()
@@ -312,7 +363,8 @@ def compute_open_pnl(
 ) -> OpenPnLResult:
     """Value current FIFO lots without ever returning a partial portfolio sum.
 
-    Formula: open_pnl = Σ (mark - cost) × signed remaining lot quantity.
+    Formula: open_pnl = Σ (mark - cost) × signed remaining lot quantity, the
+      quantity taken by its multiplier for a lot of option contracts.
     Reference: Kieso, Weygandt & Warfield, *Intermediate Accounting* (17e),
       Chapter 8; same FIFO inventory model as this module.
     Canonical implementation: this file.
@@ -343,6 +395,7 @@ def compute_open_pnl(
                     exact_cost=lot.cost,
                     opened_at_ms=lot.opened_at_ms,
                     side=lot.side,
+                    multiplier=lot.multiplier,
                 )
             )
             if exact_mark is not None:
@@ -351,7 +404,7 @@ def compute_open_pnl(
                     if lot.side is OrderSide.BUY
                     else lot.cost - exact_mark
                 )
-                total_open_pnl += signed_delta * lot.qty
+                total_open_pnl += signed_delta * _shares(lot.qty, lot.multiplier)
 
     if not open_lots:
         return OpenPnLResult(exact_value=ZERO, marks_complete=True, open_lots=())

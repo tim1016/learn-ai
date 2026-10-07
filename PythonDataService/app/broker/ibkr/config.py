@@ -80,6 +80,20 @@ class IbkrSettings(BaseSettings):
     # consumers; keep it at or below the username's actual allocation.
     realtime_bar_max_active: int = Field(default=100, ge=1, le=10_000)
 
+    # The most option contracts this Clerk asks IBKR to quote at once (ADR
+    # 0076). Contracts its bots hold count toward it and are asked for even
+    # past it. Zero, the default, watches nothing but those: every line comes
+    # out of the username's one allowance, the same one the stock quotes of
+    # every Clerk and any open TWS draw on, and this count cannot see those.
+    # Set it so that the sum across Clerks, plus a reserve for other sessions,
+    # stays inside the allowance.
+    option_line_budget: int = Field(default=0, ge=0, le=10_000)
+
+    # How many listed strikes either side of each leg's aim are watched for an
+    # option bot. A wider window survives a larger move between re-centrings and
+    # reaches a delta target farther from the money, at two lines a strike.
+    option_window_strikes_each_side: int = Field(default=10, ge=0, le=200)
+
     # Connect attempts before the lifespan event surfaces a startup
     # failure. Each attempt is a 5-second timeout inside ib_async.
     connect_attempts: int = Field(default=3, ge=1, le=10)

@@ -3,7 +3,8 @@
 Mounted under ``/internal/fleet`` — deliberately outside every public
 ``/api`` prefix — these routes are the machine surface an agent's presence
 calls: volume expectations, session registration, heartbeats, reservation,
-confirmation, and (issue #2204) one bounded history-batch read. Authentication
+confirmation, (issue #2204) one bounded history-batch read, and (#2913) the
+rate and the dividends an option is priced with. Authentication
 is two-factor and environment-only: the ``X-Fleet-Agent-Token`` header must
 match the clerk's agent service token in the coordinator's environment
 (``FLEET_AGENT_SERVICE_TOKENS_JSON``), and the registration body presents the
@@ -37,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import partial
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Header, Request, Response
@@ -52,9 +54,17 @@ from app.broker.fleet.presence import matches_service_token
 from app.broker.fleet.records import AccountAssignmentRecord
 from app.broker.fleet.service import FleetControlService
 from app.config import settings
+from app.options.expiry import option_expiry_date
 from app.schemas.broker_v2_panel import ChartHistoryTimeframe
 from app.schemas.fleet_history_batch import HistoryBatchRequest, HistoryBatchResponse
+from app.schemas.fleet_option_model_inputs import (
+    ModelInputsAnswer,
+    ModelInputsBeingLookedUp,
+    OptionModelInputsRequest,
+    OptionModelInputsResponse,
+)
 from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
+from app.services.option_model_inputs import ModelInputsBeingRead, off_the_loop, read_option_model_inputs
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
@@ -463,6 +473,46 @@ async def history_batch(
         required_bar_count=payload.required_bar_count,
         as_of_ms=payload.as_of_ms,
     )
+
+
+@router.post("/option-model-inputs", response_model=OptionModelInputsResponse)
+async def option_model_inputs(
+    payload: OptionModelInputsRequest,
+    request: Request,
+    x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
+) -> ModelInputsAnswer | ModelInputsBeingLookedUp:
+    """Serve a Clerk the rate and the declared dividends an option is priced with (#2913).
+
+    A Clerk holds no Polygon key and no FRED key (ADR 0076); this process
+    holds both. The answer is what ``read_option_model_inputs`` reads here,
+    from the vendors, with what it already keeps: the one implementation a
+    process with its own keys also uses. A fact it could not learn is
+    answered as not known, with its reason, at status 200: a Clerk is never
+    left to tell a vendor's failure from "none is declared" by a status code.
+
+    The lookup blocks, so it runs in a thread kept for it. It ends inside
+    its own bound, well inside the time a Clerk waits: a vendor that hangs
+    leaves its fact not known and the other as it was learned. An ask that
+    will not wait is answered at once when another lookup is running, so a
+    page that asks every second stacks no thread here either.
+    """
+    _authorized_agent(
+        request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
+    )
+    try:
+        read = await off_the_loop(
+            partial(
+                read_option_model_inputs,
+                payload.underlying,
+                at_ms=payload.at_ms,
+                latest_expiry=option_expiry_date(payload.latest_expiry_ms),
+                wait=payload.wait,
+            )
+        )
+    except ModelInputsBeingRead:
+        return ModelInputsBeingLookedUp(status="being_looked_up")
+    return ModelInputsAnswer.from_read(payload, read)
 
 
 __all__ = ["HistoryBatchProvider", "production_history_batch_provider", "router"]

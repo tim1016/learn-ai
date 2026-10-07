@@ -26,7 +26,14 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+)
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.options.contract import OptionContract
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -139,6 +146,14 @@ class GuardedBrokerReadPort:
         self._assert_unfenced("get_asset")
         return await self._inner.get_asset(symbol)
 
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        self._assert_unfenced("get_option_contract")
+        return await self._inner.get_option_contract(contract)
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        self._assert_unfenced("get_option_account")
+        return await self._inner.get_option_account()
+
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         self._assert_unfenced("get_clock_evidence")
         return await self._inner.get_clock_evidence()
@@ -193,6 +208,20 @@ class GuardedBrokerTradePort:
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         self._assert_unfenced("get_order_by_broker_order_id")
         return await self._inner.get_order_by_broker_order_id(order_id)
+
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder:
+        self._assert_unfenced("submit_option_order")
+        return await self._inner.submit_option_order(order, client_order_id=client_order_id)
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        self._assert_unfenced("get_option_order_by_client_order_id")
+        return await self._inner.get_option_order_by_client_order_id(client_order_id)
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        self._assert_unfenced("get_option_order_by_broker_order_id")
+        return await self._inner.get_option_order_by_broker_order_id(order_id)
 
     def bind_evaluated_bar(
         self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
