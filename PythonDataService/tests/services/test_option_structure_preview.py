@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
-from app.broker.ibkr.option_quotes import OptionQuoteLines, WatchRequest
+from app.broker.ibkr.option_quotes import CEILING_PROBE_MS, OptionQuoteLines, WatchRequest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.options.american import CashDividend, american_implied_volatility, years_from_ms
 from app.options.expiry import option_expiry_anchor_ms
@@ -1008,6 +1008,43 @@ async def test_a_bots_claim_on_its_own_underlying_stands_whatever_pages_ask(monk
 
     assert "SPY" in desk.ibkr.lines and "SPY" not in desk.ibkr.cancelled
     assert desk.ibkr.open_option_lines() == feed._symbols(583, 584, 585, 586, 587)
+
+
+async def test_a_page_kept_out_by_ibkrs_allowance_is_told_to_ask_again_and_is_let_in_when_ibkr_has_a_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IBKR grants three lines and refuses a fourth. The bot then holds exactly those three, IBKR's lines come
+    back, and a page asks about QQQ. It is asked nothing for, so nothing of its was refused by IBKR: it is
+    waiting for a line, is told to ask again, and a minute after the refusal one more line is tried for."""
+    held = tuple(scenes._contract("call", strike) for strike in (584, 585, 586, 587))
+    desk = Desk(monkeypatch, WatchRequest("SPY", LineClass.CANDIDATE, held=held), budget=20)
+    desk.ibkr.allowance = 3
+    await desk.settle()
+    granted = desk.ibkr.open_option_lines()
+    desk.watch.watch(
+        "bot-0", WatchRequest("SPY", LineClass.CANDIDATE, held=tuple(c for c in held if c.occ_symbol in granted))
+    )
+    desk.ibkr.allowance = None
+    await desk.settle()
+    puts = _on_qqq(_leg("long_put", "long", "put", _AT_THE_MONEY), structure="long_put")
+
+    await desk.preview(puts)
+    await desk.settle()
+    waiting = await desk.preview(puts)
+    asked_ibkr_for_qqq = "QQQ" in desk.ibkr.asked
+    desk.ibkr.now += CEILING_PROBE_MS
+    desk.ibkr.keep_alive()
+    await desk.preview(puts)
+    await desk.settle()
+    let_in = await desk.preview(puts)
+
+    assert len(granted) == 3
+    assert (waiting.state, waiting.reason_code) == ("no_quote_line", "OPTION_LINE_NO_CAPACITY")
+    assert _shows_no_figure(waiting) and waiting.ask_again_in_ms is not None
+    # Nothing was asked of IBKR on this page's account, so nothing of its can have been refused.
+    assert not asked_ibkr_for_qqq and "refused a quote line for this preview" not in waiting.notice
+    assert let_in.state != "no_quote_line" and "QQQ" in desk.ibkr.lines
+    assert granted <= desk.ibkr.open_option_lines() and not granted & set(desk.ibkr.cancelled)
 
 
 # ---- Where the search runs ------------------------------------------------------------------

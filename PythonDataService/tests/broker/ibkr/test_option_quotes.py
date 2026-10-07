@@ -772,6 +772,71 @@ async def test_a_line_ibkr_refuses_for_another_reason_stays_refused_until_the_co
     assert ibkr.asked.count(name) == 2
 
 
+async def _a_bot_holding_just_what_ibkr_is_known_to_grant(
+    monkeypatch: pytest.MonkeyPatch, **gateway: Any
+) -> tuple[Watching, set[str]]:
+    """IBKR grants three lines and refuses a fourth, so three is all it is known to grant. The bot then holds
+    exactly those three and wants no more: no contract is left waiting for capacity. A page on QQQ asks."""
+    held = (_call(584), _call(585), _call(586), _call(587))
+    watching = _watching(monkeypatch, WatchRequest("SPY", LineClass.CANDIDATE, held=held), budget=20, allowance=3)
+    status, lines, ibkr, wanted = watching
+    await _settle(status)
+    granted = ibkr.open_option_lines()
+    assert (lines.line_use().ceiling, len(granted)) == (3, 3)
+    wanted[0] = WatchRequest(
+        "SPY", LineClass.CANDIDATE, held=tuple(contract for contract in held if contract.occ_symbol in granted)
+    )
+    wanted.append(_page_on("QQQ"))
+    for name, value in gateway.items():
+        setattr(ibkr, name, value)
+    await _settle(status)
+    return watching, granted
+
+
+async def test_a_page_is_not_kept_out_for_good_by_a_ceiling_learned_before_ibkr_gave_its_lines_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IBKR's allowance has come back since it refused. The page is asked nothing for, so nothing of its is
+    without a line; it still counts as waiting, and one more line is tried a minute after the refusal, as it
+    would be for a bot's contract."""
+    (status, lines, ibkr, _), granted = await _a_bot_holding_just_what_ibkr_is_known_to_grant(monkeypatch, allowance=None)
+    kept_out = (lines.line_use().pages_not_served, lines.line_use().ceiling, "QQQ" in ibkr.asked)
+
+    ibkr.now += CEILING_PROBE_MS - 1
+    ibkr.keep_alive()
+    await _settle(status)
+    too_soon = (lines.line_use().pages_not_served, lines.line_use().ceiling, "QQQ" in ibkr.asked)
+    ibkr.now += 1
+    await _settle(status)
+    ibkr.tick("QQQ", bid=585.10, ask=585.12)
+    await _settle(status)
+
+    assert kept_out == too_soon == (NoLine.NO_CAPACITY, 3, False)
+    assert lines.line_use().pages_not_served is None
+    # One line more than IBKR was known to grant, and it is the page's: the strike nearest its window's centre.
+    assert ibkr.open_option_lines() == granted | {"QQQ261009P00585000"}
+    assert not granted & set(ibkr.cancelled)
+
+
+async def test_a_page_waiting_on_ibkrs_allowance_is_tried_for_once_a_minute_and_takes_nothing_from_a_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IBKR still has no line to give. The try costs one request, which is refused, and the bot's three lines
+    are as they were."""
+    (status, lines, ibkr, _), granted = await _a_bot_holding_just_what_ibkr_is_known_to_grant(monkeypatch)
+
+    ibkr.now += CEILING_PROBE_MS
+    ibkr.keep_alive()
+    await _settle(status)
+    ibkr.tick("QQQ", bid=585.10, ask=585.12)
+    await _settle(status, passes=6)
+
+    use = lines.line_use()
+    assert [name for name in ibkr.asked if name.startswith("QQQ2")] == ["QQQ261009P00585000"]
+    assert (use.ceiling, use.pages_not_served) == (3, NoLine.NO_CAPACITY)
+    assert ibkr.open_option_lines() == granted and not granted & set(ibkr.cancelled)
+
+
 # ---- Reconnects and repairs ---------------------------------------------------
 
 

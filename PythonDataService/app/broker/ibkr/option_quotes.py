@@ -29,7 +29,10 @@ asked on every pass. When IBKR refuses a line because the account's allowance
 is in use, the number of lines open at that moment becomes the ceiling until
 the next reconnect, so the lowest classes give way and a held contract is
 asked for again. The ceiling is tried one line higher once a minute while
-something is waiting for capacity.
+something is waiting for capacity: a contract with no line for want of it, or
+a page that is asked nothing for because bots hold every line IBKR is known
+to grant. Without the second a ceiling learned long ago would keep a page out
+for good, with IBKR's lines long since given back.
 
 A page asks IBKR for nothing while no line is spare for it. Its request
 stands on the list, but with every line taken by the contracts bots hold and
@@ -358,7 +361,7 @@ class OptionQuoteLines:
         self._ask_again_for_lines_with_no_quote(now)
         plan = plan_lines(wants, budget=self._budget, ceiling=self._ceiling, open_lines=self._lines.keys())
         self._apply(plan, listed, read, client, now)
-        waiting_for_capacity = NoLine.NO_CAPACITY in plan.without.values()
+        waiting_for_capacity = NoLine.NO_CAPACITY in plan.without.values() or self._a_page_waits_for_capacity()
         if self._ceiling is not None and waiting_for_capacity and now - self._ceiling_set_at_ms >= CEILING_PROBE_MS:
             # Another session may have given lines back. Ask for one more and see.
             self._ceiling += 1
@@ -377,6 +380,13 @@ class OptionQuoteLines:
             return NoLine.OVER_BUDGET
         # Inside the Clerk's own budget, and past what IBKR last showed it would grant.
         return NoLine.NO_CAPACITY if self._ceiling is not None and taken >= self._ceiling else None
+
+    def _a_page_waits_for_capacity(self) -> bool:
+        """Whether a page is asked nothing for because bots take every line IBKR is known to grant. Such a
+        page names no contract yet, so nothing of its is in the plan to be found waiting there."""
+        return self._pages_not_served is NoLine.NO_CAPACITY and any(
+            request.line_class is LineClass.PREVIEW for request in self._wanted
+        )
 
     def on_error(self, req_id: int, code: int) -> None:
         """IBKR's answer to a request for a line."""

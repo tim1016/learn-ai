@@ -38,7 +38,7 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -177,9 +177,13 @@ def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
             f"contracts its bots hold or watch. {cannot_see}"
         )
     if reason == NoLine.NO_CAPACITY:
+        # True whether IBKR refused a line of this preview's, or the preview was asked nothing for because
+        # bots hold every line IBKR is known to grant.
         return reason, (
-            "IBKR refused a quote line for this preview: the account's allowance is in use, here or in another "
-            f"IBKR session. {cannot_see}"
+            "No IBKR quote line is free for this preview. IBKR has refused this system a line since it last "
+            "connected, because the account's allowance was in use, here or in another IBKR session, and the "
+            "lines it is known to grant are taken. One more is asked for once a minute, and a bot's contracts "
+            f"come before a preview's. {cannot_see}"
         )
     return PreviewReason.LINE_REFUSED, sentence(f"No quote line could be had for this preview: {reason}")
 
@@ -248,6 +252,14 @@ class _NoFigures:
     reading: _Reading | None = None
 
 
+def _no_line(reason: str, use: LineUse, **found: Any) -> _NoFigures:
+    """A preview that could not have a quote line. Kept out by IBKR's allowance it is waiting: one more line is
+    asked for once a minute while it asks, so it asks again. Kept out by the Clerk's own budget, or by a
+    refusal of another kind, it waits for nothing that passes by itself."""
+    code, notice = _no_line_words(reason, use)
+    return _NoFigures("no_quote_line", code, notice, passes_by_itself=reason == NoLine.NO_CAPACITY, **found)
+
+
 def _watched_view(reading: _Reading) -> OptionPreviewWatched:
     watched = [OptionContract.from_occ_symbol(symbol) for symbol in reading.chain.watched]
     kinds = sorted({(seen.contract.right, seen.contract.expiry_ms) for seen in reading.window})
@@ -299,11 +311,7 @@ def _read(
     arriving = now - since_ms <= ARRIVAL_GRACE_MS
     # With no line spare for a page the supervisor asks IBKR for nothing on its account, so what is missing
     # below is not on its way: it is missing for that reason.
-    no_line = (
-        None
-        if use.pages_not_served is None
-        else _NoFigures("no_quote_line", *_no_line_words(use.pages_not_served, use))
-    )
+    no_line = None if use.pages_not_served is None else _no_line(use.pages_not_served, use)
     chain = quotes.option_chain(underlying)
     not_read = no_line or _NoFigures(
         "listing_not_read",
@@ -371,9 +379,7 @@ def _lines_stand_in_the_way(reading: _Reading) -> _NoFigures | None:
     if not reading.wanted or reading.wanted & reading.chain.watched.keys():
         return None
     if reading.refused:
-        return _NoFigures(
-            "no_quote_line", *_no_line_words(next(iter(reading.refused.values())), reading.use), reading=reading
-        )
+        return _no_line(next(iter(reading.refused.values())), reading.use, reading=reading)
     if reading.arriving:
         return _NoFigures(
             "quotes_arriving",
@@ -394,9 +400,7 @@ def _not_resolved(refused: ContractsNotResolved, reading: _Reading) -> _NoFigure
         # With no contract named, a rule by delta found nothing of its kind watched at all.
         without = reading.refused.get(symbol) if symbol is not None else next(iter(reading.refused.values()), None)
         if without is not None:
-            return _NoFigures(
-                "no_quote_line", *_no_line_words(without, reading.use), leg_ids=refused.leg_ids, contract=contract, reading=reading
-            )
+            return _no_line(without, reading.use, leg_ids=refused.leg_ids, contract=contract, reading=reading)
         if reading.arriving and (symbol is None or symbol in reading.wanted or symbol in reading.chain.watched):
             return _NoFigures(
                 "quotes_arriving",
