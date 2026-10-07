@@ -1,4 +1,4 @@
-"""Which option contract an order trades, and the multiplier its money is counted with (ADR 0076).
+"""Which option contract an order trades, and the multiplier its money is counted with (ADR 0076 decision 13).
 
 A contract's multiplier is a fact of its listing: how many shares one
 contract's per-share price stands for. It is recorded once, when the contract
@@ -60,18 +60,6 @@ ORDER_CONTRACT_JOINS_SQL = (
 )
 ORDER_CONTRACT_SYMBOL_SQL = "order_contract.symbol"
 ORDER_CONTRACT_MULTIPLIER_SQL = "option_contract.multiplier"
-
-
-def keeps_option_contracts(conn: sqlite3.Connection) -> bool:
-    """Whether this custody file has the two tables at all.
-
-    A file no Clerk has opened since v23 is still read by offline readers. It
-    has no option contract, so its fills are read exactly as before, with no
-    join.
-    """
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'order_contracts'"
-    ).fetchone() is not None
 
 
 class ContractTermsConflict(ValueError):
@@ -205,7 +193,6 @@ __all__ = [
     "bind_order_contract",
     "contract_terms",
     "is_option_contract_symbol",
-    "keeps_option_contracts",
     "order_contract_terms",
     "record_contract_terms",
     "require_fill_in_its_orders_contract",

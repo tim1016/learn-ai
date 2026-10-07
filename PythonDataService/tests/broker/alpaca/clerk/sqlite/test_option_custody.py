@@ -16,9 +16,12 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
-from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
+from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl, compute_open_pnl
+from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sqlite import schema
-from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget
+from app.broker.alpaca.clerk.sqlite.budget_projection import project_account_budget, project_account_money
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
     ContractTermsConflict,
     contract_terms,
@@ -28,17 +31,15 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
     SqliteEconomicProjectionReader,
+    _CachedFifo,
     effective_fill_records,
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
-from app.broker.alpaca.clerk.sqlite.fee_evidence import (
-    OPTION_FILL_FEES_NOT_ATTRIBUTED,
-    custody_fee_attribution,
-)
+from app.broker.alpaca.clerk.sqlite.fee_evidence import OPTION_FILL_FEES_NOT_ATTRIBUTED
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.simulated_account import _cash_after_fills
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.models import BrokerOrderLeg, OrderSide
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services.alpaca_fee_attribution import FeeAttribution
 from app.utils.session_anchors import et_date_at_ms
@@ -57,6 +58,7 @@ from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
     ACCOUNT_ID,
     RUN_ID,
     SMALL_CALL,
+    accept_option_closing_order,
     accept_option_order,
     fill,
     open_option_books,
@@ -123,6 +125,31 @@ def test_the_same_execution_delivered_twice_is_counted_once(tmp_path: Path) -> N
         assert repo.position("bot-a", AAPL_CALL.symbol) == 2.0
         assert len(_records(repo)) == 1
     finally:
+        repo.close()
+
+
+def test_account_history_finds_a_contracts_executions_under_the_contract_and_not_its_bots_symbol(tmp_path: Path) -> None:
+    """The bot is registered under AAPL and trades AAPL shares and an AAPL call. Each is found under its own symbol."""
+    repo = open_option_books(tmp_path)
+    reader = SqliteEconomicProjectionReader.from_repository(repo)
+    try:
+        shares = _accept_stock_order(repo, symbol="AAPL", side="buy", shares=100, decision_id="d1", bot="bot-a")
+        fill(repo, shares, execution_id="x1", symbol="AAPL", side="BUY", quantity=100, price=190.0)
+        call = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=1, decision_id="d2")
+        fill(repo, call, execution_id="x2", symbol=AAPL_CALL.symbol, side="BUY", quantity=1, price=2.00)
+
+        # Asked for in lower case, as a typed filter may be.
+        of_the_contract = reader.account_executions(symbol=AAPL_CALL.symbol.lower()).executions
+        of_the_shares = reader.account_executions(symbol="AAPL").executions
+
+        assert [(row.execution_id, row.symbol, row.quantity, row.price, row.multiplier) for row in of_the_contract] == [
+            ("x2", AAPL_CALL.symbol, 1.0, 2.0, 100),
+        ]
+        assert [(row.execution_id, row.symbol, row.quantity, row.multiplier) for row in of_the_shares] == [
+            ("x1", "AAPL", 100.0, None),
+        ]
+    finally:
+        reader.close()
         repo.close()
 
 
@@ -347,6 +374,59 @@ def test_an_option_fill_on_an_order_bound_to_no_contract_is_refused(tmp_path: Pa
         repo.close()
 
 
+def test_a_fill_reported_in_lower_case_is_still_matched_to_its_orders_contract(tmp_path: Path) -> None:
+    """A symbol's case is not a difference: on a bound order it is that contract; on an unbound one it is still refused."""
+    repo = open_option_books(tmp_path)
+    try:
+        stock_order = _accept_stock_order(repo, symbol="AAPL", side="buy", shares=1, decision_id="d1", bot="bot-a")
+        with pytest.raises(ContractTermsConflict, match="not bound to a contract"):
+            fill(repo, stock_order, execution_id="x1", symbol=AAPL_CALL.symbol.lower(), side="BUY", quantity=1, price=2.00)
+        assert _records(repo) == ()
+
+        order = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=1, decision_id="d2")
+        assert fill(repo, order, execution_id="x2", symbol=AAPL_CALL.symbol.lower(), side="BUY", quantity=1, price=2.00) == "appended"
+        assert repo.attributed_positions_for_strategy("bot-a") == {AAPL_CALL.symbol: 1.0}
+        (record,) = _records(repo)
+        assert (record.symbol, record.multiplier) == (AAPL_CALL.symbol, 100)
+    finally:
+        repo.close()
+
+
+# ── The bot's running FIFO ────────────────────────────────────────────────────
+
+
+def _contract_fill(side: OrderSide, contracts: float, premium: float, *, ts_ms: int, multiplier: int | None = 100) -> FillRecord:
+    return FillRecord(
+        account_id=ACCOUNT_ID, sid="bot-a", intent_id=f"int_{ts_ms}", order_ref=f"learn-ai/bot-a/v1:int_{ts_ms}",
+        event_key=f"exec:{ts_ms}", symbol=AAPL_CALL.symbol, side=side, quantity=contracts, fill_price=premium,
+        filled_at_ms=ts_ms, fee=None, multiplier=multiplier,
+    )
+
+
+def test_a_fill_fifo_refuses_leaves_nothing_behind_in_the_bots_running_lots() -> None:
+    """Buy 1. A read of [buy 1 more, a fill FIFO refuses] fails, twice. Then the fill as it should be: sell 2. Flat.
+
+    A refused read used to leave its "buy 1 more" in the lots each time: 4
+    bought against 2 sold, and 2 open contracts nobody holds.
+    (1.50 − 1.00) × 2 × 100 = $100.00 realized.
+    """
+    first = _contract_fill(OrderSide.BUY, 1, 1.00, ts_ms=1_000)
+    second = _contract_fill(OrderSide.BUY, 1, 1.00, ts_ms=2_000)
+    counted_as_shares = _contract_fill(OrderSide.SELL, 2, 1.50, ts_ms=3_000, multiplier=None)
+    sale = _contract_fill(OrderSide.SELL, 2, 1.50, ts_ms=3_000)
+    running = _CachedFifo()
+    running.project((first,))
+    for _ in range(2):
+        with pytest.raises(MoneyInputError, match="open lots count contracts of 100 shares"):
+            running.project((first, second, counted_as_shares))
+
+    closed, lots, _ = running.project((first, second, sale))
+
+    assert compute_open_pnl(lots, {}).open_lots == ()
+    assert closed == compute_fifo_pnl([first, second, sale]).closed_lots
+    assert sum(lot.exact_realized_pnl for lot in closed) == Decimal(100)
+
+
 # ── Budget: what an open position costs ───────────────────────────────────────
 
 
@@ -414,6 +494,151 @@ def test_the_budget_counts_an_open_stock_position_at_shares_times_price_as_befor
 
         (held,) = project_account_budget(repo._conn, cash=Decimal(5_000), seen_before_ms=NOON + 1, fees=_NO_FEES).deployments
         assert (held.position_cost, held.free) == (Decimal(3), Decimal(997))
+    finally:
+        repo.close()
+
+
+# ── Budget: what an entry claims before cash has caught up ────────────────────
+
+
+def test_an_option_entrys_fill_claims_the_same_cash_before_and_after_cash_sees_it(tmp_path: Path) -> None:
+    """$5,000.00 of cash and a $1,000.00 budget. 2 contracts fill at $1.50: $300.00.
+
+    Cash read before the fill was recorded: the bot keeps $700.00 free and the
+    fill claims $300.00, so $4,000.00 is free to deploy. Once cash is
+    $4,700.00 and holds the fill, nothing is claimed and $4,000.00 is free.
+    """
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
+    try:
+        bought = accept_option_order(
+            repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1", reference_price="1.50", fee_provision_cents=9
+        )
+        fill(repo, bought, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=2, price=1.50)
+        _acknowledge_filled(repo, bought, symbol=AAPL_CALL.symbol, side="buy", quantity=2, price=1.50, order_id="b1")
+
+        unseen = project_account_budget(repo._conn, cash=Decimal(5_000), seen_before_ms=NOON, fees=_NO_FEES)
+        seen = project_account_budget(repo._conn, cash=Decimal(4_700), seen_before_ms=NOON + 1, fees=_NO_FEES)
+
+        assert (unseen.order_claims, unseen.available) == (Decimal(300), Decimal(4_000))
+        assert (seen.order_claims, seen.available) == (Decimal(0), Decimal(4_000))
+        for budget in (unseen, seen):
+            (held,) = budget.deployments
+            assert (held.position_cost, held.pending_orders, held.free) == (Decimal(300), Decimal(0), Decimal(700))
+        # The money map counts the unseen fill once: $5,000.00 less $300.00 of cash, plus $300.00 of contracts.
+        for cash, seen_before_ms in ((5_000, NOON), (4_700, NOON + 1)):
+            money = project_account_money(repo._conn, cash=Decimal(cash), seen_before_ms=seen_before_ms, fees=_NO_FEES)
+            assert (money.cash, money.total) == (Decimal(4_700), Decimal(5_000))
+    finally:
+        repo.close()
+
+
+def test_a_stock_entrys_fill_claims_the_same_cash_before_and_after_cash_sees_it_as_before(tmp_path: Path) -> None:
+    """Stock twin, through the real admission: 2 shares at $1.50 claim $3.00, and $4,000.00 is free both ways."""
+    repo = _budgeted_books(tmp_path, bots={"bot-s": "SPY"}, budget_cents=100_000)
+    try:
+        bought = accept_enter(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id="bot-s", decision_id="d1", lifecycle_run_id=RUN_ID,
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+            envelope=envelope_gate(cash=5_000.0, observed_at_ms=repo.clock(), fill_sequence=risk_fill_sequence(repo)),
+            reference_price=1.50,
+        )
+        fill(repo, bought, execution_id="x1", symbol="SPY", side="BUY", quantity=2, price=1.50)
+        _acknowledge_filled(repo, bought, symbol="SPY", side="buy", quantity=2, price=1.50, order_id="b1")
+
+        unseen = project_account_budget(repo._conn, cash=Decimal(5_000), seen_before_ms=NOON, fees=_NO_FEES)
+        seen = project_account_budget(repo._conn, cash=Decimal(4_997), seen_before_ms=NOON + 1, fees=_NO_FEES)
+
+        assert (unseen.order_claims, unseen.available) == (Decimal(3), Decimal(4_000))
+        assert (seen.order_claims, seen.available) == (Decimal(0), Decimal(4_000))
+    finally:
+        repo.close()
+
+
+def test_an_option_entry_still_working_claims_what_its_contracts_will_cost(tmp_path: Path) -> None:
+    """A $1,000.00 budget. 2 contracts wanted at $1.50, with 9 cents set aside for fees.
+
+    Not filled: 2 × 1.50 × 100 + 0.09 = $300.09 claimed, $699.91 free.
+    1 filled at $1.40: it cost $140.00, and the other still claims 1 × 1.50 × 100 + 0.09 = $150.09: $709.91 free.
+    The other filled at $1.50: $290.00 of contracts, nothing claimed, $710.00 free.
+    The account's free cash is $4,000.00 at every step: cash is $5,000.00 less what it paid.
+    """
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
+
+    def bot_and_free_cash(cash: int) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        budget = project_account_budget(repo._conn, cash=Decimal(cash), seen_before_ms=NOON + 1, fees=_NO_FEES)
+        (bot,) = budget.deployments
+        return bot.position_cost, bot.pending_orders, bot.free, budget.available
+
+    try:
+        working = accept_option_order(
+            repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1", reference_price="1.50", fee_provision_cents=9
+        )
+        assert bot_and_free_cash(5_000) == (Decimal(0), Decimal("300.09"), Decimal("699.91"), Decimal(4_000))
+
+        fill(repo, working, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=1, price=1.40)
+        assert bot_and_free_cash(4_860) == (Decimal(140), Decimal("150.09"), Decimal("709.91"), Decimal(4_000))
+
+        fill(repo, working, execution_id="x2", symbol=AAPL_CALL.symbol, side="BUY", quantity=1, price=1.50)
+        assert bot_and_free_cash(4_710) == (Decimal(290), Decimal(0), Decimal(710), Decimal(4_000))
+    finally:
+        repo.close()
+
+
+def test_an_option_sale_cash_has_not_seen_yet_is_on_the_money_map_at_its_proceeds(tmp_path: Path) -> None:
+    """$5,000.00 to start. 2 contracts bought at $1.50 ($300.00) and sold at $2.10 ($420.00).
+
+    Holding: $4,700.00 of cash and $300.00 of contracts, $5,000.00 in all.
+    Sold, before the proceeds reach cash: $4,700.00 and $420.00 on its way, $5,120.00.
+    Once cash is $5,120.00 the total is the same. The stock case is
+    ``test_a_sale_the_cash_has_not_seen_settles_on_the_bar_and_the_total_holds``.
+    """
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
+    try:
+        bought = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1", reference_price="1.50")
+        fill(repo, bought, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=2, price=1.50)
+        _acknowledge_filled(repo, bought, symbol=AAPL_CALL.symbol, side="buy", quantity=2, price=1.50, order_id="b1")
+        holding = project_account_money(repo._conn, cash=Decimal(4_700), seen_before_ms=NOON + 5, fees=_NO_FEES)
+
+        repo.clock.advance(10)
+        closing = accept_option_closing_order(repo, terms=AAPL_CALL, opened=bought, decision_id="d2")
+        fill(
+            repo, closing, execution_id="x2", symbol=AAPL_CALL.symbol, side="SELL", quantity=2, price=2.10,
+            occurred_at_ms=NOON + 10,
+        )
+        unseen = project_account_money(repo._conn, cash=Decimal(4_700), seen_before_ms=NOON + 5, fees=_NO_FEES)
+        seen = project_account_money(repo._conn, cash=Decimal(5_120), seen_before_ms=NOON + 11, fees=_NO_FEES)
+
+        assert (holding.unseen_sales, holding.total) == (Decimal(0), Decimal(5_000))
+        assert (unseen.unseen_sales, unseen.cash, unseen.total) == (Decimal(420), Decimal(5_120), Decimal(5_120))
+        assert (seen.unseen_sales, seen.cash, seen.total) == (Decimal(0), Decimal(5_120), Decimal(5_120))
+        (flat,) = seen.budget.deployments
+        assert (flat.realized_gross, flat.position_cost) == (Decimal(120), Decimal(0))
+    finally:
+        repo.close()
+
+
+def test_a_stopped_bot_still_holding_is_on_the_money_map_at_what_its_contracts_or_shares_cost(tmp_path: Path) -> None:
+    """Two bots with no budget, stopped while holding. 2 contracts at $1.50 cost $300.00; 2 shares at $1.50 cost $3.00.
+
+    $5,000.00 to start: $4,697.00 of cash and $303.00 held.
+    """
+    repo = open_option_books(tmp_path, bots={"bot-a": "AAPL", "bot-s": "SPY"})
+    try:
+        contracts = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1")
+        fill(repo, contracts, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=2, price=1.50)
+        _acknowledge_filled(repo, contracts, symbol=AAPL_CALL.symbol, side="buy", quantity=2, price=1.50, order_id="b1")
+        shares = _accept_stock_order(repo, symbol="SPY", side="buy", shares=2, decision_id="d1", bot="bot-s")
+        fill(repo, shares, execution_id="x2", symbol="SPY", side="BUY", quantity=2, price=1.50)
+        _acknowledge_filled(repo, shares, symbol="SPY", side="buy", quantity=2, price=1.50, order_id="b2")
+        for bot in ("bot-a", "bot-s"):
+            submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=bot, lifecycle_run_id=RUN_ID, clock=repo.clock)
+
+        money = project_account_money(repo._conn, cash=Decimal(4_697), seen_before_ms=NOON + 1, fees=_NO_FEES)
+
+        assert {held.strategy_instance_id: held.position_cost for held in money.stopped} == {
+            "bot-a": Decimal(300), "bot-s": Decimal(3),
+        }
+        assert money.total == Decimal(5_000)
     finally:
         repo.close()
 
@@ -488,15 +713,14 @@ def _contract_rows(repo: ClerkSqliteRepository) -> dict[str, list[tuple]]:
     }
 
 
-def test_a_store_no_clerk_has_migrated_yet_still_reads_its_fills_and_fees(tmp_path: Path) -> None:
-    """An offline reader opens a v22 file as it is. It has no contract tables and needs none."""
+def test_a_stock_store_from_before_the_contract_tables_reads_the_same_after_the_clerks_next_open(tmp_path: Path) -> None:
+    """A file at v22 has neither contract table. The Clerk's next open adds both, empty, and its fills read as they did."""
     repo = open_option_books(tmp_path, bots={"bot-s": "SPY"})
     try:
-        complete_fee_evidence(repo)
         order = _accept_stock_order(repo, symbol="SPY", side="buy", shares=10, decision_id="d1", bot="bot-s")
         fill(repo, order, execution_id="x1", symbol="SPY", side="BUY", quantity=10, price=500.0)
         _acknowledge_filled(repo, order, symbol="SPY", side="buy", quantity=10, price=500.0, order_id="b1")
-        at_v23 = _records(repo)
+        before = _records(repo)
         database = repo.db_path
     finally:
         repo.close()
@@ -515,23 +739,15 @@ def test_a_store_no_clerk_has_migrated_yet_still_reads_its_fills_and_fees(tmp_pa
     finally:
         conn.close()
 
-    offline = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
-    offline.row_factory = sqlite3.Row
-    try:
-        assert effective_fill_records(offline, account_id=ACCOUNT_ID) == at_v23
-        assert (at_v23[0].symbol, at_v23[0].multiplier) == ("SPY", None)
-        # Reads to the end without asking for a table this file does not have.
-        custody_fee_attribution(offline, now_ms=NOON, evidence_checked_at_ms=NOON)
-    finally:
-        offline.close()
-
-    # The Clerk's next open brings the file to v23 with both tables empty.
     reopened = ClerkSqliteRepository.open(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_noon_clock(), fold_registry=option_fold_registry()
     )
     try:
         assert reopened._conn.execute("SELECT schema_version FROM control_meta").fetchone()[0] == schema.SCHEMA_VERSION == 23
         assert _contract_rows(reopened) == {"option_contracts": [], "order_contracts": []}
-        assert _records(reopened) == at_v23
+        assert _records(reopened) == before
+        assert (before[0].symbol, before[0].multiplier) == ("SPY", None)
+        # Books that never traded an option are not told they hold option fills.
+        assert OPTION_FILL_FEES_NOT_ATTRIBUTED not in reopened.fee_attribution(now_ms=NOON, require_fresh_evidence=False).unresolved
     finally:
         reopened.close()

@@ -30,7 +30,7 @@ is one CAT executed-equivalent share.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, Decimal
@@ -73,11 +73,17 @@ _CAT_PER_SHARE: tuple[tuple[date, Decimal], ...] = (
 
 
 class RateNotPinnedError(ValueError):
-    """A session holds a fill with no pinned rate for some component."""
+    """A session holds a fill with no pinned rate for some component.
 
-    def __init__(self, components: Sequence[FeeComponent]) -> None:
-        self.components: tuple[FeeComponent, ...] = tuple(components)
-        super().__init__(f"no pinned regulatory rate for: {', '.join(self.components)}")
+    The option fee model raises a kind of this error of its own, so a reader
+    that takes an unpinned rate as an unknown takes an option's the same way.
+    """
+
+    rate_kind = "regulatory rate"
+
+    def __init__(self, components: Sequence[str]) -> None:
+        self.components: tuple[str, ...] = tuple(components)
+        super().__init__(f"no pinned {self.rate_kind} for: {', '.join(self.components)}")
 
 
 @dataclass(frozen=True)
@@ -100,7 +106,7 @@ class FillFees:
 
     @property
     def unpinned(self) -> tuple[FeeComponent, ...]:
-        return tuple(name for name in _COMPONENTS if getattr(self, name) is None)
+        return unpinned_components(self, _COMPONENTS)
 
 
 @dataclass(frozen=True)
@@ -116,7 +122,7 @@ class SessionFees:
         return self.sec + self.taf + self.cat
 
 
-def _in_force[R](table: Sequence[tuple[date, R]], trade_date: date) -> R | None:
+def in_force[R](table: Sequence[tuple[date, R]], trade_date: date) -> R | None:
     """Value of the latest row effective on or before ``trade_date``, else ``None``."""
     latest: R | None = None
     for effective_from, value in table:
@@ -125,14 +131,19 @@ def _in_force[R](table: Sequence[tuple[date, R]], trade_date: date) -> R | None:
     return latest
 
 
+def unpinned_components[C: str](fees: object, components: Sequence[C]) -> tuple[C, ...]:
+    """The components of one fill's fees with no pinned rate, in ``components``' order."""
+    return tuple(name for name in components if getattr(fees, name) is None)
+
+
 def rates_for(trade_date: date) -> RegulatoryRates:
     """Resolve the three pass-through rates in force on ``trade_date``."""
-    taf = _in_force(_TAF_PER_SHARE_AND_CAP, trade_date)
+    taf = in_force(_TAF_PER_SHARE_AND_CAP, trade_date)
     return RegulatoryRates(
-        sec_per_dollar=_in_force(_SEC_PER_DOLLAR, trade_date),
+        sec_per_dollar=in_force(_SEC_PER_DOLLAR, trade_date),
         taf_per_share=None if taf is None else taf.per_share,
         taf_cap_per_trade=None if taf is None else taf.cap_per_trade,
-        cat_per_share=_in_force(_CAT_PER_SHARE, trade_date),
+        cat_per_share=in_force(_CAT_PER_SHARE, trade_date),
     )
 
 
@@ -159,8 +170,28 @@ def fees_for_fill(
     return FillFees(sec=sec, taf=taf, cat=cat)
 
 
-def _ceil_cents(amount: Decimal) -> Decimal:
+def ceil_cents(amount: Decimal) -> Decimal:
+    """``amount`` rounded UP to the cent."""
     return amount.quantize(_CENT, rounding=ROUND_CEILING)
+
+
+def settle_components[C: str](
+    fills: Sequence[object],
+    components: Sequence[C],
+    *,
+    not_pinned: Callable[[Sequence[C]], RateNotPinnedError],
+) -> dict[C, Decimal]:
+    """Sum each component over one day's fills and round it UP to the cent.
+
+    The one settlement rule the stock and the option fee models share (the
+    module docstring's "Session settlement"). A day holding a fill with an
+    unpinned component cannot settle to a number: ``not_pinned`` is raised
+    with those components, in ``components``' order.
+    """
+    unpinned = tuple(name for name in components if any(getattr(fill, name) is None for fill in fills))
+    if unpinned:
+        raise not_pinned(unpinned)
+    return {name: ceil_cents(sum((getattr(fill, name) for fill in fills), _ZERO)) for name in components}
 
 
 def settle_session(fills: Sequence[FillFees]) -> SessionFees:
@@ -169,13 +200,4 @@ def settle_session(fills: Sequence[FillFees]) -> SessionFees:
     Raises ``RateNotPinnedError`` if any fill has an unpinned component: a
     session containing an unknown cannot settle to a number.
     """
-    unpinned = tuple(
-        name for name in _COMPONENTS if any(name in fill.unpinned for fill in fills)
-    )
-    if unpinned:
-        raise RateNotPinnedError(unpinned)
-    return SessionFees(
-        sec=_ceil_cents(sum((fill.sec for fill in fills), _ZERO)),
-        taf=_ceil_cents(sum((fill.taf for fill in fills), _ZERO)),
-        cat=_ceil_cents(sum((fill.cat for fill in fills), _ZERO)),
-    )
+    return SessionFees(**settle_components(fills, _COMPONENTS, not_pinned=RateNotPinnedError))

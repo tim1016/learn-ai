@@ -1,4 +1,4 @@
-"""Alpaca option regulatory and clearing pass-through fees: the prediction (ADR 0076, ADR 0059 D6).
+"""Alpaca option regulatory and clearing pass-through fees: the prediction (ADR 0076 decision 13, ADR 0059 D6).
 
 Formula:
     premium value = contracts × premium × multiplier
@@ -22,7 +22,8 @@ Reference:
     34-106409) for the pause from 2026-10-01 through 2026-12-31. CAT: SEC Release 34-105449
     (SR-FINRA-2026-010), a listed option counts its multiplier in executed-equivalent shares.
     Row-by-row citations are in the golden fixture's attribution.
-Canonical implementation: this file.
+Canonical implementation: this file, over the date lookup, cent rounding and day settlement of
+    ``regulatory_fees``, which the stock model uses too.
 Validated against:
     tests/broker/alpaca/test_option_fees.py;
     tests/fixtures/test_alpaca_option_fees_fixture.py (golden FEE-002).
@@ -49,10 +50,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_CEILING, Decimal
+from decimal import Decimal
 from typing import Literal
 
 from app.broker.alpaca.clerk.money import MoneyInputError, contract_multiplier
+from app.broker.alpaca.regulatory_fees import (
+    RateNotPinnedError,
+    in_force,
+    settle_components,
+    unpinned_components,
+)
 from app.broker.alpaca.regulatory_fees import rates_for as stock_rates_for
 from app.broker.contract.models import OrderSide
 
@@ -86,12 +93,10 @@ _CAT_PER_EQUIVALENT_SHARE: tuple[tuple[date, Decimal], ...] = (
 )
 
 
-class OptionRateNotPinnedError(ValueError):
+class OptionRateNotPinnedError(RateNotPinnedError):
     """A day holds an option fill with no pinned rate for some fee type."""
 
-    def __init__(self, components: Sequence[OptionFeeComponent]) -> None:
-        self.components: tuple[OptionFeeComponent, ...] = tuple(components)
-        super().__init__(f"no pinned option fee rate for: {', '.join(self.components)}")
+    rate_kind = "option fee rate"
 
 
 @dataclass(frozen=True)
@@ -117,7 +122,7 @@ class OptionFillFees:
 
     @property
     def unpinned(self) -> tuple[OptionFeeComponent, ...]:
-        return tuple(name for name in _COMPONENTS if getattr(self, name) is None)
+        return unpinned_components(self, _COMPONENTS)
 
 
 @dataclass(frozen=True)
@@ -135,15 +140,6 @@ class OptionSessionFees:
         return self.sec + self.taf + self.cat + self.orf + self.occ
 
 
-def _in_force(table: Sequence[tuple[date, Decimal]], trade_date: date) -> Decimal | None:
-    """Value of the latest row effective on or before ``trade_date``, else ``None``."""
-    latest: Decimal | None = None
-    for effective_from, value in table:
-        if effective_from <= trade_date:
-            latest = value
-    return latest
-
-
 def option_rates_for(trade_date: date) -> OptionRates:
     """Resolve the five pass-through rates in force on ``trade_date``.
 
@@ -151,10 +147,10 @@ def option_rates_for(trade_date: date) -> OptionRates:
     """
     return OptionRates(
         sec_per_dollar=stock_rates_for(trade_date).sec_per_dollar,
-        taf_per_contract=_in_force(_TAF_PER_CONTRACT, trade_date),
-        cat_per_equivalent_share=_in_force(_CAT_PER_EQUIVALENT_SHARE, trade_date),
-        orf_per_contract=_in_force(_ORF_PER_CONTRACT, trade_date),
-        occ_per_contract=_in_force(_OCC_PER_CONTRACT, trade_date),
+        taf_per_contract=in_force(_TAF_PER_CONTRACT, trade_date),
+        cat_per_equivalent_share=in_force(_CAT_PER_EQUIVALENT_SHARE, trade_date),
+        orf_per_contract=in_force(_ORF_PER_CONTRACT, trade_date),
+        occ_per_contract=in_force(_OCC_PER_CONTRACT, trade_date),
     )
 
 
@@ -197,10 +193,6 @@ def fees_for_option_fill(
     return OptionFillFees(sec=sec, taf=per_contract(rates.taf_per_contract), cat=cat, orf=orf, occ=occ)
 
 
-def _ceil_cents(amount: Decimal) -> Decimal:
-    return amount.quantize(_CENT, rounding=ROUND_CEILING)
-
-
 def settle_option_session(fills: Sequence[OptionFillFees]) -> OptionSessionFees:
     """Sum each fee type over one account's ET trade date and round it UP to the cent.
 
@@ -211,12 +203,7 @@ def settle_option_session(fills: Sequence[OptionFillFees]) -> OptionSessionFees:
     Raises ``OptionRateNotPinnedError`` if any fill has an unpinned fee type: a
     day containing an unknown cannot settle to a number.
     """
-    unpinned = tuple(name for name in _COMPONENTS if any(name in fill.unpinned for fill in fills))
-    if unpinned:
-        raise OptionRateNotPinnedError(unpinned)
-    return OptionSessionFees(
-        **{name: _ceil_cents(sum((getattr(fill, name) for fill in fills), _ZERO)) for name in _COMPONENTS}
-    )
+    return OptionSessionFees(**settle_components(fills, _COMPONENTS, not_pinned=OptionRateNotPinnedError))
 
 
 def option_fee_provision_cents(fills: Sequence[OptionFillFees]) -> int:

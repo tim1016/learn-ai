@@ -1339,7 +1339,7 @@ def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> di
     row = conn.execute(
         "SELECT f.execution_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
         "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
-        # An order bound to an option contract trades that contract, not its bot's symbol (ADR 0076).
+        # An order bound to an option contract trades that contract, not its bot's symbol (ADR 0076 decision 13).
         f"COALESCE({ORDER_CONTRACT_SYMBOL_SQL}, s.symbol, "
         "json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "

@@ -2,7 +2,7 @@
 
 Formula: exact decimal products/sums; required cents = ceil(100*x),
 spendable cents = floor(100*x); consent never rounds. An option's notional
-is contracts * premium per share * the contract's multiplier (ADR 0076).
+is contracts * premium per share * the contract's multiplier (ADR 0076 decision 13).
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2540, Money contract.
 Canonical implementation: this module; historical REAL values enter as str.
 Validated against: tests/broker/alpaca/clerk/test_money.py (integer/Fraction oracle)

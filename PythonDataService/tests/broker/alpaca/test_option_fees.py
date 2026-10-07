@@ -14,7 +14,7 @@ from app.broker.alpaca.option_fees import (
     option_rates_for,
     settle_option_session,
 )
-from app.broker.alpaca.regulatory_fees import fees_for_fill, rates_for
+from app.broker.alpaca.regulatory_fees import RateNotPinnedError, fees_for_fill, rates_for
 from app.broker.contract.models import OrderSide
 
 _TODAY = date(2026, 10, 5)
@@ -69,6 +69,10 @@ def test_the_taf_is_paused_for_the_last_quarter_of_2026_and_resumes() -> None:
     assert taf(date(2027, 1, 1)) == Decimal("0.00329")
     assert taf(date(2028, 12, 31)) == Decimal("0.00329")
     assert taf(date(2029, 1, 1)) == Decimal("0.00390")
+    # SR-FINRA-2026-020 (91 FR 60427), the 2030 column.
+    assert taf(date(2029, 12, 31)) == Decimal("0.00390")
+    assert taf(date(2030, 1, 1)) == Decimal("0.00404")
+    assert taf(date(2030, 12, 31)) == Decimal("0.00404")
     assert taf(date(2031, 6, 1)) == Decimal("0.00420")
 
 
@@ -99,6 +103,44 @@ def test_a_rate_that_is_not_pinned_is_unknown_and_a_day_holding_one_does_not_set
     assert refused.value.components == ("cat", "orf", "occ")
     with pytest.raises(OptionRateNotPinnedError):
         option_fee_provision_cents([fees])
+
+
+def test_a_sale_before_the_taf_ladder_starts_owes_an_unknown_taf_not_a_free_one() -> None:
+    """The per-contract TAF ladder here starts on 2026-01-01. The day before, a sale's TAF is unknown.
+
+    Its SEC fee is a pinned zero that day (advisory 2025-2), so only the TAF
+    and Alpaca's three undated figures are unknown.
+    """
+    last_day_without = _fees(OrderSide.SELL, on=date(2025, 12, 31))
+    assert last_day_without.taf is None
+    assert last_day_without.sec == Decimal(0)
+    assert last_day_without.unpinned == ("taf", "cat", "orf", "occ")
+    assert _fees(OrderSide.SELL, on=date(2026, 1, 1)).taf == Decimal("0.00658")
+    # A purchase owes no TAF on any date, pinned or not.
+    assert _fees(OrderSide.BUY, on=date(2025, 12, 31)).taf == Decimal(0)
+
+
+def test_a_sale_before_the_first_pinned_sec_rate_owes_an_unknown_sec_fee_not_a_free_one() -> None:
+    """The SEC table starts on 2024-05-22 (advisory 2024-2, $27.80 per million). The day before, the fee is unknown.
+
+    On the day: 2 × 2.10 × 100 = $420.00 of premium × 0.0000278 = $0.011676.
+    """
+    day_before = _fees(OrderSide.SELL, on=date(2024, 5, 21))
+    assert day_before.sec is None
+    assert "sec" in day_before.unpinned
+    assert _fees(OrderSide.SELL, on=date(2024, 5, 22)).sec == Decimal("0.011676")
+    # A purchase owes no SEC fee on any date, pinned or not.
+    assert _fees(OrderSide.BUY, on=date(2024, 5, 21)).sec == Decimal(0)
+    with pytest.raises(OptionRateNotPinnedError) as refused:
+        settle_option_session([day_before])
+    assert refused.value.components == ("sec", "taf", "cat", "orf", "occ")
+
+
+def test_an_unpinned_option_rate_is_refused_wherever_an_unpinned_stock_rate_is() -> None:
+    """One kind of error: a reader that takes an unpinned stock rate as an unknown takes an option's the same way."""
+    with pytest.raises(RateNotPinnedError) as refused:
+        settle_option_session([_fees(OrderSide.BUY, on=date(2026, 1, 15))])
+    assert refused.value.components == ("cat", "orf", "occ")
 
 
 def test_each_fee_type_is_summed_over_the_day_and_then_rounded_up_to_the_cent() -> None:

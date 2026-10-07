@@ -1008,7 +1008,7 @@ def _apply_attributed_position_delta(
 
     A position is held per instrument: a fill of an order that trades an
     option contract moves that contract's position and no other, and an
-    option fill of an order bound to no contract is refused (ADR 0076).
+    option fill of an order bound to no contract is refused (ADR 0076 decision 13).
     """
     owner = conn.execute(
         "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",

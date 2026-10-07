@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
-from app.broker.alpaca.clerk.sqlite.contract_terms import keeps_option_contracts
 from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.execution_coverage import order_total_retained_exacts_explain_cumulative
@@ -490,9 +489,14 @@ def _has_option_fill(conn: sqlite3.Connection) -> bool:
     listed-stock ones (``regulatory_fees``): they would charge a contract as
     one share. Until option fees are attributed here from Alpaca's own fee
     activities, such a fill leaves the fees unresolved, never mispriced
-    (ADR 0076).
+    (ADR 0076 decision 13).
+
+    Asked of the bound orders first: books that bind no order to a contract
+    hold no option fill, and are answered without reading a fill.
     """
-    return keeps_option_contracts(conn) and conn.execute(
+    if conn.execute("SELECT 1 FROM order_contracts LIMIT 1").fetchone() is None:
+        return False
+    return conn.execute(
         "SELECT 1 FROM fills f JOIN order_contracts c ON c.order_ref = f.order_ref LIMIT 1"
     ).fetchone() is not None
 
