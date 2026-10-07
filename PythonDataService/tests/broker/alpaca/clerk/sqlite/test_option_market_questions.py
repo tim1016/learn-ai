@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from app.broker.alpaca.clerk.recovery_reduction import market_status_symbol
-from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import clerk_work_in_flight
@@ -20,6 +20,7 @@ from app.schemas.market_liveness import MarketLivenessFact, SymbolTradingStatusE
 from app.services.market_liveness import unknown_market_liveness
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     SYMBOL,
+    WAIT_MS,
     PaperOptions,
     paper,  # noqa: F401 -- pytest fixture, used by name
 )
@@ -42,6 +43,24 @@ async def test_a_held_contract_is_watched_through_its_underlying_and_never_as_a_
     submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
     assert SYMBOL not in paper.repo.market_data_symbols()
     assert "SPY" in paper.repo.market_data_symbols()
+
+
+async def test_a_contract_held_by_a_retired_bot_with_no_work_left_still_has_its_underlying_watched(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The one case where only the holding itself asks for the line: a fill counted on an entry already ended."""
+    order_ref = await paper.resting("a")
+    paper.wait(WAIT_MS)
+    await paper.round()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-late")
+    assert paper.held("a") == {SYMBOL: 1.0} and paper.enter_state(order_ref) == "failed"
+    for bot in ("a", "b"):
+        submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id=bot, lifecycle_run_id=f"run-{bot}")
+        submit_retire_strategy_instance(
+            paper.repo, account_id=paper.repo.account_id, strategy_instance_id=bot, retired_at_ms=paper.clock()
+        )
+
+    assert paper.repo.market_data_symbols() == ("SPY",)
 
 
 async def test_an_entry_resting_in_a_contract_is_work_in_flight_on_that_contract_and_on_no_other(

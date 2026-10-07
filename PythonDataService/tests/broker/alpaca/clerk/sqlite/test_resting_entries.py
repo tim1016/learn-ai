@@ -193,6 +193,25 @@ async def test_a_cancel_taken_while_the_lookup_still_shows_the_order_working_is_
     assert paper.outcome(order_ref).standing is EntryStanding.UNFILLED
 
 
+async def test_a_cancel_alpaca_says_is_pending_is_not_asked_for_again(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting()
+    paper.venue.cancel_is_slow = True
+    paper.wait(WAIT_MS)
+    await paper.round()
+    # Alpaca now shows the order as pending cancel: it has the request, and asking again adds nothing.
+    paper.venue.option_orders[order_ref]["status"] = "pending_cancel"
+    paper.wait(1_000)
+    await paper.round()
+    assert paper.order_state(order_ref) == "pending_cancel" and len(paper.venue.cancel_calls) == 2
+
+    paper.wait(1_000)
+    still = await paper.round()
+
+    assert len(paper.venue.cancel_calls) == 2
+    assert still.entries == WaitEndedRound(still_due=(order_ref,))
+    assert paper.outcome(order_ref).standing is EntryStanding.CANCELLATION_REQUESTED
+
+
 async def test_a_fill_reported_after_the_cancel_was_asked_is_counted(paper: PaperOptions) -> None:  # noqa: F811
     order_ref = await paper.resting(units=2)
     paper.venue.cancel_is_slow = True
