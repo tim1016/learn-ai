@@ -52,8 +52,8 @@ What is Alpaca's documented behaviour, and what is not:
   so the premium paid or received when it opened stays in the lot's cost and
   is not moved into the shares' cost. Alpaca's zero net amount on the event
   is consistent with that and does not prescribe it.
-- **This repo's rule (#2913):** an assignment or an exercise takes the
-  oldest lot first when more than one holds the contract. An expiry takes
+- **This repo's rule (#2913, ADR 0076):** an assignment or an exercise takes
+  the oldest lot first when more than one holds the contract. An expiry takes
   the newest first: it is what is left once the oldest were assigned or
   exercised, so which bot is assigned is the same whichever row is matched
   first. A lot opened on a later New York date than the event is passed
