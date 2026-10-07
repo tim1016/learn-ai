@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from app.options.american import DEFAULT_TREE_STEPS
+from app.options.decay import picks_daily_decay
 from app.options.named_structures import NamedStructure
 from app.options.quotes import QuoteSide
 from app.options.resolver import ContractsNotResolved, FeedState, Listing, Resolution, ResolverRefusal
@@ -39,6 +40,7 @@ from app.services.option_search import (
     OptionSearches,
     OptionSearchLane,
     PreviewSearches,
+    ResolutionWithDecay,
     SearchAsk,
     SearchNotRun,
     SearchNotRunReason,
@@ -141,6 +143,11 @@ _SPREAD = scenes._plan(
 )
 
 
+def _as_the_resolver_takes_it(ask: SearchAsk) -> dict[str, Any]:
+    """What ``resolve_contracts`` is handed beside the plan: every part of the ask but what is asked beside it."""
+    return {part.name: getattr(ask, part.name) for part in fields(SearchAsk) if part.name not in {"plan", "daily_decay"}}
+
+
 def _as_made(refused: ContractsNotResolved) -> tuple[object, ...]:
     return (refused.reason, refused.leg_ids, str(refused), refused.fault, refused.contract, refused.evidence, refused.recheck)
 
@@ -189,6 +196,33 @@ async def test_a_resolution_comes_back_from_the_worker_as_the_resolver_made_it()
     assert list(found.picked) == list(here.picked) == ["long_call", "short_call"]
     assert all(isinstance(part, MappingProxyType) for part in (found.picked, found.quotes, found.multipliers))
     assert found.evidence == here.evidence
+
+
+async def test_a_search_asked_for_the_picks_daily_decay_brings_it_back_beside_the_resolvers_own_answer() -> None:
+    scene = scenes._scene()
+    lane = OptionSearchLane("preview", executor=InThisProcess)
+    here = scene.resolve(_SPREAD)
+
+    with_decay = await lane.search(replace(_ask(_SPREAD, scene), daily_decay=True))
+    without = await lane.search(_ask(_SPREAD, scene))
+
+    assert isinstance(with_decay, ResolutionWithDecay) and with_decay.resolution == here
+    # Each leg's own, by the plan's leg ids, as the pricer works it out here for the same picks.
+    assert dict(with_decay.daily_decay) == picks_daily_decay(here)
+    assert list(with_decay.daily_decay) == ["long_call", "short_call"]
+    assert all(leg.worked is not None and leg.worked.decay < 0 for leg in with_decay.daily_decay.values())
+    assert isinstance(with_decay.daily_decay, MappingProxyType)
+    # Not asked for, nothing comes back beside the resolution.
+    assert isinstance(without, Resolution) and without == here
+
+
+async def test_a_search_that_is_refused_brings_back_the_refusal_and_no_decay_whatever_was_asked() -> None:
+    make, plan = _REFUSALS[ResolverRefusal.NOTHING_CLOSE_ENOUGH]
+    scene = make()
+
+    found = await OptionSearchLane("preview", executor=InThisProcess).search(replace(_ask(plan, scene), daily_decay=True))
+
+    assert isinstance(found, ContractsNotResolved) and _as_made(found) == _as_made(scene.refusal(plan))
 
 
 def _quoted_at(scene: scenes._Scene, strike: int, ago_ms: int) -> scenes._Scene:
@@ -264,7 +298,7 @@ async def test_each_refusal_comes_back_from_the_worker_as_the_resolver_made_it(r
     assert isinstance(found, ContractsNotResolved) and _as_made(found) == _as_made(here)
     # Through the lane's own ``resolve`` it is raised, as the resolver raises it.
     with pytest.raises(ContractsNotResolved) as raised:
-        await lane.resolve(plan, **{part.name: getattr(_ask(plan, scene), part.name) for part in fields(SearchAsk)[1:]})
+        await lane.resolve(plan, **_as_the_resolver_takes_it(_ask(plan, scene)))
     assert _as_made(raised.value) == _as_made(here)
 
 
@@ -273,9 +307,7 @@ async def test_what_could_not_describe_a_market_is_the_callers_mistake_from_the_
     scene = scenes._scene()
     backwards = replace(_ask(_AT_THE_MONEY, scene), selection_ms=scene.decision_bar_close_ms - 1)
     with pytest.raises(ValueError) as here:
-        scenes.resolve_contracts(
-            backwards.plan, **{part.name: getattr(backwards, part.name) for part in fields(SearchAsk)[1:]}
-        )
+        scenes.resolve_contracts(backwards.plan, **_as_the_resolver_takes_it(backwards))
 
     with pytest.raises(ValueError) as from_the_worker:
         await OptionSearchLane("entry", executor=InThisProcess).search(backwards)
@@ -333,6 +365,23 @@ async def test_a_real_worker_process_answers_as_the_resolver_does_here_for_every
 
             assert isinstance(found, Resolution), (name, found)
             assert found == scene.resolve(plan), name
+        assert lane.worker_pid not in (None, os.getpid())
+    finally:
+        lane.close()
+
+
+async def test_a_real_worker_process_prices_the_picks_daily_decay_as_it_is_priced_here() -> None:
+    """An iron condor's four legs, priced a day on in the worker, in the same pass as the search."""
+    scene = scenes._scene()
+    plan = starting_plan(NamedStructure.IRON_CONDOR, "SPY")
+    lane = OptionSearchLane("preview")
+    try:
+        found = await lane.search(replace(_ask(plan, scene), daily_decay=True))
+
+        here = scene.resolve(plan)
+        assert isinstance(found, ResolutionWithDecay) and found.resolution == here
+        assert dict(found.daily_decay) == picks_daily_decay(here)
+        assert len(found.daily_decay) == 4
         assert lane.worker_pid not in (None, os.getpid())
     finally:
         lane.close()
@@ -936,7 +985,9 @@ async def test_a_worker_lost_to_a_preview_is_told_as_not_run_and_the_next_ask_se
 # ---- Nothing else searches in the Clerk's own process ------------------------------------------
 
 
-_HELD_TO_THE_WORKER = frozenset({"resolve_contracts", "american_implied_volatility", "american_value"})
+_HELD_TO_THE_WORKER = frozenset(
+    {"resolve_contracts", "american_implied_volatility", "american_value", "american_daily_decay", "picks_daily_decay"}
+)
 
 
 def _reached_in(source: str) -> set[str]:
@@ -961,9 +1012,16 @@ def _reached_in(source: str) -> set[str]:
         ),
         ("from app.options import resolver as picks\npicks.resolve_contracts(plan)", {"resolve_contracts"}),
         ("import app.options.american as pricer\npricer.american_value(1.0)", {"american_value"}),
+        ("from app.options.american import american_daily_decay as theta\ntheta(spot=1.0)", {"american_daily_decay"}),
+        ("from app.options import decay\ndecay.picks_daily_decay(resolution)", {"picks_daily_decay"}),
         ("from app.options.resolver import Chain, Resolution", set()),
+        ("from app.options.decay import LegDecay, StructureDecay, structure_daily_decay", set()),
     ],
-    ids=["by its own name", "under another name", "the pricer under other names", "off its module", "off the pricer's module", "the resolver's types"],
+    ids=[
+        "by its own name", "under another name", "the pricer under other names", "off its module",
+        "off the pricer's module", "a contract's decay under another name", "the picks' decay off its module",
+        "the resolver's types", "the decay's types and its sum, which price nothing",
+    ],
 )
 def test_a_module_that_reaches_the_resolver_or_the_pricer_is_seen_whatever_name_it_imports_them_under(
     source: str, reached: set[str]
@@ -974,7 +1032,8 @@ def test_a_module_that_reaches_the_resolver_or_the_pricer_is_seen_whatever_name_
 def test_only_the_search_worker_calls_the_resolver_and_nothing_outside_the_options_package_prices() -> None:
     """A search run on the event loop, or in a thread of the Clerk's process, stops the loop for as long as it runs
     (ADR 0076 decision 18). Everything outside the resolver's own package reaches it through a lane, and the
-    pricer it searches with is called by nothing else.
+    pricer it searches with is called by nothing else. The picks' daily decay prices two trees a leg, and is
+    worked in the worker too (decision 23).
 
     This reads the source, so it sees a name that is written: used, read off a module, or imported under any
     name. A name built at run time and looked up with ``getattr`` is out of its reach, as is a new function
@@ -989,7 +1048,7 @@ def test_only_the_search_worker_calls_the_resolver_and_nothing_outside_the_optio
         if reached:
             callers[module.relative_to(app).as_posix()] = reached
 
-    assert callers == {"services/option_search.py": {"resolve_contracts"}}
+    assert callers == {"services/option_search.py": {"resolve_contracts", "picks_daily_decay"}}
 
 
 def test_the_app_stops_the_search_workers_and_the_lookup_threads_where_it_shuts_down() -> None:

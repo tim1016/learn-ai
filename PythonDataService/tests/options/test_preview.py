@@ -12,6 +12,7 @@ from fractions import Fraction
 import pytest
 
 from app.options.american import AmericanIvStatus
+from app.options.decay import DecayNotEstimated, LegDecay, picks_daily_decay
 from app.options.entry import prepare_entry
 from app.options.lean import LeanDirection
 from app.options.named_structures import NamedStructure
@@ -59,11 +60,14 @@ def _figures(
     model_is_known: bool = True,
     cost_limit: str = "10",
     gap_limit: str = "8",
+    with_decay: bool = False,
     **markets: tuple[str, str],
 ) -> StructureFigures:
+    resolution = _resolved(plan, **markets)
     return structure_figures(
         plan,
-        _resolved(plan, **markets),
+        resolution,
+        daily_decay=picks_daily_decay(resolution) if with_decay else None,
         units=units,
         leg_gap_limit_percent=Decimal(gap_limit),
         cost_limit_percent=Decimal(cost_limit),
@@ -250,3 +254,56 @@ def test_every_structure_asked_for_is_counted() -> None:
     assert (shown.size.units, shown.money.net_entry_premium_cents, shown.round_trip_cost_cents) == (3, 58_200, 2_400)
     assert shown.at_expiry.gain_cents == 91_800
     assert shown.lean.shares == pytest.approx(3 * shown.lean.shares_per_structure, abs=1e-12, rel=0)
+
+
+
+# ---- What a day takes -------------------------------------------------------------------------
+
+
+def test_the_structures_decay_is_its_legs_own_bought_less_sold_for_every_structure_asked() -> None:
+    shown = _figures(_spread(), units=3, with_decay=True, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    bought, sold = (leg.daily_decay.worked.decay for leg in shown.legs)
+    assert bought < 0 and sold < 0
+    assert shown.decay.per_share == pytest.approx(bought - sold, abs=1e-12, rel=0)
+    assert shown.decay.per_structure == pytest.approx(100 * (bought - sold), abs=1e-9, rel=0)
+    assert shown.decay.total == pytest.approx(300 * (bought - sold), abs=1e-9, rel=0)
+    # The call nearer the money loses more in a day, so the spread that bought it loses.
+    assert shown.decay.total < 0
+
+
+def test_a_leg_with_no_decay_leaves_the_structure_with_none_and_the_other_legs_figure_beside_it() -> None:
+    """The 590 call quoted far above anything a volatility explains: no volatility, so no decay for it."""
+    shown = _figures(_spread(), with_decay=True, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
+
+    assert (shown.decay.estimated, shown.decay.why_not, shown.decay.legs_without) == (
+        False, DecayNotEstimated.NO_VOLATILITY, ("short_call",),
+    )
+    assert (shown.decay.per_share, shown.decay.total) == (None, None)
+    assert shown.legs[0].daily_decay.worked.decay < 0
+
+
+def test_inputs_that_are_not_known_show_no_decay_even_when_one_was_worked_out() -> None:
+    """A decay priced on dividends nobody could look up is not shown, as no delta is."""
+    shown = _figures(_spread(), model_is_known=False, with_decay=True, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert (shown.decay.estimated, shown.decay.why_not) == (False, DecayNotEstimated.INPUTS_NOT_KNOWN)
+    assert shown.decay.legs_without == ("long_call", "short_call")
+    assert [leg.daily_decay for leg in shown.legs] == [None, None]
+
+
+def test_figures_nobody_asked_a_decay_for_carry_none_and_picks_that_are_no_structure_have_none_either() -> None:
+    assert _figures(_spread(), c585=("4.08", "4.12"), c590=("2.18", "2.22")).decay is None
+    assert _figures(_spread(sold_from_bought=0.0), with_decay=True).decay is None
+
+
+def test_a_decay_handed_in_for_the_wrong_legs_is_the_callers_mistake() -> None:
+    plan = _spread()
+    resolution = _resolved(plan)
+    one_leg_only = {"long_call": LegDecay(None, DecayNotEstimated.NOT_PRICED)}
+
+    with pytest.raises(KeyError):
+        structure_figures(
+            plan, resolution, units=1, leg_gap_limit_percent=Decimal(8), cost_limit_percent=Decimal(10),
+            fee_provision=lambda *_: 0, model_is_known=True, daily_decay=one_leg_only,
+        )

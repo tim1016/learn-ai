@@ -14,8 +14,9 @@ Formula: round-trip cost percent = round-trip cost / entry commitment · 100.
   the refusals are ``app/options/entry.py``'s; the premium, requirement,
   commitment, loss estimate and round-trip cost are
   ``app/options/requirement.py``'s; the gain, ranges and break-evens are
-  ``app/options/at_expiry.py``'s; the lean is ``app/options/lean.py``'s.
-Reference: ADR 0076 decisions 2, 5, 7 and 17.
+  ``app/options/at_expiry.py``'s; the lean is ``app/options/lean.py``'s; the
+  daily decay is ``app/options/decay.py``'s.
+Reference: ADR 0076 decisions 2, 5, 7, 17 and 23.
 Canonical implementation: this file for the cost percent; the modules named
   above for everything else.
 Validated against: tests/options/test_preview.py, and
@@ -27,12 +28,14 @@ eye, and whoever holds one to a limit compares it exactly.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 
 from app.options.at_expiry import AtExpiry, at_expiry
 from app.options.contract import OptionContract
+from app.options.decay import DecayNotEstimated, LegDecay, StructureDecay, decay_not_estimated, structure_daily_decay
 from app.options.entry import (
     EntryFigures,
     EntryRefusal,
@@ -45,7 +48,7 @@ from app.options.lean import Lean, lean
 from app.options.quotes import HeldQuote
 from app.options.requirement import EntryMoney, EntrySize, StructureMoneyRefusal
 from app.options.resolver import Priced, Resolution
-from app.options.structure import LegPosition
+from app.options.structure import LegPosition, ResolvedStructure
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg
 
 # No fee rate is pinned for the day, so the entry's fee provision, and with it what is set aside, is not known.
@@ -81,6 +84,8 @@ class PickedLeg:
     # Whether its gap is wider than the owner's limit, so that an entry would be skipped. None: not judged,
     # because the picks are not the plan's legs and no entry could be made of them.
     over_gap_limit: bool | None = None
+    # What the next 24 hours take from its contract, per share, or why that is not estimated. None: not asked.
+    daily_decay: LegDecay | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,10 +119,17 @@ class StructureFigures:
     # None when a leg has no delta of ours; ``lean_unknown_leg_id`` then names the first such leg.
     lean: Lean | None = None
     lean_unknown_leg_id: str | None = None
+    # What a day takes from the entry, or why that is not estimated. None when the picks are not a structure.
+    decay: StructureDecay | None = None
 
 
 def _picked_legs(
-    plan: ActionPlan, resolution: Resolution, *, model_is_known: bool, over_gap_limit: frozenset[str] | None
+    plan: ActionPlan,
+    resolution: Resolution,
+    *,
+    model_is_known: bool,
+    over_gap_limit: frozenset[str] | None,
+    daily_decay: Mapping[str, LegDecay] | None,
 ) -> tuple[PickedLeg, ...]:
     evidence = {leg.leg_id: leg for leg in resolution.evidence.legs}
     legs = []
@@ -138,6 +150,7 @@ def _picked_legs(
                 priced=pick.priced if model_is_known else None,
                 vendor_delta=pick.vendor_delta,
                 over_gap_limit=None if over_gap_limit is None else leg.leg_id in over_gap_limit,
+                daily_decay=None if daily_decay is None else daily_decay[leg.leg_id],
             )
         )
     return tuple(legs)
@@ -175,6 +188,7 @@ def structure_figures(
     cost_limit_percent: Decimal,
     fee_provision: FeeProvision,
     model_is_known: bool,
+    daily_decay: Mapping[str, LegDecay] | None = None,
 ) -> StructureFigures:
     """Everything a preview shows of ``resolution``, for ``units`` structures of ``plan``.
 
@@ -185,8 +199,15 @@ def structure_figures(
     ``model_is_known`` is false when the pricing model was given inputs that
     are not known to be true, such as dividends that could not be looked up.
     The picks stand, where no rule picked by delta, but no delta of ours is
-    shown and no lean is worked out from one.
+    shown, no lean is worked out from one, and no daily decay is estimated.
+
+    ``daily_decay`` is each pick's decay as the search worked it out
+    (``app.options.decay.picks_daily_decay``), by leg id. Nothing is priced
+    here. Handed none on a model that is known, the figures carry no decay
+    at all: nobody asked for one.
     """
+    if not model_is_known:
+        daily_decay = None
     worked = entry_figures(
         plan,
         picked=resolution.picked,
@@ -203,6 +224,7 @@ def structure_figures(
         resolution,
         model_is_known=model_is_known,
         over_gap_limit=None if structure is None else worked.legs_over_gap_limit,
+        daily_decay=daily_decay,
     )
     refusals = _refusals_in_an_entrys_order(worked)
     not_as_built = next((refusal for refusal in refusals if refusal.reason not in _SKIPPED_FOR_NOW), None)
@@ -228,4 +250,13 @@ def structure_figures(
         at_expiry=None if money is None else at_expiry(structure, size, net_price=worked.net_price),
         lean=lean(structure, size, deltas) if without_delta is None else None,
         lean_unknown_leg_id=without_delta,
+        decay=_decay(structure, size, daily_decay, model_is_known=model_is_known),
     )
+
+
+def _decay(
+    structure: ResolvedStructure, size: EntrySize, daily_decay: Mapping[str, LegDecay] | None, *, model_is_known: bool
+) -> StructureDecay | None:
+    if not model_is_known:
+        return decay_not_estimated(structure, DecayNotEstimated.INPUTS_NOT_KNOWN)
+    return None if daily_decay is None else structure_daily_decay(structure, size, daily_decay)

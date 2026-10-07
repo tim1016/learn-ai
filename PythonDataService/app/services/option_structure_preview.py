@@ -86,7 +86,7 @@ from app.services.option_preview_views import (
     quote_view,
     sentence,
 )
-from app.services.option_search import PreviewSearches, SearchAsk, SearchNotRun
+from app.services.option_search import PreviewSearches, ResolutionWithDecay, SearchAsk, SearchNotRun
 from app.services.option_watch import OptionWatchList
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
@@ -759,6 +759,8 @@ async def preview_option_structure(
             ),
             decision_bar_close_ms=reading.now,
             selection_ms=reading.now,
+            # Priced in the same pass, in the worker. Not asked for on a model that is not known.
+            daily_decay=inputs.dividends is not None,
         ),
     )
     if isinstance(found, SearchNotRun):
@@ -766,6 +768,9 @@ async def preview_option_structure(
     if isinstance(found, ContractsNotResolved):
         return asked.without_figures(plan, _not_resolved(found, reading), inputs)
     today = reading.today
+    decays = None
+    if isinstance(found, ResolutionWithDecay):
+        found, decays = found.resolution, found.daily_decay
     figures = structure_figures(
         plan,
         found,
@@ -774,5 +779,6 @@ async def preview_option_structure(
         cost_limit_percent=request.cost_limit_percent,
         fee_provision=partial(_fee_provision, today),
         model_is_known=inputs.dividends is not None,
+        daily_decay=decays,
     )
     return asked.resolved(plan, reading, figures, inputs)
