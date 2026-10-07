@@ -15,7 +15,15 @@ and no second store:
   (``orders.effect_operation_id``), counted by the broker's last reported
   state: *sent* once the broker has reported the order at all, then
   *filled*, *cancelled* (cancelled or expired) or *rejected*. An order the
-  broker never acknowledged was never sent.
+  broker never acknowledged was never sent. Neither was the booking of an
+  option position that ended with no order of the bot's (ADR 0076
+  decision 22): an expiry, an exercise, an assignment, a sale by an order
+  the Clerk did not place, a simulation's settlement or the owner's ending.
+  Nobody sent those. Their rows are written as orders so that money is
+  counted once by every reader, and they are left out of these counts.
+  Their fills are transactions all the same: each is a fill the bot's
+  result is worked out from, and the run's ``option_endings`` say what
+  each was.
 * **Result and fees** are per bot, never per run: ``project_bot_results``
   and the canonical fee reconciler's per-subject total. An old bot with
   several runs (the retired Resume) has one result across all of them.
@@ -81,6 +89,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
 from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding, recorded_option_endings
+from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_EVENT_EFFECT_KIND
 from app.broker.alpaca.clerk.sqlite.runtime import decision_id_from_durable
 from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION, migrate_schema
 from app.broker.alpaca.clerk.sqlite.timeline_query import uncertainty_sequence
@@ -217,7 +226,7 @@ def project_custody_history(
     orders_by_bot: dict[str, OrderCounts] = {}
     orders_by_run: dict[str, OrderCounts] = {}
     for row in conn.execute(
-        "SELECT o.order_ref, o.effect_operation_id, o.broker_state, e.strategy_instance_id, e.run_id "
+        "SELECT o.order_ref, o.effect_operation_id, o.broker_state, e.strategy_instance_id, e.run_id, e.kind "
         "FROM orders o JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "WHERE e.strategy_instance_id IS NOT NULL"
     ):
@@ -225,6 +234,9 @@ def project_custody_history(
         order_runs[str(row["order_ref"])] = (sid, run_id)
         if _reported_filled(state):
             filled_order_effects[str(row["order_ref"])] = str(row["effect_operation_id"])
+        if row["kind"] == OPTION_EVENT_EFFECT_KIND:
+            # The booking of an option position that ended with no order of the bot's. Nobody sent it.
+            continue
         orders_by_bot[sid] = orders_by_bot.get(sid, OrderCounts()).plus(state)
         if run_id is not None:
             orders_by_run[run_id] = orders_by_run.get(run_id, OrderCounts()).plus(state)

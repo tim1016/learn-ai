@@ -271,7 +271,7 @@ async def test_at_the_press_a_price_that_has_come_since_settles_the_contract_and
         await _press(dry_run.clerk, SID, shown=shown)
 
     said = str(told.value)
-    assert "not ended at your word" in said and "settled in cash" in said
+    assert "not ended at your word" in said and "settled it in cash" in said
     [booked] = _booked(dry_run)
     assert (booked["summary_code"], booked["close_price"]) == ("OPTION_SETTLED_IN_CASH", "5.25")
     assert "owner_word" not in booked

@@ -130,7 +130,6 @@ from app.broker.alpaca.clerk.sqlite.option_event_books import (
     booking_key,
     bookings,
     books_record_no_contract,
-    describe_option_ending,
     held_option_positions,
     hold_item_ack_ref,
     outside_fill,
@@ -1441,6 +1440,17 @@ def _book_outside_orders(
 # ── The owner's ending of a contract nothing will settle ─────────────────────
 
 
+# What the owner is told of a contract that was settled after all, in the place of their ending.
+_HOW_IT_ENDED: dict[OptionEnding, str] = {
+    OptionEnding.EXPIRED: "It expired worth nothing.",
+    OptionEnding.EXERCISED: "It was exercised.",
+    OptionEnding.ASSIGNED: "It was assigned.",
+    OptionEnding.SOLD_OUTSIDE: "It was sold by an order the Clerk did not place.",
+    OptionEnding.SETTLED_IN_CASH: "The simulation settled it in cash by its own rule.",
+    OptionEnding.ENDED_BY_OWNER: "It was ended at the owner's word.",
+}
+
+
 def _owner_ending_refused(reason_code: str, message: str) -> OwnerEndingOutcome:
     return OwnerEndingOutcome(result="refused", reason_code=reason_code, message=f"{message} Nothing was ended.")
 
@@ -1464,7 +1474,7 @@ def _booked_ending(facts: OptionPositionEndedFacts) -> OwnerEndingOutcome:
         result="settled", ended_by=facts.ended_by, command_id=command_id,
         message=(
             f"{facts.contract_symbol} was not ended at your word: a settlement had come after all, and it was "
-            f"booked in its place. {describe_option_ending(facts)}"
+            f"booked in its place. {_HOW_IT_ENDED[OptionEnding(facts.ended_by)]} History shows it."
         ),
     )
 

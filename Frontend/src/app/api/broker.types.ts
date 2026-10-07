@@ -8394,7 +8394,7 @@ export interface components {
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
             /** Primary Action */
-            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -19791,23 +19791,104 @@ export interface components {
             target?: string | null;
         };
         /**
+         * OptionEndingContract
+         * @description The contract, as every option view serves one: for the shared renderer, which writes its name.
+         */
+        OptionEndingContract: {
+            /**
+             * Expiry Ms
+             * Format: int64
+             */
+            expiry_ms: number;
+            /** Occ Symbol */
+            occ_symbol: string;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Strike */
+            strike: string;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * OptionEndingSettlementPrice
+         * @description The underlying's price a simulation settled a contract from, and when that price is from.
+         */
+        OptionEndingSettlementPrice: {
+            /**
+             * Bar Ended At Ms
+             * Format: int64
+             */
+            bar_ended_at_ms: number;
+            /** Before Close Ms */
+            before_close_ms: number;
+            /**
+             * Last Session Close Ms
+             * Format: int64
+             */
+            last_session_close_ms: number;
+            /** Price */
+            price: string;
+            /** Price Usd */
+            price_usd: string;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
          * OptionEndingView
          * @description One option position that ended with no order of the bot's.
          */
         OptionEndingView: {
-            /** Contract */
-            contract: string;
+            /** Close Cash Cents */
+            close_cash_cents?: number | null;
+            /** Close Cash Usd */
+            close_cash_usd?: string | null;
+            /** Close Price */
+            close_price?: string | null;
+            /** Close Price Usd */
+            close_price_usd?: string | null;
+            contract: components["schemas"]["OptionEndingContract"];
             /** Contracts */
             contracts: number;
+            /** Ended By Operator */
+            ended_by_operator?: string | null;
+            /**
+             * Ended On Ms
+             * Format: int64
+             */
+            ended_on_ms: number;
             /** Headline */
             headline: string;
+            /**
+             * Held
+             * @enum {string}
+             */
+            held: "bought" | "sold";
             /**
              * Kind
              * @enum {string}
              */
-            kind: "expired" | "exercised" | "assigned" | "sold_outside";
-            /** Recorded At Ms */
+            kind: "expired" | "exercised" | "assigned" | "sold_outside" | "settled_in_cash" | "ended_by_owner";
+            /** No Settlement Reason */
+            no_settlement_reason?: string | null;
+            /**
+             * Recorded At Ms
+             * Format: int64
+             */
             recorded_at_ms: number;
+            settled_from?: components["schemas"]["OptionEndingSettlementPrice"] | null;
+            /** Share Cash Cents */
+            share_cash_cents?: number | null;
+            /** Share Cash Usd */
+            share_cash_usd?: string | null;
+            /** Share Price */
+            share_price?: string | null;
+            /** Share Price Usd */
+            share_price_usd?: string | null;
+            /** Share Symbol */
+            share_symbol?: string | null;
             /** Shares */
             shares?: number | null;
             /** Simulated */
@@ -20138,7 +20219,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -20177,7 +20258,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -20206,7 +20287,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
@@ -20230,7 +20311,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -21146,7 +21227,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -21540,7 +21621,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /**
              * Band Override
@@ -21568,7 +21649,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
@@ -21584,7 +21665,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             command: components["schemas"]["CommandResponse"] | null;
@@ -21608,7 +21689,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Available */
             available: boolean;
             /** Concurrency Token */

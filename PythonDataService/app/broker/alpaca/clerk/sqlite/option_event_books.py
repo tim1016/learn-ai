@@ -19,7 +19,6 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OPTION_EVENT_EFFECT_KIND,
     OPTION_EVENT_SHARE_ORDER_ROLE,
     OPTION_POSITION_ENDED,
-    OptionEnding,
     OptionPositionEndedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
@@ -298,35 +297,6 @@ class RecordedOptionEnding:
     recorded_at_ms: int
     facts: OptionPositionEndedFacts
 
-    @property
-    def sentence(self) -> str:
-        return describe_option_ending(self.facts)
-
-
-def describe_option_ending(facts: OptionPositionEndedFacts) -> str:
-    """How one option position ended, in one sentence the owner reads. Written here, never on a screen."""
-    ended_by = OptionEnding(facts.ended_by)
-    one = facts.contracts == 1
-    what = f"{facts.contracts} {'contract' if one else 'contracts'} of {facts.contract_symbol}"
-    was = "was" if one else "were"
-    if ended_by is OptionEnding.EXPIRED:
-        said = f"{what} expired."
-    elif ended_by is OptionEnding.SOLD_OUTSIDE:
-        done = "sold" if facts.held == "bought" else "bought back"
-        said = f"{what} {was} {done} at {facts.close_price} by an order the Clerk did not place."
-    elif ended_by is OptionEnding.SETTLED_IN_CASH:
-        said = f"{what} {was} settled in cash at {facts.close_price} a share."
-    elif ended_by is OptionEnding.ENDED_BY_OWNER:
-        return f"{what} {was} ended at the owner's word and counted as worth nothing. No settlement could be made."
-    else:
-        shares = facts.shares or {}
-        quantity = shares.get("quantity", 0)
-        said = (
-            f"{what} {was} {ended_by.value}: {abs(quantity)} {shares.get('symbol', '')} "
-            f"{'bought' if quantity > 0 else 'sold'} at {shares.get('price', '')}."
-        )
-    return f"{said} A simulation settled it by its own rule." if facts.simulated else said
-
 
 def recorded_option_endings(
     conn: sqlite3.Connection, effect_operation_ids: Sequence[str] | None = None
@@ -376,7 +346,6 @@ __all__ = [
     "booking_key",
     "bookings",
     "books_record_no_contract",
-    "describe_option_ending",
     "event_share_order_symbol",
     "held_option_positions",
     "outside_order_reduces_a_bots_contract",

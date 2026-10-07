@@ -5483,6 +5483,7 @@
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
                   "discharge_attributed_residue",
+                  "end_expired_option",
                   "settle_unknown_exit_order",
                   "stop_bot_decisions",
                   "open_custody_timeline"
@@ -34147,19 +34148,167 @@
         "title": "OperatorMove",
         "type": "object"
       },
+      "OptionEndingContract": {
+        "additionalProperties": false,
+        "description": "The contract, as every option view serves one: for the shared renderer, which writes its name.",
+        "properties": {
+          "expiry_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "occ_symbol": {
+            "title": "Occ Symbol",
+            "type": "string"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "strike": {
+            "title": "Strike",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "occ_symbol",
+          "underlying",
+          "expiry_ms",
+          "right",
+          "strike"
+        ],
+        "title": "OptionEndingContract",
+        "type": "object"
+      },
+      "OptionEndingSettlementPrice": {
+        "additionalProperties": false,
+        "description": "The underlying's price a simulation settled a contract from, and when that price is from.",
+        "properties": {
+          "bar_ended_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Ended At Ms",
+            "type": "integer"
+          },
+          "before_close_ms": {
+            "minimum": 0.0,
+            "title": "Before Close Ms",
+            "type": "integer"
+          },
+          "last_session_close_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Close Ms",
+            "type": "integer"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "price_usd": {
+            "title": "Price Usd",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "price",
+          "price_usd",
+          "bar_ended_at_ms",
+          "last_session_close_ms",
+          "before_close_ms"
+        ],
+        "title": "OptionEndingSettlementPrice",
+        "type": "object"
+      },
       "OptionEndingView": {
         "additionalProperties": false,
         "description": "One option position that ended with no order of the bot's.",
         "properties": {
+          "close_cash_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Cash Cents"
+          },
+          "close_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Cash Usd"
+          },
+          "close_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Price"
+          },
+          "close_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Price Usd"
+          },
           "contract": {
-            "maxLength": 32,
-            "minLength": 1,
-            "title": "Contract",
-            "type": "string"
+            "$ref": "#/components/schemas/OptionEndingContract"
           },
           "contracts": {
             "minimum": 1.0,
             "title": "Contracts",
+            "type": "integer"
+          },
+          "ended_by_operator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended By Operator"
+          },
+          "ended_on_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Ended On Ms",
             "type": "integer"
           },
           "headline": {
@@ -34167,21 +34316,108 @@
             "title": "Headline",
             "type": "string"
           },
+          "held": {
+            "enum": [
+              "bought",
+              "sold"
+            ],
+            "title": "Held",
+            "type": "string"
+          },
           "kind": {
             "enum": [
               "expired",
               "exercised",
               "assigned",
-              "sold_outside"
+              "sold_outside",
+              "settled_in_cash",
+              "ended_by_owner"
             ],
             "title": "Kind",
             "type": "string"
           },
+          "no_settlement_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Settlement Reason"
+          },
           "recorded_at_ms": {
+            "format": "int64",
             "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
+          },
+          "settled_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionEndingSettlementPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "share_cash_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Cash Cents"
+          },
+          "share_cash_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Cash Usd"
+          },
+          "share_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Price"
+          },
+          "share_price_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Price Usd"
+          },
+          "share_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Symbol"
           },
           "shares": {
             "anyOf": [
@@ -34203,9 +34439,11 @@
           "kind",
           "contract",
           "contracts",
+          "held",
+          "ended_on_ms",
+          "recorded_at_ms",
           "simulated",
-          "headline",
-          "recorded_at_ms"
+          "headline"
         ],
         "title": "OptionEndingView",
         "type": "object"
@@ -34866,6 +35104,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -34959,6 +35198,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -35043,6 +35283,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -35112,6 +35353,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -37264,6 +37506,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -38432,6 +38675,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -38544,6 +38788,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -38620,6 +38865,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
@@ -38695,6 +38941,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "end_expired_option",
               "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
