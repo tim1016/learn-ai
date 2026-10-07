@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
+from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.market_liveness import set_market_liveness_consumer
 from app.broker.ibkr.config import reset_settings_for_testing
@@ -655,6 +656,31 @@ async def test_a_pick_listed_with_another_multiplier_is_refused_by_name_before_t
     _nothing_was_sent(floor, ran)
 
 
+async def test_an_entry_whose_quote_grew_too_old_before_its_order_was_sent_buys_nothing_and_the_run_goes_on(
+    floor: Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Clerk takes the entry on a quote a decision could use, and the process then stands still for five
+    seconds before the order is reached for sending. The Clerk tests the quote again at that clock and sends
+    nothing. The runner discards the decision as it does after any refusal at the send: nothing is bought,
+    the journal lists no purchase, and the bars after it are decided on as usual."""
+    take = clerk_runtime.accept_option_enter
+
+    def take_and_stand_still(*args: Any, **kwargs: Any) -> Any:
+        taken = take(*args, **kwargs)
+        floor.clock.value += 5_001
+        return taken
+
+    monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_stand_still)
+
+    ran = await floor.run(_entry_then_three_bars())
+
+    assert floor.asked_of_the_clerk == ["ENTER"]
+    assert floor.transitions("ENTER_SUBMISSION_REFUSED") == 1
+    assert floor.simulated_fills() == [] and floor.holds() == {} and ran.journal == []
+    assert floor.clerk.option_fills_of_decision(SID, _decisions(ran)["enter_intent"]) == ()
+    assert [outcome for outcome, _ in ran.outcomes()][2:] == ["no_action", "no_action", "no_action"]
+
+
 # ---- On its contract's expiry day, an entry has a last moment ---------------------------
 
 # The call expires on Friday, whose session closes at 16:00. An entry is opened only when its whole life
@@ -925,6 +951,51 @@ async def test_an_exit_nobody_bids_for_sells_nothing_and_the_run_goes_on_holding
     assert [row.intent for row in ran.journal] == ["ENTER"]
     assert [fill[1] for fill in floor.fills()] == ["buy"]
     assert ran.outcomes()[-1][1] == EXIT_MS + MINUTE, "the bar after the refused EXIT was decided on too"
+
+
+async def test_an_exit_whose_call_shows_only_an_ask_since_a_data_loss_sells_nothing_and_the_next_bar_sells_it(
+    floor: Floor,
+) -> None:
+    """IBKR's data came back twenty seconds before the EXIT's bar, and since then only the call's ask has
+    ticked. The runner hands over the line as it stands, and that quote is the newest kept. Nothing on it
+    says what is bid, and no older quote stands in for it: the close is not priced, the owner is told the
+    position was not closed, and the bot goes on holding. The Clerk's own keeping states no quote with one
+    side, so nothing it wrote hides that. On the next bar the call is quoted whole, and the EXIT sells it."""
+    seen: dict[str, Any] = {}
+
+    async def exit_bar(floor: Floor) -> None:
+        await floor.bar_arrives(EXIT_MS - 20_000, quotes=False)
+        floor.new_lines_are_answered = False
+        floor.ibkr.client.connection_state = "soft_lost"
+        await floor.supervisor_passes(1)
+        floor.ibkr.client.connection_state = "connected"
+        floor.ibkr.client.connectivity_lost_count += 1
+        floor.ibkr.client.last_ibkr_code = 1102
+        await floor.time_passes_to(EXIT_MS + DELIVERY_MS)
+        floor.ibkr.now = floor.clock.value
+        floor.ibkr.tick(CALL, ask=4.34)
+        await floor.account_is_read()
+
+    async def the_bar_after(floor: Floor) -> None:
+        kept, now = floor.kept_quotes(), floor.clock.value
+        seen["held"] = floor.holds()
+        seen["newest kept"] = kept.newest(CALL, at_or_before_ms=now)
+        seen["last stated with a bid"] = kept.last_stated(CALL, at_or_before_ms=now, with_side="bid")
+        seen["can be sold"] = kept.prices_a_close(CALL, side="sell", at_ms=now)
+        seen["not closed"] = floor.transitions("EXIT_NOT_FLAT")
+        await floor.bar_arrives(EXIT_MS + MINUTE + DELIVERY_MS)
+
+    script = _round_trip()
+    script[-1] = Step(red(EXIT_MS), before=exit_bar)
+    ran = await floor.run([*script, Step(red(EXIT_MS + MINUTE), before=the_bar_after)])
+
+    assert ran.outcomes()[-2:] == [("exit_intent", EXIT_MS), ("exit_intent", EXIT_MS + MINUTE)]
+    assert (seen["held"], seen["can be sold"], seen["not closed"]) == ({CALL: 1.0}, False, 1)
+    assert (seen["newest kept"].quote.bid, seen["newest kept"].quote.ask) == (None, Decimal("4.34"))
+    # The last whole quote stated for the call is from before the data loss: the keeping stated none after.
+    assert seen["last stated with a bid"].kept_at_ms < EXIT_MS - 20_000
+    assert [fill[:4] for fill in floor.fills()] == [(CALL, "buy", 1.0, 4.12), (CALL, "sell", 1.0, 4.08)]
+    assert floor.holds() == {} and [row.intent for row in ran.journal] == ["ENTER", "EXIT"]
 
 
 # ---- The Clerk keeps quotes for what it holds, runner or no runner ----------------------
