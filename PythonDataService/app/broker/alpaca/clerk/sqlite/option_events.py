@@ -163,6 +163,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_books import (
     outside_order_hold_ref,
     outside_order_reduces_a_bots_contract,
     outside_orders_in,
+    recorded_option_endings,
     unsettled_outside_order,
     written_off_contracts,
 )
@@ -248,6 +249,10 @@ OPTION_EVENT_POLL_INTERVAL_MS = 5 * 60_000
 OPTION_EVENT_POLL_RETRY_MS = 60_000
 # The most pages one poll follows. A walk that is longer is not whole, and says so.
 MAX_OPTION_EVENT_PAGES = 50
+
+# Why a read was not whole, in words that are the same from one failed read to the next.
+_WALK_CUT_SHORT = "The broker's walk of the account's activities stopped before the window's start."
+_READ_FAILED = "The account's option activities could not be read. The broker's own error is in the Clerk's log."
 
 # The owner of the lot that stands for outside orders in a contract. It is no bot and no custody subject.
 OUTSIDE_THE_BOOKS = "outside-the-books"
@@ -465,7 +470,8 @@ def option_work_on_the_books(repo: ClerkSqliteRepository) -> bool:
 
     Or a contract the owner ended at their word a few days ago, on a real
     account: the broker's row for it may still come, and an exercise's or an
-    assignment's must not go unread.
+    assignment's must not go unread. Or shares an event left a bot, which
+    the next round must hold it for.
     """
     with repo.write_fence() as conn:
         if books_record_no_contract(conn):
@@ -474,6 +480,8 @@ def option_work_on_the_books(repo: ClerkSqliteRepository) -> bool:
             bool(held_option_positions(conn))
             or bool(_active_holds(conn))
             or bool(recent_owner_endings(conn, since_ms=late_row_read_since_ms(repo.clock())))
+            # Shares an event left that no hold stands for yet: a stop came between the booking and its hold.
+            or bool(_shares_an_event_left(conn))
         )
 
 
@@ -1209,11 +1217,29 @@ def _bots_whose_lots_cannot_be_offered(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _SharesAsReported:
+    """The broker's own share trade for one exercise or assignment, set against the contract's terms."""
+
+    # None when no share trade was read for the event.
+    trade: BrokerOptionShareTradeActivity | None = None
+    # Where the row differs from the terms, in words. Empty when it agrees.
+    differences: tuple[str, ...] = ()
+    # Whether the shares, the cash and the symbol are the contract's and only the printed price
+    # is not. The books count the strike, so nothing they hold is in doubt, and nobody is held:
+    # the difference is recorded on the booking. Alpaca's own documented exercise prints such
+    # a price.
+    only_the_price: bool = False
+
+
+_NO_SHARE_TRADE = _SharesAsReported()
+
+
 def _pair_share_trades(
     events: Sequence[BrokerOptionEventActivity],
     share_trades: Sequence[BrokerOptionShareTradeActivity],
     multiplier_of: Mapping[str, int],
-) -> tuple[dict[str, tuple[BrokerOptionShareTradeActivity | None, tuple[str, ...]]], list[BrokerOptionShareTradeActivity]]:
+) -> tuple[dict[str, _SharesAsReported], list[BrokerOptionShareTradeActivity]]:
     """Each exercise or assignment with the broker's share trade for it, and the share trades that belong to none.
 
     A share trade names the underlying and no event. It is paired with an
@@ -1226,7 +1252,7 @@ def _pair_share_trades(
         (trade for trade in share_trades if trade.status is OptionActivityStatus.EXECUTED),
         key=lambda trade: trade.activity_id,
     )
-    paired: dict[str, tuple[BrokerOptionShareTradeActivity | None, tuple[str, ...]]] = {}
+    paired: dict[str, _SharesAsReported] = {}
     expected = {}
     for event in events:
         if event.kind is OptionEventKind.EXPIRED:
@@ -1251,12 +1277,17 @@ def _pair_share_trades(
                 differences = share_trade_disagreements(terms, trade)
                 if exactly and differences:
                     continue
-                paired[event.activity_id] = (trade, differences)
+                paired[event.activity_id] = _SharesAsReported(
+                    trade=trade, differences=differences,
+                    # The same comparison, with the row's price read as the strike: nothing else differs.
+                    only_the_price=bool(differences)
+                    and not share_trade_disagreements(terms, trade.model_copy(update={"price": terms.price})),
+                )
                 left.remove(trade)
                 break
     for event in events:
         if event.activity_id in expected and event.activity_id not in paired:
-            paired[event.activity_id] = (None, ())
+            paired[event.activity_id] = _NO_SHARE_TRADE
     return paired, left
 
 
@@ -1455,14 +1486,16 @@ def _book_events(
                             f"a lot of it after that date and before the row was read."
                         ),
                     })
-            trade, differences = paired.get(event.activity_id, (None, ()))
+            reported = paired.get(event.activity_id, _NO_SHARE_TRADE)
             share_trade_note = None
             if event.kind is not OptionEventKind.EXPIRED:
                 share_trade_note = {
-                    "activity_id": None if trade is None else trade.activity_id,
-                    "agrees": trade is not None and not differences,
-                    "differences": list(differences),
+                    "activity_id": None if reported.trade is None else reported.trade.activity_id,
+                    "agrees": reported.trade is not None and not reported.differences,
+                    "differences": list(reported.differences),
                 }
+                if reported.only_the_price:
+                    share_trade_note["only_the_price_differs"] = True
             allocation_rows = _allocation_rows(matched.on_the_books)
             booked_as_of_ms = max(
                 [last_session_close_ms(event_date) - 1, *(lot.opened_at_ms for lot in taken_by_bot)]
@@ -1546,19 +1579,21 @@ def _book_events(
         # What the record noted is held for as long as the row is read and the owner has not acknowledged it.
         for note in notes:
             hold(note["code"], [note["bot"]] if "bot" in note else owners, note["detail"])
-        trade, differences = paired.get(event.activity_id, (None, ()))
+        reported = paired.get(event.activity_id, _NO_SHARE_TRADE)
         if event.kind is not OptionEventKind.EXPIRED and owners:
-            if trade is None:
+            if reported.trade is None:
                 hold(
                     OPTION_SHARE_TRADE_MISSING_REASON_CODE, owners,
                     f"No share trade was read for the {event.kind.value} {symbol} of "
                     f"{et_date_at_ms(event.activity_date_ms).isoformat()}.",
                 )
-            elif differences:
+            elif reported.differences and not reported.only_the_price:
+                # Shares, cash or symbol that are not the contract's: what the broker holds may
+                # not be what the books booked. A printed price alone puts nothing in doubt.
                 holds.add(
-                    OPTION_SHARE_TRADE_DISAGREES_REASON_CODE, owners, ref=f"share-trade:{trade.activity_id}",
-                    symbol=trade.underlying_symbol, date_ms=trade.activity_date_ms,
-                    detail=f"For {symbol}: {'; '.join(differences)}.",
+                    OPTION_SHARE_TRADE_DISAGREES_REASON_CODE, owners, ref=f"share-trade:{reported.trade.activity_id}",
+                    symbol=reported.trade.underlying_symbol, date_ms=reported.trade.activity_date_ms,
+                    detail=f"For {symbol}: {'; '.join(reported.differences)}.",
                 )
     for trade in unpaired:
         holds.add(
@@ -1646,14 +1681,34 @@ def _hold_what_expired_and_is_still_held(
         )
 
 
-def _sync_shares_held(
-    repo: ClerkSqliteRepository, conn: sqlite3.Connection, booked: Sequence[tuple[str, OptionPositionEndedFacts]]
-) -> None:
-    """Hold a bot for the shares an event left it, and end that hold once the bot holds none."""
-    for sid, facts in booked:
-        if facts.shares is None:
-            continue
-        shares = facts.shares["quantity"]
+def _shares_an_event_left(conn: sqlite3.Connection) -> dict[str, OptionPositionEndedFacts]:
+    """Each bot that holds shares now and was left shares by an option event, with the newest such booking.
+
+    Read from the books' own records of what ended, never from what one run
+    booked. A bot that trades options holds shares only because an exercise
+    or an assignment left them.
+    """
+    newest: dict[str, OptionPositionEndedFacts] = {}
+    for ending in recorded_option_endings(conn):
+        if ending.facts.shares is not None:
+            newest[ending.strategy_instance_id] = ending.facts
+    return {
+        sid: facts
+        for sid, facts in newest.items()
+        if facts.shares is not None and reads.position(conn, sid, facts.shares["symbol"])
+    }
+
+
+def _sync_shares_held(repo: ClerkSqliteRepository, conn: sqlite3.Connection) -> None:
+    """Hold each bot for the shares an option event left it, and end that hold once the bot holds none.
+
+    Worked out from the books each time. So a stop between a booking and
+    its holds loses nothing: the next round finds the shares and holds for
+    them, though it books nothing itself.
+    """
+    left = _shares_an_event_left(conn)
+    for sid, facts in left.items():
+        shares = facts.shares["quantity"] if facts.shares is not None else 0
         _raise_hold(
             repo, sid, OPTION_SHARES_HELD_REASON_CODE,
             [OptionEventHoldItem(
@@ -1667,10 +1722,7 @@ def _sync_shares_held(
         )
     for hold in _active_holds(conn):
         sid = hold["strategy_instance_id"]
-        if hold["reason_code"] != OPTION_SHARES_HELD_REASON_CODE or sid is None:
-            continue
-        registered = reads.strategy_instance(conn, sid)
-        if registered is not None and not reads.position(conn, sid, registered["symbol"]):
+        if hold["reason_code"] == OPTION_SHARES_HELD_REASON_CODE and sid is not None and sid not in left:
             _resolve_hold(
                 repo, sid, OPTION_SHARES_HELD_REASON_CODE, resolution_kind="ATTRIBUTED_FLAT_PROVEN",
                 summary_code="OPTION_SHARES_HELD_RESOLVED", evidence_refs=("attributed_flat",),
@@ -2046,13 +2098,6 @@ def book_option_events(
                 "The account's option events were not read, so nothing proves the contract has no settlement.",
             )
         if read is not None:
-            if not whole:
-                holders = sorted({sid for sid, _symbol, _quantity in held_option_positions(conn)})
-                if holders:
-                    holds.add(
-                        OPTION_EVENTS_NOT_READ_REASON_CODE, holders, ref="read", symbol=None, date_ms=None,
-                        detail=read.failure or "The walk of the account's activities did not reach the window's start.",
-                    )
             _hold_what_could_not_be_read(conn, read, holds)
             simulated = {} if settled is None else {item.event.activity_id: item for item in settled.settled}
             booked += _book_events(repo, conn, read, holds, simulated=simulated)
@@ -2062,6 +2107,14 @@ def book_option_events(
                 )
                 if ended is not None:
                     booked.append(ended)
+            if not whole:
+                # After the bookings: a bot this round has just emptied is waiting for nothing more.
+                holders = sorted({sid for sid, _symbol, _quantity in held_option_positions(conn)})
+                if holders:
+                    holds.add(
+                        OPTION_EVENTS_NOT_READ_REASON_CODE, holders, ref="read", symbol=None, date_ms=None,
+                        detail=read.failure or _WALK_CUT_SHORT,
+                    )
             if whole:
                 _hold_what_expired_and_is_still_held(
                     conn, read, holds, now_ms=repo.clock(), not_settled={} if settled is None else settled.not_settled
@@ -2071,7 +2124,7 @@ def book_option_events(
         if read is not None:
             # A read that was not whole ends no hold: a row it did not reach is not a row that is gone.
             held += _sync_holds(repo, conn, holds, codes=(OPTION_EVENTS_NOT_READ_REASON_CODE, *_READ_HOLDS), may_end=whole)
-        _sync_shares_held(repo, conn, booked)
+        _sync_shares_held(repo, conn)
         return OptionEventRound(
             booked=tuple(f"cmd:{facts.idempotency_key}" for _sid, facts in booked), held=tuple(held), read_whole=whole,
             owner_ending=owner_outcome,
@@ -2130,12 +2183,14 @@ async def _read_events(repo: ClerkSqliteRepository, read: BrokerReadPort, *, aft
             if resume is None:
                 complete = evidence.history_complete
                 if not complete:
-                    failure = "The broker's walk of the account's activities stopped before the window's start."
+                    failure = _WALK_CUT_SHORT
                 break
         else:
             failure = f"The walk of the account's activities is longer than {MAX_OPTION_EVENT_PAGES} reads."
     except (BrokerError, ValueError) as exc:
-        failure = f"The account's option activities could not be read: {exc}"
+        # The broker's own words go to the log and never into the hold: they change from one
+        # failed read to the next, and a hold whose words change is written again each time.
+        failure = _READ_FAILED
         logger.warning(
             "the account's option events could not be read",
             extra={"action": "option_events_read_failed", "account_id": repo.account_id, "error": str(exc)},
@@ -2203,10 +2258,16 @@ async def poll_option_events(
             # Nothing an event could change: look again when the next read would be due.
             state.read_at_ms, state.nothing_pending = now_ms, True
         return OptionEventPoll(read=False)
+    differs = False
     if not due and may_read and broker_positions is not None:
         # A pass's own snapshot shows a recorded contract's position differing from the books.
         differs = await off_loop(lambda: option_position_differs(repo, broker_positions))
         due = differs and _due(state, now_ms, asked_for=True)
+    # From here to the lock nothing is awaited. While the books were being asked another caller may
+    # have begun this same read, or finished it: then it is theirs, and this one neither waits
+    # behind their walk nor reads again after it.
+    if due and not forced and (state.lock.locked() or not _due(state, repo.clock(), asked_for=asked_for or differs)):
+        due = False
     if not due:
         if not act_on_the_books_between_reads:
             return OptionEventPoll(read=False)

@@ -346,21 +346,56 @@ async def test_a_share_trade_that_belongs_to_no_event_read_is_held_for(tmp_path:
         repo.close()
 
 
-async def test_a_share_trade_that_differs_from_the_contracts_terms_is_named_and_the_books_keep_the_strike(
+async def test_a_share_trade_that_prints_another_price_and_is_right_in_all_else_holds_nobody_and_is_on_the_record(
     tmp_path: Path,
 ) -> None:
-    """Alpaca's own example prints a price of 90 on a strike of 150. The books say 150 and name the 90."""
+    """Alpaca's own example prints a price of 90 on a strike of 150. Its 200 shares and its $30,000 are the strike's.
+
+    The books count 150, and nothing they hold is in doubt. Nobody is held.
+    The booking's record says the row printed 90.
+    """
     repo = _one_bot(tmp_path, contracts=2)
     account = _FakeReadPort()
     rows = [documented_option_activity("trading_api", "option_exercise", index) for index in (0, 1)]
     try:
         await _read(repo, account, *rows)
+        await _read(repo, account, *rows)
 
-        [difference] = _cause(repo, "bot-a", "OPTION_SHARE_TRADE_DISAGREES")
-        assert "90" in difference["detail"] and "150" in difference["detail"]
+        assert option_holds(repo).keys() == {("bot-a", "OPTION_SHARES_HELD")}
         assert held(repo, "bot-a") == {"AAPL": 200.0}
         booked = json.loads(bookings(repo)[0]["facts_json"])
+        assert booked["shares"]["price"] == "150"
+        noted = booked["share_trade"]
+        assert (noted["agrees"], noted["only_the_price_differs"]) == (False, True)
+        [difference] = noted["differences"]
+        assert "90" in difference and "150" in difference
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("row", "what_differs"),
+    [
+        pytest.param({"net_amount": "-15001"}, "cash", id="the cash is a dollar out"),
+        pytest.param({"qty": "200", "net_amount": "-30000"}, "shares", id="twice the shares"),
+        pytest.param({"price": "90", "net_amount": "-9000"}, "cash", id="the price and the cash both differ"),
+    ],
+)
+async def test_a_share_trade_whose_shares_or_cash_are_not_the_contracts_is_named_and_the_books_keep_the_strike(
+    tmp_path: Path, row: dict[str, str], what_differs: str
+) -> None:
+    """What the broker did may not be what the books booked from the contract's terms. The bot is held."""
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _exercise(), _share_trade(100, **row))
+
+        [named] = _cause(repo, "bot-a", "OPTION_SHARE_TRADE_DISAGREES")
+        assert named["ref"] == "share-trade:trd-1" and what_differs in named["detail"]
+        assert held(repo, "bot-a") == {"AAPL": 100.0}
+        booked = json.loads(bookings(repo)[0]["facts_json"])
         assert booked["shares"]["price"] == "150" and booked["share_trade"]["agrees"] is False
+        assert "only_the_price_differs" not in booked["share_trade"]
     finally:
         repo.close()
 

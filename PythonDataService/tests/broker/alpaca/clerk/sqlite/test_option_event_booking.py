@@ -317,6 +317,45 @@ async def test_a_crash_between_two_bots_bookings_is_finished_from_the_record_and
         repo.close()
 
 
+async def test_a_bot_that_no_longer_holds_what_the_record_matched_to_it_is_not_booked_from_the_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first bot's part was booked and the process died. Before the next read the second bot bought its call back.
+
+    The record still says the assignment took the second bot's lot. Its
+    books hold none now, so nothing can be closed for it. It is held by
+    name, and its position is not taken past nothing.
+    """
+    repo = _two_bots_sold_one_call_each(tmp_path)
+    account = _FakeReadPort()
+    account.option_events.rows = _documented_case("trading_api/option_assignment")
+    real_append = option_events._append_booking
+    appended: list[str] = []
+
+    def dies_after_the_first(repository: ClerkSqliteRepository, **booking: Any) -> Any:
+        if appended:
+            raise RuntimeError("the process died here")
+        appended.append(booking["sid"])
+        return real_append(repository, **booking)
+
+    monkeypatch.setattr(option_events, "_append_booking", dies_after_the_first)
+    try:
+        with pytest.raises(RuntimeError, match="died"):
+            await poll(repo, account)
+        monkeypatch.setattr(option_events, "_append_booking", real_append)
+        holds_option(repo, "second", AAPL_CALL, contracts=1, price=1.20)
+        assert held(repo, "second") == {}
+
+        later(repo, option_events.OPTION_EVENT_POLL_RETRY_MS)
+        await poll(repo, account, asked_for=True)
+
+        assert [row["strategy_instance_id"] for row in bookings(repo)] == ["first"]
+        assert held(repo, "second") == {}
+        assert ("second", "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD") in option_holds(repo)
+    finally:
+        repo.close()
+
+
 async def test_an_event_of_a_contract_only_an_outside_order_holds_is_booked_for_no_bot_and_holds_nobody(
     tmp_path: Path,
 ) -> None:

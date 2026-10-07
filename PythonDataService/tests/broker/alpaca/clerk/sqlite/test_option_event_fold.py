@@ -150,6 +150,19 @@ async def test_the_fold_refuses_shares_or_cash_that_are_not_the_contracts(tmp_pa
         repo.close()
 
 
+async def test_the_fold_refuses_a_booking_stamped_with_another_time_than_its_facts_state(tmp_path: Path) -> None:
+    """When an event is counted decides the session its money falls in and the lot FIFO closes with it."""
+    repo, facts = await _booked_exercise(tmp_path)
+    try:
+        booking = _as_for_bot_b(facts)
+        with pytest.raises(ValueError, match="booking's time"):
+            repo.append_transition(replace(booking, source_event_at_ms=facts["booked_as_of_ms"] + 1))
+
+        assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()
+
+
 async def test_the_fold_refuses_an_exercise_that_names_an_outside_order(tmp_path: Path) -> None:
     """Naming an outside order takes that order out of the money reads' count. Only its own sale may."""
     repo, facts = await _booked_exercise(tmp_path)
