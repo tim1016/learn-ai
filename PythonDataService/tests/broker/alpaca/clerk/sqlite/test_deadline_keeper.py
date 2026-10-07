@@ -9,6 +9,7 @@ sleeping. Its real timing under the production event loop is not shown here.
 from __future__ import annotations
 
 import asyncio
+import itertools
 
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
@@ -23,6 +24,8 @@ from app.broker.alpaca.clerk.sqlite.deadline_keeper import (
 )
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
+from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
+from app.broker.alpaca.clerk.sqlite.resting_entries import _cancel_and_say_whether_proven, resting_entries
 from app.broker.contract.errors import BrokerUnavailable
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     WAIT_MS,
@@ -85,18 +88,47 @@ async def test_the_keeper_sleeps_to_the_next_deadline_and_no_further(paper: Pape
     assert done.wake_in_ms == 1_300
 
 
-async def test_an_unproven_cancel_is_looked_at_again_every_second_for_ten_seconds_then_idly(paper: PaperOptions) -> None:  # noqa: F811
+async def test_an_unproven_cancel_is_asked_again_every_second_for_ten_seconds_then_every_five(paper: PaperOptions) -> None:  # noqa: F811
     order_ref = await paper.resting()
+    deadline = paper.outcome(order_ref).cancel_at_ms
     paper.venue.cancel_error = BrokerUnavailable("Alpaca did not answer", broker="alpaca")
+    asked_at: list[int] = []
+    real_cancel = paper.venue.cancel
+
+    async def cancel_and_note_when(order_id: str) -> None:
+        asked_at.append(paper.clock() - deadline)
+        await real_cancel(order_id)
+
+    paper.venue.cancel = cancel_and_note_when  # type: ignore[method-assign]
     paper.wait(WAIT_MS)
+    keeper, _slept = _keeper_on_the_tests_clock(paper, rounds=40)
 
-    assert (await paper.round()).wake_in_ms == UNPROVEN_RETRY_MS
+    await keeper.run()
 
-    paper.wait(UNPROVEN_RETRY_WINDOW_MS - 1)
-    assert (await paper.round()).wake_in_ms == UNPROVEN_RETRY_MS
-    paper.wait(1)
-    assert (await paper.round()).wake_in_ms == IDLE_WAKE_MS
-    assert paper.outcome(order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+    # Ten asks in the first ten seconds past the deadline, then one every five: 128 in ten minutes, not 600.
+    assert asked_at[:10] == [second * UNPROVEN_RETRY_MS for second in range(UNPROVEN_RETRY_WINDOW_MS // 1000)]
+    assert len(asked_at) > 12
+    assert {later - earlier for earlier, later in itertools.pairwise(asked_at[9:])} == {IDLE_WAKE_MS}
+    # The lookup still shows the order working: it is asked for, and not proven.
+    assert paper.outcome(order_ref).standing is EntryStanding.CANCELLATION_REQUESTED
+
+
+async def test_an_old_unproven_cancel_is_not_asked_again_each_time_the_keeper_wakes_for_a_newer_entry(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    stuck = await paper.resting("a")
+    paper.venue.cancel_error = BrokerUnavailable("Alpaca did not answer", broker="alpaca")
+    paper.wait(WAIT_MS + UNPROVEN_RETRY_WINDOW_MS)
+    await paper.round()
+    asks = len(paper.venue.cancel_calls)
+
+    # A second, newer entry keeps the keeper waking every second; the old one keeps its five-second pause.
+    await paper.resting("b")
+    paper.wait(1_000)
+    waking = await paper.round()
+
+    assert waking.wake_in_ms < IDLE_WAKE_MS and len(paper.venue.cancel_calls) == asks
+    assert paper.outcome(stuck).standing is EntryStanding.OUTCOME_UNKNOWN
 
 
 async def test_two_bots_on_one_account_one_at_its_deadline_while_the_other_enters_and_is_not_refused(
@@ -164,7 +196,7 @@ async def test_the_keepers_rest_ends_at_its_time_or_at_a_nudge_whichever_is_firs
 async def test_a_round_that_fails_does_not_end_the_keeper(paper: PaperOptions, monkeypatch) -> None:  # noqa: F811
     order_ref = await paper.resting()
     paper.wait(WAIT_MS)
-    real_step = deadline_keeper.cancel_entries_past_their_wait
+    real_step = deadline_keeper.cancel_resting_entries
     calls = 0
 
     async def step_that_fails_once(*args: object, **kwargs: object) -> object:
@@ -174,7 +206,7 @@ async def test_a_round_that_fails_does_not_end_the_keeper(paper: PaperOptions, m
             raise RuntimeError("the books could not be read")
         return await real_step(*args, **kwargs)
 
-    monkeypatch.setattr(deadline_keeper, "cancel_entries_past_their_wait", step_that_fails_once)
+    monkeypatch.setattr(deadline_keeper, "cancel_resting_entries", step_that_fails_once)
     keeper, _slept = _keeper_on_the_tests_clock(paper, rounds=2)
 
     await keeper.run()
@@ -190,9 +222,84 @@ async def test_a_keeper_stopped_in_the_moment_it_wakes_still_stops(paper: PaperO
     await asyncio.sleep(0.01)
     keeper.nudge()
 
+    task = keeper._task
+    assert task is not None
+
     await asyncio.wait_for(keeper.stop(), timeout=2)
 
-    assert keeper._task is None
+    assert keeper._task is None and task.cancelled()
+
+
+async def test_a_stop_that_lands_inside_alpacas_cancel_while_the_claim_cannot_be_renewed_still_stops(
+    paper: PaperOptions, monkeypatch  # noqa: F811
+) -> None:
+    """The stop comes out of the broker call as a claim error, not as a cancellation: the keeper must still end."""
+    order_ref = await paper.resting()
+    paper.wait(WAIT_MS)
+    inside_the_cancel = asyncio.Event()
+
+    async def cancel_that_never_answers(_order_id: str) -> None:
+        inside_the_cancel.set()
+        await asyncio.Event().wait()
+
+    paper.venue.cancel = cancel_that_never_answers  # type: ignore[method-assign]
+    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
+    keeper.start()
+    task = keeper._task
+    assert task is not None
+    await asyncio.wait_for(inside_the_cancel.wait(), timeout=2)
+    monkeypatch.setattr(paper.repo, "renew_operation_claim", lambda **_claim: False)
+
+    await asyncio.wait_for(keeper.stop(), timeout=2)
+
+    assert task.cancelled()
+    assert paper.cancel_requests(order_ref) != []
+
+
+async def test_a_stop_that_comes_out_of_a_round_as_any_other_error_still_stops(paper: PaperOptions, monkeypatch) -> None:  # noqa: F811
+    inside_the_round = asyncio.Event()
+
+    async def round_that_turns_a_stop_into_an_error(*_args: object, **_kwargs: object) -> object:
+        inside_the_round.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise ExecutionLeaseLost("the lease was lost while stopping", account_id=paper.repo.account_id) from None
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(deadline_keeper, "cancel_resting_entries", round_that_turns_a_stop_into_an_error)
+    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
+    keeper.start()
+    task = keeper._task
+    assert task is not None
+    await asyncio.wait_for(inside_the_round.wait(), timeout=2)
+
+    await asyncio.wait_for(keeper.stop(), timeout=2)
+
+    assert task.cancelled()
+
+
+async def test_one_entrys_cancel_that_is_stopped_ends_as_stopped_and_is_not_read_as_a_held_claim(
+    paper: PaperOptions, monkeypatch  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    paper.wait(WAIT_MS)
+    inside_the_cancel = asyncio.Event()
+
+    async def cancel_that_never_answers(_order_id: str) -> None:
+        inside_the_cancel.set()
+        await asyncio.Event().wait()
+
+    paper.venue.cancel = cancel_that_never_answers  # type: ignore[method-assign]
+    [entry] = resting_entries(paper.repo)
+    one = asyncio.create_task(_cancel_and_say_whether_proven(paper.repo, entry, trade=paper.venue, run=run_inline))
+    await asyncio.wait_for(inside_the_cancel.wait(), timeout=2)
+    monkeypatch.setattr(paper.repo, "renew_operation_claim", lambda **_claim: False)
+
+    one.cancel()
+    done, _pending = await asyncio.wait({one}, timeout=2)
+
+    assert done == {one} and one.cancelled(), order_ref
 
 
 # ── a restart ────────────────────────────────────────────────────────────

@@ -541,6 +541,7 @@ async def cancel_and_prove_owned_entry(
     trade: BrokerTradePort,
     off_loop: OffLoop | None = None,
     reason: str = ENTRY_TERMINAL_PROOF,
+    say_once: bool = False,
 ) -> OrderResource:
     """Cancel one exact owned ENTRY under its current durable custodian.
 
@@ -549,6 +550,11 @@ async def cancel_and_prove_owned_entry(
 
     ``reason`` is why the cancel is asked for, recorded on the order's
     ``ORDER_CANCEL_REQUESTED`` the first time one is written for it.
+
+    ``say_once`` is for a caller that asks again on a short timer (the
+    deadline keeper, ADR 0076): a cancel still uncertain for the reason the
+    books already hold is not recorded again (:func:`_cancel_already_uncertain`).
+    Every other caller records each uncertain attempt, as before.
     """
     run = off_loop if off_loop is not None else run_inline
     entry = await run(lambda: repo.order(entry_order_ref))
@@ -574,6 +580,7 @@ async def cancel_and_prove_owned_entry(
             effect_operation_id=effect_operation_id,
             order=entry,
             reason=reason,
+            say_once=say_once,
             broker=broker,
             run=claim_scoped(run),
         )
@@ -1989,6 +1996,7 @@ async def _cancel_and_prove_order(
     effect_operation_id: str,
     order: OrderResource,
     reason: str = ENTRY_TERMINAL_PROOF,
+    say_once: bool = False,
     broker: ClaimedBrokerIO,
     run: OffLoop,
 ) -> bool:
@@ -2028,6 +2036,8 @@ async def _cancel_and_prove_order(
     if isinstance(observed, BrokerError) or observed is None:
 
         def _fold_cancel_uncertain() -> None:
+            if say_once and _cancel_already_uncertain(repo, order, looked_up=None):
+                return
             fold_uncertain(
                 repo,
                 effect_operation_id=effect_operation_id,
@@ -2055,7 +2065,9 @@ async def _cancel_and_prove_order(
         refreshed = repo.order(order.order_ref)
         assert refreshed is not None
         if not _is_terminal(refreshed.broker_state):
-            if cancel_error is not None:
+            if cancel_error is not None and not (
+                say_once and _cancel_already_uncertain(repo, order, looked_up=refreshed)
+            ):
                 fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order.order_ref,
                                why=str(cancel_error), transition_kind="ORDER_CANCEL_UNCERTAIN")
             return False
@@ -2064,6 +2076,37 @@ async def _cancel_and_prove_order(
         return not repo.order_fills_short_of_broker_cumulative(order.order_ref)
 
     return await run(_fold_observed_entry)
+
+
+_UNCERTAIN_KINDS = frozenset({"ORDER_CANCEL_UNCERTAIN", "ORDER_SUBMIT_UNCERTAIN"})
+
+
+def _cancel_already_uncertain(
+    repo: ClerkSqliteRepository, order: OrderResource, *, looked_up: OrderResource | None
+) -> bool:
+    """Whether the books already say this order's cancel is uncertain, and this attempt adds nothing to that.
+
+    ``order`` is the order as it stood before the attempt. ``looked_up`` is
+    the order after this attempt's lookup was folded, or ``None`` when the
+    lookup itself failed.
+
+    A cancel asked for again every second would otherwise write a record
+    every second for as long as the broker refused it or could not be
+    reached. Nothing is lost by saying it once: the first record stands, and
+    the order stays on the worklist until a lookup shows it ended.
+
+    - The lookup failed: nothing new when the last thing recorded of the
+      order is already that its outcome is uncertain.
+    - The lookup answered and the cancel was refused: nothing new when a
+      cancel of this order was already recorded uncertain and the broker
+      still shows the state it showed before.
+    """
+    if not repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_CANCEL_UNCERTAIN"):
+        return False
+    if looked_up is not None:
+        return looked_up.broker_state == order.broker_state
+    last = repo.last_order_transition(order_ref=order.order_ref)
+    return last is not None and last["transition_kind"] in _UNCERTAIN_KINDS
 
 
 def _prove_never_accepted_durably(

@@ -1116,6 +1116,38 @@ def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: st
     return [OrderResource(**dict(row)) for row in rows]
 
 
+_ORDER_FIELDS = (
+    "order_ref", "effect_operation_id", "client_order_id", "broker_order_id", "role", "broker_state",
+    "submitted_at_ms", "updated_at_ms",
+)
+_ENTRY_ORDER_COLUMNS = ", ".join(f"o.{name}" for name in _ORDER_FIELDS)
+
+_ENTRY_SHOWN_WORKING = f"LOWER(o.broker_state) IN ({', '.join('?' for _ in CANCELLABLE_ENTRY_BROKER_STATES)})"
+"""The broker's last word on the order is a state it can still fill in
+(:data:`CANCELLABLE_ENTRY_BROKER_STATES`, bound in sorted order)."""
+
+_STRATEGY_ENTRY_NO_EXIT_OWNS = (
+    "o.role = 'ENTRY' AND e.strategy_instance_id IS NOT NULL "
+    "AND NOT EXISTS (SELECT 1 FROM operation_order_links l "
+    "JOIN effect_operations x ON x.effect_operation_id = l.effect_operation_id "
+    "WHERE l.order_ref = o.order_ref AND x.kind = 'EXIT' "
+    "AND x.state NOT IN ('succeeded','failed','rejected'))"
+)
+"""A strategy's ENTRY that no nonterminal EXIT links (``o`` its order, ``e`` its effect).
+
+With :data:`_ENTRY_SHOWN_WORKING` this is the one definition of "an entry
+order that must be cancelled" once its reason has come. Two steps read it and
+differ only in the reason: a run that is no longer ACTIVE
+(:func:`entry_orders_owed_a_cancel`) and a wait that has run out
+(:func:`option_entries_with_a_deadline`).
+
+Manual-custody orders belong to no strategy. An entry a nonterminal EXIT
+links is that EXIT's to cancel (the predicate of :func:`active_exit_for_order`),
+and a second canceller would race it. **The ENTER's own state is deliberately
+not asked**: an ENTER voided as never sent whose order the broker later shows
+working (#2342) is as live as any other, and must be cancelled all the same."""
+
+
 def entry_orders_owed_a_cancel(conn: sqlite3.Connection) -> list[OrderResource]:
     """Working strategy ENTRYs whose run is not ACTIVE and that no EXIT owns.
 
@@ -1129,23 +1161,93 @@ def entry_orders_owed_a_cancel(conn: sqlite3.Connection) -> list[OrderResource]:
     * no nonterminal EXIT links the order -- that EXIT's machine owns its
       cancel, the predicate of :func:`active_exit_for_order`.
     """
-    states = ", ".join("?" for _ in CANCELLABLE_ENTRY_BROKER_STATES)
     rows = conn.execute(
-        "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
-        "o.role, o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "WHERE o.role = 'ENTRY' AND e.strategy_instance_id IS NOT NULL "
-        f"AND LOWER(o.broker_state) IN ({states}) "
+        f"WHERE {_STRATEGY_ENTRY_NO_EXIT_OWNS} AND {_ENTRY_SHOWN_WORKING} "
         "AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.run_id = e.run_id "
         "AND r.strategy_instance_id = e.strategy_instance_id AND r.state = 'ACTIVE') "
-        "AND NOT EXISTS (SELECT 1 FROM operation_order_links l "
-        "JOIN effect_operations x ON x.effect_operation_id = l.effect_operation_id "
-        "WHERE l.order_ref = o.order_ref AND x.kind = 'EXIT' "
-        "AND x.state NOT IN ('succeeded','failed','rejected')) "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         tuple(sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
     ).fetchall()
     return [OrderResource(**dict(row)) for row in rows]
+
+
+class EntryDeadline(NamedTuple):
+    """One option entry the Clerk may still have to cancel, and the two times its acceptance keeps."""
+
+    order: OrderResource
+    # When the Clerk cancels what has not filled, and its own clock when it admitted the entry.
+    cancel_at_ms: int
+    admitted_at_ms: int
+
+
+_ENTRY_ACCEPTANCE_TIME = "CAST(json_extract(accepted.facts_json, '$.option.{name}') AS INTEGER)"
+
+# Read outward from the orders the books bind to a contract (``CROSS JOIN``
+# keeps SQLite to the written order): books that never traded an option answer
+# from an empty table, and books that did read one acceptance for each bound
+# order, by its index. The custody log itself is never scanned.
+OPTION_ENTRIES_WITH_A_DEADLINE_SQL = (
+    f"SELECT {_ENTRY_ORDER_COLUMNS}, {_ENTRY_ACCEPTANCE_TIME.format(name='cancel_at_ms')} AS cancel_at_ms, "
+    f"{_ENTRY_ACCEPTANCE_TIME.format(name='admitted_at_ms')} AS admitted_at_ms "
+    "FROM order_contracts bound "
+    "CROSS JOIN orders o ON o.order_ref = bound.order_ref "
+    "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+    "CROSS JOIN custody_transitions accepted ON accepted.order_ref = o.order_ref "
+    "AND accepted.transition_kind = 'ENTER_ACCEPTED' "
+    f"WHERE {_STRATEGY_ENTRY_NO_EXIT_OWNS} "
+    f"AND ({_ENTRY_SHOWN_WORKING} OR (o.broker_state IS NULL "
+    f"AND e.state IN ({', '.join('?' for _ in NONTERMINAL_EFFECT_STATES)}))) "
+    f"AND {_ENTRY_ACCEPTANCE_TIME.format(name='cancel_at_ms')} IS NOT NULL "
+    "ORDER BY cancel_at_ms ASC, o.order_ref ASC"
+)
+OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS = (*sorted(CANCELLABLE_ENTRY_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES))
+
+
+def option_entries_with_a_deadline(conn: sqlite3.Connection) -> list[EntryDeadline]:
+    """Every option entry that may still have to be cancelled at its deadline, the earliest deadline first (#2913).
+
+    The deadline keeper's worklist, in one read. It is
+    :func:`entry_orders_owed_a_cancel`'s predicate with a deadline in place
+    of a stopped run: a strategy's ENTRY the books show working, that no EXIT
+    owns, whatever its ENTER's state. An entry in shares, and an option entry
+    from before entries could rest, has no deadline and is never listed.
+
+    One more case is listed that the stopped-run step leaves to the pass's
+    own recovery: an entry the broker has not answered about yet, under an
+    ENTER that has not ended. Nothing can be cancelled without the broker's
+    id for it, so its turn at the deadline is a lookup, which finds the order
+    or, past the grace, proves it never arrived.
+    """
+    rows = conn.execute(OPTION_ENTRIES_WITH_A_DEADLINE_SQL, OPTION_ENTRIES_WITH_A_DEADLINE_PARAMS).fetchall()
+    return [
+        EntryDeadline(
+            order=OrderResource(**{name: row[name] for name in _ORDER_FIELDS}),
+            cancel_at_ms=row["cancel_at_ms"],
+            admitted_at_ms=row["admitted_at_ms"],
+        )
+        for row in rows
+    ]
+
+
+def working_option_entry_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> OrderResource | None:
+    """An option entry of this strategy that the books show working at the broker, or ``None`` (#2913).
+
+    Whatever its ENTER's state: the order of an ENTER voided as never sent,
+    which the broker later showed, can still fill. Read from the orders the
+    books bind to a contract, so a strategy that trades shares is answered
+    from an empty table and its orders are never asked about.
+    """
+    row = conn.execute(
+        f"SELECT {_ENTRY_ORDER_COLUMNS} FROM order_contracts bound "
+        "CROSS JOIN orders o ON o.order_ref = bound.order_ref "
+        "CROSS JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        f"WHERE o.role = 'ENTRY' AND e.strategy_instance_id = ? AND {_ENTRY_SHOWN_WORKING} "
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC LIMIT 1",
+        (strategy_instance_id, *sorted(CANCELLABLE_ENTRY_BROKER_STATES)),
+    ).fetchone()
+    return OrderResource(**dict(row)) if row is not None else None
 
 
 def orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:
