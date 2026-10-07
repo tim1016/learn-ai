@@ -281,6 +281,33 @@ def test_a_spreads_provision_is_each_leg_filled_at_the_price_it_is_entered_at() 
     assert three == 27
 
 
+def test_a_leg_of_two_contracts_a_structure_is_charged_as_two_contracts() -> None:
+    """A call butterfly on 2026-10-06: one 580 call bought, two 585 calls sold at a bid of 4.00, one 590 call
+    bought. That is four contracts a structure, and the body is two of them.
+
+    ORF is 4 x 1.5 = 6 cents and OCC 4 x 2.5 = 10. CAT on 400 shares is 0.12 of a cent, which rounds up to 1.
+    The SEC fee is on the $800.00 the two sold contracts bring: 1.648 cents, which rounds up to 2. The TAF is
+    paused. Nineteen cents.
+
+    Charged as one contract, the body would bring $400.00: three contracts, ORF 4.5 rounding up to 5, OCC 7.5
+    to 8, CAT 1 and an SEC fee of 0.824 rounding up to 1. Fifteen cents.
+
+    Two structures are eight contracts: ORF 12, OCC 20, CAT on 800 shares 0.24 of a cent, 1, and the SEC fee on
+    $1,600.00 3.296 cents, 4. Thirty-seven cents.
+    """
+    butterfly = _structure(("lower", "long", 580, 1), ("body", "short", 585, 2), ("upper", "long", 590, 1))
+    markets = {
+        "lower": LegQuote(bid=Decimal("6.06"), ask=Decimal("6.10")),
+        "body": LegQuote(bid=Decimal("4.00"), ask=Decimal("4.04")),
+        "upper": LegQuote(bid=Decimal("2.26"), ask=Decimal("2.30")),
+    }
+
+    one = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY)
+    two = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=2), trade_date=_TUESDAY)
+
+    assert (one, two) == (19, 37)
+
+
 def test_the_sold_leg_is_charged_on_its_bid_and_not_on_its_ask() -> None:
     """Sold at a bid of 4.85 the SEC fee is 0.9991 of a cent and rounds up to 1. At the ask of 4.89 it would be
     1.0073 and round up to 2."""
