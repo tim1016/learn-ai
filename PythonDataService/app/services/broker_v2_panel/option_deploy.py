@@ -1,13 +1,15 @@
 """Deploy for a bot that trades an option structure: its plan, what stops it, and its money review (#2913).
 
 Deploy takes an option choice on its request (``app.schemas.option_deploy``)
-and this module says three things of it, each from an authority that already
-exists. It holds no rule, no price and no figure of its own.
+and this module says three things of it. Wherever an authority already holds
+the rule, that authority is asked. What is decided here and nowhere else is
+named below.
 
 **The plan.** The Action Plan a Deploy carries is the one the structure
-preview builds from the same legs (``plan_of``), and a structure the
-preview's own checks refuse is refused here in the preview's own words, so
-the builder's verdict and Deploy's cannot differ.
+preview builds from the same legs, and a structure the preview's own plan
+checks refuse is refused here in the preview's own words
+(``plan_or_refusal``, one function that reads no quote), so the builder's
+verdict and Deploy's cannot differ.
 
 **What stops it.** Each is a typed blocker with a sentence that names a leg
 by its place:
@@ -19,22 +21,36 @@ by its place:
   ``ALPACA_LIVE_OPTION_BOTS_ENABLED`` is off, which it is unless a
   deployment turns it on (ADR 0076 decision 24);
 - this Clerk has no option quotes of its own, or counts no quote line free
-  for the plan. Both are the runner's own start refusals, asked here first;
+  for the plan. The first is the runner's own start refusal. The second is
+  stricter than the runner's: the runner refuses a window larger than the
+  Clerk's whole budget, and Deploy also takes off what the option bots
+  already running here can need. That sum is this module's;
 - on a real account: the account is not approved for the structure, its
   option buying power cannot cover one entry, or Alpaca does not list the
   contract the preview picked. The broker's port is asked; a Dry Run asks
-  nothing of a broker;
+  nothing of a broker. The level a structure needs (2 to buy an option, 3
+  for several legs) and the comparison of buying power with what one entry
+  sets aside are this module's;
 - what the structure preview finds right now: picks that are not the
-  structure built, or money that cannot be set aside.
+  structure built, or money that cannot be set aside;
+- at the click, no price: an option bot is deployed only while one entry of
+  its structure can be priced.
 
-A Deploy raises the first. The money review lists them all.
+A click and an admission read are refused for the first found, and ask
+nobody further. The money review lists every one it finds: it goes on to
+read the preview and to ask Alpaca after a structure, a mode or a quote-line
+blocker. Two things bound that list. A review of an account whose mode is
+not open asks Alpaca nothing. And what needs a price or a pick (buying
+power, the listing, a red verdict) is found only once the preview has
+resolved.
 
 **The money.** One entry is priced by the structure preview, which reads the
 entry's own figures function. The rows here are that answer's fields under
 the names the owner knows them by: what is set aside, and the premium,
 Alpaca's requirement and the fee estimate that add up to it; the loss at
-expiry if held, an estimate; and what the budget has free after one entry.
-With no resolved preview there is no price, and the review says why.
+expiry if held, an estimate; and what the budget has free after one entry,
+which is the one figure worked out here (the budget less what is set
+aside). With no resolved preview there is no price, and the review says why.
 """
 
 from __future__ import annotations
@@ -238,12 +254,14 @@ def mode_blocker(request: AlpacaPaperDeployRequest) -> OptionDeployBlocker | Non
 
 
 def quote_line_blockers(plan: ActionPlan, market: OptionMarket) -> list[OptionDeployBlocker]:
-    """Why this Clerk could not quote the plan's contracts: the two refusals its runner would start with.
+    """Why this Clerk could not quote the plan's contracts.
 
-    The count of lines is this system's own estimate: what this plan's
-    window can need, and what the windows of the option bots already
-    running on this Clerk can need, against the Clerk's own budget. It
-    cannot see what another IBKR session uses.
+    No option quotes of its own is the refusal its runner would start with.
+    The count of lines is held more strictly here than there: the runner
+    refuses a window larger than the Clerk's whole budget, and Deploy also
+    takes off what the windows of the option bots already running on this
+    Clerk can need. The count is this system's own estimate. It cannot see
+    what another IBKR session uses.
     """
     if market.quotes_are_read_elsewhere():
         return [
@@ -536,13 +554,14 @@ def _money_rows(preview: OptionStructurePreview, structures: int, budget_cents: 
 
 
 def _end_sentence(plan: ActionPlan) -> str | None:
-    """What a sold leg does to the bot's end: the Clerk schedules a close before every session's close."""
+    """What a sold leg does to the bot's end: the Clerk closes the position before every session's close it is
+    held through (ADR 0076 decision 20). The Clerk owes that close, not the bot's run."""
     if not any(isinstance(leg, OptionEntryLeg) and leg.position == "short" for leg in plan.on_enter):
         return None
     minutes = CloseTerms().sold_leg_close_lead_ms // 60_000
     return (
-        f"This structure has a sold leg, so the bot schedules a close {minutes} minutes before each session "
-        "ends. Keeping it overnight is not offered."
+        f"This structure has a sold leg, so the account's Clerk closes it {minutes} minutes before the close of "
+        "every session it is held through, whether or not the bot is running. Keeping it overnight is not offered."
     )
 
 
@@ -553,10 +572,10 @@ def _standing_notes(request: AlpacaPaperDeployRequest) -> list[OptionDeployNote]
     return [
         OptionDeployNote(
             code=UNTESTED_AT_ALPACA,
-            headline="No option order from this system has been sent to Alpaca yet.",
+            headline="This system's option orders have not been checked against Alpaca.",
             detail=(
-                "The order, its cancel and its fills are built from Alpaca's published examples. Check this "
-                "bot's first option orders at Alpaca yourself."
+                "The order, its cancel and its fills are built from Alpaca's published examples, not from "
+                "what Alpaca has answered. Check this bot's first option orders at Alpaca yourself."
             ),
         ),
         OptionDeployNote(

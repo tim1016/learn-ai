@@ -1692,8 +1692,9 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Sealed order terms** — an option bot's four order terms as they are written down at Deploy: on its binding, its instance record and its seal, under their hashes, and fixed for its life. A bot in shares has none.
 - **Trades choice** — what a Deploy says its bot trades, said once: the signal's own shares, another stock or ETF, or an option structure with its order terms.
   _Avoid_: saying a traded symbol and an option structure together (it is refused).
-- **Option review** — what the money review of an option Deploy carries beside the budget: the money rows, what stops the Deploy, and what the owner should know. Priced by the preview; it computes nothing.
-- **Live option setting** — `ALPACA_LIVE_OPTION_BOTS_ENABLED`. Off unless a deployment turns it on. While off, Deploy, the account Clerk and the Alpaca port each refuse a Live option bot by name.
+- **Option review** — what the money review of an option Deploy carries beside the budget: the money rows, what stops the Deploy, and what the owner should know. Priced by the preview. It lists every blocker it finds, and says so when it read no preview (`not_asked`). Left out of the review of a bot in shares.
+- **Live option setting** — `ALPACA_LIVE_OPTION_BOTS_ENABLED`. Off unless a deployment turns it on. While off, Deploy, the account Clerk and the Alpaca port each refuse by name what opens an option position on a Live account. It never stops a close: an order whose every leg closes still goes out.
+- **Not priced** — an option Deploy whose structure preview gives no price at the click. It is refused by name, with a budget or without one: an option bot is deployed only while one entry can be priced.
 - **Entry standing** — where an option entry stands, read from the books: working, cancellation requested, filled, filled in part, unfilled, never sent, or outcome unknown. The first two and the last are not proven.
 - **Cancellation requested** — the Clerk has recorded that it is asking Alpaca to cancel an order and no lookup has yet shown the order ended. It is not "cancelled".
   _Avoid_: cancelled (that is proven only by a lookup).
