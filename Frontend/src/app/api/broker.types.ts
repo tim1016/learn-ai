@@ -19978,6 +19978,8 @@ export interface components {
             assumptions_sentence: string;
             /** Break Even Prices */
             break_even_prices: string[];
+            /** Break Even Sentence */
+            break_even_sentence: string | null;
             /** Estimated */
             estimated: boolean;
             /** Gain Cents */
@@ -19986,10 +19988,14 @@ export interface components {
             gain_has_no_limit: boolean;
             /** Gain Holds */
             gain_holds: components["schemas"]["PriceRangeView"][];
+            /** Gain Sentence */
+            gain_sentence: string | null;
             /** Loss Cents */
             loss_cents: number | null;
             /** Loss Holds */
             loss_holds: components["schemas"]["PriceRangeView"][];
+            /** Loss Sentence */
+            loss_sentence: string | null;
             /** Warning Sentence */
             warning_sentence: string;
         };
@@ -20222,6 +20228,8 @@ export interface components {
             money: components["schemas"]["OptionPreviewMoney"] | null;
             /** Notice */
             notice: string | null;
+            /** Oldest Quote Age Ms */
+            oldest_quote_age_ms: number | null;
             /** Preview Sentence */
             preview_sentence: string;
             pricing_inputs: components["schemas"]["OptionPreviewPricingInputs"] | null;

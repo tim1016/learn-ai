@@ -34453,6 +34453,17 @@
             "title": "Break Even Prices",
             "type": "array"
           },
+          "break_even_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Break Even Sentence"
+          },
           "estimated": {
             "title": "Estimated",
             "type": "boolean"
@@ -34479,6 +34490,17 @@
             "title": "Gain Holds",
             "type": "array"
           },
+          "gain_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain Sentence"
+          },
           "loss_cents": {
             "anyOf": [
               {
@@ -34497,6 +34519,17 @@
             "title": "Loss Holds",
             "type": "array"
           },
+          "loss_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Sentence"
+          },
           "warning_sentence": {
             "title": "Warning Sentence",
             "type": "string"
@@ -34510,6 +34543,9 @@
           "gain_has_no_limit",
           "gain_holds",
           "break_even_prices",
+          "loss_sentence",
+          "gain_sentence",
+          "break_even_sentence",
           "assumptions_sentence",
           "warning_sentence"
         ],
@@ -35170,6 +35206,17 @@
             ],
             "title": "Notice"
           },
+          "oldest_quote_age_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Quote Age Ms"
+          },
           "preview_sentence": {
             "title": "Preview Sentence",
             "type": "string"
@@ -35302,6 +35349,7 @@
           "cost_limit_percent",
           "quotes_read_ms",
           "feed_generation",
+          "oldest_quote_age_ms",
           "underlying_quote",
           "the_money",
           "the_money_sentence",

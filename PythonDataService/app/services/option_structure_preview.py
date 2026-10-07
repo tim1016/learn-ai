@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
@@ -44,6 +44,7 @@ from app.broker.alpaca.option_fees import OptionRateNotPinnedError, fees_for_opt
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import LineUse, WatchRequest
+from app.options.at_expiry import PriceRange
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA, LeanDirection
@@ -264,7 +265,24 @@ def _money_view(figures: StructureFigures, cost_limit_percent: Decimal) -> Optio
     )
 
 
-def _at_expiry_view(figures: StructureFigures) -> OptionPreviewAtExpiry | None:
+def _where(holds: Sequence[PriceRange]) -> str:
+    """Stretches of underlying price, in words: "at 585 or below", "from 575 to 595", "at 600 or above"."""
+    said = []
+    for held in holds:
+        if held.high is None:
+            said.append(f"at {held.low:f} or above")
+        elif held.high == 0:
+            said.append("at zero")
+        elif held.low == 0:
+            said.append(f"at {held.high:f} or below")
+        elif held.low == held.high:
+            said.append(f"at {held.low:f}")
+        else:
+            said.append(f"from {held.low:f} to {held.high:f}")
+    return ", or ".join(said)
+
+
+def _at_expiry_view(figures: StructureFigures, underlying: str) -> OptionPreviewAtExpiry | None:
     if figures.money is None:
         return None
     warning = "A market exit before expiry can do worse than this."
@@ -278,17 +296,34 @@ def _at_expiry_view(figures: StructureFigures) -> OptionPreviewAtExpiry | None:
             gain_has_no_limit=False,
             gain_holds=[],
             break_even_prices=[],
+            loss_sentence=None,
+            gain_sentence=None,
+            break_even_sentence=None,
             assumptions_sentence="Not estimated: the legs do not share an expiry.",
             warning_sentence=warning,
         )
+    loss_cents = figures.money.loss_at_expiry_cents
+    assert loss_cents is not None
+    even_at = [_rounded(price) for price in seen.break_evens]
     return OptionPreviewAtExpiry(
         estimated=True,
-        loss_cents=figures.money.loss_at_expiry_cents,
+        loss_cents=loss_cents,
         loss_holds=[PriceRangeView(from_price=held.low, to_price=held.high) for held in seen.loss_holds],
         gain_cents=seen.gain_cents,
         gain_has_no_limit=seen.gain_cents is None,
         gain_holds=[PriceRangeView(from_price=held.low, to_price=held.high) for held in seen.gain_holds],
-        break_even_prices=[_rounded(price) for price in seen.break_evens],
+        break_even_prices=even_at,
+        loss_sentence=f"Lose up to {_usd(loss_cents)}, with {underlying} {_where(seen.loss_holds)}.",
+        gain_sentence=(
+            f"The gain has no limit as {underlying} rises."
+            if seen.gain_cents is None
+            else f"Gain up to {_usd(seen.gain_cents)}, with {underlying} {_where(seen.gain_holds)}."
+        ),
+        break_even_sentence=(
+            f"Even with {underlying} at {' and at '.join(str(price) for price in even_at)}."
+            if even_at
+            else "It is even at no price."
+        ),
         assumptions_sentence=(
             "At expiry, if held, before fees. An estimate: it takes every leg as held to expiry and never "
             "exercised or assigned early."
@@ -588,6 +623,7 @@ class _Asked:
             "cost_limit_percent": request.cost_limit_percent,
             "quotes_read_ms": self.now,
             "feed_generation": None,
+            "oldest_quote_age_ms": None,
             "underlying_quote": None,
             "the_money": None,
             "the_money_sentence": None,
@@ -610,7 +646,9 @@ class _Asked:
         said = ["It goes to Alpaca as one order."]
         if any(leg.position == "short" for leg in legs):
             said.append("Every sold leg has a bought leg of its kind to cover it.")
-        said.append("The exit closes it." if len(legs) == 1 else f"The exit closes all {len(legs)} legs.")
+        said.append(
+            {1: "The exit closes it.", 2: "The exit closes both legs."}.get(len(legs), f"The exit closes all {len(legs)} legs.")
+        )
         return {"can_be_deployed": True, "deploy_sentence": " ".join(said), "deploy_reason_code": None}
 
     def _of_the_reading(self, reading: _Reading) -> dict[str, object]:
@@ -705,7 +743,12 @@ class _Asked:
             ),
             legs=[_leg_view(leg, reading.now) for leg in figures.legs],
             money=_money_view(figures, request.cost_limit_percent),
-            at_expiry=_at_expiry_view(figures),
+            at_expiry=_at_expiry_view(figures, request.underlying),
+            oldest_quote_age_ms=max(
+                age
+                for quote in (reading.underlying_quote, *(leg.quote for leg in figures.legs))
+                for age in (reading.now - side.received_ms for side in (quote.bid, quote.ask) if side is not None)
+            ),
             lean=_lean_view(figures, request.underlying, request.listens_to),
             lean_unknown_sentence=lean_unknown,
             pricing_inputs=_pricing_inputs_view(inputs),

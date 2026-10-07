@@ -193,6 +193,10 @@ class OptionPreviewAtExpiry(BaseModel):
     gain_holds: list[PriceRangeView]
     # To the nearest cent.
     break_even_prices: list[Decimal]
+    # The three lines above as the server says them. None when nothing is estimated.
+    loss_sentence: str | None
+    gain_sentence: str | None
+    break_even_sentence: str | None
     assumptions_sentence: str
     warning_sentence: str
 
@@ -309,6 +313,8 @@ class OptionStructurePreview(BaseModel):
     # When this process read its quotes for this answer, and the feed's generation then.
     quotes_read_ms: EpochMs
     feed_generation: int | None
+    # The age of the oldest quote side the picks stand on, the underlying's included. None with no picks.
+    oldest_quote_age_ms: int | None
     underlying_quote: OptionPreviewQuote | None
     # "The money" a preview counts strikes from: the underlying's live mid. A bot uses its decision bar's close.
     the_money: Decimal | None

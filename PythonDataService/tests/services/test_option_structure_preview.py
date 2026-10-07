@@ -174,6 +174,7 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
 
     assert (seen.state, seen.reason_code, seen.notice) == ("resolved", None, None)
     assert (seen.quotes_read_ms, seen.feed_generation) == (NOW + 400, desk.lines.generation)
+    assert seen.oldest_quote_age_ms == 400
     # A preview has no decision bar: the money is SPY's live mid.
     assert seen.the_money == Decimal("585.11")
     assert (seen.underlying_quote.bid, seen.underlying_quote.ask, seen.underlying_quote.bid_age_ms) == (
