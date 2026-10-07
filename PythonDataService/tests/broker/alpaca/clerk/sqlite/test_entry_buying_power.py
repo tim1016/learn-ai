@@ -86,7 +86,8 @@ class OptionAccount(PaperAccountRead):
         super().__init__(venue)
         self.buying_power = BEFORE
         self.option_account_error: Exception | None = None
-        self.option_account_never_answers = False
+        # While set and not yet released, a read of the option account does not answer.
+        self.option_account_waits_for: asyncio.Event | None = None
         # Raised by the read of the account's positions while set: a pass then reaches no verdict.
         self.positions_error: Exception | None = None
 
@@ -96,9 +97,9 @@ class OptionAccount(PaperAccountRead):
         return await super().list_positions()
 
     async def get_option_account(self) -> BrokerOptionAccountSnapshot:
-        if self.option_account_never_answers:
+        if self.option_account_waits_for is not None and not self.option_account_waits_for.is_set():
             self.option_account_reads += 1
-            await asyncio.Event().wait()
+            await self.option_account_waits_for.wait()
         if self.option_account_error is not None:
             self.option_account_reads += 1
             raise self.option_account_error
@@ -393,14 +394,18 @@ async def test_a_first_reading_that_never_answers_is_given_up_on_and_the_entry_i
     paper: Paper, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(entry_buying_power, "FIRST_READING_BOUND_MS", 50)
-    paper.account.option_account_never_answers = True
+    alpaca_answers = asyncio.Event()
+    paper.account.option_account_waits_for = alpaca_answers
     taken_at = paper.clock()
 
-    order_ref = await paper.resting()
+    try:
+        # Ten seconds is far past the reading's own bound: an entry still waiting then is waiting on the read.
+        order_ref = await asyncio.wait_for(paper.resting(), timeout=10)
+    finally:
+        alpaca_answers.set()
 
     # Sent at the same clock it was asked at, to the venue, once.
     assert paper.venue.option_submit_calls == [order_ref] and paper.clock() == taken_at
-    paper.account.option_account_never_answers = False
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
     await paper.pass_and_round()
     assert paper.comparison(order_ref).reason_code == "FIRST_READING_FAILED"
