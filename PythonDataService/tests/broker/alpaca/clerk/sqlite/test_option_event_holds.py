@@ -616,3 +616,24 @@ async def test_a_read_goes_back_to_the_oldest_row_an_open_hold_names(tmp_path: P
         assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
     finally:
         repo.close()
+
+
+async def test_a_hold_that_still_stands_is_written_once_however_often_the_same_rows_are_read(tmp_path: Path) -> None:
+    """While a hold stands the events are read every minute. A read that finds what the last one found writes nothing."""
+    repo = _one_bot(tmp_path, contracts=2)
+    account = _FakeReadPort()
+    rows = [_expiry(qty="-0.5"), _exercise(qty="-1", id="exc-9")]
+    try:
+        await _read(repo, account, *rows)
+        written = repo.last_custody_sequence()
+        assert {reason for _bot, reason in option_holds(repo)} == {
+            "OPTION_EVENT_UNREADABLE", "OPTION_SHARE_TRADE_MISSING", "OPTION_SHARES_HELD",
+        }
+
+        for _ in range(3):
+            await _read(repo, account, *rows)
+
+        assert repo.last_custody_sequence() == written
+        assert len(account.option_events.reads) == 4
+    finally:
+        repo.close()
