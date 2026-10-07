@@ -567,10 +567,11 @@ class PreviewSearches:
       on quotes read then.
 
     A late answer is not kept for the next ask. It stands on quotes read
-    before the search began, and a page asks again a second after it is told
-    to: by then those quotes are older than the age a pick may stand on (the
-    resolver's own limit, five seconds), so a kept answer could only ever be
-    one the resolver itself would call stale.
+    before the search began, and the page is told to ask again in a second:
+    its next ask comes when those quotes are older than a pick may stand on
+    (the age limit the resolver is handed), so a kept answer could only ever
+    be one the resolver itself would call stale. A test of the preview holds
+    the wait, the second and that limit to this.
     """
 
     def __init__(self, lane: OptionSearchLane, *, wait_s: float = PREVIEW_SEARCH_WAIT_S) -> None:

@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
+from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import CEILING_PROBE_MS, OptionQuoteLines, WatchRequest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.options.american import CashDividend, american_implied_volatility, years_from_ms
@@ -34,7 +35,7 @@ from app.services import option_structure_preview
 from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
 from app.services.option_preview_views import usd
-from app.services.option_search import OptionSearchLane, PreviewSearches
+from app.services.option_search import PREVIEW_SEARCH_WAIT_S, OptionSearchLane, PreviewSearches
 from app.services.option_structure_preview import (
     ARRIVAL_GRACE_MS,
     MAX_PREVIEW_WINDOWS,
@@ -1164,6 +1165,16 @@ async def test_a_search_that_outlives_its_ask_is_never_shown_and_the_next_ask_se
     # A search of its own, of the quotes as read a second later: they are 1,400 ms old then, not 400.
     assert (seen.state, seen.quotes_read_ms, seen.oldest_quote_age_ms) == ("resolved", read_at + 1_000, 1_400)
     assert [search.asked.selection_ms for search in worker.searches] == [read_at, read_at + 1_000]
+
+
+def test_a_late_answer_would_be_older_than_a_pick_may_stand_on_before_a_page_could_ask_for_it() -> None:
+    """Why a search that outlives its ask is not kept for the page's next one. The ask waits four seconds and
+    is told to ask again in one, so the next ask comes when the quotes the search read are past the age limit
+    the resolver is handed. Were the wait made shorter or the limit longer, keeping a late answer, no older
+    than that limit, would be of use again: this fails then, to say so."""
+    earliest_next_ask_ms = PREVIEW_SEARCH_WAIT_S * 1_000 + option_structure_preview._ASK_AGAIN_MS
+
+    assert earliest_next_ask_ms >= DECISION_DATA_MAX_AGE_MS
 
 
 async def test_a_search_that_could_not_be_run_is_said_plainly_and_is_no_refusal_of_the_structure(
