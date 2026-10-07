@@ -30,7 +30,9 @@ leaves the outcome unknown.
 under the operation claim of its own order, so a broker call that is slow
 for one does not hold up the next. An entry whose cancel raises is logged
 and left for the next run; the others go on. A cancel that keeps failing
-the same way is recorded once, not once a round.
+the same way is not recorded once a round: with the keeper working alone
+it is recorded once. While passes run and the lookup fails, it is recorded
+again after each pass (ADR 0076 decision 19).
 
 Left alone, by design: an entry before its deadline; an entry from before
 entries could rest, which has no deadline; an entry whose order has ended;

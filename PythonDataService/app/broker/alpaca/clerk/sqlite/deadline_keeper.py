@@ -34,8 +34,10 @@ deadline, then no more often than the idle wake, however often the keeper
 wakes for other entries. That pause is kept in memory only. It is not a
 list of what is due: forget it, and an entry is asked about one round
 sooner. A cancel that keeps failing the same way writes one record, not
-one a round. A nudge from the facade, sent when it accepts an option entry,
-ends the sleep at once. The nudge carries no meaning: lost, the idle wake
+one a round, while the keeper works alone; with passes running and the
+lookup failing it is written again after each pass (ADR 0076 decision 19).
+A nudge from the facade, sent when it accepts an option entry, ends the
+sleep at once. The nudge carries no meaning: lost, the idle wake
 and the pass still find the entry.
 
 **It always stops.** A stop that lands inside a broker call can surface as
