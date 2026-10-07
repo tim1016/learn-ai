@@ -432,7 +432,7 @@ Decision 14 says how an activity is read and which lots it takes. Nothing called
 
 **Holds**
 
-One family of reason codes. Each is raised for the bot it can be tied to and account-wide otherwise. Each blocks entries and admits reductions and the Flatten.
+One family of reason codes. Each is raised for the bot it can be tied to and account-wide otherwise. Each blocks entries and admits reductions and the Flatten. One reduction waits whether or not a hold is yet raised: a bot's own order in a contract an unsettled outside order stands in (below).
 
 | Code | Raised when |
 |---|---|
@@ -450,7 +450,9 @@ One family of reason codes. Each is raised for the bot it can be tied to and acc
 | `OPTION_ORDER_NOT_OURS` | an order the Clerk did not place is in a contract the bot holds |
 
 - **A hold ends by proof or by the owner.** It stands while a whole read still has its cause and ends when a whole read no longer has it. The owner's acknowledgement ends it too, and the same row is not held for again; a new row is. `OPTION_SHARES_HELD` and `OPTION_EVENTS_NOT_READ` end only by proof. No hold ends on a timer. **No route calls the acknowledgement yet.**
-- **A hold does not block lane quiet,** and the owner's write-off may proceed beside it. A row that arrives after a write-off finds no lot and is held by name; it cannot close a lot twice.
+- **A hold does not block lane quiet,** and the owner's write-off may proceed beside it.
+- **A row read after the owner wrote its position off closes nothing twice.** The write-off took the position off the books and closed no lot, so the bot is offered no lot. An expiry's row then only confirms the write-off: nothing is booked and nobody is held. An exercise's or an assignment's row moved shares and cash the write-off did not: nothing is booked, and the bot that wrote the position off is held by name under `OPTION_EVENT_CONTRACT_NOT_HELD`, because those shares are on no bot's books. A write-off of the other side explains nothing, and the row is held for as nobody's.
+- **The row is the truth and the write-off is the last resort.** A booked expiry closes the lot at zero, so the premium shows as the loss; a write-off realises nothing and leaves the lot open in the fills. Once the write-off has left the books with no option work, the account's events are read no more, and shares from an exercise then show only as the pass's drift in the underlying. So on a real account the write-off of an expired contract is for when no row comes.
 
 **A lot closed between an event's date and the day its row is read**
 
@@ -462,9 +464,12 @@ A lot still open on a contract past its last session is set against the broker's
 
 **A sale Alpaca makes itself**
 
-It arrives as an order the Clerk did not place. Before, any such order put the whole account on a hold that refuses reductions, the bot's own close included.
+It arrives as an order the Clerk did not place. Before, any such order put the whole account on a hold that refuses every reduction of every bot.
 
-- **An outside order in a recorded contract that a bot holds, on the side that reduces it, is held against that bot** (`OPTION_ORDER_NOT_OURS`) and is left off the account-wide hold. The bot may still close its own position.
+- **An outside order in a recorded contract that a bot holds, on the side that reduces it, is held against that bot** (`OPTION_ORDER_NOT_OURS`) and is left off the account-wide hold. No other bot is held, and the bot's reductions in every other symbol go on.
+- **While the order is unsettled, no order of the bot's own to reduce that contract is sent.** Unsettled means still working, or filled and not yet booked. A second order beside it would sell contracts the outside order may sell, or has sold. Every reduction asks: a deciding program's EXIT, the Flatten, an ended run's close, the Clerk's retry and its scheduled close all create their order through the one admission of a reduction (`uncertainty.decide_capability`), which is refused under `OPTION_ORDER_NOT_OURS`. An EXIT already accepted is kept and driven on when the order has settled.
+- **The fact asked is the books' own record of the order** (`option_event_books.outside_order_in_the_way`), written by the transition that observed it. No hold has to be raised first, so nothing is sent in the time between Alpaca's stream showing the order and the next pass or poll.
+- **The owner's review releases it.** An outside order the owner has marked reviewed, by the route that always reviewed outside orders, is held for no more and stands in no order's way. So does an acknowledgement of the bot's hold. What the order fills is booked all the same.
 - **Once the order has ended with a fill, the fill is booked against the oldest lots,** as `OPTION_SOLD_OUTSIDE`, at the broker's average price, once, by the order's id.
 - **It is not booked** while another outside order may hold the same contract, when it filled more than the bots hold, or when it states no fill or no price. The hold then says which.
 - Nothing on such an order says whether Alpaca placed it or the owner did by hand. Both are recorded the same way.
@@ -487,6 +492,8 @@ History's run and Activity's row each carry how an option position ended: a clos
 - A bot left short the stock, by an exercised put today and by an assigned call once sold legs are taken, makes the long-only budget unavailable for the whole account until the short is covered. That is the budget's existing rule for any short lot.
 - Two bots holding opposite sides of one contract past its expiry are held by name. The owner's write-off refuses each of them, because it writes off only what restores agreement with the broker one bot at a time.
 - An outside holding of a contract is known only from the outside orders the books recorded. One opened before custody began is not known.
+- An outside order whose last state the Clerk never reads stays unsettled, and the bot's own order in that contract waits until the owner reviews the order. The pass looks an order up by its client order id once it has left the open orders; an order with none is never looked up.
+- An order of the bot's own already working when an outside order appears is not cancelled. Both are then at the broker.
 - Option corporate actions and cash deliverables are listed as unreadable and held for. They are not read.
 
 **Nothing here has been seen on an account.** How Alpaca's own sale near expiry appears, when Paper and Live publish these activities, what links a share trade to its event, and whether real rows carry the fields the documents show are all still to be seen.
@@ -539,7 +546,9 @@ Custody reads the contract tables on every read of fills, and tells a contract's
 - **End a hold after some days.** Rejected: ADR 0048 gives a hold no clock. A hold ends by proof or by the owner.
 - **Close both lots of a contract held on both sides once it has expired with no row.** Not done: with no row the Clerk cannot know whether the contract ended in the money, so it cannot say what each bot is owed. Both bots are held by name.
 - **Let the simulation settle from the last price it kept on any day.** Rejected: that is not the contract's last price. With no price from the last session nothing is settled.
-- **Keep the account-wide hold for an outside order in a bot's contract.** Rejected: that hold refuses reductions, so the bot could not close its own position beside the broker's sale.
+- **Keep the account-wide hold for an outside order in a bot's contract.** Rejected: that hold refuses every reduction of every bot of the account for one bot's one contract.
+- **Let the bot's own close go out beside a working outside order in the same contract.** Built first, then rejected: with Alpaca's sale working and unfilled the positions agree, so nothing else refused a second order to sell the same contracts. The bot's own order in that one contract now waits until the outside order has settled or the owner has reviewed it.
+- **Refuse the bot's reduction through the hold's own proof.** Rejected: the hold is raised by a pass or a poll, minutes after the stream may have shown the order. The record of the order itself is asked.
 - **Make the shares reducible by teaching each reduction about a new order role.** Rejected, after it was tried: the entry role is read in a dozen places. The shares' order takes the entry role, and the EXIT's two proofs that look an entry up at the broker leave it out.
 - **Wait for the fill inside the call that sends the entry.** Rejected: it would hold the one path stock bots share open for the whole wait, and put the wait behind a lock other bots need.
 - **A second, hand-kept worklist for the deadline keeper.** Rejected, after it was built: it asked that the ENTER had not ended, the stopped-run step it copied did not, and an entry voided as never sent whose order later showed was cancelled by nobody. One predicate is read by both.

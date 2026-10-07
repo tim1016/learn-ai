@@ -1681,7 +1681,8 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option ending** — how a booked position ended, as a screen is told: expired, exercised, assigned or sold outside.
   _Avoid_: outcome (that is how a run ended).
 - **Sold outside** — a contract a bot held was sold, or bought back, by an order the Clerk did not place. It may be the broker's own sale or the owner's by hand; nothing on the order says which.
-- **Option-event hold** — one of the family of holds the reading and booking of option events raises. For the bot it names, or the account when it names none. It blocks entries and admits reductions and the Flatten.
+- **Option-event hold** — one of the family of holds the reading and booking of option events raises. For the bot it names, or the account when it names none. It blocks entries and admits reductions and the Flatten; the one reduction that waits is named under Unsettled outside order.
+- **Unsettled outside order** — an order the Clerk did not place, in a contract a bot holds, on the side that reduces it, that is still working or has filled and is not yet booked. While it is unsettled and the owner has not reviewed it, no order of that bot's own to reduce that contract is sent.
 - **Acknowledgement (of an option-event hold)** — the owner saying a held row has been looked at. The hold ends and that row is not held for again. No screen offers it yet.
 - **Outside holding** — what orders the Clerk did not place hold of a contract, as far as the books recorded those orders. Offered to an event as one lot of its own.
 - **Shares held (from an option event)** — the shares an exercise or an assignment left on a bot's books. The bot does not trade them; the owner flattens them.
