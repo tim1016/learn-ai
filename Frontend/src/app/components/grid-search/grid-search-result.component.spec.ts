@@ -10,7 +10,7 @@ import { etMidnightMs } from '../../shared/date/et-midnight';
 import { fakeCharts } from '../golden-search/testing/fake-charts';
 import { GridSearchService } from './grid-search.service';
 import { gridSearchDetail as detail } from './testing/fixtures';
-import type { CellPageQuery, GridSearchCell, GridSearchCellCurves, GridSearchCellPage } from './grid-search.types';
+import type { CellPageQuery, GridSearchCell, GridSearchCellCurves, GridSearchCellPage, GridSearchDetail } from './grid-search.types';
 
 function cell(overrides: Partial<GridSearchCell> = {}): GridSearchCell {
   return {
@@ -158,12 +158,33 @@ describe('GridSearchResultComponent', () => {
   it('reads a cell’s curve again for another search that holds the same cell', async () => {
     // A walk-forward fold's training and test sweeps hold the same cells: one's curve is never shown for the other.
     const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
-    const view = await renderResult({ cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
+    const get = vi.fn(async (id: string) => detail({ id }));
+    const view = await renderResult({ get, cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
     await waitFor(() => expect(cellCurves.mock.calls).toEqual([['abc', ['h2']]]));
 
     view.fixture.componentRef.setInput('searchId', 'xyz');
 
     await waitFor(() => expect(cellCurves.mock.calls).toEqual([['abc', ['h2']], ['xyz', ['h2']]]));
+  });
+
+  it('does not ask a search just opened for the last search’s leader, and draws its own once it has one', async () => {
+    // "abc" is open with its leader drawn; "xyz" is opened while its record is still on its way, then finishes with the same settings in the lead.
+    let arrive: (row: GridSearchDetail) => void = () => undefined;
+    const pending = new Promise<GridSearchDetail>((resolve) => (arrive = resolve));
+    const get = vi.fn(async (id: string) => (id === 'abc' ? detail() : pending));
+    const cellCurves = vi.fn(async (_id: string, hashes: readonly string[]) => curves(hashes));
+    const view = await renderResult({ get, cells: vi.fn(async () => page(leaderAndAnother())), cellCurves });
+    await waitFor(() => expect(cellCurves.mock.calls).toEqual([['abc', ['h2']]]));
+
+    view.fixture.componentRef.setInput('searchId', 'xyz');
+    await view.fixture.whenStable();
+    // The record on hand is still abc's: its leader is not asked of xyz.
+    expect(cellCurves.mock.calls).toEqual([['abc', ['h2']]]);
+
+    arrive(detail({ id: 'xyz' }));
+
+    await waitFor(() => expect(cellCurves.mock.calls).toEqual([['abc', ['h2']], ['xyz', ['h2']]]));
+    await waitFor(() => expect(drawnChart().getAttribute('aria-label')).toContain('1 cell drawn'));
   });
 
   it('draws no more cells than the most it can hold', async () => {
@@ -200,7 +221,8 @@ describe('GridSearchResultComponent', () => {
     expect(screen.getAllByText('Curve not recorded')).toHaveLength(2);
     // No cell can be ticked, and the leader's row shows no tick for a curve that cannot be drawn.
     expect((screen.getAllByRole('checkbox') as HTMLInputElement[]).map((box) => [box.disabled, box.checked])).toEqual([[true, false], [true, false]]);
-    expect(await screen.findByText('No curve was recorded for this cell.')).not.toBeNull();
+    // The owner did not tick it, so the panel names it.
+    expect(await screen.findByText('No curve was recorded for the leader.')).not.toBeNull();
     expect(screen.getByText('0 of at most 200 drawn')).not.toBeNull();
     expect(within(screen.getByRole('region', { name: 'Equity curves' })).queryByRole('img')).toBeNull();
   });
