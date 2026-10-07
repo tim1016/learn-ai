@@ -543,6 +543,61 @@ def test_a_stock_plan_is_not_held_to_the_option_rules() -> None:
     assert len(ActionPlan(on_enter=legs, on_exit=[]).on_enter) == 6
 
 
+# ---- the structure's name (#2913) -------------------------------------------
+
+
+def test_a_named_structure_keeps_its_name_and_a_plan_without_one_is_written_as_before() -> None:
+    """The name is in the plan when it has one, so two plans that differ only by name are two plans.
+    A plan without one has no such key at all, so its hashes are what they were before names existed."""
+    legs = [_leg("bought"), _leg("sold", **_SHORT, strike={"selector": "atm_offset", "offset": 5})]
+    named = ActionPlan.model_validate(_structure(*legs).model_dump() | {"structure": "bull_call_spread"})
+    custom = _structure(*legs)
+
+    assert named.model_dump(mode="json")["structure"] == "bull_call_spread"
+    assert ActionPlan.model_validate_json(named.model_dump_json()) == named
+    assert "structure" not in custom.model_dump()
+    assert "structure" not in custom.model_dump_json()
+    assert ActionPlan.model_validate(custom.model_dump()) == custom
+
+
+@pytest.mark.parametrize(
+    ("name", "legs", "reason"),
+    [
+        pytest.param(
+            "bull_call_spread",
+            [_leg("one"), _leg("two", strike={"selector": "atm_offset", "offset": 5})],
+            "a bull call spread is 1 bought call and 1 sold call",
+            id="two bought calls called a spread",
+        ),
+        pytest.param(
+            "bull_call_spread",
+            [_leg("bought", **_PUT), _leg("sold", **_PUT, **_SHORT, strike={"selector": "atm_offset", "offset": -5})],
+            "a bull call spread is 1 bought call and 1 sold call",
+            id="a put spread called a call spread",
+        ),
+        pytest.param(
+            "call_butterfly",
+            [
+                _leg("lower", strike={"selector": "atm_offset", "offset": -5}),
+                _leg("body", **_SHORT),
+                _leg("upper", strike={"selector": "atm_offset", "offset": 5}),
+            ],
+            "a call butterfly is 1 bought call and 2 sold calls and 1 bought call",
+            id="a butterfly that sells its body once",
+        ),
+        pytest.param("long_call", [_leg("call"), _leg("put", **_PUT)], "a long call is 1 bought call", id="a straddle called a long call"),
+    ],
+)
+def test_a_name_whose_legs_are_not_what_it_is_made_of_is_refused(name: str, legs: list[dict], reason: str) -> None:
+    with pytest.raises(ValidationError, match=reason):
+        ActionPlan.model_validate(_structure(*legs).model_dump() | {"structure": name})
+
+
+def test_a_stock_plan_cannot_carry_a_structures_name() -> None:
+    with pytest.raises(ValidationError, match="a plan with no option leg is not a long call"):
+        ActionPlan(on_enter=[_STOCK_LEG], on_exit=[], structure="long_call")
+
+
 # ---- what a plan trades (#2912) --------------------------------------------
 
 

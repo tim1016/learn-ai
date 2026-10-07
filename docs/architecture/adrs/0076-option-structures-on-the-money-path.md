@@ -73,9 +73,34 @@ Stock and ETF options are American: the holder may exercise early. Everything th
 - **A solve with no answer says why and carries no number.** The reasons are kept apart: under a minute to expiry; a price under what exercising now pays; a price no higher than the model's at the lowest volatility tried, which includes an option priced at exactly its exercise value, whichever way its cents round; a price above the model's at the highest; no convergence, which is also the answer when the tree resolves the strike at no volatility it tries (a strike far from the price within a couple of minutes of expiry); an input the model has no meaning for. A vendor's implied volatility or Greeks are never put in a failure's place (ADR 0071 Decision 1, which this extends from the Polygon recorder to any quote a bot prices).
 - **A strike dozens of standard deviations from the price is not priced.** The tree's branch sizes are rounding error there. It answers nothing, never a guess.
 
+### 7. A structure is checked after its contracts are picked
+
+A plan's legs are rules, and independent rules can land on a shape nobody meant. A bounded loss does not prove the result is the structure the owner named. So the picked contracts are checked before an order is built from them, and wherever a plan is previewed.
+
+- **Every structure.** One contract per leg of the plan, of the leg's kind, on the plan's underlying. No contract in two legs. Every sold leg has a bought leg of its kind, contract for contract, that does not expire before it. A resolved structure takes each leg's side and ratio from the plan, so it cannot differ from what was declared.
+- **A named structure, also its own shape.** One expiry, and:
+
+  | Structure | Must hold |
+  |---|---|
+  | Bull call spread | bought strike below sold strike; premium paid |
+  | Bear put spread | bought strike above sold strike; premium paid |
+  | Bull put spread | bought strike below sold strike; premium received, and less than the width |
+  | Bear call spread | bought strike above sold strike; premium received, and less than the width |
+  | Long straddle | one strike |
+  | Long strangle | put strike below call strike |
+  | Iron condor | bought put, sold put, sold call, bought call, strikes rising; premium received |
+  | Iron butterfly | the sold put and sold call share a strike, with the bought put below it and the bought call above; premium received |
+  | Call or put butterfly | lower wing, body, upper wing, strikes rising; wings the same width |
+
+- **The name is part of the plan** (ADR 0012's amendment). A plan with no name is Custom and gets the first check only.
+- **A failure is a typed refusal** that names the rule and the legs. At an entry it skips the entry; in a preview it is the verdict. Its reasons are spelled as the money's are (`OPTION_STRUCTURE_…`), so one screen and one stored entry read both.
+- **A share-class ticker is not handled yet.** A contract is on the plan's underlying when its root is the plan's ticker letter for letter, and `BRK.B` is written `BRKB` in a contract symbol. Such a plan's picks are refused until the broker's contract reference says which roots are whose.
+- **Not asked here:** whether the loss is bounded, which the requirement answers (decision 3), and whether Alpaca lists each contract as standard and tradable, which waits for its contract reference.
+- **Where a named structure starts** is a separate list: the legs and rules the builder fills in. Most hang on one leg picked by delta with the others a dollar distance from it; the strangle and the iron condor pick two legs by delta, a put and a call out of the money. Every value is a starting point the owner changes, and a deployed plan carries its own. **The values themselves are provisional.** Only the bull call spread's (delta 0.50, $5 above, the nearest weekly expiry) come from the builder's design (#2915); the 0.30 delta for a leg out of the money and the other eleven starts await the owner's word.
+
 ## Where it lives
 
-`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-003` pin the American price, delta and implied volatility against QuantLib.
+`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `american.py` (decision 6), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents. Fixtures `AM-001` to `AM-003` pin the American price, delta and implied volatility against QuantLib.
 
 Nothing on the money path calls these yet.
 

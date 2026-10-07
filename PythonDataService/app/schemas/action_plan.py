@@ -18,7 +18,8 @@ ADR 0012 fixes the invariants this schema encodes:
 An **option structure** (#2913) is a plan with an option leg. It is held to
 rules a stock plan is not, because it goes to the broker as one order and
 its exit must close exactly what its entry opened: see
-``ActionPlan._an_option_structure_is_one_coverable_order``.
+``ActionPlan._an_option_structure_is_one_coverable_order``. It may carry the
+name of the structure the owner started from; a plan without one is Custom.
 """
 
 from __future__ import annotations
@@ -27,10 +28,21 @@ from collections import Counter
 from math import gcd
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    SerializerFunctionWrapHandler,
+    Tag,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from app.options.contract import MAX_STRIKE_THOUSANDTHS, require_symbol_expiry, strike_thousandths
 from app.options.expiry import OptionExpiryMs
+from app.options.named_structures import LegKind, NamedStructure, is_made_as_named, made_of_in_words
 from app.options.structure import MAX_OPTION_LEGS
 
 # ``leg_id`` regex from ADR 0012 §3 — lowercase ASCII + digits + underscore,
@@ -275,6 +287,20 @@ class ActionPlan(BaseModel):
 
     on_enter: list[ActionEntity] = Field(default_factory=list)
     on_exit: list[CloseLegExit] = Field(default_factory=list)
+    # The named structure the owner started from, while the legs are still what it is made of
+    # (#2913). A stock plan and a structure built as Custom carry none, and such a plan is
+    # written and hashed exactly as before the field existed (``_omit_an_absent_structure_name``).
+    structure: NamedStructure | None = None
+
+    # No return annotation: the plan's published schema stays this model's own fields, where an
+    # annotated ``dict`` would replace it with a bare object.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_structure_name(self, handler: SerializerFunctionWrapHandler):
+        """Leave an absent name out of the plan, and so out of every identity hashed from it."""
+        plan = handler(self)
+        if plan.get("structure") is None:
+            plan.pop("structure", None)
+        return plan
 
     @model_validator(mode="after")
     def _validate_referential_integrity(self) -> ActionPlan:
@@ -307,6 +333,8 @@ class ActionPlan(BaseModel):
         """
         legs = [leg for leg in self.on_enter if isinstance(leg, OptionEntryLeg)]
         if not legs:
+            if self.structure is not None:
+                raise ValueError(f"a plan with no option leg is not a {self.structure.in_words}")
             return self
         if len(legs) != len(self.on_enter):
             raise ValueError("an option structure has no stock leg beside its option legs")
@@ -324,6 +352,13 @@ class ActionPlan(BaseModel):
             )
         _require_sold_legs_coverable(legs)
         _require_strike_references_resolve(legs)
+        if self.structure is not None and not is_made_as_named(
+            self.structure, (LegKind(leg.position, leg.right, leg.qty_ratio) for leg in legs)
+        ):
+            raise ValueError(
+                f"a {self.structure.in_words} is {made_of_in_words(self.structure)}; "
+                "these legs are not, so the plan carries no structure name"
+            )
         return self
 
 
