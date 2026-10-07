@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -545,3 +547,18 @@ def test_an_expiry_already_past_has_nothing_to_look_up() -> None:
     read = lookups.read(latest_expiry=date(2026, 10, 2))
 
     assert (read.dividends, lookups.dividends_asked) == ((), [])
+
+
+def test_a_process_that_reads_the_vendors_loads_nothing_a_clerk_asks_the_coordinator_with() -> None:
+    """The reading knows the two facts and why one is not known. What crosses between a Clerk and the
+    coordinator is the Clerk's client's to know, and is loaded only by a process that asks."""
+    module = ast.parse(Path(option_model_inputs.__file__).read_text(encoding="utf-8"))
+    loaded_with_it = {
+        name
+        for node in module.body
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        for name in ([node.module] if isinstance(node, ast.ImportFrom) else [alias.name for alias in node.names])
+    }
+
+    assert "app.options.model_input_reasons" in loaded_with_it
+    assert not {name for name in loaded_with_it if "fleet" in name or name.endswith("option_model_inputs_client")}
