@@ -7,7 +7,8 @@ money. Here the Clerk asks, in order, and the first "no" refuses the entry:
 1. Is the plan one the Clerk takes today: one bought call or put?
 2. Did the facts come, do they cover the plan's leg, and is each of them
    what it must be: two limits that are percents, a generation and a read
-   time that are whole numbers, and the owner's order terms?
+   time that are whole numbers, and the owner's order terms, each inside
+   its bounds (an entry wait of a second to five minutes)?
 3. Is the picked contract a standard one, of a hundred shares?
 4. Has the picked contract's last session ended, and is each quote usable at
    the Clerk's own clock: one generation, both sides, live, not crossed, and
@@ -82,6 +83,14 @@ _CENT = Decimal("0.01")
 # The terms an entry accepted before entries kept their own is held to (#2913).
 ENTRY_CLOSE_TERMS = CloseTerms()
 
+# What the owner's order terms may be, asked where the Clerk takes them (ADR 0076).
+# An entry wait: a second at least, since a wait of nothing cancels the order as it is sent;
+# five minutes at most, since the quotes it was priced from are seconds old.
+MIN_ENTRY_WAIT_MS = 1_000
+MAX_ENTRY_WAIT_MS = 5 * 60_000
+# Every other term: no longer than a whole regular session, which nothing could be counted back from.
+MAX_ORDER_TERM_MS = 390 * 60_000
+
 
 @dataclass(frozen=True, slots=True)
 class OptionEntryRefused:
@@ -119,6 +128,32 @@ def _evidence_fault(leg: OptionEntryLeg, evidence: OptionEntryEvidence) -> str |
         return f"The time the quotes were read is {evidence.rechecked_at_ms!r}. It is a time in milliseconds."
     if not isinstance(evidence.terms, CloseTerms):
         return f"The order terms handed over are {evidence.terms!r}. They are the owner's entry wait and close leads."
+    return _terms_fault(evidence.terms)
+
+
+def _terms_fault(terms: CloseTerms) -> str | None:
+    """What is out of bounds in the owner's order terms, in plain words; ``None`` when nothing is.
+
+    Asked here so that a wait of nothing, of hours, or too large to be a
+    time at all is a refusal by name, and never an error out of the entry's
+    own record further on.
+    """
+    if not MIN_ENTRY_WAIT_MS <= terms.entry_wait_ms <= MAX_ENTRY_WAIT_MS:
+        return (
+            f"The entry wait handed over is {terms.entry_wait_ms:,} ms. An entry waits for its fill between "
+            f"{MIN_ENTRY_WAIT_MS:,} and {MAX_ENTRY_WAIT_MS:,} ms."
+        )
+    for name, value in (
+        ("time allowed to prove a cancel", terms.cancel_allowance_ms),
+        ("entry margin", terms.entry_margin_ms),
+        ("lead of the close on an expiry day", terms.expiry_close_lead_ms),
+        ("lead of a sold leg's close", terms.sold_leg_close_lead_ms),
+    ):
+        if value > MAX_ORDER_TERM_MS:
+            return (
+                f"The {name} handed over is {value:,} ms. No order term is longer than a regular session, "
+                f"{MAX_ORDER_TERM_MS:,} ms."
+            )
     return None
 
 
@@ -168,8 +203,8 @@ def work_out_option_entry(
     if evidence is None:
         return OptionEntryRefused(
             OptionEffectRefusal.ENTRY_EVIDENCE_MISSING.value,
-            "This entry came with no picked contract and no quotes. A simulation fills only from the quotes kept "
-            "with an entry, so nothing was filled.",
+            "This entry came with no picked contract and no quotes. An option entry is priced from the quotes "
+            "handed over with it, so no order was made.",
         )
     malformed = _evidence_fault(leg, evidence)
     if malformed is not None:
@@ -257,4 +292,12 @@ def work_out_option_entry(
     )
 
 
-__all__ = ["ENTRY_CLOSE_TERMS", "OptionEntryRefused", "entry_past_cutoff", "work_out_option_entry"]
+__all__ = [
+    "ENTRY_CLOSE_TERMS",
+    "MAX_ENTRY_WAIT_MS",
+    "MAX_ORDER_TERM_MS",
+    "MIN_ENTRY_WAIT_MS",
+    "OptionEntryRefused",
+    "entry_past_cutoff",
+    "work_out_option_entry",
+]

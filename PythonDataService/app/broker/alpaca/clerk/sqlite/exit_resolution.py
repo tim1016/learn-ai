@@ -218,14 +218,24 @@ A leg that could not be sent, a broker refusal, or an unfilled extended-hours
 limit stays visible. The separate observed recovery status explains current
 eligibility; the failed order itself promises no future send time."""
 
-_OPTION_CLOSE_NOT_TAKEN_NEXT_STEP = (
-    "The Clerk tries the close again in regular hours after a fresh recovery check. Or flatten it yourself "
-    "once a quote of the contract with something bid has been kept."
-)
-"""What the operator can do about an option position a refused close left open (ADR 0076).
+_OPTION_CLOSE_RETRIED = "The Clerk tries the close again in regular hours after a fresh recovery check."
 
-Never "flatten with a priced limit": an option position is closed by a market
-order in the regular session, and takes no limit."""
+
+def _option_close_not_taken_next_step(repo: ClerkSqliteRepository) -> str:
+    """What the operator can do about an option position a refused close left open (ADR 0076).
+
+    Never "flatten with a priced limit": an option position is closed by a
+    market order in the regular session, and takes no limit. A Dry Run's
+    close is priced from a quote kept for the contract, so its Flatten
+    waits for one with something bid. A real account's close is a market
+    order the broker fills, and waits for no quote of ours.
+    """
+    if repo.account_id.startswith("sim:"):
+        return (
+            f"{_OPTION_CLOSE_RETRIED} Or flatten it yourself once a quote of the contract with something bid "
+            "has been kept."
+        )
+    return f"{_OPTION_CLOSE_RETRIED} Or flatten it yourself from the bot's page, in regular hours."
 
 PROGRAM_EXIT_SESSION_ENDED = LegRefusal(
     reason_code="PROGRAM_EXIT_SESSION_ENDED",
@@ -418,7 +428,9 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
     a contract still trading, is ``None``.
 
     The position stays on the books. Settling an expired contract at its
-    exercise value is not built; the words say so.
+    exercise value is not built, for a Dry Run or for a real account, whose
+    broker settles it on its own side where these books do not yet read it;
+    the words say so of either.
     """
     contract_symbol = symbol.upper()
     if not is_option_contract_symbol(contract_symbol):
@@ -430,8 +442,8 @@ def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
         reason_code=OPTION_CONTRACT_EXPIRED,
         explanation=(
             f"{contract_symbol} expired on {expiry.isoformat()}. Its last session is over, or ends within "
-            "seconds, so no order can close it and none was sent. The position is still on the books: a "
-            "Dry Run does not yet settle an expired contract at its exercise value."
+            "seconds, so no order can close it and none was sent. The position is still on the books: an "
+            "expired contract is not yet settled here at its exercise value."
         ),
         next_step=_EXPIRED_CONTRACT_NEXT_STEP,
     )
@@ -2895,10 +2907,9 @@ def option_close_not_taken(
     """Why a failed EXIT's close of an option contract was not taken, or ``None`` for a reduction in shares (ADR 0076).
 
     Read from the EXIT's own fold, as :func:`flatten_send_refusal` is, so
-    the Flatten that failed and a retry of it are told the same thing. No
-    broker is asked about an option order today: the Clerk itself or a
-    Dry Run's simulation would not take it, and the recorded reason is in
-    the refuser's own words.
+    the Flatten that failed and a retry of it are told the same thing. The
+    Clerk itself, a Dry Run's simulation or a Paper account's broker may
+    have refused it, and the recorded reason is in the refuser's own words.
 
     A contract that expired keeps its own code and its own next step,
     which sends the operator to no retry: none can work. Any other is
@@ -3249,8 +3260,8 @@ def _fold_submit_refused(
     assert effect is not None
     held = repo.position(effect.strategy_instance_id, created.symbol)
     closes_an_option = is_option_contract_symbol(created.symbol.upper())
-    # No broker is named for an option order: it is refused by the Clerk
-    # itself or by a simulation (ADR 0076), and the recorded reason says which.
+    # Who refused an option order is not named here: the Clerk itself, a simulation, or a
+    # Paper account's broker (ADR 0076). The recorded reason says which, in the refuser's words.
     reason = "The closing order was not taken." if closes_an_option else "The reducing order did not reach the broker."
     if not position_quantity_is_nonzero(held):
         fold_failed(
@@ -3290,7 +3301,7 @@ def _fold_submit_refused(
                 "held. The broker's reason is on the order's evidence."
             )
         ),
-        next_step=_OPTION_CLOSE_NOT_TAKEN_NEXT_STEP if closes_an_option else _REDRIVE_NEXT_STEP,
+        next_step=_option_close_not_taken_next_step(repo) if closes_an_option else _REDRIVE_NEXT_STEP,
     )
 
 

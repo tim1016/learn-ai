@@ -17,12 +17,23 @@ from decimal import Decimal
 import pytest
 
 from app.broker.alpaca import adapter as alpaca_adapter
-from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState
+from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
+from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
-from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding, SettledEntry, entry_outcome
+from app.broker.alpaca.clerk.sqlite.entry_outcome import (
+    ENTRY_OUTCOME_LIMIT_PAST,
+    ENTRY_OUTCOME_LIMIT_TOO_FAR,
+    MAX_ENTRY_OUTCOME_WAIT_MS,
+    EntryOutcomeWaitRefused,
+    EntrySettlement,
+    EntryStanding,
+    SettledEntry,
+    entry_outcome,
+)
 from app.broker.alpaca.clerk.sqlite.facts import EntrySettledFacts
+from app.broker.alpaca.clerk.sqlite.option_admission import MAX_ENTRY_WAIT_MS, MAX_ORDER_TERM_MS, MIN_ENTRY_WAIT_MS
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     AskedOptionOrder,
@@ -31,12 +42,16 @@ from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     option_order_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
-from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
-from app.broker.contract.models import OrderSide, OrderType
+from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOrderRejected, BrokerUnavailable
+from app.broker.contract.models import BrokerOrderEvent, OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
+from app.options.deadlines import CloseTerms
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.market_liveness import QUOTE_MAX_AGE_MS
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
@@ -147,6 +162,55 @@ async def test_an_entry_whose_contract_alpaca_could_not_confirm_is_refused(paper
 
     _refused(refused, "OPTION_CONTRACT_REFERENCE_UNREAD")
     assert paper.venue.option_submit_calls == []
+
+
+async def test_a_listing_that_does_not_answer_in_time_refuses_the_entry_before_its_quotes_grow_old(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    async def listing_that_never_answers(_contract: object) -> object:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(paper.account, "get_option_contract", listing_that_never_answers)
+    monkeypatch.setattr(clerk_runtime, "CONTRACT_REFERENCE_READ_BOUND_MS", 20)
+
+    refused = await asyncio.wait_for(paper.enter(), timeout=2)
+
+    _refused(refused, "OPTION_CONTRACT_REFERENCE_UNREAD")
+    assert paper.venue.option_submit_calls == [] and paper.set_aside_cents() == 0
+
+
+def test_the_listings_own_bound_is_well_inside_the_time_an_entrys_quotes_are_good_for() -> None:
+    assert 0 < clerk_runtime.CONTRACT_REFERENCE_READ_BOUND_MS <= QUOTE_MAX_AGE_MS - 1_000
+
+
+@pytest.mark.parametrize("why", ["the session is closed", "a channel is unhealthy"])
+async def test_an_entry_refused_without_alpaca_is_refused_for_that_and_alpaca_is_not_asked_for_the_listing(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, why: str  # noqa: F811
+) -> None:
+    if why == "the session is closed":
+        monkeypatch.setattr(clerk_runtime, "market_leg_sendable", lambda _now_ms: False)
+    else:
+        monkeypatch.setattr(clerk_runtime, "stream_health_refusal", lambda *_args, **_kwargs: "the stream is down")
+
+    refused = await paper.enter()
+
+    _refused(refused, "MARKET_CLOSED" if why == "the session is closed" else clerk_runtime.STREAM_HEALTH_REASON_CODE)
+    assert paper.account.listing_reads == [] and paper.venue.option_submit_calls == []
+
+
+async def test_an_entry_whose_listing_was_not_asked_is_never_taken_when_the_session_opens_in_between(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """Closed when the Clerk decided not to ask Alpaca, open by the time it judged the entry."""
+    answers = iter([False, True, True])
+    monkeypatch.setattr(clerk_runtime, "market_leg_sendable", lambda _now_ms: next(answers))
+
+    refused = await paper.enter()
+
+    _refused(refused, "OPTION_CONTRACT_REFERENCE_UNREAD")
+    assert paper.account.listing_reads == [] and paper.venue.option_submit_calls == []
+    assert paper.set_aside_cents() == 0
 
 
 async def test_a_decision_sent_again_is_answered_from_its_own_entry_without_asking_alpaca_again(
@@ -294,6 +358,46 @@ async def test_what_the_books_asked_for_is_read_from_the_order_and_a_stock_order
 
     assert asked_option_order(paper.repo, order_ref) == AskedOptionOrder(SYMBOL, "buy", 2, "limit", Decimal("1.94"))
     assert asked_option_order(paper.repo, "no-such-order") is None
+
+
+# ── a stream frame the books cannot hold ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("said", "execution_id", "contracts", "recovery_source"),
+    [
+        pytest.param({"symbol": "SPY260918C00590000"}, "x-wrong", 1, None, id="another contract"),
+        pytest.param({"symbol": "SPY"}, "x-wrong", 1, None, id="the underlying's shares"),
+        pytest.param({}, "x-wrong", 0.5, None, id="half a contract"),
+        pytest.param({"symbol": "SPY260918C00590000"}, None, 1, "closed_orders_window", id="another contract, recovered"),
+    ],
+)
+async def test_a_stream_frame_whose_fill_is_not_in_the_orders_contract_is_withheld_and_the_stream_goes_on(
+    paper: PaperOptions, said: dict[str, str], execution_id: str | None, contracts: float, recovery_source: str | None  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    paper.venue.option_order_fills(order_ref, contracts=1, average_price="1.94")
+    sink = SqliteTradeUpdateEvidenceSink(repo=paper.repo, intake=paper.clerk.intake, reconciler=paper.clerk)
+
+    taken_as = await sink.record_lifecycle_event(
+        client_order_id=order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=paper.clock(), price=1.94, quantity=contracts, execution_id=execution_id,
+        ),
+        event_key=f"execution:{execution_id}",
+        order=alpaca_adapter.from_alpaca_order({**paper.venue.option_orders[order_ref], **said}),
+        recovery_source=recovery_source, recovery_window_limit=None,
+    )
+
+    # Nothing of it is counted, and the sink did not raise: the owner is told the outcome is unknown.
+    assert taken_as == "withheld_order"
+    assert paper.held() == {} and paper.repo.fills_for_order(order_ref) == []
+    assert (paper.order_state(order_ref), paper.enter_state(order_ref)) == ("new", "unknown")
+    assert paper.set_aside_cents() == ONE_CONTRACT_SET_ASIDE
+
+    # The stream goes on: the frame about the order's own contract is taken as it always was.
+    await paper.stream_execution(order_ref, contracts=1, price="1.94", execution_id="x-1")
+    assert paper.held() == {SYMBOL: 1.0} and paper.outcome(order_ref).standing is EntryStanding.FILLED
 
 
 # ── the exit ─────────────────────────────────────────────────────────────
@@ -447,6 +551,44 @@ async def test_an_operator_settles_a_paper_option_close_that_traded_unseen_by_na
     assert paper.order_state(closing_ref) == "filled" and paper.held() == {}
 
 
+# ── what a Paper account's owner is told is true of a Paper account ──────
+
+
+async def test_a_paper_close_alpaca_refuses_is_not_said_to_wait_for_a_quote_to_be_kept(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.venue.option_submit_error = BrokerOrderRejected("insufficient options trading level", broker="alpaca")
+
+    await paper.exit()
+
+    [notice] = [raised for raised in paper.repo.active_uncertainties() if raised["reason_code"] == EXIT_NOT_FLAT_REASON_CODE]
+    # A Paper close is a market order Alpaca fills: no quote of ours prices it.
+    assert paper.held() == {SYMBOL: 1.0}
+    assert "quote" not in notice["next_step"].lower()
+
+
+async def test_an_expired_contract_on_a_paper_account_is_not_called_a_dry_runs(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    _days_pass(paper, MONDAY_AFTER_THE_OPEN)
+
+    refused = await paper.exit()
+
+    _refused(refused, "OPTION_CONTRACT_EXPIRED")
+    assert "dry run" not in refused.explanation.lower() and "simulat" not in refused.explanation.lower()
+    assert paper.held() == {SYMBOL: 1.0} and len(paper.venue.option_submit_calls) == 1
+
+
+async def test_a_paper_entry_that_came_with_no_quotes_is_not_told_about_a_simulation(paper: PaperOptions) -> None:  # noqa: F811
+    refused = await paper.clerk.execute_for_instance(
+        strategy_instance_id="a", run_id="run-a", decision_id="no-evidence", purpose=EffectPurpose.ENTER,
+        action_plan=BUYS_ONE_CALL, quantity=1, option_entry=None,
+    )
+
+    _refused(refused, "OPTION_ENTRY_QUOTES_NOT_KEPT")
+    assert "simulat" not in refused.explanation.lower()
+
+
 # ── the outcome the runner asks for ──────────────────────────────────────
 
 
@@ -544,6 +686,120 @@ async def test_a_wait_that_ends_because_the_run_stopped_is_answered_and_not_reco
         EntrySettlement.ENTERED, EntryStanding.WORKING, False,
     )
     assert "ENTRY_SETTLED" not in [kind for kind, _summary, _facts in paper.log()]
+
+
+async def test_a_wait_for_an_entry_of_a_run_the_bot_has_since_replaced_is_answered_and_not_recorded(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The bot is running, under another run than the entry's: the entry's own run is over, and that is what is asked."""
+    await paper.resting(decision="d-1")
+    running = paper.repo.active_run("a")
+    assert running is not None
+    # These books take one Deploy for a bot, so its later run is stood in for: the same run, renamed.
+    monkeypatch.setattr(paper.repo, "active_run", lambda _sid: replace(running, run_id=f"{running.run_id}-again"))
+
+    settled = await paper.clerk.await_entry_outcome(
+        strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + 60_000
+    )
+
+    assert (settled.settlement, settled.recorded) == (EntrySettlement.ENTERED, False)
+    assert "ENTRY_SETTLED" not in [kind for kind, _summary, _facts in paper.log()]
+
+
+async def test_the_wait_holds_the_clerks_intake_lock_only_while_it_reads_never_while_it_pauses(paper: PaperOptions) -> None:  # noqa: F811
+    await paper.resting(decision="d-1")
+    taken_during_a_pause: list[bool] = []
+
+    async def take_the_lock_from_another_task() -> bool:
+        async with paper.clerk.intake:
+            return True
+
+    async def pause(_seconds: float) -> None:
+        # Asked from a task of its own: the lock is the waiter's to re-enter, never another's while held.
+        other = asyncio.create_task(take_the_lock_from_another_task())
+        done, _pending = await asyncio.wait({other}, timeout=1)
+        taken_during_a_pause.append(other in done)
+        other.cancel()
+        paper.wait(30_000)
+
+    paper.clerk._outcome_pause = pause
+
+    await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + 20_000)
+
+    assert taken_during_a_pause == [True]
+
+
+# ── the limit a wait is asked with ───────────────────────────────────────
+
+
+async def test_a_wait_asked_to_run_longer_than_a_day_is_refused_by_name(paper: PaperOptions) -> None:  # noqa: F811
+    await paper.resting(decision="d-1")
+
+    with pytest.raises(EntryOutcomeWaitRefused) as refused:
+        await paper.clerk.await_entry_outcome(
+            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + MAX_ENTRY_OUTCOME_WAIT_MS + 1
+        )
+
+    assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_TOO_FAR
+    assert "ENTRY_SETTLED" not in [kind for kind, _summary, _facts in paper.log()]
+
+
+async def test_a_wait_asked_with_a_limit_already_past_is_refused_for_an_unproven_entry_and_never_answered_entered(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting(decision="d-1")
+
+    with pytest.raises(EntryOutcomeWaitRefused) as refused:
+        await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() - 1)
+
+    assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_PAST
+    assert paper.outcome(order_ref).standing is EntryStanding.WORKING
+    assert "ENTRY_SETTLED" not in [kind for kind, _summary, _facts in paper.log()]
+
+
+async def test_a_limit_already_past_still_answers_an_entry_that_is_proven_or_was_settled_before(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting(decision="d-1")
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    long_ago = paper.clock() - 60_000
+
+    proven = await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=long_ago)
+    again = await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=long_ago - 1)
+
+    assert (proven.settlement, proven.standing, proven.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
+    assert again == proven
+
+
+# ── the owner's order terms, where the Clerk takes them ──────────────────
+
+
+@pytest.mark.parametrize("wait_ms", [0, MIN_ENTRY_WAIT_MS - 1, MAX_ENTRY_WAIT_MS + 1, 6 * 60 * 60 * 1000, 10**18])
+async def test_an_entry_wait_of_nothing_of_hours_or_of_no_time_at_all_is_refused_by_name(
+    paper: PaperOptions, wait_ms: int  # noqa: F811
+) -> None:
+    refused = await paper.enter(evidence=paper.evidence(terms=CloseTerms(entry_wait_ms=wait_ms)))
+
+    _refused(refused, "OPTION_ENTRY_EVIDENCE_INCOMPLETE")
+    assert paper.venue.option_submit_calls == [] and paper.set_aside_cents() == 0
+
+
+@pytest.mark.parametrize("wait_ms", [MIN_ENTRY_WAIT_MS, MAX_ENTRY_WAIT_MS])
+async def test_an_entry_wait_at_either_bound_is_taken_and_kept_as_the_entrys_deadline(paper: PaperOptions, wait_ms: int) -> None:  # noqa: F811
+    admitted_at = paper.clock()
+
+    sent = await paper.enter(evidence=paper.evidence(terms=CloseTerms(entry_wait_ms=wait_ms)))
+
+    [order_ref] = sent.child_order_refs
+    assert paper.outcome(order_ref).cancel_at_ms == admitted_at + wait_ms
+
+
+@pytest.mark.parametrize(
+    "term", ["cancel_allowance_ms", "entry_margin_ms", "expiry_close_lead_ms", "sold_leg_close_lead_ms"]
+)
+async def test_any_other_order_term_longer_than_a_session_is_refused_by_name(paper: PaperOptions, term: str) -> None:  # noqa: F811
+    refused = await paper.enter(evidence=paper.evidence(terms=CloseTerms(**{term: MAX_ORDER_TERM_MS + 1})))
+
+    _refused(refused, "OPTION_ENTRY_EVIDENCE_INCOMPLETE")
+    assert paper.venue.option_submit_calls == []
 
 
 async def test_a_proven_outcome_is_recorded_even_after_the_run_stopped(paper: PaperOptions) -> None:  # noqa: F811

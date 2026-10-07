@@ -8,7 +8,9 @@ the acknowledgements hold the broker's own cumulative count.
 
 ``entry_outcome`` is that one read. It writes nothing and asks no broker.
 ``settlement_for`` is the rule a strategy is settled by, for the live
-runner and for a replay alike.
+runner and for a replay alike. ``entry_settlement`` is the answer for anyone
+who asks after the fact: the Clerk's recorded answer when it gave one
+(``recorded_settlement``), else the rule applied to the books as they stand.
 
 Formula: units filled = min over the entry's legs of
   floor(contracts filled of the leg / the leg's ratio): the whole structures
@@ -30,7 +32,9 @@ the entry holds. Four standings are proven: filled, filled in part and
 ended, ended unfilled, and never sent. Three are not: working, cancellation
 requested, and outcome unknown. A terminal order whose recorded fills fall
 short of the broker's own cumulative is unknown, never filled: a fill the
-broker counted is not on the books yet.
+broker counted is not on the books yet. So is an entry whose books hold
+more contracts than it asked for: something was counted that the order
+cannot explain.
 """
 
 from __future__ import annotations
@@ -196,7 +200,10 @@ def _standing(
     if fills_short or effect_state == "unknown":
         # The broker counted a fill the books do not hold, or its last answer was lost.
         return EntryStanding.OUTCOME_UNKNOWN
-    if contracts_filled >= asked:
+    if contracts_filled > asked:
+        # More is on the books than the order asked for: not an outcome an order can have.
+        return EntryStanding.OUTCOME_UNKNOWN
+    if contracts_filled == asked:
         return EntryStanding.FILLED
     if effect_state in FAILED_EFFECT_STATES and not state:
         # The ENTER ended and the broker never reported the order: it was refused before the
@@ -227,12 +234,77 @@ def settlement_for(outcome: EntryOutcome) -> EntrySettlement:
     return EntrySettlement.ENTERED
 
 
+def settled_now(outcome: EntryOutcome, *, until_ms: int, now_ms: int) -> EntrySettledFacts:
+    """How the strategy is settled on ``outcome`` at ``now_ms``, as the record of it."""
+    return EntrySettledFacts(
+        settlement=settlement_for(outcome).value,
+        standing=outcome.standing.value,
+        units_asked=outcome.units_asked,
+        units_filled=outcome.units_filled,
+        until_ms=until_ms,
+        settled_at_ms=now_ms,
+    )
+
+
+def recorded_settlement(repo: ClerkSqliteRepository, entry_order_ref: str) -> SettledEntry | None:
+    """The answer the Clerk recorded for the entry ``entry_order_ref`` (``ENTRY_SETTLED``), or ``None`` when it gave none."""
+    with repo.write_fence():
+        order = repo.order(entry_order_ref)
+        if order is None:
+            return None
+        recorded = repo.first_effect_transition(
+            effect_operation_id=order.effect_operation_id, transition_kind="ENTRY_SETTLED"
+        )
+    if recorded is None:
+        return None
+    return SettledEntry.of(
+        EntrySettledFacts.from_facts_json(recorded["facts_json"]), order_ref=entry_order_ref, recorded=True
+    )
+
+
+def entry_settlement(repo: ClerkSqliteRepository, entry_order_ref: str) -> EntrySettlement:
+    """How a strategy is settled on the option entry ``entry_order_ref``, asked after the fact: the record wins, else the books.
+
+    The Clerk's recorded answer stands whatever the books say by now: it is
+    what the strategy was told. With none recorded (the bot's run stopped
+    before the Clerk answered) the rule is applied to the books as they
+    stand, so two askers on either side of the moment an outcome is proven
+    can be told differently. Raises for an order that is not an option entry.
+    """
+    recorded = recorded_settlement(repo, entry_order_ref)
+    if recorded is not None:
+        return recorded.settlement
+    return settlement_for(entry_outcome(repo, entry_order_ref))
+
+
+class EntryOutcomeWaitRefused(ValueError):
+    """A wait for an entry's outcome was asked with a limit the Clerk does not take, and why by name."""
+
+    def __init__(self, reason_code: str, explanation: str) -> None:
+        super().__init__(f"{reason_code}: {explanation}")
+        self.reason_code = reason_code
+        self.explanation = explanation
+
+
+# An option order is for the day: nothing waits for its outcome longer than a day.
+MAX_ENTRY_OUTCOME_WAIT_MS = 24 * 60 * 60 * 1000
+ENTRY_OUTCOME_LIMIT_TOO_FAR = "ENTRY_OUTCOME_LIMIT_TOO_FAR"
+ENTRY_OUTCOME_LIMIT_PAST = "ENTRY_OUTCOME_LIMIT_PAST"
+
+
 __all__ = [
+    "ENTRY_OUTCOME_LIMIT_PAST",
+    "ENTRY_OUTCOME_LIMIT_TOO_FAR",
+    "MAX_ENTRY_OUTCOME_WAIT_MS",
     "PROVEN_STANDINGS",
     "EntryOutcome",
+    "EntryOutcomeWaitRefused",
     "EntrySettlement",
     "EntryStanding",
     "SettledEntry",
     "entry_outcome",
+    "entry_settlement",
+    "recorded_settlement",
+    "settled_now",
     "settlement_for",
 ]

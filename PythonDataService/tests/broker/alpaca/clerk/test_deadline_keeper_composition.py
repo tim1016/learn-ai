@@ -9,10 +9,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.broker.alpaca.clerk.active_authority import select_active_clerk_runtime
+import pytest
+
+from app.broker.alpaca.clerk.active_authority import (
+    SyntheticOpening,
+    activate_synthetic_clerk_authority,
+    select_active_clerk_runtime,
+    select_synthetic_clerk_runtime,
+)
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _ActivationStore, _Broker
 from tests.broker.alpaca.clerk.test_live_authority_runtime import (
     _RecordingLiveBroker,
@@ -64,3 +72,21 @@ async def test_a_live_shadows_clerk_gets_no_keeper(
 
     assert runtime.authority_kind == "shadow"
     assert runtime.deadline_keeper is None and runtime.clerk._entry_deadline_nudge is None
+
+
+@pytest.mark.parametrize("opening", [SyntheticOpening.READ_ONLY, SyntheticOpening.PROJECT])
+async def test_a_dry_run_store_opened_only_to_be_read_has_no_keeper_running(tmp_path: Path, opening: SyntheticOpening) -> None:
+    """A read of a Dry Run's books sends nothing and cancels nothing: its keeper is composed and never started."""
+    account_id = "sim:ema-1"
+    broker = SyntheticBroker(account_id=account_id)
+    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
+
+    runtime = await select_synthetic_clerk_runtime(
+        account_id=account_id, read=broker, trade=broker, artifacts_root=tmp_path, opening=opening,
+    )
+
+    try:
+        assert runtime.clerk is not None
+        assert runtime.deadline_keeper is not None and runtime.deadline_keeper._task is None
+    finally:
+        await runtime.close()

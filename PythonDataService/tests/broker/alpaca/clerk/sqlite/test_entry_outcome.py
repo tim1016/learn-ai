@@ -17,6 +17,8 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import (
     EntrySettlement,
     EntryStanding,
     entry_outcome,
+    entry_settlement,
+    recorded_settlement,
     settlement_for,
 )
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
@@ -26,6 +28,7 @@ from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     WAIT_MS,
     PaperOptions,
     paper,  # noqa: F401 -- pytest fixture, used by name
+    patiently,
 )
 
 
@@ -172,6 +175,65 @@ async def test_an_order_alpaca_calls_filled_with_fewer_contracts_on_the_books_th
     outcome = paper.outcome(order_ref)
     assert paper.order_state(order_ref) == "filled"
     assert (outcome.standing, outcome.proven, outcome.units_filled) == (EntryStanding.OUTCOME_UNKNOWN, False, 0)
+
+
+async def test_books_holding_more_contracts_than_the_entry_asked_for_are_unknown_never_filled(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    assert paper.outcome(order_ref).standing is EntryStanding.FILLED
+
+    # A second execution of one contract on an order that asked for one.
+    await paper.stream_execution(order_ref, contracts=1, price="1.94", execution_id="x-2")
+
+    outcome = paper.outcome(order_ref)
+    assert (outcome.units_asked, outcome.units_filled) == (1, 2)
+    assert outcome.standing is EntryStanding.OUTCOME_UNKNOWN and not outcome.proven
+    # The bot holds something, so the strategy is in: an exit will come for it.
+    assert settlement_for(outcome) is EntrySettlement.ENTERED
+
+
+@pytest.mark.parametrize("ended_as", ["expired", "rejected", "canceled"])
+async def test_an_order_alpaca_ended_by_itself_is_unfilled_or_part_filled_by_what_it_had_filled(
+    paper: PaperOptions, ended_as: str  # noqa: F811
+) -> None:
+    nothing_filled, one_of_two = await paper.resting("a"), await paper.resting("b", units=2)
+    await paper.stream_fill(one_of_two, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    for order_ref in (nothing_filled, one_of_two):
+        paper.venue.option_order_ends(order_ref, ended_as)
+    paper.wait(WAIT_MS)
+
+    done = await paper.round()
+
+    # Nothing was left to cancel: the lookup showed each order ended, and that is proof.
+    assert set(done.entries.ended) == {nothing_filled, one_of_two}
+    assert (paper.order_state(nothing_filled), paper.outcome(nothing_filled).standing) == (ended_as, EntryStanding.UNFILLED)
+    assert (paper.order_state(one_of_two), paper.outcome(one_of_two).standing) == (ended_as, EntryStanding.PART_FILLED)
+    assert paper.enter_state(nothing_filled) == "failed"
+    assert paper.set_aside_cents("a") == 0 and paper.set_aside_cents("b") == 0
+    assert paper.held("b") == {SYMBOL: 1.0}
+
+
+async def test_asked_after_the_fact_the_recorded_answer_wins_and_with_none_the_books_decide(paper: PaperOptions) -> None:  # noqa: F811
+    settled_first, never_asked = await paper.resting("a", decision="d-a"), await paper.resting("b", decision="d-b")
+    assert recorded_settlement(paper.repo, never_asked) is None
+    # A's wait runs to its limit with the entry still working: the Clerk answers "entered" and records it.
+    paper.clerk._outcome_pause = patiently(paper)
+    answered = await paper.clerk.await_entry_outcome(
+        strategy_instance_id="a", decision_id="d-a", until_ms=paper.clock() + 5_000
+    )
+    assert answered.settlement is EntrySettlement.ENTERED and answered.recorded
+
+    # Both are then cancelled with nothing filled.
+    paper.wait(WAIT_MS)
+    await paper.round()
+    assert paper.outcome(settled_first).standing is paper.outcome(never_asked).standing is EntryStanding.UNFILLED
+
+    # What A's strategy was told stands; B was told nothing, so the books speak.
+    assert entry_settlement(paper.repo, settled_first) is EntrySettlement.ENTERED
+    assert recorded_settlement(paper.repo, settled_first) == answered
+    assert entry_settlement(paper.repo, never_asked) is EntrySettlement.DISCARDED
 
 
 def _outcome(standing: EntryStanding, *, units_filled: int) -> EntryOutcome:
