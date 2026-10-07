@@ -12,7 +12,7 @@ from fractions import Fraction
 
 import pytest
 
-from app.options.at_expiry import PriceRange, at_expiry
+from app.options.at_expiry import PriceRange, ResultAt, at_expiry
 from app.options.contract import OptionContract
 from app.options.requirement import EntrySize, StructureMoneyRefusal, StructureMoneyRefused, entry_money
 from app.options.structure import ResolvedLeg, ResolvedStructure
@@ -223,3 +223,63 @@ def test_a_net_price_that_is_no_amount_of_money_is_the_callers_mistake(net_price
 
     with pytest.raises(ValueError):
         at_expiry(spread, _ONE, net_price=net_price)
+
+
+# ---- The line to draw ----------------------------------------------------------------------------
+
+
+def _line(*points: tuple[str, int]) -> tuple[ResultAt, ...]:
+    return tuple(ResultAt(Decimal(price), cents) for price, cents in points)
+
+
+def test_a_bought_call_spreads_line_runs_from_below_its_strikes_to_above_them_through_each() -> None:
+    """585 bought and 590 sold for $1.94, even at 586.94. The strikes and the break-even span 585 to 590, a
+    quarter of which is $1.25, so the line starts $1.25 below 585 rounded down to 583, and ends above 590 at
+    592. It is level at -$194.00 up to 585, rises to +$306.00 at 590, and is level again."""
+    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
+
+    figures = at_expiry(spread, _ONE, net_price=Decimal("1.94"))
+
+    assert figures.sketch == _line(("583", -19_400), ("585", -19_400), ("590", 30_600), ("592", 30_600))
+
+
+def test_one_bought_calls_line_reaches_past_its_break_even_and_keeps_rising() -> None:
+    """A 585 call bought for $4.12 is even at 589.12. From 585 to 589.12 is $4.12, a quarter of it $1.03: the
+    line starts at 583 and ends at 589.12 + 1.03 = 590.15, rounded up to 591, where the call is worth $6.00
+    and the entry is $1.88 a share ahead. Three structures: three times each."""
+    call = _of(_leg("bought", "long", "call", 585))
+
+    figures = at_expiry(call, EntrySize(multiplier=100, units=3), net_price=Decimal("4.12"))
+
+    assert figures.sketch == _line(("583", -123_600), ("585", -123_600), ("591", 56_400))
+
+
+def test_an_iron_condors_line_turns_at_each_of_its_four_strikes() -> None:
+    """Puts at 570 and 575 and calls at 595 and 600, sold for $1.50. It keeps the $150.00 between 575 and 595
+    and loses $5.00 - $1.50 at or beyond a wing. Even at 573.50 and 596.50. The window: 30 wide, a quarter is
+    $7.50, so from 562 to 608."""
+    condor = _of(
+        _leg("long_put", "long", "put", 570),
+        _leg("short_put", "short", "put", 575),
+        _leg("short_call", "short", "call", 595),
+        _leg("long_call", "long", "call", 600),
+    )
+
+    figures = at_expiry(condor, _ONE, net_price=Decimal("-1.50"))
+
+    assert figures.break_evens == (Fraction("573.5"), Fraction("596.5"))
+    assert figures.sketch == _line(
+        ("562", -35_000), ("570", -35_000), ("575", 15_000), ("595", 15_000), ("600", -35_000), ("608", -35_000)
+    )
+
+
+def test_a_line_never_starts_below_a_price_of_zero() -> None:
+    """A 2 put bought for $1.50 is even at 0.50. A dollar below that is under zero, and no stock trades there:
+    the line starts at zero, where the put is worth its whole strike and the entry is 50 cents a share ahead."""
+    put = _of(_leg("bought", "long", "put", 2))
+
+    figures = at_expiry(put, _ONE, net_price=Decimal("1.50"))
+
+    assert figures.break_evens == (Fraction("0.5"),)
+    assert figures.sketch == _line(("0", 5_000), ("2", -15_000), ("3", -15_000))
+

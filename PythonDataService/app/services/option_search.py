@@ -23,6 +23,12 @@ underlying's observation, the feed's state, the model's inputs, the limits
 and the two times. What comes back is the resolver's own answer, a
 resolution or its typed refusal, rebuilt here as the resolver made it.
 
+**A search may be asked for the picks' daily decay too.** That prices two
+more trees a leg (``app.options.decay``), so it is worked in the same pass,
+in the worker, and comes back beside the resolution. For four legs it adds
+about 13 ms to a search of a second or more (measured on one machine, at the
+default 401 steps). A page asks for it; a bot's entry does not yet.
+
 **A search that could not be run is not an answer.** A worker that could not
 be started, died, or did not answer within the bound gives ``SearchNotRun``:
 never a refusal of the plan, and never a guess. An error the search itself
@@ -52,7 +58,7 @@ import multiprocessing
 import os
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import BrokenExecutor, Executor, Future, ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -62,6 +68,7 @@ from types import MappingProxyType
 
 from app.options.american import AmericanIvStatus
 from app.options.contract import OptionContract
+from app.options.decay import LegDecay, picks_daily_decay
 from app.options.quotes import HeldQuote, QuoteFault
 from app.options.resolver import (
     Chain,
@@ -145,6 +152,9 @@ class SearchAsk:
     limits: ResolverLimits
     decision_bar_close_ms: int
     selection_ms: int
+    # Also work out what the next 24 hours take from each pick. Asked for only with a model that is known:
+    # a decay priced on inputs nobody has checked is not shown.
+    daily_decay: bool = False
 
     def as_plain_data(self) -> SearchAsk:
         """The same ask with nothing in it that cannot be sent to another process. A chain's watched contracts
@@ -152,8 +162,18 @@ class SearchAsk:
         return replace(self, chain=replace(self.chain, watched=dict(self.chain.watched)))
 
 
-# What a search comes to: the resolver's own answer, or that it could not be run.
-Searched = Resolution | ContractsNotResolved | SearchNotRun
+@dataclass(frozen=True, slots=True)
+class ResolutionWithDecay:
+    """A resolution, and beside it what the next 24 hours take from each picked leg, by leg id: the answer
+    to a search that was asked for both."""
+
+    resolution: Resolution
+    daily_decay: Mapping[str, LegDecay]
+
+
+# What a search comes to: the resolver's own answer, with the picks' decay when that was asked for, or that
+# it could not be run.
+Searched = Resolution | ResolutionWithDecay | ContractsNotResolved | SearchNotRun
 
 
 # ---- what the worker process runs -----------------------------------------------
@@ -168,15 +188,20 @@ class _Resolved:
     sold: frozenset[str]
     multipliers: dict[str, int]
     evidence: Evidence
+    # Each pick's daily decay, when the search was asked for it.
+    daily_decay: dict[str, LegDecay] | None = None
 
-    def as_the_resolver_made_it(self) -> Resolution:
-        return Resolution(
+    def as_the_resolver_made_it(self) -> Resolution | ResolutionWithDecay:
+        resolution = Resolution(
             picked=MappingProxyType(self.picked),
             quotes=MappingProxyType(self.quotes),
             sold=self.sold,
             multipliers=MappingProxyType(self.multipliers),
             evidence=self.evidence,
         )
+        if self.daily_decay is None:
+            return resolution
+        return ResolutionWithDecay(resolution, MappingProxyType(self.daily_decay))
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +230,7 @@ class _NotAQuestion:
 
 def search(asked: SearchAsk) -> _Resolved | _Refused | _NotAQuestion:
     """Run one search. This is what a lane's worker process runs, and the one place outside the resolver's
-    own package that calls it."""
+    own package that calls it, or that prices a pick's daily decay."""
     try:
         resolution = resolve_contracts(
             asked.plan,
@@ -229,6 +254,7 @@ def search(asked: SearchAsk) -> _Resolved | _Refused | _NotAQuestion:
         resolution.sold,
         dict(resolution.multipliers),
         resolution.evidence,
+        picks_daily_decay(resolution) if asked.daily_decay else None,
     )
 
 
@@ -413,6 +439,8 @@ class OptionSearchLane:
         )
         if isinstance(found, ContractsNotResolved):
             raise found
+        # Nothing was asked beside the resolution, so nothing comes back beside it.
+        assert not isinstance(found, ResolutionWithDecay)
         return found
 
     def close(self) -> None:
@@ -669,6 +697,7 @@ __all__ = [
     "OptionSearchLane",
     "OptionSearches",
     "PreviewSearches",
+    "ResolutionWithDecay",
     "SearchAsk",
     "SearchNotRun",
     "SearchNotRunReason",

@@ -7,8 +7,12 @@ from decimal import Context, Decimal, localcontext
 
 import pytest
 
+from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence
+from app.broker.alpaca.clerk.sqlite.option_admission import work_out_option_entry
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.option_fees import (
     OptionRateNotPinnedError,
+    entry_fee_provision_cents,
     fees_for_option_fill,
     option_fee_provision_cents,
     option_rates_for,
@@ -16,6 +20,11 @@ from app.broker.alpaca.option_fees import (
 )
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError, fees_for_fill, rates_for
 from app.broker.contract.models import OrderSide
+from app.options.contract import OptionContract
+from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
+from app.options.requirement import EntrySize, LegQuote
+from app.options.structure import ResolvedLeg, ResolvedStructure
+from app.schemas.action_plan import ActionPlan
 
 _TODAY = date(2026, 10, 5)
 
@@ -230,3 +239,115 @@ def test_a_day_with_no_option_fill_owes_nothing() -> None:
 def test_an_entrys_provision_is_its_own_fills_settled_alone_in_whole_cents() -> None:
     """Buy 2 at $1.50: CAT $0.0006 → 1¢, ORF 3¢, OCC 5¢: 9 cents."""
     assert option_fee_provision_cents([_fees(OrderSide.BUY, premium="1.50")]) == 9
+
+
+# ---- An entry's provision, from the structure it enters -------------------------------------------------
+
+_FRIDAY = date(2026, 10, 9)
+_TUESDAY = date(2026, 10, 6)
+
+
+def _structure(*legs: tuple[str, str, int, int]) -> ResolvedStructure:
+    """Calls expiring Friday, as (leg id, bought or sold, strike, ratio)."""
+    return ResolvedStructure(
+        legs=tuple(
+            ResolvedLeg(
+                leg_id=leg_id,
+                contract=OptionContract.of(root="SPY", expiry_date=_FRIDAY, right="call", strike=strike),
+                position=position,
+                ratio=ratio,
+            )
+            for leg_id, position, strike, ratio in legs
+        )
+    )
+
+
+_SPREAD = _structure(("bought", "long", 585, 1), ("sold", "short", 590, 1))
+_SPREADS_MARKETS = {
+    "bought": LegQuote(bid=Decimal("4.08"), ask=Decimal("4.12")),
+    "sold": LegQuote(bid=Decimal("2.18"), ask=Decimal("2.22")),
+}
+
+
+def test_a_spreads_provision_is_each_leg_filled_at_the_price_it_is_entered_at() -> None:
+    """One 585 call bought at its ask and one 590 sold at its bid of 2.18, on 2026-10-06. The SEC fee on the
+    $218.00 sold is 0.45 of a cent, which rounds up to 1. CAT on 200 shares is 0.06 of a cent: 1. ORF is
+    2 x 1.5 = 3 and OCC 2 x 2.5 = 5. The TAF is paused. Ten cents."""
+    one = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY)
+    three = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=3), trade_date=_TUESDAY)
+
+    assert one == 10
+    # Six contracts: SEC on the $654.00 sold is 1.35 cents, 2; CAT on 600 shares 0.18, 1; ORF 9; OCC 15.
+    assert three == 27
+
+
+def test_a_leg_of_two_contracts_a_structure_is_charged_as_two_contracts() -> None:
+    """A call butterfly on 2026-10-06: one 580 call bought, two 585 calls sold at a bid of 4.00, one 590 call
+    bought. That is four contracts a structure, and the body is two of them.
+
+    ORF is 4 x 1.5 = 6 cents and OCC 4 x 2.5 = 10. CAT on 400 shares is 0.12 of a cent, which rounds up to 1.
+    The SEC fee is on the $800.00 the two sold contracts bring: 1.648 cents, which rounds up to 2. The TAF is
+    paused. Nineteen cents.
+
+    Charged as one contract, the body would bring $400.00: three contracts, ORF 4.5 rounding up to 5, OCC 7.5
+    to 8, CAT 1 and an SEC fee of 0.824 rounding up to 1. Fifteen cents.
+
+    Two structures are eight contracts: ORF 12, OCC 20, CAT on 800 shares 0.24 of a cent, 1, and the SEC fee on
+    $1,600.00 3.296 cents, 4. Thirty-seven cents.
+    """
+    butterfly = _structure(("lower", "long", 580, 1), ("body", "short", 585, 2), ("upper", "long", 590, 1))
+    markets = {
+        "lower": LegQuote(bid=Decimal("6.06"), ask=Decimal("6.10")),
+        "body": LegQuote(bid=Decimal("4.00"), ask=Decimal("4.04")),
+        "upper": LegQuote(bid=Decimal("2.26"), ask=Decimal("2.30")),
+    }
+
+    one = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY)
+    two = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=2), trade_date=_TUESDAY)
+
+    assert (one, two) == (19, 37)
+
+
+def test_the_sold_leg_is_charged_on_its_bid_and_not_on_its_ask() -> None:
+    """Sold at a bid of 4.85 the SEC fee is 0.9991 of a cent and rounds up to 1. At the ask of 4.89 it would be
+    1.0073 and round up to 2."""
+    sold_first = _structure(("sold", "short", 585, 1), ("bought", "long", 590, 1))
+    markets = {
+        "sold": LegQuote(bid=Decimal("4.85"), ask=Decimal("4.89")),
+        "bought": LegQuote(bid=Decimal("1.89"), ask=Decimal("1.93")),
+    }
+
+    assert entry_fee_provision_cents(sold_first, markets, EntrySize(multiplier=100, units=1), trade_date=_TUESDAY) == 10
+
+
+def test_a_provision_for_a_day_with_no_pinned_rate_is_refused_and_is_never_nothing() -> None:
+    with pytest.raises(OptionRateNotPinnedError):
+        entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date=date(2019, 1, 2))
+
+
+@pytest.mark.parametrize(("units", "ask"), [(1, "1.94"), (2, "0.07"), (5, "12.40")])
+def test_the_account_clerk_sets_aside_the_same_provision_for_the_one_bought_option_it_takes(units: int, ask: str) -> None:
+    """The Clerk works its one-leg entry's fees out in its own lines. They are this rule, for one bought leg."""
+    call = OptionContract.of(root="SPY", expiry_date=_FRIDAY, right="call", strike=585)
+    leg = {
+        "leg_id": "long_call", "instrument": {"kind": "option", "underlying": "SPY"}, "position": "long",
+        "qty_ratio": 1, "right": "call", "strike": {"selector": "atm"}, "expiry": {"selector": "nearest_weekly"},
+    }
+    plan = ActionPlan.model_validate({"on_enter": [leg], "on_exit": [{"kind": "close_leg", "entry_leg_id": "long_call"}]})
+    # Tuesday 2026-10-06 at noon in New York.
+    noon = 1_791_302_400_000
+    bid = Decimal(ask) - Decimal("0.02")
+    quote = HeldQuote(QuoteSide(bid, noon - 300), QuoteSide(Decimal(ask), noon - 300), QuoteDataType.LIVE, 4)
+    evidence = OptionEntryEvidence(
+        picked={"long_call": call}, multipliers={"long_call": 100}, quotes={"long_call": quote}, generation=4,
+        rechecked_at_ms=noon - 100, leg_gap_limit_percent=Decimal(200), cost_limit_percent=Decimal(100),
+    )
+
+    admitted = work_out_option_entry(plan, evidence=evidence, units=units, now_ms=noon)
+
+    assert isinstance(admitted, OptionEntryFacts)
+    bought = _structure(("long_call", "long", 585, 1))
+    assert admitted.money.fee_provision_cents == entry_fee_provision_cents(
+        bought, {"long_call": LegQuote(bid=bid, ask=Decimal(ask))}, EntrySize(multiplier=100, units=units), trade_date=_TUESDAY
+    )
+
