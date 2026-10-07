@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
-    from app.broker.alpaca.clerk.sqlite.entry_outcome import SettledEntry
+    from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOnTheBooks, SettledEntry
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
     from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill
     from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
@@ -143,11 +143,25 @@ class ActiveAlpacaClerk(Protocol):
         ``execute_for_instance`` returns once an option entry is sent: the
         order then rests at the broker. A runner asks this next, and settles
         its Signal Program on the answer. It waits until the outcome is
-        proven, or the authority's clock reaches ``until_ms`` (the close of
-        the bot's next decision bar), or the run stops. It holds no lock
+        proven, or the authority's clock reaches ``until_ms`` (the end of
+        the runner's own wait), or the run stops. It holds no lock
         while it waits and may be cancelled. Only for a decision whose
         receipt was not a refusal; a stock decision is never asked.
         """
+        ...
+
+    def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
+        """Raise the typed refusal of an option plan this account does not take (ADR 0076)."""
+        ...
+
+    def option_contracts_to_watch(self) -> tuple[str, ...]:
+        """The option contracts a bot's run on this account must ask to have quoted, by OCC symbol: held, or an
+        order working. None where the authority's own keeping asks for them (ADR 0076)."""
+        ...
+
+    def option_entry_of_decision(self, strategy_instance_id: str, decision_id: str) -> EntryOnTheBooks | None:
+        """Where the option entry one decision made stands on the books now, or ``None`` when it made none: a
+        read, which waits for nothing and records nothing (ADR 0076)."""
         ...
 
     def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:

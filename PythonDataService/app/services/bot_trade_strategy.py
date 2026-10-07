@@ -21,17 +21,13 @@ from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.option_effects import (
-    OptionEffectRefusal,
-    OptionEntryEvidence,
-    OptionPlanRefused,
-    is_option_plan,
-)
+from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, is_option_plan
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     CRASH_CANDIDATE_OUTCOME,
     DecisionOutcome,
     SqliteDecisionReceipts,
 )
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, SettledEntry
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.config import settings
 from app.engine.data.trade_bar import TradeBar
@@ -879,6 +875,7 @@ async def run_trade_bot(
     source_bars: SourceBarLedger | None = None,
     pricing_feed: MarketDataFeed | None = None,
     pricing_bar_wait_ms: int | None = None,
+    option_market: OptionMarket | None = None,
 ) -> None:
     """Execute one admitted strategy; the Clerk owns all execution truth.
 
@@ -897,15 +894,13 @@ async def run_trade_bot(
     symbol it listens to never opens it. ``pricing_bar_wait_ms`` overrides
     the configured pricing-bar wait; production wiring leaves it unset.
 
-    A bot that trades option contracts is refused here by name, before any
-    stream is opened: only a Dry Run runs one for now (ADR 0076).
+    A bot that trades option contracts runs here on an account whose Clerk
+    takes its plan: a Paper account, for one bought call or put (ADR 0076).
+    The Clerk is asked before any stream is opened, and its refusal of any
+    other account or plan is raised as it gave it. ``option_market`` is what
+    such a bot reads its quotes through (``bot_option_run``); production
+    wiring leaves it unset and the process's own is used.
     """
-    if is_option_plan(binding.action_plan):
-        raise OptionPlanRefused(
-            OptionEffectRefusal.ACCOUNT_NOT_OPEN,
-            "This bot trades option contracts. Only a Dry Run runs an option bot for now: option orders have "
-            "not been checked against Alpaca on a Paper, Live Shadow or Live account.",
-        )
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("The SQLite Alpaca Clerk is unavailable; trade-mode decisions are blocked.")
@@ -920,6 +915,12 @@ async def run_trade_bot(
     repository = getattr(clerk, "repository", None)
     if repository is None:
         raise RuntimeError("The active SQLite Clerk has no repository for decision receipts.")
+    # None for a bot that trades shares. An option bot's side of the run: what it asks to have quoted,
+    # and what its decisions are handed to the Clerk with. The Clerk is asked first whether the account
+    # takes the plan, before any stream is opened.
+    options = _option_run(binding, clerk, option_market)
+    if options is not None and source_bars is None:
+        raise RuntimeError("An option bot's run requires its durable source-bar ledger.")
     decision_receipts = SqliteDecisionReceipts(
         repository,
         strategy_instance_id=binding.strategy_instance_id,
@@ -937,6 +938,7 @@ async def run_trade_bot(
     continuity = (
         None if source_bars is None else continuity_policy_for(binding, source_bars, session=session)
     )
+    feed, pricing_feed = _shown_to_the_option_run(options, feed, pricing_feed)
     # The retained feed owns the live stream its warmup opens; leaving the
     # context closes it however the run ends (#2410).
     run_feed_scope = (
@@ -951,11 +953,13 @@ async def run_trade_bot(
         )
     )
     pricing_scope = _pricing_stream_scope(binding, pricing_feed, source_bars, wait_ms=pricing_bar_wait_ms)
-    async with run_feed_scope as run_feed, pricing_scope as pricing:
+    async with (nullcontext() if options is None else options), run_feed_scope as run_feed, pricing_scope as pricing:
         async for evaluation in strategy_evaluations(
             binding,
             run_feed,
-            captured_decisions=captured_decision_outcomes(decision_receipts, run_id=binding.run_id),
+            captured_decisions=captured_decision_outcomes(
+                decision_receipts, run_id=binding.run_id, option_entries=options is not None
+            ),
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
@@ -1044,11 +1048,23 @@ async def run_trade_bot(
             priced = await _price_decision(
                 decision_receipts, binding=binding, evaluation=evaluation, intent=intent,
                 pricing=pricing, continuity=continuity,
-                # A Live Shadow runs this loop too, and fills its own orders.
-                synthesized=clerk.binds_decision_bar,
+                # A Live Shadow runs this loop too, and fills its own orders. An option close is
+                # priced from quotes, or sent as a market order: it waits for no bar of the underlying.
+                synthesized=clerk.binds_decision_bar and options is None,
             )
             if priced.refused:
                 continue
+            # What an option bot's decision is handed to the Clerk with. Nothing for a bot in shares.
+            option_facts: dict[str, Any] = {}
+            if options is not None:
+                assert source_bars is not None  # required above for a bot that trades options
+                handed_over = await _option_decision_facts(
+                    decision_receipts, clerk=clerk, binding=binding, evaluation=evaluation, intent=intent,
+                    options=options, priced=priced, pricing=pricing, source_bars=source_bars, continuity=continuity,
+                )
+                if handed_over is None:
+                    continue
+                option_facts = handed_over
             logger.info(
                 "Trade bot decision",
                 extra={
@@ -1079,8 +1095,15 @@ async def run_trade_bot(
                 retained_source_bar=retained,
                 pricing_bar=priced.bar,
                 decision_evidence=decision_evidence,
+                **option_facts,
             )
-            if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+            if options is not None:
+                # A refusal is dropped as it is for shares. An entry rests at the broker, so the
+                # strategy is settled on what the entry came to, not on its acceptance.
+                await _settle_option_decision(
+                    clerk, binding=binding, evaluation=evaluation, intent=intent, receipt=receipt, options=options
+                )
+            elif _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
                 # A distinct failure mode from the liveness gate above: that one
                 # catches evidence already stale *before* the Clerk was reached,
                 # this one catches evidence that changed *while* the intent awaited
@@ -1537,15 +1560,25 @@ def _decision_bar_evidence(
 
 
 def _option_run(
-    binding: BrokerBotBinding, clerk: ActiveAlpacaClerk, option_market: OptionMarket | None
+    binding: BrokerBotBinding,
+    clerk: ActiveAlpacaClerk,
+    option_market: OptionMarket | None,
 ) -> OptionRun | None:
     """This run's option side, or ``None`` for a bot that trades shares, which has none (ADR 0076).
 
+    Shared by both runners. The Clerk is asked first whether its account
+    takes the plan, by the rule the bot was registered under, and its refusal
+    is raised as it gave it: a Live Shadow and a Live account take no option
+    plan. Nothing is asked for before that, no stream and no quote line.
+
     Loaded only for an option bot: it brings the resolver and the pricer
-    with it.
+    with it. The contracts the run asks for as held lines are the Clerk's
+    answer too: those the account's books say must be quoted on a real
+    account, and none in a Dry Run, whose Clerk asks for them itself.
     """
     if not is_option_plan(binding.action_plan):
         return None
+    clerk.require_option_plan_taken(binding.action_plan)
     from app.services.bot_option_run import OptionRun, this_process_option_market
 
     return OptionRun(
@@ -1553,7 +1586,192 @@ def _option_run(
         option_market or this_process_option_market(),
         # The contracts this bot holds are the Clerk's answer, read from its books at each EXIT.
         held_contracts=lambda: clerk.held_option_contracts(binding.strategy_instance_id),
+        contracts_to_watch=clerk.option_contracts_to_watch,
     )
+
+
+def _shown_to_the_option_run(
+    options: OptionRun | None, feed: MarketDataFeed, pricing_feed: MarketDataFeed | None
+) -> tuple[MarketDataFeed, MarketDataFeed | None]:
+    """A run's two bar streams, each showing the underlying's bars to the run's option side (ADR 0076).
+
+    Shared by both runners. Whichever stream delivers the underlying's
+    bars moves the watched window with each one: the Signal stream for a bot
+    that listens to the underlying, the pricing stream for a bot that
+    listens to another symbol. So both are tapped, always together. A bot
+    that trades shares gets both back as they were.
+    """
+    if options is None:
+        return feed, pricing_feed
+    return options.tapping(feed), None if pricing_feed is None else options.tapping(pricing_feed)
+
+
+@dataclass(frozen=True)
+class _OptionDecisionSettled:
+    """What the runner did with the Clerk's receipt for one option decision.
+
+    ``refused`` -- the receipt was a refusal: the staged decision was
+    discarded, and nothing was bought or sold. ``entry`` -- the Clerk's
+    answer to what an ENTER's entry came to; ``None`` for an EXIT and for a
+    refusal.
+    """
+
+    refused: bool
+    entry: SettledEntry | None = None
+
+
+async def _settle_option_decision(
+    clerk: ActiveAlpacaClerk,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent: SignalIntent,
+    receipt: _EffectReceipt,
+    options: OptionRun,
+) -> _OptionDecisionSettled:
+    """Settle an option bot's staged decision on the Clerk's receipt for it (ADR 0076).
+
+    Shared by both runners, so the two cannot differ:
+
+    - a refusal: DISCARD, as for shares. An ENTER the Clerk took and then
+      did not send is said in the runner's own words too
+      (``_note_an_entry_refused_at_the_send``);
+    - an ENTER the Clerk took: settled on what its entry came to, not on
+      its acceptance (``_settle_option_entry``);
+    - an EXIT the Clerk took: COMMIT, as for shares.
+    """
+    if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+        # A REJECTED receipt is final, as it is for shares (#2623).
+        _discard_evaluation(evaluation)
+        if intent.kind is SignalIntentKind.ENTER:
+            _note_an_entry_refused_at_the_send(clerk, binding=binding, evaluation=evaluation)
+        return _OptionDecisionSettled(refused=True)
+    if intent.kind is SignalIntentKind.ENTER:
+        settled = await _settle_option_entry(clerk, binding=binding, evaluation=evaluation, options=options)
+        return _OptionDecisionSettled(refused=False, entry=settled)
+    _settle_evaluation(evaluation, Settlement.COMMIT)
+    return _OptionDecisionSettled(refused=False)
+
+
+def _note_an_entry_refused_at_the_send(
+    clerk: ActiveAlpacaClerk, *, binding: BrokerBotBinding, evaluation: StrategyEvaluation
+) -> None:
+    """Say what a refused option ENTER came to, when the Clerk had taken the entry first (ADR 0076).
+
+    An ENTER refused before the Clerk took it has a ``blocked`` receipt
+    with its own code, and nothing on the books: nothing more is said. One
+    refused as its order was sent was accepted first. Its receipt reads
+    ``enter_intent``, the refusal is on the Clerk's books only, and nothing
+    is asked about its outcome. So the runner says it here, once: the
+    decision, the word for what the entry came to, and the code the books
+    recorded of its order.
+    """
+    from app.services.bot_option_run import entry_came_to
+
+    entry = clerk.option_entry_of_decision(binding.strategy_instance_id, evaluation.evaluation_id)
+    if entry is None:
+        return
+    logger.info(
+        "An option bot's entry was taken by the Clerk and then refused; the decision is dropped",
+        extra={
+            "action": "bot_option_entry_refused_at_the_send",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+            "came_to": entry_came_to(entry.standing).value,
+            "standing": entry.standing.value,
+            "reason_code": entry.last_recorded_code,
+            "order_ref": entry.order_ref,
+        },
+    )
+
+
+async def _settle_option_entry(
+    clerk: ActiveAlpacaClerk,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    options: OptionRun,
+) -> SettledEntry:
+    """Settle an option ENTER the Clerk accepted on what its entry came to (ADR 0076).
+
+    Shared by both runners. An option entry is a limit order that rests at
+    the broker, so its acceptance does not say the bot holds anything. The
+    runner asks the Clerk what the entry came to and waits here, inside its
+    own loop, for the answer. The staged decision stays staged meanwhile, and
+    the run asks its stream for no further bar until it is settled: a run has
+    one bar in flight at a time. So no decision is ever taken on a state that
+    is not settled yet.
+
+    The wait ends when the outcome is proven, when the run stops, or
+    ``ENTRY_OUTCOME_WAIT_MS`` after the decision bar closed, whichever is
+    first (``bot_option_run`` says why that long and no longer). The
+    settlement is the Clerk's:
+
+    - entered: something filled, in full or in part. COMMIT. The bot holds
+      what filled, and its exit closes what the books hold.
+    - discarded: the order ended with nothing filled, or was never sent.
+      DISCARD, exactly as for a refused entry.
+    - not proven when the wait ends: entered. An exit will then come and
+      close whatever turns out to be held.
+
+    A simulation fills inside the send, so a Dry Run is answered on the
+    first read.
+
+    The settlement is always the Clerk's, and the runner works out none of
+    its own: a later Start replays the entry by the Clerk's record, so an
+    answer the runner made up could not be replayed. The send itself can
+    outlast the wait. The limit asked for is then a moment from now and not
+    one already past (``ENTRY_OUTCOME_SHORTEST_WAIT_MS``), so the Clerk
+    still looks again until that limit, judges, and records its answer. A
+    wait the Clerk refuses all the same is raised, and ends the run.
+
+    The limit is also never further from now than the wait itself. A clock
+    set back while the send was out would otherwise put the bar's close,
+    and so the limit, that much further ahead, and keep the runner from its
+    stream for as long.
+    """
+    from app.services.bot_option_run import (
+        ENTRY_OUTCOME_SHORTEST_WAIT_MS,
+        ENTRY_OUTCOME_WAIT_MS,
+        entry_came_to,
+    )
+
+    now_ms = now_ms_utc()
+    until_ms = max(
+        min(evaluation.decision_bar_close_ms + ENTRY_OUTCOME_WAIT_MS, now_ms + ENTRY_OUTCOME_WAIT_MS),
+        now_ms + ENTRY_OUTCOME_SHORTEST_WAIT_MS,
+    )
+    settled = await clerk.await_entry_outcome(
+        strategy_instance_id=binding.strategy_instance_id,
+        decision_id=evaluation.evaluation_id,
+        until_ms=until_ms,
+    )
+    entered = settled.settlement is EntrySettlement.ENTERED
+    _settle_evaluation(evaluation, Settlement.COMMIT if entered else Settlement.DISCARD)
+    # What is held may have changed: a part fill is held from now on.
+    options.follow_what_is_held()
+    logger.info(
+        "An option bot's entry was settled on what it came to",
+        extra={
+            "action": "bot_option_entry_settled",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+            "until_ms": until_ms,
+            "settlement": settled.settlement.value,
+            "came_to": entry_came_to(settled.standing).value,
+            "standing": settled.standing.value,
+            "units_asked": settled.units_asked,
+            "units_filled": settled.units_filled,
+            "order_ref": settled.order_ref,
+            "settled_at_ms": settled.settled_at_ms,
+            "recorded": settled.recorded,
+        },
+    )
+    return settled
 
 
 def _the_money(
@@ -1584,6 +1802,7 @@ def _the_money(
 async def _option_decision_facts(
     decision_receipts: SqliteDecisionReceipts,
     *,
+    clerk: ActiveAlpacaClerk,
     binding: BrokerBotBinding,
     evaluation: StrategyEvaluation,
     intent: SignalIntent,
@@ -1595,18 +1814,28 @@ async def _option_decision_facts(
 ) -> dict[str, Any] | None:
     """What an option bot's decision is handed to the Clerk with (ADR 0076), or ``None`` when it is not sent.
 
-    An EXIT is never refused here. It goes with the newest quote held for
-    the contract the Clerk says the bot holds, or with none: the Clerk prices
-    it from the newest quote kept, and says so.
+    An EXIT is never refused here. Where the Clerk fills the close itself,
+    from quotes (a Dry Run), it goes with the newest quote held for the
+    contract the Clerk says the bot holds, or with none: the Clerk prices it
+    from the newest quote kept, and says so. A real account's close is a
+    market order. No quote prices it, so none is read: a fault in a read the
+    close does not need must never keep the close from going out.
 
     An ENTER is resolved to its contracts first (``OptionRun.entry_evidence``).
     A refusal on the way is one protected ``blocked`` receipt with its own
     reason code and sentence; the candidate is discarded, and nothing is kept
     for a later bar. The resolve and the recheck take time, so lateness is
-    judged again after them, as it is after the wait for a price: nothing
-    after this looks at the clock before the order is sent.
+    judged again after them, as it is after the wait for a price. Then the
+    run says whether an entry taken this late could still be cancelled and
+    proven ended while the runner waits for what it came to
+    (``OptionRun.too_late_to_see_through``). Nothing after that looks at the
+    clock before the order is sent.
     """
     if intent.kind is SignalIntentKind.EXIT:
+        if not clerk.binds_decision_bar:
+            # The broker fills this close, as a market order. Only an authority that fills it
+            # itself prices it from a quote.
+            return {}
         with_the_exit = options.exit_evidence()
         return {} if with_the_exit is None else {"option_exit": with_the_exit}
     found = await options.entry_evidence(
@@ -1614,35 +1843,42 @@ async def _option_decision_facts(
         decision_bar_close_ms=intent.bar_close_ms,
         time_left_ms=lambda: decision_time_left_ms(continuity, evaluation.decision_bar_close_ms),
     )
-    if not isinstance(found, OptionEntryEvidence):
-        _discard_evaluation(evaluation)
-        _append_decision_receipt(
-            decision_receipts,
-            binding=binding,
-            evaluation=evaluation,
-            outcome="blocked",
-            reason_code=found.reason_code,
-            refusal_reason=found.why,
+    if isinstance(found, OptionEntryEvidence):
+        late = _screen_late_decision(
+            decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
         )
-        logger.warning(
-            "Bot entry not sent: its option contracts could not be resolved",
-            extra={
-                "action": "bot_option_entry_blocked",
-                "strategy_instance_id": binding.strategy_instance_id,
-                "run_id": binding.run_id,
-                "strategy_key": binding.strategy_key,
-                "symbol": binding.symbol,
-                "underlying": options.underlying,
-                "reason_code": found.reason_code,
-                "evaluation_id": evaluation.evaluation_id,
-                "decision_bar_close_ms": evaluation.decision_bar_close_ms,
-            },
-        )
-        return None
-    late = _screen_late_decision(
-        decision_receipts, binding=binding, evaluation=evaluation, intent=intent, continuity=continuity
+        if late.refused:
+            return None
+        too_late = options.too_late_to_see_through(evaluation.decision_bar_close_ms)
+        if too_late is None:
+            return {"option_entry": found}
+        blocked, not_sent = too_late, "Bot entry not sent: taken this late, its order could not be seen through"
+    else:
+        blocked, not_sent = found, "Bot entry not sent: its option contracts could not be resolved"
+    _discard_evaluation(evaluation)
+    _append_decision_receipt(
+        decision_receipts,
+        binding=binding,
+        evaluation=evaluation,
+        outcome="blocked",
+        reason_code=blocked.reason_code,
+        refusal_reason=blocked.why,
     )
-    return None if late.refused else {"option_entry": found}
+    logger.warning(
+        not_sent,
+        extra={
+            "action": "bot_option_entry_blocked",
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "strategy_key": binding.strategy_key,
+            "symbol": binding.symbol,
+            "underlying": options.underlying,
+            "reason_code": blocked.reason_code,
+            "evaluation_id": evaluation.evaluation_id,
+            "decision_bar_close_ms": evaluation.decision_bar_close_ms,
+        },
+    )
+    return None
 
 
 def _journal_option_fill(
@@ -1656,6 +1892,7 @@ def _journal_option_fill(
     intent: SignalIntent,
     receipt: Any,
     bar_ref: str,
+    settled: SettledEntry | None,
 ) -> None:
     """Write the journal's rows for what a decision filled in an option contract.
 
@@ -1663,21 +1900,44 @@ def _journal_option_fill(
     (``option_fills_of_decision``): the contract and its multiplier are the
     books', and the premium, the model and the quote's age are the
     simulation's record of the fill. Nothing is taken from what the runner
-    handed over, and no order is read out of the receipt. An entry is filled
-    at once and in full, so one with no fill on record is a broken
-    simulation and is raised. An EXIT the Clerk accepted and holds for the
-    session's open has no closing order yet, and no row.
+    handed over, and no order is read out of the receipt. An EXIT the Clerk
+    accepted and holds for the session's open has no closing order yet, and
+    no row.
+
+    The journal is a record of fills. ``settled`` is the Clerk's answer to
+    what an ENTER's entry came to, and each row of that entry says it in the
+    runner's closed set (``EntryCameTo``). An entry that bought nothing is
+    an ordinary ending, not a fault: it has no row, and what it came to is
+    in the log and on the Clerk's own record. Only a contradiction is
+    raised: the Clerk says contracts filled and has no fill of them on
+    record, or says nothing filled and has one.
     """
     from app.services.bot_dry_run import DryRunActivity
-    from app.services.bot_option_run import IBKR_LISTING
+    from app.services.bot_option_run import IBKR_LISTING, entry_came_to
 
     entering = intent.kind is SignalIntentKind.ENTER
     fills = clerk.option_fills_of_decision(binding.strategy_instance_id, evaluation.evaluation_id)
+    # Only an ENTER comes with an answer about its entry.
+    came_to = None if settled is None else entry_came_to(settled.standing)
+    if settled is not None and bool(fills) != bool(settled.units_filled):
+        raise RuntimeError(
+            f"The Clerk says this option entry filled {settled.units_filled} of {settled.units_asked}, and "
+            f"has {len(fills)} fill(s) of it on record."
+        )
     if not fills:
         if entering:
-            raise RuntimeError(
-                "A simulated option entry was accepted, and the simulation has no fill of it on record."
+            logger.info(
+                "An option bot's entry bought nothing; the journal lists no fill of it",
+                extra={
+                    "action": "dry_run_option_entry_not_filled",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "came_to": None if came_to is None else came_to.value,
+                    "effect_state": _effect_state_value(receipt),
+                    "order_refs": list(receipt.child_order_refs),
+                },
             )
+            return
         logger.info(
             "An option bot's EXIT was accepted and has not filled; its position is closed when its order goes out",
             extra={
@@ -1712,6 +1972,7 @@ def _journal_option_fill(
                 quote_age_ms=fill.quote_age_ms,
                 # A Dry Run has no broker reference to ask: the listing IBKR gave is the contract's.
                 contract_reference=IBKR_LISTING if entering else None,
+                entry_outcome=None if came_to is None else came_to.value,
             )
         )
         logger.info(
@@ -1765,10 +2026,7 @@ async def run_dry_run_bot(
     # None for a bot that trades shares. An option bot's side of the run: what it asks to have quoted,
     # and what its decisions are handed to the Clerk with.
     options = _option_run(binding, clerk, option_market)
-    if options is not None:
-        # Whichever stream delivers the underlying's bars moves the watched window with each one.
-        feed = options.tapping(feed)
-        pricing_feed = None if pricing_feed is None else options.tapping(pricing_feed)
+    feed, pricing_feed = _shown_to_the_option_run(options, feed, pricing_feed)
     pricing_scope = _pricing_stream_scope(binding, pricing_feed, source_bars, wait_ms=pricing_bar_wait_ms)
     async with (nullcontext() if options is None else options), _RetainedSourceBarFeed(
         feed,
@@ -1780,7 +2038,9 @@ async def run_dry_run_bot(
         async for evaluation in strategy_evaluations(
             binding,
             retained_feed,
-            captured_decisions=captured_decision_outcomes(decision_receipts, run_id=binding.run_id),
+            captured_decisions=captured_decision_outcomes(
+                decision_receipts, run_id=binding.run_id, option_entries=options is not None
+            ),
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
@@ -1850,8 +2110,8 @@ async def run_dry_run_bot(
             option_facts: dict[str, Any] = {}
             if options is not None:
                 handed_over = await _option_decision_facts(
-                    decision_receipts, binding=binding, evaluation=evaluation, intent=intent, options=options,
-                    priced=priced, pricing=pricing, source_bars=source_bars, continuity=continuity,
+                    decision_receipts, clerk=clerk, binding=binding, evaluation=evaluation, intent=intent,
+                    options=options, priced=priced, pricing=pricing, source_bars=source_bars, continuity=continuity,
                 )
                 if handed_over is None:
                     continue
@@ -1878,6 +2138,21 @@ async def run_dry_run_bot(
                 decision_evidence=decision_evidence,
                 **option_facts,
             )
+            if options is not None:
+                # The same settle a Paper account's decision goes through. A simulation fills inside
+                # the send, so the Clerk answers what an entry came to on its first read.
+                settled = await _settle_option_decision(
+                    clerk, binding=binding, evaluation=evaluation, intent=intent, receipt=receipt, options=options
+                )
+                if not settled.refused:
+                    # An option fill has no bar it filled at. Its row is what the simulation itself
+                    # recorded of the fill, on the contract the Clerk's books name.
+                    _journal_option_fill(
+                        journal, clerk=clerk, binding=binding, options=options, account_id=account_id,
+                        evaluation=evaluation, intent=intent, receipt=receipt, bar_ref=decision_evidence.bar_ref,
+                        settled=settled.entry,
+                    )
+                continue
             if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
                 # A REJECTED receipt is final: an ENTER refused only because
                 # executions postdate the account's last reading is kept by the
@@ -1886,14 +2161,6 @@ async def run_dry_run_bot(
                 _discard_evaluation(evaluation)
                 continue
             _settle_evaluation(evaluation, Settlement.COMMIT)
-            if options is not None:
-                # An option fill has no bar it filled at. Its row is what the simulation itself
-                # recorded of the fill, on the contract the Clerk's books name.
-                _journal_option_fill(
-                    journal, clerk=clerk, binding=binding, options=options, account_id=account_id,
-                    evaluation=evaluation, intent=intent, receipt=receipt, bar_ref=decision_evidence.bar_ref,
-                )
-                continue
             if retained is None:
                 raise RuntimeError(
                     "A synthetic effect was accepted without its exact retained decision-bar evidence."

@@ -26,7 +26,6 @@ import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
-from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
 from app.marketdata.feed import (
@@ -36,7 +35,6 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeedError,
 )
-from app.schemas.action_plan import ActionPlan
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -462,40 +460,6 @@ async def test_a_bot_that_trades_what_it_listens_to_opens_no_second_stream(run: 
     (call,) = ran.calls
     assert call["pricing_bar"] is None
     assert ran.feed.symbols_asked_for == [SIGNAL]
-
-
-async def test_the_paper_runner_refuses_a_plan_that_trades_options_by_name_and_opens_no_stream(tmp_path: Path) -> None:
-    """Only a Dry Run runs an option bot for now. A Paper bot's is refused before any stream is asked for."""
-    options_on_the_signal = ActionPlan.model_validate(
-        {
-            "on_enter": [
-                {
-                    "leg_id": "call",
-                    "instrument": {"kind": "option", "underlying": SIGNAL},
-                    "position": "long",
-                    "qty_ratio": 1,
-                    "right": "call",
-                    "strike": {"selector": "atm"},
-                    "expiry": {"selector": "nearest_weekly"},
-                }
-            ],
-            "on_exit": [{"kind": "close_leg", "entry_leg_id": "call"}],
-        }
-    )
-    binding = _binding().model_copy(update={"action_plan": options_on_the_signal})
-    ledger = SourceBarLedger(artifacts_root=tmp_path / "ledger", account_id="PA-TEST")
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
-    set_alpaca_clerk(_FakeClerk(repository=repo))
-    feed = _ScriptedFeed([])
-    try:
-        with pytest.raises(OptionPlanRefused) as refused:
-            await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger, pricing_feed=feed)
-        assert refused.value.reason is OptionEffectRefusal.ACCOUNT_NOT_OPEN
-        assert feed.symbols_asked_for == []
-    finally:
-        set_alpaca_clerk(None)
-        ledger.close()
-        repo.close()
 
 
 async def test_a_bot_that_trades_another_asset_refuses_to_run_without_that_assets_feed(tmp_path: Path) -> None:
