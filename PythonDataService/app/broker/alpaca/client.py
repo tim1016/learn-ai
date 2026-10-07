@@ -37,7 +37,7 @@ from alpaca.common.enums import Sort
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
-from alpaca.trading.requests import GetAssetsRequest, GetOrdersRequest
+from alpaca.trading.requests import GetAssetsRequest, GetOrderByIdRequest, GetOrdersRequest
 from pydantic import ValidationError
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RequestException, Timeout
@@ -392,6 +392,25 @@ class AlpacaTradingClient:
 
         return await self._call(_get, describe="asset lookup")
 
+    async def get_option_contract(self, symbol: str) -> dict[str, Any] | None:
+        """GET ``/v2/options/contracts/{symbol}``: Alpaca's listing of one option contract.
+
+        This is the Trading API's contract reference, not a market-data
+        subscription. Alpaca answers HTTP 404 for a contract it does not
+        list, which is the answer "not listed" and maps to ``None``, never
+        to an unavailable broker. Other failures keep the shared taxonomy.
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_option_contract(symbol)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="option contract lookup")
+
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")
 
@@ -629,3 +648,32 @@ class AlpacaTradingClient:
                 raise
 
         return await self._call(_get, describe="order lookup by broker order id")
+
+    async def get_nested_order_by_broker_order_id(self, order_id: str) -> dict[str, Any] | None:
+        """GET ``/v2/orders/{order_id}?nested=true``: one order with its legs nested under it.
+
+        ``nested`` is the documented way to have Alpaca "roll up multi-leg
+        orders under the legs field of primary order", and this read is the
+        one it is documented on. Otherwise as
+        :meth:`get_order_by_broker_order_id`: the raw payload, ``None`` on a
+        definitive 404, and an id that is not a UUID refused before anything
+        is asked of Alpaca.
+        """
+        try:
+            UUID(order_id)
+        except ValueError as exc:
+            raise BrokerRequestInvalid(
+                f"{order_id!r} is not an Alpaca order id.",
+                broker=self.broker_id,
+                detail="An Alpaca order id is a UUID; nothing was asked of Alpaca.",
+            ) from exc
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="nested order lookup by broker order id")

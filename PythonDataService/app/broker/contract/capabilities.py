@@ -52,6 +52,11 @@ class BrokerCapabilities(BaseModel):
     # The declared extended session (ADR 0059 D5.2); present iff supported.
     extended_hours_window: ExtendedHoursWindow | None = None
     supported_order_types: tuple[str, ...]
+    # Option orders (ADR 0076): whether the broker takes an order for one
+    # option contract, and one for several legs as a single order. No is the
+    # default, so a broker that takes them says so.
+    supports_option_orders: bool = False
+    supports_multi_leg_option_orders: bool = False
     # Market-data / streaming shape (designed now, enforced from phase 3).
     data_feed: str
     bars_may_gap: bool
@@ -66,6 +71,12 @@ class BrokerCapabilities(BaseModel):
             raise ValueError("supports_extended_hours requires an extended_hours_window")
         if not self.supports_extended_hours and self.extended_hours_window is not None:
             raise ValueError("extended_hours_window is only meaningful when extended hours are supported")
+        return self
+
+    @model_validator(mode="after")
+    def _multi_leg_orders_are_option_orders(self) -> BrokerCapabilities:
+        if self.supports_multi_leg_option_orders and not self.supports_option_orders:
+            raise ValueError("supports_multi_leg_option_orders requires supports_option_orders")
         return self
 
     def revised(self, **changes: object) -> BrokerCapabilities:

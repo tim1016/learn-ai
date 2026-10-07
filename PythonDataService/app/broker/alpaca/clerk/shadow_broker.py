@@ -75,6 +75,7 @@ from app.broker.alpaca.clerk.synthetic_broker import (
     synthesized_positions,
 )
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
+from app.broker.contract.errors import BrokerOptionsNotSupported
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -87,6 +88,12 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+)
 from app.broker.contract.ports import BrokerReadPort
 from app.engine.live.order_identity import (
     NAMESPACE_ROOT,
@@ -95,6 +102,7 @@ from app.engine.live.order_identity import (
     build_bot_order_namespace,
     parse_order_ref,
 )
+from app.options.contract import OptionContract
 from app.services.session_authority import (
     declared_session_bounds,
     scheduled_extended_session_bounds,
@@ -604,6 +612,27 @@ class NoSubmitAlpacaTradePort:
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return self._book.order_by_broker_order_id(order_id)
 
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder:
+        del order, client_order_id
+        raise self._options_not_supported("takes no option orders")
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        del client_order_id
+        raise self._options_not_supported("holds no option orders")
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        del order_id
+        raise self._options_not_supported("holds no option orders")
+
+    def _options_not_supported(self, what: str) -> BrokerOptionsNotSupported:
+        return BrokerOptionsNotSupported(
+            f"The shadow order book {what}.",
+            broker=self.broker_id,
+            detail="Its capabilities say so; nothing was sent and no order exists.",
+        )
+
 
 class ShadowAccountReadPort:
     """``BrokerReadPort``: live account truth, synthesized custody (ruling R3)."""
@@ -615,7 +644,11 @@ class ShadowAccountReadPort:
         self._book = book
 
     def capabilities(self) -> BrokerCapabilities:
-        return self._live.capabilities()
+        # The live broker's own, less what the shadow order book does not do:
+        # it synthesizes stock orders and takes no option order yet (#2913).
+        return self._live.capabilities().revised(
+            supports_option_orders=False, supports_multi_leg_option_orders=False
+        )
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return await self._live.get_account()
@@ -661,6 +694,12 @@ class ShadowAccountReadPort:
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         return await self._live.get_asset(symbol)
+
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        return await self._live.get_option_contract(contract)
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        return await self._live.get_option_account()
 
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         return await self._live.get_clock_evidence()
