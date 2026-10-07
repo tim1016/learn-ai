@@ -1421,7 +1421,8 @@ def _created_leg_may_be_sent(
     valid_until_ms = _created_leg_valid_until_ms(repo, effect_operation_id, created)
     now_ms = repo.clock()
     accepted = _accepted_facts(repo, effect_operation_id)
-    if _fold_expired_option_close(
+    # An order sent before to a real broker may be there: its EXIT keeps custody below, expired contract or not.
+    if not sent_to_broker and _fold_expired_option_close(
         repo, accepted, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=created.symbol,
         remaining_qty=remaining_qty, now_ms=now_ms,
     ):
