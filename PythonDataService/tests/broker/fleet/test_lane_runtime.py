@@ -266,6 +266,45 @@ async def test_internal_history_batch_read_draws_read_not_command_capacity(
     assert _status(await held) == 200
 
 
+@pytest.mark.parametrize("internal_read", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs"])
+async def test_a_held_internal_read_takes_the_read_slot_and_leaves_the_command_slot_free(
+    tmp_path: Path, internal_read: str
+) -> None:
+    """The fleet's internal reads are spelled POST and change nothing (#2204, #2913).
+
+    While one is held, an ordinary read finds the one read slot taken, and a
+    command such as Stop is still admitted: the read did not take its slot.
+    """
+    from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
+    from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
+
+    assert internal_read in (INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        if scope["path"] == internal_read:
+            entered.set()
+            await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(
+        app,
+        config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
+        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
+    )
+    held = asyncio.create_task(_invoke(runtime, method="POST", path=internal_read))
+    await entered.wait()
+
+    another_read = await asyncio.wait_for(_invoke(runtime, method="GET"), timeout=2.0)
+    a_command = await asyncio.wait_for(_invoke(runtime, method="POST"), timeout=2.0)
+    assert (_status(another_read), _status(a_command)) == (503, 200)
+
+    release.set()
+    assert _status(await held) == 200
+
+
 async def test_bounded_request_queue_waits_then_admits_after_release(tmp_path: Path) -> None:
     """One bounded waiter is admitted; this is not an unbounded backlog."""
     entered = asyncio.Event()

@@ -18,7 +18,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -31,6 +31,10 @@ from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.services.market_liveness import MarketLivenessStore, get_market_liveness_store
 from app.utils.timestamps import Clock, now_ms_utc
+
+if TYPE_CHECKING:
+    from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
+    from app.services.option_watch import OptionWatchList
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +76,11 @@ class AlpacaMarketLivenessConsumer:
         clock_poll_interval_s: float = _CLOCK_POLL_INTERVAL_S,
         status_snapshot_source: StatusSnapshotSource | None = None,
         status_source_close: Callable[[], Awaitable[None]] | None = None,
+        option_quotes: IbkrMarketStatusSource | None = None,
     ) -> None:
+        # The supervisor this process's option bots read their quotes from (ADR 0076). None when the
+        # consumer was built without an IBKR source of its own.
+        self.option_quotes = option_quotes
         self._read = read
         self._frame_source = frame_source
         self._store = store or get_market_liveness_store()
@@ -376,6 +384,7 @@ class AlpacaMarketLivenessConsumer:
         settings: AlpacaSettings | None = None,
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
+        option_watch: OptionWatchList | None = None,
     ) -> AlpacaMarketLivenessConsumer:
         """Use IBKR data locally or through an authenticated IBKR status owner.
 
@@ -393,7 +402,10 @@ class AlpacaMarketLivenessConsumer:
             raise RuntimeError("Direct Alpaca market-data subscriptions are disabled.")
             yield ""  # pragma: no cover
 
+        from app.broker.ibkr.config import get_settings as ibkr_settings
         from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
+        from app.broker.ibkr.option_quotes import OptionQuoteLines
+        from app.services.option_watch import get_option_watch_list
 
         cached_demand: tuple[str, ...] = ()
         cached_revision: tuple[object, int] | None = None
@@ -429,9 +441,20 @@ class AlpacaMarketLivenessConsumer:
             symbols=watched_symbols,
             publish=lambda snapshot: store.apply_status_snapshot(snapshot, now_ms=now_ms_utc()),
             halt_path=resolved.clerk_dir / "market_data_halts.json",
+            # Option contracts are quoted on this Clerk's own IBKR connection, for whatever its bots ask
+            # to have watched, inside the line budget it is configured with (zero until set).
+            options=OptionQuoteLines(
+                requests=(option_watch or get_option_watch_list()).requests,
+                budget=ibkr_settings().option_line_budget,
+                strikes_each_side=ibkr_settings().option_window_strikes_each_side,
+            ),
         )
         status_source = local_source
+        # What quotes option contracts is this supervisor's own pass. A process that reads its market status
+        # from a shared source never makes that pass, so it has no option quotes and says so (#2913).
+        option_quotes: IbkrMarketStatusSource | None = local_source
         if resolved.market_status_upstream_url is not None:
+            option_quotes = None
             from app.config import settings as service_settings
 
             if not service_settings.DATA_PLANE_CONTROL_SECRET:
@@ -454,6 +477,7 @@ class AlpacaMarketLivenessConsumer:
             journal=journal,
             status_snapshot_source=status_source,
             status_source_close=local_source.close,
+            option_quotes=option_quotes,
         )
 
 
@@ -493,6 +517,12 @@ _consumer: AlpacaMarketLivenessConsumer | None = None
 def get_market_liveness_consumer() -> AlpacaMarketLivenessConsumer | None:
     """Return the lifespan-owned source, if Alpaca has been configured."""
     return _consumer
+
+
+def get_option_quotes() -> IbkrMarketStatusSource | None:
+    """Where this process's option bots read their quotes: the Clerk's own IBKR supervisor. None when no
+    Clerk with an IBKR source of its own runs here."""
+    return None if _consumer is None else _consumer.option_quotes
 
 
 def set_market_liveness_consumer(consumer: AlpacaMarketLivenessConsumer | None) -> None:

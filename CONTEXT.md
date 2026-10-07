@@ -1687,6 +1687,23 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Working entry order** — an option entry order the books show working at Alpaca, whatever its ENTER's state. Past its deadline it is cancelled; while it works, its bot's next entry is refused.
 - **Withheld answer** — a broker's answer about one of the Clerk's own orders that the books cannot state or hold: nothing of it is recorded, and the order's outcome is unknown until an exact lookup settles it.
 - **Fee estimate (option fill, real account)** — an option fill's fees as the option fee model works them out, carried until a fee row of the fill's day is seen. From then the fill is charged its part of the day's rows, shared among all the day's fills by each one's own fee model: the day's total is Alpaca's, the part is the models'. If no row comes, the estimate stays and goes on being held back from cash, as a stock fill's does.
+- **Preview (option structure)** — what a structure's rules would pick right now from the quotes a Clerk holds, with its money and what it leans. It needs no bot and changes nothing, and the bot picks again at every entry.
+  _Avoid_: quote (that is a bid and an ask), simulation, estimate of the fill.
+- **Quote-line lease** — how a page holds quote lines: for a minute, renewed by each ask. A bot's request stands until the bot takes it away.
+- **The money (in a preview)** — the underlying's live mid quote. A bot's is the close of the bar it decided on.
+- **Gain at expiry (estimate)** — the most a structure gains under the loss estimate's assumptions: one shared expiry, held to it, never exercised or assigned early, settled at exercise value, before fees. "No limit" when it keeps gaining as the price rises. "Not estimated" when the legs do not share an expiry.
+  _Avoid_: maximum profit, best case.
+- **Break-even (at expiry)** — an underlying price at which a structure held to expiry neither gains nor loses, before fees. An estimate under the same assumptions.
+- **Lean** — which way a structure gains for a small move of the underlying now, and the shares of the underlying it moves like: its net delta times the contract multiplier. Up, down, or about flat (a net delta under 0.05).
+  _Avoid_: direction of the trade, bullish or bearish (the signal stays ENTER and EXIT), exposure.
+- **Search (for option contracts)** — one run of the resolver: a plan's rules against the quotes held, to one contract for every leg or one refusal. It runs in a worker process, never in the Clerk's own.
+  _Avoid_: lookup (that is the rate and the dividends), scan.
+- **Search lane** — where the searches of one kind run, one at a time, in a worker process of their own. There are two: one for bots' entries, which nothing uses yet, and one for pages' previews. A lane has one worker process at most, and ends it when it does not come up or does not answer in time.
+  _Avoid_: lane with no "search" (a lane is an account's Clerk in the fleet).
+- **Search not run** — a search that gave no answer because its worker could not be started, did not come up in time, died, or did not answer in time; or because the search itself failed. Not a refusal of the plan, and never a guess. For a page it also covers a search still running: a search too slow to wait for is never shown later, and the page's next ask searches again.
+- **Pricing inputs** — the rate and the cash dividends the option model is given, each with its source. Dividends that could not be looked up are unknown, never none. A process with its own Polygon and FRED keys reads them there; a fleet Clerk asks the coordinator.
+- **Declared dividend** — a cash dividend a company has announced, with its ex-date. Only a declared dividend can be known; none declared is not none paid.
+- **Option order terms** — the four settings an owner is to fix for an option bot at Deploy: the widest bid-ask gap each leg may have, how long an entry waits for its fill, the structure cost limit, and how long before the close an expiring position is closed. The builder is given the default each starts from; nothing holds a bot to them yet.
 
 ## Market-data readiness (resolved 2026-09-22)
 
