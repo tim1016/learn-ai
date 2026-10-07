@@ -90,11 +90,13 @@ class OptionAccount(PaperAccountRead):
         self.option_account_waits_for: asyncio.Event | None = None
         # Raised by the read of the account's positions while set: a pass then reaches no verdict.
         self.positions_error: Exception | None = None
+        # What Alpaca shows held that no order the Clerk knows of bought.
+        self.held_from_outside: list[BrokerPosition] = []
 
     async def list_positions(self) -> list[BrokerPosition]:
         if self.positions_error is not None:
             raise self.positions_error
-        return await super().list_positions()
+        return [*await super().list_positions(), *self.held_from_outside]
 
     async def get_option_account(self) -> BrokerOptionAccountSnapshot:
         if self.option_account_waits_for is not None and not self.option_account_waits_for.is_set():
@@ -408,7 +410,7 @@ async def test_a_first_reading_that_never_answers_is_given_up_on_and_the_entry_i
     assert paper.venue.option_submit_calls == [order_ref] and paper.clock() == taken_at
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
     await paper.pass_and_round()
-    assert paper.comparison(order_ref).reason_code == "FIRST_READING_FAILED"
+    assert paper.comparison(order_ref).reason_code == "FIRST_READING_NOT_READY"
 
 
 @pytest.mark.usefixtures("judged")
@@ -423,6 +425,77 @@ async def test_a_first_reading_that_states_no_buying_power_is_not_read_as_zero(p
         "unknown", "FIRST_READING_WITHOUT_FIGURE", None,
     )
     assert found.first_began_ms is not None
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_slow_account_read_does_not_age_a_quote_or_outlive_the_listing(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    began = asyncio.Event()
+    ended = asyncio.Event()
+    never_answers = asyncio.Event()
+
+    async def slow_account() -> BrokerOptionAccountSnapshot:
+        began.set()
+        try:
+            await never_answers.wait()
+            return await OptionAccount.get_option_account(paper.account)
+        finally:
+            ended.set()
+
+    monkeypatch.setattr(paper.account, "get_option_account", slow_account)
+    evidence = paper.evidence()
+    paper.wait(3_400)  # Its quote is now 3,700 ms old; a 1,400 ms wait would make it stale.
+    receipt = await asyncio.wait_for(paper.enter(evidence=evidence), timeout=1)
+    await asyncio.wait_for(ended.wait(), timeout=1)
+
+    assert began.is_set()
+    assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation
+    assert len(paper.venue.option_submit_calls) == 1
+
+
+@pytest.mark.usefixtures("judged")
+async def test_another_entries_comparison_record_is_not_another_order_moving(paper: Paper) -> None:
+    first = await paper.filled(shows="99806.00", sid="a")
+    await paper.pass_and_round()
+    assert await paper.sync.tick() == "observed"
+    second = await paper.filled(shows="99612.00", sid="b")
+
+    await paper.pass_and_round()
+    await paper.pass_and_round()
+
+    assert len(paper.comparisons(first)) == 1
+    found = paper.comparison(second)
+    assert (found.result, found.reason_code, found.fall_cents) == ("consistent", None, 19_400)
+
+
+@pytest.mark.usefixtures("judged")
+@pytest.mark.parametrize("restarted", [False, True], ids=["running round", "restart scan"])
+async def test_one_entries_failed_comparison_is_recorded_and_does_not_starve_the_next(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, restarted: bool,
+) -> None:
+    first = await paper.filled(shows="99806.00", sid="a")
+    assert await paper.sync.tick() == "observed"
+    second = await paper.filled(shows="99612.00", sid="b")
+    premium = entry_buying_power._premium_paid_cents
+
+    def failing_premium(conn: Any, *, account_id: str, strategy_instance_id: str | None, order_ref: str) -> int | None:
+        if order_ref == first:
+            raise ValueError("unreadable first entry premium")
+        return premium(conn, account_id=account_id, strategy_instance_id=strategy_instance_id, order_ref=order_ref)
+
+    monkeypatch.setattr(entry_buying_power, "_premium_paid_cents", failing_premium)
+    if restarted:
+        await paper.restart()
+    for _ in range(3):
+        await paper.pass_and_round()
+
+    failed = paper.comparison(first)
+    assert (failed.result, failed.reason_code, failed.holds) == ("unknown", "COMPARISON_FAILED", False)
+    assert len(paper.comparisons(second)) == 1
+    if restarted:
+        assert paper.comparison(second).reason_code == "CLERK_RESTARTED"
+    assert "unreadable first entry premium" in caplog.text
 
 
 @pytest.mark.usefixtures("judged")
@@ -625,6 +698,54 @@ async def test_a_pass_that_reached_no_verdict_does_not_count_as_a_check_of_the_a
     assert paper.comparison(order_ref).result == "under_reserved_unexplained"
 
 
+@pytest.mark.parametrize("switched_on", [True, False], ids=["judged", "the setting off"])
+async def test_a_pass_that_found_the_account_not_clean_does_not_let_the_pair_be_judged(
+    paper: Paper, monkeypatch: pytest.MonkeyPatch, switched_on: bool
+) -> None:
+    monkeypatch.setattr(settings, "ALPACA_OPTION_BUYING_POWER_JUDGED", switched_on)
+    # $194.00 for the bot's call, and $56.00 for a share the owner bought in Alpaca's own app between the
+    # readings. The stream did not deliver that order: the Clerk sees only a position its books do not hold.
+    order_ref = await paper.filled(shows="99750.00")
+    paper.account.held_from_outside.append(_a_share_from_outside())
+
+    paper.wait(15_000)
+    first_pass = await paper.pass_()
+    paper.clerk.publish_reconciliation(first_pass)
+    assert await paper.clerk.compare_entries_with_buying_power() == ()
+    paper.wait(15_000)
+    second_pass = await paper.pass_()
+    paper.clerk.publish_reconciliation(second_pass)
+    recorded = await paper.clerk.compare_entries_with_buying_power()
+
+    # The pass after the second reading reached a verdict, and the verdict was not "clean".
+    assert (first_pass.verdict, second_pass.verdict) == ("position_drift", "position_drift")
+    assert recorded == (order_ref,)
+    found = paper.comparison(order_ref)
+    assert (found.result, found.reason_code, found.holds) == ("unknown", "ACCOUNT_NOT_CLEAN_AFTER", False)
+    assert (found.fall_cents, found.set_aside_for_filled_cents) == (25_000, SET_ASIDE)
+    # The books hold a difference nothing explains, and no notice says nothing else moved.
+    open_notices = {notice["reason_code"] for notice in paper.repo.active_uncertainties()}
+    assert "POSITION_DRIFT" in open_notices and HOLD not in open_notices
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_pair_the_account_was_not_clean_after_is_not_judged_by_a_later_clean_pass(paper: Paper) -> None:
+    order_ref = await paper.filled(shows="99750.00")
+    await paper.pass_and_round()
+    paper.account.held_from_outside.append(_a_share_from_outside())
+    assert await paper.pass_and_round() == (order_ref,)
+
+    # The share is gone again and the account is clean: what was recorded stands, and nothing is held.
+    paper.account.held_from_outside.clear()
+    paper.wait(15_000)
+    after = await paper.pass_()
+    paper.clerk.publish_reconciliation(after)
+    assert after.verdict == "clean" and await paper.clerk.compare_entries_with_buying_power() == ()
+
+    assert paper.comparison(order_ref).reason_code == "ACCOUNT_NOT_CLEAN_AFTER"
+    assert paper.notices() == []
+
+
 @pytest.mark.usefixtures("judged")
 async def test_an_entry_cancelled_unfilled_keeps_both_readings_and_is_not_judged(paper: Paper) -> None:
     order_ref = await paper.resting()
@@ -794,6 +915,14 @@ async def test_a_dry_run_makes_no_comparison_and_its_page_says_so(dry_run: _DryR
     [check] = page.checks
     assert (check.order_ref, check.result, check.reason_code) == (order_ref, "unknown", "SIMULATION")
     assert check.set_aside.cents == SET_ASIDE and check.first_reading is None and check.fall is None
+
+
+def _a_share_from_outside() -> BrokerPosition:
+    return BrokerPosition(
+        broker="alpaca", symbol="AAPL", asset_id=None, asset_class="us_equity", quantity=1.0, side="long",
+        average_entry_price=56.0, market_value=56.0, cost_basis=56.0, current_price=56.0, unrealized_pl=0.0,
+        unrealized_plpc=0.0, observed_at_ms=NOON,
+    )
 
 
 def _an_outside_order(*, seen_at_ms: int) -> BrokerOrder:

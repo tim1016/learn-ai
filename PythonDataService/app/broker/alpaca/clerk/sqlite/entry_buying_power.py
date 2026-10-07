@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
 from app.broker.alpaca.clerk.money import dollars, money_context, notional
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import BrokerCallUnderIntakeError
 from app.broker.alpaca.clerk.sqlite.day_pnl import CASH_TRANSFER_ACTIVITY_FILTER
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOutcome, EntryStanding, entry_outcome
@@ -115,6 +116,8 @@ class NotComparedReason(StrEnum):
     JUDGMENT_NOT_SWITCHED_ON = "JUDGMENT_NOT_SWITCHED_ON"
     # The read before the order failed or did not answer in time.
     FIRST_READING_FAILED = "FIRST_READING_FAILED"
+    # The listing answered before the account reading; the entry did not wait for it.
+    FIRST_READING_NOT_READY = "FIRST_READING_NOT_READY"
     # It answered, and stated no option buying power.
     FIRST_READING_WITHOUT_FIGURE = "FIRST_READING_WITHOUT_FIGURE"
     # It was older than an account reading may be when the order was sent.
@@ -133,6 +136,8 @@ class NotComparedReason(StrEnum):
     CASH_MOVEMENT_UNREAD = "CASH_MOVEMENT_UNREAD"
     # No pass of the account reached its verdict after the second reading in time.
     ACCOUNT_NOT_CHECKED_AFTER = "ACCOUNT_NOT_CHECKED_AFTER"
+    # The later pass found something on the account the books could not explain.
+    ACCOUNT_NOT_CLEAN_AFTER = "ACCOUNT_NOT_CLEAN_AFTER"
     # Nothing filled, so there was no cost to compare.
     ENTRY_BOUGHT_NOTHING = "ENTRY_BOUGHT_NOTHING"
     # It filled in part and the rest ended. Whether the broker had given back what it held for the
@@ -142,6 +147,8 @@ class NotComparedReason(StrEnum):
     OUTCOME_NOT_PROVEN = "OUTCOME_NOT_PROVEN"
     # The Clerk restarted before the second reading, and the first was lost with it.
     CLERK_RESTARTED = "CLERK_RESTARTED"
+    # This entry's comparison failed; no arithmetic from it is used for a hold.
+    COMPARISON_FAILED = "COMPARISON_FAILED"
     # Served only, never recorded: the bot's account is a simulation and has no broker figure.
     SIMULATION = "SIMULATION"
     # Served only, never recorded: the entry is on the books and its comparison has not been made yet.
@@ -162,6 +169,7 @@ class AccountReading:
     failed: bool
     # The ids of the day's cash transfers as this reading saw them. None when they could not be read.
     cash_transfers: frozenset[str] | None
+    not_ready: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -178,6 +186,21 @@ class ReadingBegun:
         """Stop both reads: the reading is no longer wanted."""
         self.account.cancel()
         self.transfers.cancel()
+        self.account.add_done_callback(_discard_read_answer)
+        self.transfers.add_done_callback(_discard_read_answer)
+
+
+def _discard_read_answer(read: asyncio.Future[object]) -> None:
+    """Retrieve the answer of a reading the entry no longer needs, and log a failure it already reached."""
+    if read.cancelled():
+        return
+    error = read.exception()
+    if error is not None:
+        logger.error(
+            "an abandoned option account read failed",
+            extra={"action": "option_buying_power_abandoned_read_failed"},
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
 
 async def _answer_of[T](read: asyncio.Future[T]) -> T | Exception:
@@ -241,12 +264,17 @@ class EntryBuyingPowerWatch:
         )
 
     async def finish_first(self, key: tuple[str, str], begun: ReadingBegun) -> None:
-        """Wait for the reading ``begun`` and keep it for the entry ``key`` (its bot and its decision).
-
-        Bounded by the reading's own bound, and never raises for the
-        broker's sake: a read that fails is kept as a reading that failed.
-        """
-        self._first[key] = (await self._finish_reading(begun), begun.transfers_from_ms)
+        """Keep a reading that finished beside the listing; abandon one the entry would have to wait for."""
+        if begun.account.done() and begun.transfers.done():
+            reading = await self._finish_reading(begun)
+        else:
+            begun.cancel()
+            reading = AccountReading(
+                began_ms=begun.began_ms, ended_ms=self._repo.clock(),
+                began_after_sequence=begun.began_after_sequence, buying_power=None,
+                failed=True, cash_transfers=None, not_ready=True,
+            )
+        self._first[key] = (reading, begun.transfers_from_ms)
 
     def sent(self, key: tuple[str, str], *, order_ref: str | None, sent_at_ms: int | None) -> None:
         """The entry ``key`` was accepted as ``order_ref`` and handed to the broker at ``sent_at_ms``: watch it.
@@ -283,7 +311,7 @@ class EntryBuyingPowerWatch:
 
     # ── the Clerk's own round ────────────────────────────────────────────
 
-    async def round(self, *, last_pass_at_ms: int | None) -> tuple[str, ...]:
+    async def round(self, *, last_pass_at_ms: int | None, last_pass_clean: bool) -> tuple[str, ...]:
         """One step for every watched entry; the order references a comparison was recorded for.
 
         ``last_pass_at_ms`` is when the newest pass of the account that
@@ -296,12 +324,24 @@ class EntryBuyingPowerWatch:
                 recorded.extend(await self._record_entries_a_restart_left())
                 self._restart_recorded = True
             for watched in tuple(self._watched.values()):
-                if await self._step(watched, last_pass_at_ms=last_pass_at_ms):
+                try:
+                    done = await self._step(
+                        watched, last_pass_at_ms=last_pass_at_ms, last_pass_clean=last_pass_clean
+                    )
+                except (sqlite3.Error, BrokerCallUnderIntakeError):
+                    raise
+                except Exception:
+                    logger.exception(
+                        "an option entry's buying power comparison failed",
+                        extra={"action": "option_buying_power_comparison_failed", "order_ref": watched.order_ref},
+                    )
+                    done = await self._record(watched, reason=NotComparedReason.COMPARISON_FAILED)
+                if done:
                     recorded.append(watched.order_ref)
                     self._watched.pop(watched.order_ref, None)
         return tuple(recorded)
 
-    async def _step(self, watched: _Watched, *, last_pass_at_ms: int | None) -> bool:
+    async def _step(self, watched: _Watched, *, last_pass_at_ms: int | None, last_pass_clean: bool) -> bool:
         """One entry's next step. True once its comparison is on the books."""
         outcome = entry_outcome(self._repo, watched.order_ref)
         now_ms = self._repo.clock()
@@ -330,6 +370,8 @@ class EntryBuyingPowerWatch:
             if now_ms - watched.second.ended_ms <= PASS_AFTER_SECOND_READING_BOUND_MS:
                 return False
             return await self._record(watched, reason=NotComparedReason.ACCOUNT_NOT_CHECKED_AFTER)
+        if not last_pass_clean:
+            return await self._record(watched, reason=NotComparedReason.ACCOUNT_NOT_CLEAN_AFTER)
         return await self._record(watched, reason=None)
 
     def _begin_reading(self, *, bound_ms: int, transfers_from_ms: int) -> ReadingBegun:
@@ -339,7 +381,9 @@ class EntryBuyingPowerWatch:
         by itself from its first wait on the broker. So a caller that reads
         the broker for something else meanwhile is not held back by a turn
         of the event loop, and a port that answers at once has answered by
-        the time this returns.
+        the time this returns. Python 3.12's eager tasks are needed to
+        start both reads before a listing port that also answers without
+        yielding; a pending read is cancelled as soon as that listing ends.
         """
         loop = asyncio.get_running_loop()
         began_ms = self._repo.clock()
@@ -374,13 +418,15 @@ class EntryBuyingPowerWatch:
         if isinstance(account, Exception):
             # Whatever the read raised, a timeout among it: it is evidence the Clerk could not have,
             # never a reason to stop an entry.
-            logger.warning(
+            logger.log(
+                logging.ERROR if isinstance(account, BrokerCallUnderIntakeError) else logging.WARNING,
                 "the account's option buying power could not be read",
                 extra={"action": "option_buying_power_read_failed", "account_id": self._repo.account_id,
                        "error": f"{type(account).__name__}: {account}"},
             )
         if isinstance(transfers, Exception):
-            logger.warning(
+            logger.log(
+                logging.ERROR if isinstance(transfers, BrokerCallUnderIntakeError) else logging.WARNING,
                 "the account's cash transfers could not be read beside its option buying power",
                 extra={"action": "option_buying_power_transfers_unread", "account_id": self._repo.account_id,
                        "error": f"{type(transfers).__name__}: {transfers}"},
@@ -412,7 +458,17 @@ class EntryBuyingPowerWatch:
             if order_ref in self._watched or option_entry_of_order(self._repo, order_ref) is None:
                 continue
             left = _Watched(order_ref=order_ref, first=None, sent_at_ms=None, transfers_from_ms=0)
-            if await self._record(left, reason=NotComparedReason.CLERK_RESTARTED):
+            try:
+                done = await self._record(left, reason=NotComparedReason.CLERK_RESTARTED)
+            except (sqlite3.Error, BrokerCallUnderIntakeError):
+                raise
+            except Exception:
+                logger.exception(
+                    "a restarted option entry's buying power comparison failed",
+                    extra={"action": "option_buying_power_restart_comparison_failed", "order_ref": order_ref},
+                )
+                done = await self._record(left, reason=NotComparedReason.COMPARISON_FAILED)
+            if done:
                 recorded.append(order_ref)
         return recorded
 
@@ -432,7 +488,9 @@ class EntryBuyingPowerWatch:
                     return True
                 outcome = entry_outcome(self._repo, watched.order_ref)
                 now_ms = self._repo.clock()
-                facts = _compare(
+                facts = _failed_comparison(watched, entry, outcome, now_ms=now_ms) if (
+                    reason is NotComparedReason.COMPARISON_FAILED
+                ) else _compare(
                     conn, account_id=self._repo.account_id, strategy_instance_id=effect.strategy_instance_id,
                     watched=watched, entry=entry, outcome=outcome, effect_operation_id=effect.effect_operation_id,
                     broker_order_id=order.broker_order_id, forced=reason, judged=self._judged(), now_ms=now_ms,
@@ -480,6 +538,27 @@ class EntryBuyingPowerWatch:
             },
         )
         return True
+
+
+def _failed_comparison(
+    watched: _Watched, entry: OptionEntryFacts, outcome: EntryOutcome, *, now_ms: int
+) -> EntryBuyingPowerComparedFacts:
+    """Keep an entry and its readings when its arithmetic failed; no computed figure is used or invented."""
+    first, second = watched.first, watched.second
+    return EntryBuyingPowerComparedFacts(
+        result=BuyingPowerCheckResult.UNKNOWN.value, reason_code=NotComparedReason.COMPARISON_FAILED.value,
+        contracts_asked=entry.order.quantity, contracts_filled=outcome.contracts_filled.get(entry.contract_terms.symbol, 0),
+        commitment_cents=entry.money.entry_commitment_cents, set_aside_for_filled_cents=None,
+        premium_paid_cents=None, cost_of_filled_cents=None,
+        first_began_ms=None if first is None else first.began_ms,
+        first_ended_ms=None if first is None else first.ended_ms,
+        first_buying_power=None if first is None or first.buying_power is None else str(first.buying_power),
+        sent_at_ms=watched.sent_at_ms,
+        second_began_ms=None if second is None else second.began_ms,
+        second_ended_ms=None if second is None else second.ended_ms,
+        second_buying_power=None if second is None or second.buying_power is None else str(second.buying_power),
+        fall_cents=None, compared_at_ms=now_ms, holds=False,
+    )
 
 
 def _compare(
@@ -592,7 +671,10 @@ def _why_not_compared(
     """
     first, second = watched.first, watched.second
     if first is None or first.failed:
-        return NotComparedReason.FIRST_READING_FAILED
+        return (
+            NotComparedReason.FIRST_READING_NOT_READY
+            if first is not None and first.not_ready else NotComparedReason.FIRST_READING_FAILED
+        )
     if first.buying_power is None:
         return NotComparedReason.FIRST_READING_WITHOUT_FIGURE
     if not outcome.proven or set_aside_cents is None:
@@ -659,11 +741,11 @@ def _another_order_moved(
     nothing here ends at the second reading.
     """
     about_another = conn.execute(
-        "SELECT 1 FROM custody_transitions WHERE sequence > ? AND ("
+        "SELECT 1 FROM custody_transitions WHERE sequence > ? AND transition_kind != ? AND ("
         "(effect_operation_id IS NOT NULL AND effect_operation_id != ?) "
         "OR (order_ref IS NOT NULL AND order_ref != ?) "
         "OR (broker_order_id IS NOT NULL AND broker_order_id != ?)) LIMIT 1",
-        (after_sequence, effect_operation_id, order_ref, broker_order_id or ""),
+        (after_sequence, COMPARED_KIND, effect_operation_id, order_ref, broker_order_id or ""),
     ).fetchone()
     if about_another is not None:
         return True

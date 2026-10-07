@@ -2779,7 +2779,8 @@ class SqliteAlpacaClerkFacade:
             return ()
         published = self._last_published
         return await self._buying_power.round(
-            last_pass_at_ms=None if published is None or published.cut is None else published.observed_at_ms
+            last_pass_at_ms=None if published is None or published.cut is None else published.observed_at_ms,
+            last_pass_clean=published is not None and published.result.verdict == "clean",
         )
 
     @property

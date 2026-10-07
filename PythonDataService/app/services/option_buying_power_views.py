@@ -46,6 +46,9 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
     NotComparedReason.FIRST_READING_FAILED: (
         "Alpaca's account figures could not be read before the order was sent."
     ),
+    NotComparedReason.FIRST_READING_NOT_READY: (
+        "The account reading had not finished when the contract listing answered. The entry did not wait for it."
+    ),
     NotComparedReason.FIRST_READING_WITHOUT_FIGURE: (
         "Alpaca's account answered before the order was sent and stated no option buying power."
     ),
@@ -72,6 +75,10 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
     NotComparedReason.ACCOUNT_NOT_CHECKED_AFTER: (
         "The account was not checked against Alpaca soon enough after the second reading."
     ),
+    NotComparedReason.ACCOUNT_NOT_CLEAN_AFTER: (
+        "The check after the second reading found something on the account the books could not explain, "
+        "so this change cannot be attributed to the entry."
+    ),
     NotComparedReason.ENTRY_BOUGHT_NOTHING: "The entry bought nothing, so there was no cost to compare.",
     NotComparedReason.UNFILLED_PART_RELEASE_NOT_VERIFIED: (
         "The entry filled in part and the rest was cancelled. Whether Alpaca had given back what it held for "
@@ -80,6 +87,9 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
     NotComparedReason.OUTCOME_NOT_PROVEN: "What the entry came to was not proven in time.",
     NotComparedReason.CLERK_RESTARTED: (
         "The account's Clerk restarted before the second reading, and the first was lost with it."
+    ),
+    NotComparedReason.COMPARISON_FAILED: (
+        "This entry's comparison failed, so it was recorded without judging the account's change."
     ),
     NotComparedReason.SIMULATION: (
         "This bot trades in a simulation. There is no Alpaca figure to compare with."

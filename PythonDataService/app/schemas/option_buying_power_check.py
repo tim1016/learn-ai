@@ -19,6 +19,7 @@ OptionBuyingPowerResult = Literal["consistent", "unknown", "over_reserved", "und
 OptionBuyingPowerNotComparedReason = Literal[
     "JUDGMENT_NOT_SWITCHED_ON",
     "FIRST_READING_FAILED",
+    "FIRST_READING_NOT_READY",
     "FIRST_READING_WITHOUT_FIGURE",
     "FIRST_READING_STALE",
     "SECOND_READING_FAILED",
@@ -29,10 +30,12 @@ OptionBuyingPowerNotComparedReason = Literal[
     "CASH_MOVED",
     "CASH_MOVEMENT_UNREAD",
     "ACCOUNT_NOT_CHECKED_AFTER",
+    "ACCOUNT_NOT_CLEAN_AFTER",
     "ENTRY_BOUGHT_NOTHING",
     "UNFILLED_PART_RELEASE_NOT_VERIFIED",
     "OUTCOME_NOT_PROVEN",
     "CLERK_RESTARTED",
+    "COMPARISON_FAILED",
     "SIMULATION",
     "NOT_COMPARED_YET",
 ]
