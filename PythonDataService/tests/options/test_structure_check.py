@@ -9,6 +9,7 @@ import pytest
 
 from app.options.contract import OptionContract
 from app.options.named_structures import LegKind, NamedStructure, is_made_as_named
+from app.options.requirement import StructureMoneyRefusal
 from app.options.structure_catalogue import starting_plan
 from app.options.structure_check import StructureRefusal, StructureRefused, require_named_shape, resolved_structure
 from app.schemas.action_plan import ActionPlan, DeltaStrike
@@ -404,6 +405,13 @@ def test_a_plan_with_no_name_is_asked_nothing_about_its_shape() -> None:
     structure = resolved_structure(plan, _picked(sold="C585", bought="C590"))
 
     require_named_shape(plan, structure, net_price=Decimal("-1.50"))
+
+
+def test_shape_refusals_are_spelled_as_the_moneys_are_and_share_none_with_them() -> None:
+    """Both kinds reach the same screens and are stored with the same entries, so they are one family of codes."""
+    assert all(refusal.value == f"OPTION_STRUCTURE_{refusal.name}" for refusal in StructureRefusal)
+    assert all(refusal.value == f"OPTION_STRUCTURE_{refusal.name}" for refusal in StructureMoneyRefusal)
+    assert not {refusal.value for refusal in StructureRefusal} & {refusal.value for refusal in StructureMoneyRefusal}
 
 
 def test_a_shape_is_not_judged_on_a_price_it_cannot_be_exact_about() -> None:
