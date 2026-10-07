@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_val
 
 from app.options.contract import MAX_STRIKE_THOUSANDTHS, require_symbol_expiry, strike_thousandths
 from app.options.expiry import OptionExpiryMs
+from app.options.structure import MAX_OPTION_LEGS
 
 # ``leg_id`` regex from ADR 0012 §3 — lowercase ASCII + digits + underscore,
 # bounded to 32 chars so it embeds cleanly in logs, parquet column names,
@@ -265,10 +266,6 @@ class CloseLegExit(BaseModel):
 
     kind: Literal["close_leg"]
     entry_leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
-
-
-# The most option legs one order carries at the broker.
-MAX_OPTION_LEGS = 4
 
 
 class ActionPlan(BaseModel):

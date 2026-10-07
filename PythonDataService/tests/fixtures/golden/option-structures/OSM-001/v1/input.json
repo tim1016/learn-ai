@@ -1,0 +1,784 @@
+{
+  "multiplier": 100,
+  "cases": [
+    {
+      "case": "alpaca_documented_four_calls_offset_to_nothing",
+      "source": "Alpaca, Options Level 3 Trading: long $100 call, short $110 call, long $200 call, short $190 call; universal spread rule total $0",
+      "legs": [
+        {
+          "leg_id": "a",
+          "position": "long",
+          "right": "call",
+          "strike": "100",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "b",
+          "position": "short",
+          "right": "call",
+          "strike": "110",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "c",
+          "position": "long",
+          "right": "call",
+          "strike": "200",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "d",
+          "position": "short",
+          "right": "call",
+          "strike": "190",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ]
+    },
+    {
+      "case": "alpaca_documented_call_credit_spread",
+      "source": "Alpaca, Options Level 3 Trading: long $200 call paid $10, short $190 call received $15; maintenance margin $1,000, net credit $500, total cost basis $500",
+      "legs": [
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "200",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "190",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "bought": "10",
+        "sold": "15"
+      }
+    },
+    {
+      "case": "call_spread_bought_for_1_94",
+      "source": "PRD #2913 worked case: premium +$194.00, requirement $0.00, commitment $194.00, loss up to $194.00",
+      "legs": [
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "bought": [
+          "4.06",
+          "4.10"
+        ],
+        "sold": [
+          "2.16",
+          "2.20"
+        ]
+      }
+    },
+    {
+      "case": "five_wide_call_spread_sold_for_3_07",
+      "source": "PRD #2913 worked case: premium -$307.00, requirement $500.00, commitment $193.00, loss up to $193.00",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "sold": [
+          "5.20",
+          "5.26"
+        ],
+        "bought": [
+          "2.09",
+          "2.13"
+        ]
+      }
+    },
+    {
+      "case": "bought_call",
+      "legs": [
+        {
+          "leg_id": "call",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "call": [
+          "6.40",
+          "6.46"
+        ]
+      }
+    },
+    {
+      "case": "bought_put_three_units",
+      "units": 3,
+      "legs": [
+        {
+          "leg_id": "put",
+          "position": "long",
+          "right": "put",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "put": [
+          "3.10",
+          "3.15"
+        ]
+      }
+    },
+    {
+      "case": "long_straddle",
+      "legs": [
+        {
+          "leg_id": "call",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "put",
+          "position": "long",
+          "right": "put",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "call": [
+          "6.40",
+          "6.46"
+        ],
+        "put": [
+          "5.90",
+          "5.97"
+        ]
+      }
+    },
+    {
+      "case": "long_strangle",
+      "legs": [
+        {
+          "leg_id": "put",
+          "position": "long",
+          "right": "put",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "call",
+          "position": "long",
+          "right": "call",
+          "strike": "460",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "put": [
+          "3.10",
+          "3.15"
+        ],
+        "call": [
+          "2.80",
+          "2.86"
+        ]
+      }
+    },
+    {
+      "case": "bought_call_and_put_in_the_money_keep_an_exercise_value",
+      "source": "hand-derived: a 440 call and a 460 put are together worth at least $20 a share at expiry, so the loss estimate is the premium less $2,000",
+      "legs": [
+        {
+          "leg_id": "call",
+          "position": "long",
+          "right": "call",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "put",
+          "position": "long",
+          "right": "put",
+          "strike": "460",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "call": "12.30",
+        "put": "11.95"
+      }
+    },
+    {
+      "case": "bought_for_less_than_it_must_be_worth_has_no_loss_to_estimate",
+      "source": "hand-derived: the same 440 call and 460 put, worth at least $2,000 at expiry, bought for $1,500. The estimate stops at zero; it does not report a negative loss",
+      "legs": [
+        {
+          "leg_id": "call",
+          "position": "long",
+          "right": "call",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "put",
+          "position": "long",
+          "right": "put",
+          "strike": "460",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "call": "7.60",
+        "put": "7.40"
+      }
+    },
+    {
+      "case": "iron_condor_two_units",
+      "units": 2,
+      "legs": [
+        {
+          "leg_id": "sold_put",
+          "position": "short",
+          "right": "put",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought_put",
+          "position": "long",
+          "right": "put",
+          "strike": "435",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold_call",
+          "position": "short",
+          "right": "call",
+          "strike": "460",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought_call",
+          "position": "long",
+          "right": "call",
+          "strike": "465",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "sold_put": [
+          "3.10",
+          "3.15"
+        ],
+        "bought_put": [
+          "2.20",
+          "2.24"
+        ],
+        "sold_call": [
+          "2.80",
+          "2.86"
+        ],
+        "bought_call": [
+          "1.86",
+          "1.90"
+        ]
+      }
+    },
+    {
+      "case": "iron_butterfly",
+      "legs": [
+        {
+          "leg_id": "sold_put",
+          "position": "short",
+          "right": "put",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought_put",
+          "position": "long",
+          "right": "put",
+          "strike": "445",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold_call",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought_call",
+          "position": "long",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "sold_put": "5.90",
+        "bought_put": "3.80",
+        "sold_call": "6.40",
+        "bought_call": "4.10"
+      }
+    },
+    {
+      "case": "call_butterfly",
+      "legs": [
+        {
+          "leg_id": "low",
+          "position": "long",
+          "right": "call",
+          "strike": "445",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "body",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 2,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "high",
+          "position": "long",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "low": "9.70",
+        "body": "6.40",
+        "high": "4.10"
+      }
+    },
+    {
+      "case": "put_butterfly",
+      "legs": [
+        {
+          "leg_id": "high",
+          "position": "long",
+          "right": "put",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "body",
+          "position": "short",
+          "right": "put",
+          "strike": "450",
+          "ratio": 2,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "low",
+          "position": "long",
+          "right": "put",
+          "strike": "445",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "high": "9.10",
+        "body": "5.90",
+        "low": "3.80"
+      }
+    },
+    {
+      "case": "quoted_call_butterfly_three_units_counts_the_body_twice",
+      "source": "hand-derived: four-cent gaps on three legs, the body twice, three structures: 4 x 4 cents x 100 x 3",
+      "units": 3,
+      "legs": [
+        {
+          "leg_id": "low",
+          "position": "long",
+          "right": "call",
+          "strike": "445",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "body",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 2,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "high",
+          "position": "long",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "low": [
+          "9.66",
+          "9.70"
+        ],
+        "body": [
+          "6.40",
+          "6.44"
+        ],
+        "high": [
+          "4.06",
+          "4.10"
+        ]
+      }
+    },
+    {
+      "case": "broken_wing_call_butterfly_loses_past_its_body",
+      "source": "hand-derived: wings 5 and 10 wide; above 460 the payoff rests at -$5 a share",
+      "legs": [
+        {
+          "leg_id": "low",
+          "position": "long",
+          "right": "call",
+          "strike": "445",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "body",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 2,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "high",
+          "position": "long",
+          "right": "call",
+          "strike": "460",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "low": "9.70",
+        "body": "6.40",
+        "high": "2.86"
+      }
+    },
+    {
+      "case": "half_dollar_strikes",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "put",
+          "strike": "452.5",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "put",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "sold": "7.05",
+        "bought": "5.90"
+      }
+    },
+    {
+      "case": "eighth_dollar_strikes_come_to_whole_cents",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "2.125",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "2.5",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "sold": "0.31",
+        "bought": "0.12"
+      }
+    },
+    {
+      "case": "sold_put_alone_is_at_its_worst_at_zero",
+      "source": "hand-derived: nothing at or above the strike loses; at a price of zero the put is worth its strike",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "put",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "sold": "5.90"
+      }
+    },
+    {
+      "case": "put_ratio_spread_is_at_its_worst_at_zero_not_at_a_strike",
+      "source": "hand-derived: one 450 put bought, two 440 puts sold. Payoff is +$10 at 440 and $0 at 450, and falls to -$430 a share at zero",
+      "legs": [
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "put",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "put",
+          "strike": "440",
+          "ratio": 2,
+          "expiry": "261218"
+        }
+      ]
+    },
+    {
+      "case": "call_ratio_spread_keeps_losing_above_its_last_strike",
+      "source": "hand-derived: one 450 call bought, two 455 calls sold. Above 455 the payoff falls a dollar for every dollar the price rises",
+      "legs": [
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "455",
+          "ratio": 2,
+          "expiry": "261218"
+        }
+      ]
+    },
+    {
+      "case": "sold_call_alone_keeps_losing",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ]
+    },
+    {
+      "case": "bought_legs_with_two_expiries_have_no_loss_estimate",
+      "legs": [
+        {
+          "leg_id": "near",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "far",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "270115"
+        }
+      ],
+      "leg_prices": {
+        "near": "6.46",
+        "far": "9.80"
+      }
+    },
+    {
+      "case": "sold_leg_covered_by_a_later_expiry_is_not_worked_out",
+      "source": "PRD #2913: Alpaca's documents do not say how its per-expiry rule treats this",
+      "legs": [
+        {
+          "leg_id": "near",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "far",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "270115"
+        }
+      ]
+    },
+    {
+      "case": "sold_call_nothing_covers_is_unbounded_whatever_its_expiries",
+      "source": "hand-derived: a sold December call beside a bought January put. The loss has no limit, and that is the reason given, ahead of the mixed expiries",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "put",
+          "strike": "440",
+          "ratio": 1,
+          "expiry": "270115"
+        }
+      ]
+    },
+    {
+      "case": "credit_larger_than_the_width_is_refused",
+      "source": "hand-derived: a $5-wide spread cannot honestly be sold for $5.10",
+      "legs": [
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "455",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "leg_prices": {
+        "sold": "5.30",
+        "bought": "0.20"
+      }
+    },
+    {
+      "case": "narrow_legs_hide_a_costly_spread",
+      "source": "PRD #2913 worked case: mids $5.00 and $4.90, each four cents wide; in for $0.14, out for $0.06, so $8 of a $14 commitment is the round trip",
+      "legs": [
+        {
+          "leg_id": "bought",
+          "position": "long",
+          "right": "call",
+          "strike": "450",
+          "ratio": 1,
+          "expiry": "261218"
+        },
+        {
+          "leg_id": "sold",
+          "position": "short",
+          "right": "call",
+          "strike": "450.5",
+          "ratio": 1,
+          "expiry": "261218"
+        }
+      ],
+      "quotes": {
+        "bought": [
+          "4.98",
+          "5.02"
+        ],
+        "sold": [
+          "4.88",
+          "4.92"
+        ]
+      }
+    }
+  ]
+}
