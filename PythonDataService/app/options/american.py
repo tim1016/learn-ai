@@ -1,4 +1,4 @@
-"""American option price, delta and implied volatility, with cash dividends, for stock and ETF options.
+"""American option price, delta, implied volatility and daily time decay, with cash dividends, for stock and ETF options.
 
 Formula: a Leisen-Reimer binomial tree of ``n`` (odd) steps over time ``T``.
   With ``dt = T/n`` and ``h(z) = 1/2 + sign(z)·sqrt(1/4 - 1/4·exp(-(z/(n + 1/3 + 0.1/(n+1)))²·(n + 1/6)))``
@@ -11,6 +11,9 @@ Formula: a Leisen-Reimer binomial tree of ``n`` (odd) steps over time ``T``.
   still to go ex before expiry, the tree is built on S*, and the stock price a
   node is exercised at is S* at that node plus the present value, at the node's
   time, of the dividends still to go ex.
+  Daily time decay = price a day later - price now: the same tree with 24
+  hours less to expiry and every dividend 24 hours nearer, at the same stock
+  price, volatility and rate.
 Reference: Leisen & Reimer (1996), "Binomial models for option valuation -
   examining and improving convergence", Applied Mathematical Finance 3(4),
   319-346, as constructed by QuantLib 1.42.1 ``BinomialLRVanillaEngine``: the
@@ -21,7 +24,8 @@ Reference: Leisen & Reimer (1996), "Binomial models for option valuation -
   ``CashDividendModel.Escrowed`` is the independent check.
 Canonical implementation: this file.
 Validated against: tests/fixtures/test_american_option_fixtures.py (golden
-  fixtures AM-001 to AM-003) and tests/options/test_american.py.
+  fixtures AM-001 to AM-005), tests/options/test_american.py and
+  tests/options/test_american_daily_decay.py.
 
 Why a tree and not the closed form the rest of the repo uses: a stock or ETF
 option can be exercised early, so Black-Scholes prices a different contract.
@@ -37,6 +41,34 @@ AM-002), not the 1e-9 the no-dividend path meets. An implied volatility
 solved from that engine's price is within 5e-4 of its volatility inside one
 standard deviation of the money, and looser beyond, where vega is small.
 
+Daily time decay is a difference of two prices from this tree, 24 hours
+apart. It is not the theta a tree gives from its own nodes, and not a yearly
+rate of decay divided by 365. It is the number an owner means by what a day
+costs. It stays a plain number in the last days before expiry, where a rate
+of decay runs away. And each of its two prices is one the reference engine
+computes too, so the difference is proven the way the price is. The day is
+24 hours by the clock. Over a weekend three such days pass before the next
+session, and this figure is one of them. A contract that expires inside the
+day is worth, a day later, what exercising pays. A stock that goes ex inside
+the day is priced a day later at its price less that dividend.
+
+How close the decay is. With no dividend it matches the reference to 1e-9
+on fixture AM-004's cases, whose later price is fifteen minutes or more
+from expiry. That is true of those cases, not of every contract: outside
+the fixture 1.6e-9 was measured with a later price fifteen minutes from
+expiry, and 1.7e-9 with one minute. With cash dividends it is checked
+against the finite-difference engine's difference and agrees to the tree's
+step error, as the price does. On fixture AM-005's cases the largest gap is
+9.4e-4 at 2,003 steps and 8.1e-3 at the default 401. Those are the
+fixture's own measured gaps, not a bound. The gap is largest where one of
+the two prices is a day before an ex-date: a call in the money whose stock
+goes ex one or two days out. The fixture's cases with no ex-date that near
+are within 8.0e-4 at 401 steps. Outside the fixture a gap of 2e-2, 16% of
+the decay, was measured at the default 401 steps for a call in the money
+with a large dividend going ex two days out at high volatility; at 2,003
+steps that gap was 1e-4. So near an ex-date the figure at the default steps
+is an estimate.
+
 What it does not do. It has no continuous dividend yield: a bot's dividends
 are cash amounts on dates, given explicitly, and there is no default of
 none. It does not price index options or anything not American. Time is a
@@ -49,6 +81,13 @@ small ``x``. That is a strike placed where d2, or d2 + σ·√T, is all but
 zero, at any time to expiry. The price there moves in steps of up to about
 1e-5 as the volatility changes, and a volatility solved from it is good to
 about 2e-7/√T: 1e-6 at thirty days, 1e-4 at one minute.
+A dividend whose ex-date falls exactly on a tree step is counted before or
+after that step by the last bit of the two times, and the price can move by
+a step's error for it. The move measured is 5.6e-3 to 1.1e-2 at 401 steps.
+An ex-date lands on a step only at isolated instants. Whole days to both
+the expiry and the ex-date never do under 401 days, because 401 is prime.
+The daily decay takes a day off each time as a float, so there its later
+price can differ that much from a price worked a day later from instants.
 """
 
 from __future__ import annotations
@@ -67,6 +106,11 @@ MS_PER_YEAR = 365 * 86_400_000
 # Under a minute the model is not asked: a quote that close to expiry prices exercise, not volatility.
 MIN_TIME_TO_EXPIRY_MS = 60_000
 _MIN_YEARS_TO_EXPIRY = MIN_TIME_TO_EXPIRY_MS / MS_PER_YEAR
+# The day a daily time decay is taken over: 24 hours by the clock, not a trading session.
+ONE_DAY_MS = 86_400_000
+_ONE_DAY_YEARS = ONE_DAY_MS / MS_PER_YEAR
+# A day later a contract must still have the minute the model asks for. With less it is priced as exercised.
+_MIN_YEARS_FOR_A_PRICE_A_DAY_LATER = (ONE_DAY_MS + MIN_TIME_TO_EXPIRY_MS) / MS_PER_YEAR
 # Odd, as the tree requires. More steps buy accuracy with time, about linearly in both.
 DEFAULT_TREE_STEPS = 401
 MIN_VOLATILITY = 0.005
@@ -115,6 +159,28 @@ class AmericanValue:
 
     price: float
     delta: float
+
+
+@dataclass(frozen=True, slots=True)
+class AmericanDailyDecay:
+    """What the next 24 hours take from an American option's model price, per share, with its working.
+
+    ``decay`` is the later price less the price now: negative for a contract
+    that loses value as time passes. The day is 24 hours by the clock. Over a
+    weekend three such days pass before the next session, and this figure is
+    one of them.
+    """
+
+    price_now: float
+    price_a_day_later: float
+    # The contract has under a minute left a day later, or none: the later price is what exercising pays.
+    later_price_is_exercise_value: bool
+    # The dividends going ex inside the day, per share. The later price is worked at the stock price less this.
+    cash_gone_ex: float
+
+    @property
+    def decay(self) -> float:
+        return self.price_a_day_later - self.price_now
 
 
 class AmericanIvStatus(StrEnum):
@@ -338,6 +404,88 @@ def american_value(
             tree, strike=strike, right=right, rate=rate, years_to_expiry=years_to_expiry, dividends=dividends, steps=steps
         )
     return value if math.isfinite(value.price) and math.isfinite(value.delta) else None
+
+
+def american_daily_decay(
+    *,
+    spot: float,
+    strike: float,
+    years_to_expiry: float,
+    rate: float,
+    volatility: float,
+    right: OptionRight,
+    dividends: Sequence[CashDividend],
+    steps: int = DEFAULT_TREE_STEPS,
+) -> AmericanDailyDecay | None:
+    """What the next 24 hours take from one American option's model price, per share.
+
+    The price a day later less the price now, both from ``american_value``,
+    with the stock price, the volatility and the rate held and every dividend
+    kept on its date. Negative for a contract that loses value with time. Over
+    a weekend three such days pass before the next session, and this figure
+    is one of them.
+
+    Near an ex-date the figure at the default ``steps`` is an estimate: with
+    a dividend going ex two days out it was measured a sixth out, so a caller
+    shows it as an estimate or asks for more steps.
+
+    A contract with less than a day and a minute left is worth, a day later,
+    what exercising pays at the held stock price: nothing when it is out of
+    the money. The model is not asked for a price under a minute from expiry.
+
+    A stock that goes ex inside the day is priced a day later at its price
+    less that dividend, in full. Holding the quoted price across an ex-date
+    would say the stock had risen by the dividend, and that rise, not the
+    day, would be most of the number. A dividend going ex exactly a day from
+    now has gone ex. For a contract that expires inside the day, the
+    dividends taken off are those going ex by its expiry.
+
+    Whatever ``american_value`` refuses, this refuses the same way: its
+    ``ValueError`` for an input the model has no meaning for, and ``None``
+    when the tree cannot resolve the strike, now or a day later. ``None`` too
+    with less than a minute to expiry now. A refusal is never a zero.
+    """
+    now = american_value(
+        spot=spot,
+        strike=strike,
+        years_to_expiry=years_to_expiry,
+        rate=rate,
+        volatility=volatility,
+        right=right,
+        dividends=dividends,
+        steps=steps,
+    )
+    if now is None or years_to_expiry < _MIN_YEARS_TO_EXPIRY:
+        return None
+    expires_inside_the_day = years_to_expiry < _MIN_YEARS_FOR_A_PRICE_A_DAY_LATER
+    gone_ex_by = years_to_expiry if expires_inside_the_day else _ONE_DAY_YEARS
+    cash_gone_ex = math.fsum(dividend.cash for dividend in dividends if 0.0 < dividend.years_to_ex <= gone_ex_by)
+    spot_a_day_later = spot - cash_gone_ex
+    if spot_a_day_later <= 0:
+        raise ValueError("the dividends going ex inside the day are worth as much as the stock itself")
+    if expires_inside_the_day:
+        price_a_day_later = float(_exercise_value(spot_a_day_later, strike, right))
+    else:
+        later = american_value(
+            spot=spot_a_day_later,
+            strike=strike,
+            years_to_expiry=years_to_expiry - _ONE_DAY_YEARS,
+            rate=rate,
+            volatility=volatility,
+            right=right,
+            # One at or under zero has gone ex, and the pricer leaves it out.
+            dividends=[CashDividend(dividend.years_to_ex - _ONE_DAY_YEARS, dividend.cash) for dividend in dividends],
+            steps=steps,
+        )
+        if later is None:
+            return None
+        price_a_day_later = later.price
+    return AmericanDailyDecay(
+        price_now=now.price,
+        price_a_day_later=price_a_day_later,
+        later_price_is_exercise_value=expires_inside_the_day,
+        cash_gone_ex=cash_gone_ex,
+    )
 
 
 def american_implied_volatility(
