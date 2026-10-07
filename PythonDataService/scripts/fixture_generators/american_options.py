@@ -1,8 +1,9 @@
 """Generate AM-001, AM-002 and AM-003 from QuantLib, without importing the canonical American pricer.
 
 AM-001  price and delta with no dividend, from ``BinomialLRVanillaEngine``.
-AM-002  price and delta with cash dividends, from ``FdBlackScholesVanillaEngine``
-        under the escrowed dividend model, on a fine grid.
+AM-002  price and delta with cash dividends, and one group with none, from
+        ``FdBlackScholesVanillaEngine`` under the escrowed dividend model, on a
+        fine grid.
 AM-003  implied volatility: a price QuantLib computes at a known volatility,
         which a solver must turn back into that volatility.
 
@@ -10,6 +11,11 @@ QuantLib counts time in whole days. A time to expiry under a day is the same
 problem restated over one day: with ``f`` the fraction of a day, the rate
 becomes ``r·f`` and the volatility ``σ·√f``, which leaves ``r·T`` and
 ``σ²·T``, and so the price and the delta, unchanged.
+
+QuantLib 1.42.1's binomial engines lose the payoff at expiry when the step,
+multiplied back by the number of steps, rounds to less than the time to
+expiry: an American price then comes out under the European one. No such pair
+of span and step count is used; ``_tree_row`` refuses one.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ FD_TIME_STEPS = 2000
 FD_PRICE_STEPS = 2000
 # (label, days to expiry, [(day the stock goes ex, cash per share), ...], strikes)
 DIVIDEND_CASES: list[tuple[str, int, list[tuple[int, float]], tuple[float, ...]]] = [
+    ("30d_no_dividend", 30, [], (80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0)),
     ("30d_one_dividend", 30, [(12, 1.75)], (80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0)),
     ("7d_one_dividend", 7, [(3, 0.6)], (90.0, 95.0, 100.0, 105.0, 110.0)),
     ("90d_two_dividends", 90, [(20, 0.9), (80, 0.9)], (80.0, 90.0, 100.0, 110.0, 120.0)),
@@ -72,6 +79,9 @@ def _option(right: str, strike: float, days: int) -> ql.VanillaOption:
 
 
 def _tree_row(right: str, strike: float, days: int, fraction: float, rate: float, volatility: float, steps: int) -> dict[str, float]:
+    span_years = days / 365.0
+    if (span_years / steps) * steps < span_years:
+        raise SystemExit(f"QuantLib {QUANTLIB_VERSION} loses the payoff at expiry at {days} days and {steps} steps")
     option = _option(right, strike, days)
     option.setPricingEngine(
         ql.BinomialLRVanillaEngine(_process(rate * fraction, volatility * math.sqrt(fraction)), steps)

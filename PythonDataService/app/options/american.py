@@ -28,10 +28,22 @@ option can be exercised early, so Black-Scholes prices a different contract.
 Why this tree: with no dividend it reproduces a second pinned engine to
 1e-9, so the port can be proven, not argued.
 
+Accepted divergence, with cash dividends. No engine pinned here builds this
+tree with cash dividends, so that path is checked against QuantLib's
+finite-difference engine for the same escrowed model and agrees with it only
+to the tree's own discretization error: within 1e-3 in price and 2e-4 in
+delta at 2,001 steps, and within 5e-3 and 1e-3 at the default 401 (fixture
+AM-002), not the 1e-9 the no-dividend path meets. An implied volatility
+solved from that engine's price is within 5e-4 of its volatility inside one
+standard deviation of the money, and looser beyond, where vega is small.
+
 What it does not do. It has no continuous dividend yield: a bot's dividends
-are cash amounts on dates, given explicitly. It does not price index options
-or anything not American. Time is a fraction of a 365-day year, to the
-millisecond, so a contract expiring today has the hours it really has.
+are cash amounts on dates, given explicitly, and there is no default of
+none. It does not price index options or anything not American. Time is a
+fraction of a 365-day year, to the millisecond, so a contract expiring today
+has the hours it really has. Under a few minutes to expiry the tree's
+probabilities keep about six digits, as the reference's do: both take
+``1 - exp(-x)`` of a very small ``x``.
 """
 
 from __future__ import annotations
@@ -40,16 +52,16 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
 
 import numpy as np
 from scipy.optimize import brentq
 
-OptionRight = Literal["call", "put"]
+from app.options.contract import OptionRight
 
 MS_PER_YEAR = 365 * 86_400_000
 # Under a minute the model is not asked: a quote that close to expiry prices exercise, not volatility.
 MIN_TIME_TO_EXPIRY_MS = 60_000
+_MIN_YEARS_TO_EXPIRY = MIN_TIME_TO_EXPIRY_MS / MS_PER_YEAR
 # Odd, as the tree requires. More steps buy accuracy with time, about linearly in both.
 DEFAULT_TREE_STEPS = 401
 MIN_VOLATILITY = 0.005
@@ -62,6 +74,14 @@ _BRACKET_GROWTH = 1.25
 # ``down`` divides by one minus the up probability. The strike is then dozens of standard
 # deviations from the price, and the tree is not asked.
 _UNRESOLVED_PROBABILITY = 1e-6
+# A price this close to a bound is at it: far under any quote's increment, far over the tree's rounding.
+# Without it a quote at exactly what exercising pays would be told apart from one a rounding error over.
+_PRICE_NOISE = 1e-9
+
+
+def years_from_ms(duration_ms: int) -> float:
+    """A span in milliseconds as the fraction of a 365-day year the model counts time in."""
+    return duration_ms / MS_PER_YEAR
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +132,11 @@ class AmericanIv:
     delta: float | None = None
     detail: str = ""
 
+    def __post_init__(self) -> None:
+        solved = self.status is AmericanIvStatus.SOLVED
+        if (self.volatility is not None, self.delta is not None) != (solved, solved):
+            raise ValueError("an implied volatility carries its volatility and delta when solved, and neither otherwise")
+
 
 def _peizer_pratt(z: float, steps: int) -> float:
     scaled = z / (steps + 1.0 / 3.0 + 0.1 / (steps + 1.0))
@@ -161,12 +186,15 @@ def _tree(
 
     That happens when the strike lies so many standard deviations away that a
     branch probability is all but zero or one. The option then has no time
-    value the tree can see, and the branch sizes would be rounding error.
+    value the tree can see, and the branch sizes would be rounding error. A
+    volatility too small to have a square has no tree either.
     """
     escrowed_spot = _escrowed_spot(spot, dividends, rate=rate, years_to_expiry=years_to_expiry)
     step_years = years_to_expiry / steps
     variance = volatility * volatility * years_to_expiry
     deviation = math.sqrt(variance)
+    if not (math.isfinite(deviation) and deviation > 0):
+        return None
     drift_per_step = (rate - 0.5 * volatility * volatility) * step_years
     growth = math.exp(drift_per_step + 0.5 * variance / steps)
     d2 = (math.log(escrowed_spot / strike) + drift_per_step * steps) / deviation
@@ -189,7 +217,12 @@ def _tree(
     )
 
 
-def _require_inputs(*, spot: float, strike: float, years_to_expiry: float, rate: float, steps: int) -> None:
+def _require_inputs(
+    *, spot: float, strike: float, years_to_expiry: float, rate: float, right: OptionRight, steps: int
+) -> None:
+    if right not in ("call", "put"):
+        # Anything else would be priced as one of the two without saying which.
+        raise ValueError(f"an option is a call or a put; got {right!r}")
     for name, value in (("spot", spot), ("strike", strike), ("years to expiry", years_to_expiry)):
         if not (math.isfinite(value) and value > 0):
             raise ValueError(f"{name} must be a finite number above zero; got {value}")
@@ -219,10 +252,13 @@ def _roll_back(
     dividends: Sequence[CashDividend],
     steps: int,
 ) -> AmericanValue:
+    moves = np.arange(steps + 1, dtype=np.float64)
+    down_moves = np.power(tree.down, moves)
+    up_moves = np.power(tree.up, moves)
+
     def stock_prices(step: int) -> np.ndarray:
-        ups = np.arange(step + 1, dtype=np.float64)
         escrow = _escrow(dividends, rate=rate, at_years=tree.step_years * step, expiry_years=years_to_expiry)
-        return tree.escrowed_spot * np.power(tree.down, step - ups) * np.power(tree.up, ups) + escrow
+        return tree.escrowed_spot * down_moves[step::-1] * up_moves[: step + 1] + escrow
 
     probability_down = 1.0 - tree.probability_up
     values = _exercise_value(stock_prices(steps), strike, right)
@@ -245,16 +281,18 @@ def american_value(
     rate: float,
     volatility: float,
     right: OptionRight,
-    dividends: Sequence[CashDividend] = (),
+    dividends: Sequence[CashDividend],
     steps: int = DEFAULT_TREE_STEPS,
 ) -> AmericanValue | None:
     """The model price and delta of one American option, per share.
 
-    ``None`` when the strike is too far from the price, for this time and
-    volatility, for the tree to resolve: such an option has no time value the
-    model can see, and it is not given a made-up one.
+    ``dividends`` is every cash dividend the stock may go ex on; it has no
+    default, so pricing with none is said, never assumed. ``None`` when the
+    strike is too far from the price, for this time and volatility, for the
+    tree to resolve, or the inputs are so extreme its prices overflow: such
+    an option is not given a made-up value.
     """
-    _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, steps=steps)
+    _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, right=right, steps=steps)
     _require_dividends(dividends)
     if not (math.isfinite(volatility) and volatility > 0):
         raise ValueError(f"volatility must be a finite number above zero; got {volatility}")
@@ -269,9 +307,11 @@ def american_value(
     )
     if tree is None:
         return None
-    return _roll_back(
-        tree, strike=strike, right=right, rate=rate, years_to_expiry=years_to_expiry, dividends=dividends, steps=steps
-    )
+    with np.errstate(over="ignore", invalid="ignore"):
+        value = _roll_back(
+            tree, strike=strike, right=right, rate=rate, years_to_expiry=years_to_expiry, dividends=dividends, steps=steps
+        )
+    return value if math.isfinite(value.price) and math.isfinite(value.delta) else None
 
 
 def american_implied_volatility(
@@ -282,7 +322,7 @@ def american_implied_volatility(
     years_to_expiry: float,
     rate: float,
     right: OptionRight,
-    dividends: Sequence[CashDividend] = (),
+    dividends: Sequence[CashDividend],
     steps: int = DEFAULT_TREE_STEPS,
 ) -> AmericanIv:
     """The volatility at which the model prices the option at ``price``, and the delta there.
@@ -291,17 +331,17 @@ def american_implied_volatility(
     did not converge does not return where it stopped.
     """
     try:
-        _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, steps=steps)
+        _require_inputs(spot=spot, strike=strike, years_to_expiry=years_to_expiry, rate=rate, right=right, steps=steps)
         _require_dividends(dividends)
         _escrowed_spot(spot, dividends, rate=rate, years_to_expiry=years_to_expiry)
         if not (math.isfinite(price) and price > 0):
             raise ValueError(f"an option price must be a finite number above zero; got {price}")
     except ValueError as invalid:
         return AmericanIv(AmericanIvStatus.INVALID_INPUT, detail=str(invalid))
-    if years_to_expiry * MS_PER_YEAR < MIN_TIME_TO_EXPIRY_MS:
+    if years_to_expiry < _MIN_YEARS_TO_EXPIRY:
         return AmericanIv(AmericanIvStatus.TIME_TO_EXPIRY_BELOW_FLOOR, detail="less than a minute to expiry")
     exercise_now = float(_exercise_value(spot, strike, right))
-    if price < exercise_now:
+    if price < exercise_now - _PRICE_NOISE:
         return AmericanIv(
             AmericanIvStatus.BELOW_EXERCISE_VALUE,
             detail=f"the price {price} is under the {exercise_now} that exercising now pays",
@@ -331,7 +371,7 @@ def american_implied_volatility(
         return AmericanIv(
             AmericanIvStatus.NO_CONVERGENCE, detail="the tree cannot resolve this strike at any volatility it tries"
         )
-    if price <= at_lowest.price:
+    if price <= at_lowest.price + _PRICE_NOISE:
         return AmericanIv(
             AmericanIvStatus.BELOW_VOLATILITY_FLOOR,
             detail=f"the price {price} is no higher than the model's {at_lowest.price} at a volatility of {lowest}",
@@ -341,6 +381,7 @@ def american_implied_volatility(
             AmericanIvStatus.ABOVE_VOLATILITY_CEILING,
             detail=f"the price {price} is over the model's {at_highest.price} at a volatility of {MAX_VOLATILITY}",
         )
+
     def miss(volatility: float) -> float:
         valued = value_at(volatility)
         if valued is None:
@@ -353,11 +394,9 @@ def american_implied_volatility(
         )
     except _Unresolved:
         return AmericanIv(AmericanIvStatus.NO_CONVERGENCE, detail="the tree stopped resolving the strike during the search")
-    if not report.converged:
-        return AmericanIv(AmericanIvStatus.NO_CONVERGENCE, detail=f"no answer after {report.iterations} iterations")
-    solved = value_at(volatility)
+    solved = value_at(volatility) if report.converged else None
     if solved is None:
-        return AmericanIv(AmericanIvStatus.NO_CONVERGENCE, detail="the tree cannot resolve the strike at the volatility found")
+        return AmericanIv(AmericanIvStatus.NO_CONVERGENCE, detail=f"no answer after {report.iterations} iterations")
     return AmericanIv(AmericanIvStatus.SOLVED, volatility=float(volatility), delta=solved.delta)
 
 

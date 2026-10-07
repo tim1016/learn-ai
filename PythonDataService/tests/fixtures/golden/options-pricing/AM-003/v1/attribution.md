@@ -12,6 +12,8 @@ QuantLib 1.42.1, `BinomialLRVanillaEngine` at 401 steps: the prices and deltas o
 
 As AM-001. The oracle is the volatility the price was generated at, so the fixture proves the solver inverts the pricer, and inherits AM-001's proof that the pricer is QuantLib's.
 
+No case here has a dividend. The solver with dividends is checked against AM-002's prices, at that fixture's looser tolerance.
+
 ## Independent numerical oracle
 
 `reference_kind=external_reference`. The generator calls QuantLib only and never imports the canonical implementation.

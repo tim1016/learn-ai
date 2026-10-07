@@ -1,6 +1,146 @@
 {
   "cases": [
     {
+      "case": "30d_no_dividend_vol0.2_k80_call",
+      "price": 20.29541257673057,
+      "delta": 0.999967579343616
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k80_put",
+      "price": 4.451067215662391e-05,
+      "delta": -3.387840687456043e-05
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k90_call",
+      "price": 10.391961350322484,
+      "delta": 0.9732415172665688
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k90_put",
+      "price": 0.06004322000522368,
+      "delta": -0.026942408366375202
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k95_call",
+      "price": 5.852720361922172,
+      "delta": 0.83836349284621
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k95_put",
+      "price": 0.5062919325717137,
+      "delta": -0.163326603096966
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k100_call",
+      "price": 2.47226813067118,
+      "delta": 0.5371183373011705
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k100_put",
+      "price": 2.1295656617681438,
+      "delta": -0.47080347092142566
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k105_call",
+      "price": 0.7218275071092533,
+      "delta": 0.22430229041593197
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k105_put",
+      "price": 5.434141370071088,
+      "delta": -0.7985350785415942
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k110_call",
+      "price": 0.1402145978354258,
+      "delta": 0.058315706426099755
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k110_put",
+      "price": 10.002084256612992,
+      "delta": -0.989420629270498
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k120_call",
+      "price": 0.0015848971590824207,
+      "delta": 0.0010124008643142377
+    },
+    {
+      "case": "30d_no_dividend_vol0.2_k120_put",
+      "price": 19.999999999999964,
+      "delta": -0.9999999999996841
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k80_call",
+      "price": 20.38741906155455,
+      "delta": 0.9790986328459119
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k80_put",
+      "price": 0.09227375466551843,
+      "delta": -0.020962161634093476
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k90_call",
+      "price": 11.323583965020482,
+      "delta": 0.8433592812356544
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k90_put",
+      "price": 0.9949293087678439,
+      "delta": -0.15734115585595554
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k95_call",
+      "price": 7.626840985526474,
+      "delta": 0.7043252506427503
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k95_put",
+      "price": 2.2862203607949363,
+      "delta": -0.29736511512202674
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k100_call",
+      "price": 4.750948761205507,
+      "delta": 0.5356947105880707
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k100_put",
+      "price": 4.405432081359501,
+      "delta": -0.46773781531434916
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k105_call",
+      "price": 2.728264063119281,
+      "delta": 0.36848558028138517
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k105_put",
+      "price": 7.388750664842612,
+      "delta": -0.6375946046241561
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k110_call",
+      "price": 1.4445816809226781,
+      "delta": 0.22918581208105415
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k110_put",
+      "price": 11.125919106042003,
+      "delta": -0.7804950483745712
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k120_call",
+      "price": 0.3214377699969627,
+      "delta": 0.06676997519941574
+    },
+    {
+      "case": "30d_no_dividend_vol0.4_k120_put",
+      "price": 20.102824120033375,
+      "delta": -0.9527745862718673
+    },
+    {
       "case": "30d_one_dividend_vol0.2_k80_call",
       "price": 20.11826867998849,
       "delta": 1.0000000004303067

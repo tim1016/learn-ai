@@ -1,4 +1,4 @@
-"""The American pricer beyond what golden fixtures AM-001 to AM-003 pin: refusals, and what the step count costs."""
+"""The American pricer beyond what golden fixtures AM-001 to AM-003 pin: refusals, bounds and the solver's statuses."""
 
 from __future__ import annotations
 
@@ -7,17 +7,30 @@ import math
 import numpy as np
 import pytest
 
+from app.options import american
 from app.options.american import (
     DEFAULT_TREE_STEPS,
+    MIN_TIME_TO_EXPIRY_MS,
+    AmericanIv,
     AmericanIvStatus,
+    AmericanValue,
     CashDividend,
     american_implied_volatility,
     american_value,
+    years_from_ms,
 )
 
 _THIRTY_DAYS = 30 / 365
-_FIFTEEN_MINUTES = 15 / (60 * 24 * 365)
-_AT_THE_MONEY_PUT = {"spot": 100.0, "strike": 100.0, "years_to_expiry": _THIRTY_DAYS, "rate": 0.045, "right": "put"}
+_FIFTEEN_MINUTES = years_from_ms(15 * 60_000)
+_NO_DIVIDENDS: tuple[CashDividend, ...] = ()
+_AT_THE_MONEY_PUT = {
+    "spot": 100.0,
+    "strike": 100.0,
+    "years_to_expiry": _THIRTY_DAYS,
+    "rate": 0.045,
+    "right": "put",
+    "dividends": _NO_DIVIDENDS,
+}
 
 
 @pytest.mark.parametrize(
@@ -33,14 +46,29 @@ _AT_THE_MONEY_PUT = {"spot": 100.0, "strike": 100.0, "years_to_expiry": _THIRTY_
         ),
         pytest.param({"price": 60.0}, AmericanIvStatus.ABOVE_VOLATILITY_CEILING, id="a price no volatility up to 500% reaches"),
         pytest.param(
-            {"years_to_expiry": 30 / (60 * 60 * 24 * 365), "price": 0.05},
+            {"years_to_expiry": years_from_ms(30_000), "price": 0.05},
             AmericanIvStatus.TIME_TO_EXPIRY_BELOW_FLOOR,
             id="thirty seconds to expiry",
+        ),
+        pytest.param(
+            {"right": "call", "strike": 1e-300, "price": 100.0},
+            AmericanIvStatus.NO_CONVERGENCE,
+            id="a strike no volatility the model tries brings within reach",
+        ),
+        pytest.param(
+            {"years_to_expiry": 200.0, "price": 50.0},
+            AmericanIvStatus.NO_CONVERGENCE,
+            id="two hundred years, where the highest volatility tried overflows the tree",
         ),
         pytest.param({"spot": 0.0, "price": 2.0}, AmericanIvStatus.INVALID_INPUT, id="no stock price"),
         pytest.param({"price": 0.0}, AmericanIvStatus.INVALID_INPUT, id="no option price"),
         pytest.param({"price": float("nan")}, AmericanIvStatus.INVALID_INPUT, id="an option price that is no number"),
         pytest.param({"price": 2.0, "steps": 400}, AmericanIvStatus.INVALID_INPUT, id="an even number of steps"),
+        pytest.param(
+            {"price": 2.0, "right": "P"},
+            AmericanIvStatus.INVALID_INPUT,
+            id="a put written the market-data provider's way, which is not this model's",
+        ),
         pytest.param(
             {"price": 2.0, "dividends": (CashDividend(years_to_ex=10 / 365, cash=150.0),)},
             AmericanIvStatus.INVALID_INPUT,
@@ -63,19 +91,138 @@ def test_a_solve_with_no_answer_says_why_and_carries_no_number(changes: dict, st
     assert result.detail
 
 
+def test_a_put_quoted_at_exactly_what_exercising_pays_has_no_volatility_whichever_way_its_cents_round() -> None:
+    """A strike less a price in cents is rarely exact in binary: 227.5 - 158.02 comes out a hair under
+    69.48 and 715.5 - 505.15 a hair over 210.35. Neither hair is time value, so neither quote is solved,
+    and both get the one status."""
+    statuses = set()
+    for index in range(60):
+        spot = round(150.01 + 7.37 * index, 2)
+        strike = round(spot * 2.8) / 2
+        at_exercise_value = round(strike - spot, 2)
+        statuses.add(
+            american_implied_volatility(
+                **(_AT_THE_MONEY_PUT | {"spot": spot, "strike": strike}), price=at_exercise_value
+            ).status
+        )
+    for spot, strike, price in ((158.02, 227.5, 69.48), (505.15, 715.5, 210.35)):
+        statuses.add(american_implied_volatility(**(_AT_THE_MONEY_PUT | {"spot": spot, "strike": strike}), price=price).status)
+
+    assert statuses == {AmericanIvStatus.BELOW_VOLATILITY_FLOOR}
+
+
+def test_a_price_no_volatility_moves_until_it_is_high_is_not_solved_to_the_lowest_one_tried() -> None:
+    """A put just in the money with $1.49 going ex inside its fifteen minutes is worth the same at every
+    volatility up to some level. A price from that level has no one volatility behind it."""
+    put = {
+        "spot": 100.0,
+        "strike": 100.04,
+        "years_to_expiry": _FIFTEEN_MINUTES,
+        "rate": 0.08,
+        "right": "put",
+        "dividends": (CashDividend(years_to_ex=years_from_ms(5 * 60_000), cash=1.49),),
+    }
+    priced = american_value(**put, volatility=0.3848)
+
+    assert priced is not None
+    assert american_implied_volatility(**put, price=priced.price).status is AmericanIvStatus.BELOW_VOLATILITY_FLOOR
+
+
+def test_a_search_that_runs_out_of_iterations_does_not_return_where_it_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(american, "_SOLVER_MAX_ITERATIONS", 1)
+
+    result = american_implied_volatility(**_AT_THE_MONEY_PUT, price=2.5)
+
+    assert (result.status, result.volatility, result.delta) == (AmericanIvStatus.NO_CONVERGENCE, None, None)
+
+
+def test_a_search_the_tree_stops_answering_part_way_through_has_no_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both ends of the search price; a volatility between them does not. The search stops there."""
+    price_it = american.american_value
+
+    def priced_only_at_the_ends(*, volatility: float, **contract: object) -> AmericanValue | None:
+        if 0.01 < volatility < 4.9:
+            return None
+        return price_it(volatility=volatility, **contract)
+
+    monkeypatch.setattr(american, "american_value", priced_only_at_the_ends)
+
+    result = american_implied_volatility(**_AT_THE_MONEY_PUT, price=2.5)
+
+    assert (result.status, result.volatility, result.delta) == (AmericanIvStatus.NO_CONVERGENCE, None, None)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param({"status": AmericanIvStatus.SOLVED}, id="solved, with no numbers"),
+        pytest.param({"status": AmericanIvStatus.SOLVED, "volatility": 0.2}, id="solved, with no delta"),
+        pytest.param({"status": AmericanIvStatus.NO_CONVERGENCE, "volatility": 0.2, "delta": 0.5}, id="a failure with numbers"),
+        pytest.param({"status": AmericanIvStatus.BELOW_VOLATILITY_FLOOR, "delta": -1.0}, id="a failure with a delta"),
+    ],
+)
+def test_an_implied_volatility_cannot_be_built_with_numbers_its_status_denies(result: dict) -> None:
+    with pytest.raises(ValueError, match="when solved, and neither otherwise"):
+        AmericanIv(**result)
+
+
+def test_exactly_a_minute_to_expiry_is_solved_and_a_millisecond_less_is_not() -> None:
+    a_minute = years_from_ms(MIN_TIME_TO_EXPIRY_MS)
+    priced = american_value(**(_AT_THE_MONEY_PUT | {"years_to_expiry": a_minute}), volatility=0.3)
+    assert priced is not None
+
+    at_the_floor = american_implied_volatility(**(_AT_THE_MONEY_PUT | {"years_to_expiry": a_minute}), price=priced.price)
+    under_it = american_implied_volatility(
+        **(_AT_THE_MONEY_PUT | {"years_to_expiry": years_from_ms(MIN_TIME_TO_EXPIRY_MS - 1)}), price=priced.price
+    )
+
+    assert at_the_floor.status is AmericanIvStatus.SOLVED
+    # This close to expiry the tree's probabilities keep about six digits, as the reference's do.
+    assert at_the_floor.volatility == pytest.approx(0.3, abs=1e-4, rel=0)
+    assert under_it.status is AmericanIvStatus.TIME_TO_EXPIRY_BELOW_FLOOR
+
+
 def test_a_strike_dozens_of_standard_deviations_away_is_not_priced() -> None:
     """Fifteen minutes out, a strike 13% away is over a hundred standard deviations off. The tree's
     branch sizes would be rounding error there, so it answers nothing and never a NaN."""
-    far = {"spot": 100.0, "strike": 113.0, "years_to_expiry": _FIFTEEN_MINUTES, "rate": 0.045, "right": "call"}
+    far = {
+        "spot": 100.0,
+        "strike": 113.0,
+        "years_to_expiry": _FIFTEEN_MINUTES,
+        "rate": 0.045,
+        "right": "call",
+        "dividends": _NO_DIVIDENDS,
+    }
 
     assert american_value(**far, volatility=0.2) is None
     # A penny on that call needs more volatility than the model will try.
     assert american_implied_volatility(**far, price=0.01).status is AmericanIvStatus.ABOVE_VOLATILITY_CEILING
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param(
+            {"years_to_expiry": 1e-7, "rate": 0.0, "volatility": 1e-4}, id="so little volatility the two branches are one"
+        ),
+        pytest.param({"volatility": 1e-170}, id="a volatility whose square is nothing"),
+        pytest.param({"years_to_expiry": 200.0, "volatility": 5.0}, id="so much that the tree's prices overflow"),
+    ],
+)
+def test_inputs_too_extreme_for_the_tree_are_not_priced_and_never_come_back_as_a_nan(changes: dict) -> None:
+    assert american_value(**(_AT_THE_MONEY_PUT | {"volatility": 0.25} | changes)) is None
+
+
 def test_a_far_strike_is_still_solved_once_enough_volatility_resolves_it() -> None:
     """The lowest volatility tried rises until the tree resolves the strike; the answer is above it."""
-    near = {"spot": 100.0, "strike": 101.0, "years_to_expiry": _FIFTEEN_MINUTES, "rate": 0.045, "right": "call"}
+    near = {
+        "spot": 100.0,
+        "strike": 101.0,
+        "years_to_expiry": _FIFTEEN_MINUTES,
+        "rate": 0.045,
+        "right": "call",
+        "dividends": _NO_DIVIDENDS,
+    }
 
     assert american_value(**near, volatility=0.005) is None
     priced = american_value(**near, volatility=1.2)
@@ -95,9 +242,26 @@ def test_a_far_strike_is_still_solved_once_enough_volatility_resolves_it() -> No
 )
 def test_a_dividend_outside_the_options_life_changes_nothing(dividend: CashDividend) -> None:
     without = american_value(**_AT_THE_MONEY_PUT, volatility=0.25)
-    with_it = american_value(**_AT_THE_MONEY_PUT, volatility=0.25, dividends=(dividend,))
+    with_it = american_value(**(_AT_THE_MONEY_PUT | {"dividends": (dividend,)}), volatility=0.25)
 
     assert with_it == without
+
+
+def test_a_dividend_going_ex_at_the_moment_of_expiry_is_still_held_in_escrow() -> None:
+    """With no interest a put is never exercised early, so one whose stock goes ex $1.75 as it expires
+    is worth what the same put is worth on a stock $1.75 lower that pays nothing."""
+    no_interest = _AT_THE_MONEY_PUT | {"rate": 0.0}
+
+    ex_at_expiry = american_value(
+        **(no_interest | {"dividends": (CashDividend(years_to_ex=_THIRTY_DAYS, cash=1.75),)}), volatility=0.25
+    )
+    on_the_lower_stock = american_value(**(no_interest | {"spot": 98.25}), volatility=0.25)
+    as_if_it_paid_nothing = american_value(**no_interest, volatility=0.25)
+
+    assert ex_at_expiry is not None and on_the_lower_stock is not None and as_if_it_paid_nothing is not None
+    assert ex_at_expiry.price == pytest.approx(on_the_lower_stock.price, abs=1e-9, rel=0)
+    assert ex_at_expiry.delta == pytest.approx(on_the_lower_stock.delta, abs=1e-9, rel=0)
+    assert ex_at_expiry.price - as_if_it_paid_nothing.price > 0.9
 
 
 def test_a_deep_call_is_exercised_just_before_the_stock_goes_ex() -> None:
@@ -108,7 +272,7 @@ def test_a_deep_call_is_exercised_just_before_the_stock_goes_ex() -> None:
     deep_call = {"spot": 100.0, "strike": 60.0, "years_to_expiry": _THIRTY_DAYS, "rate": 0.045, "right": "call"}
     tomorrow = 1 / 365
 
-    held_to_expiry = american_value(**deep_call, volatility=0.25)
+    held_to_expiry = american_value(**deep_call, volatility=0.25, dividends=_NO_DIVIDENDS)
     exercised_before_ex = american_value(
         **deep_call, volatility=0.25, dividends=(CashDividend(years_to_ex=tomorrow, cash=1.75),)
     )
@@ -122,32 +286,6 @@ def test_a_deep_call_is_exercised_just_before_the_stock_goes_ex() -> None:
     )
 
 
-def test_the_default_step_count_costs_under_a_thousandth_of_delta() -> None:
-    """What 401 steps give up against a tree ten times finer, on contracts with and without a dividend.
-    A delta rule's own tolerance is 0.05, so the step count moves a pick by under 2% of it."""
-    dividend = (CashDividend(years_to_ex=12 / 365, cash=1.75),)
-    gaps = []
-    for right in ("call", "put"):
-        for strike in (90.0, 95.0, 100.0, 105.0, 110.0):
-            for dividends in ((), dividend):
-                contract = {
-                    "spot": 100.0,
-                    "strike": strike,
-                    "years_to_expiry": _THIRTY_DAYS,
-                    "rate": 0.045,
-                    "volatility": 0.25,
-                    "right": right,
-                    "dividends": dividends,
-                }
-                coarse = american_value(**contract, steps=DEFAULT_TREE_STEPS)
-                fine = american_value(**contract, steps=4001)
-                assert coarse is not None and fine is not None
-                gaps.append(abs(coarse.delta - fine.delta))
-
-    assert max(gaps) < 1e-3
-    assert all(math.isfinite(gap) for gap in gaps)
-
-
 @pytest.mark.parametrize(
     "changes",
     [
@@ -156,6 +294,7 @@ def test_the_default_step_count_costs_under_a_thousandth_of_delta() -> None:
         pytest.param({"strike": -5.0}, id="a negative strike"),
         pytest.param({"years_to_expiry": 0.0}, id="no time left"),
         pytest.param({"steps": 2}, id="too few steps"),
+        pytest.param({"right": "C"}, id="a call written the market-data provider's way"),
     ],
 )
 def test_a_price_is_not_worked_out_from_inputs_the_model_has_no_meaning_for(changes: dict) -> None:
@@ -167,7 +306,15 @@ def test_delta_stays_between_no_exposure_and_the_whole_share() -> None:
     """Across strikes from deep in to deep out of the money, a call's delta lies in [0, 1], a put's in [-1, 0]."""
     for right, low, high in (("call", 0.0, 1.0), ("put", -1.0, 0.0)):
         deltas = [
-            american_value(spot=100.0, strike=strike, years_to_expiry=_THIRTY_DAYS, rate=0.045, volatility=0.25, right=right)
+            american_value(
+                spot=100.0,
+                strike=strike,
+                years_to_expiry=_THIRTY_DAYS,
+                rate=0.045,
+                volatility=0.25,
+                right=right,
+                dividends=_NO_DIVIDENDS,
+            )
             for strike in np.arange(70.0, 131.0, 5.0)
         ]
         assert all(value is not None and low - 1e-12 <= value.delta <= high + 1e-12 for value in deltas), right

@@ -1907,7 +1907,7 @@
       "tolerance": {
         "atol": 1e-09,
         "rtol": 0.0,
-        "note": "Strict default. The canonical tree is the same construction as the reference engine, so the two differ by rounding only; measured maximum 4.4e-10 in price and 1.3e-11 in delta over 400 cases."
+        "note": "Strict default. The canonical tree is the same construction as the reference engine, so the two differ by rounding only; measured maximum 4.4e-10 in price and 1.3e-11 in delta over 400 cases. The cases a day or less from expiry take 1 - exp(-x) of a very small x, as the reference does, so one unit in the last place of exp moves their price by up to 2e-8: a failure of those cases alone on another platform is that, and expm1 is not the cure."
       },
       "active_version": 1,
       "versions": {
@@ -1918,12 +1918,12 @@
           "content_sha256": {
             "input.json": "70f5e9db411e3a15cd7f266f24388a1ebe3c28d5984bf08d06861a14e05fdfb4",
             "output.json": "f3af23d0a5a8633c4ba130758995de39598eeb2ddc36c95d1ed45cc3afa4c5c3",
-            "attribution.md": "40871ee9e921fd73c64a28a50789c07d023f35cdcc1cb0d0133755ec275e93be"
+            "attribution.md": "84441221592353ff33221aef771a4f8ffb64defac9bee5883ef5522a0a8bce51"
           },
           "file_sha256": {
             "input.json": "23eab1b4bce4a5d7c787f45dbdf71b9fb713b3732abce956b114618380bb1688",
             "output.json": "d0efc878428548e4e1e20cedc2485491e84027181cd5f84f2903346196c8a19f",
-            "attribution.md": "40871ee9e921fd73c64a28a50789c07d023f35cdcc1cb0d0133755ec275e93be"
+            "attribution.md": "84441221592353ff33221aef771a4f8ffb64defac9bee5883ef5522a0a8bce51"
           }
         }
       },
@@ -1934,7 +1934,7 @@
     },
     {
       "id": "AM-002",
-      "name": "American option price and delta with cash dividends — QuantLib escrowed finite-difference engine",
+      "name": "American option price and delta from a second engine, with and without cash dividends — QuantLib escrowed finite-difference engine",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/options/american.py",
       "canonical_callable": "american_value",
@@ -1952,7 +1952,7 @@
       "tolerance": {
         "atol": 0.0002,
         "rtol": 0.0,
-        "note": "Looser than the strict default because the reference is a different numerical scheme for the same model: the two agree only as closely as both have converged. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4, falling in proportion to the steps (3.9e-5 and 1.8e-4 at 4,001). The test file states both tolerances."
+        "note": "An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so it is checked against a converged finite-difference grid (2.6e-5 in price, 3.4e-6 in delta from its own doubling) and agrees to the tree's discretization error. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4 over 96 cases. At the default 401 steps: delta atol 1e-3, price atol 5e-3 (measured 4.2e-4, 3.2e-3). Implied volatility solved from these prices within one standard deviation of the money: atol 5e-4 (measured 3.0e-4). The test file states every tolerance."
       },
       "active_version": 1,
       "versions": {
@@ -1961,20 +1961,22 @@
           "output": "output.json",
           "attribution": "attribution.md",
           "content_sha256": {
-            "input.json": "d93fd56b79e594c60cd37b82a3e4b9bf4995ee250edc3186423a1c84cc7c98bc",
-            "output.json": "d5a16c3b14b0c3be935e151992cd96a49bb29136a0594f188db54a66b3377f31",
-            "attribution.md": "d6c581ec30f4371fd26416785894034f40a4d254846d6e09aa2fe26605b5d86b"
+            "input.json": "521356e030ff7053bd6a2ac65241b2053c2df2bdbbff90412096a1a7b989c164",
+            "output.json": "16bfb43ca80fe017e43e446fa4eafbd74cee4daefb5b7ac6e4257855c467b0ea",
+            "attribution.md": "74bbaa126eaf83f34cb2e30c226a53b10f7da4e8d6f7b0df15567e8cb9b881a1"
           },
           "file_sha256": {
-            "input.json": "f0b469c5ee9fa185a25ba2513b284c512f83b794e4bb9248430eabdecdc65da2",
-            "output.json": "2b27381ddedc9f4c1f1d89ac188d4924f419d15f4c9534c89ee43f3dfa7663e6",
-            "attribution.md": "d6c581ec30f4371fd26416785894034f40a4d254846d6e09aa2fe26605b5d86b"
+            "input.json": "5685917ddf1630b3123d5d37a98c20da9ff039e27b0f25e3f77828bcedd51da4",
+            "output.json": "6ac8137d0122a4e3f7015fe467dd65d41a15bea004788c80a95cfc6e578fd9f3",
+            "attribution.md": "74bbaa126eaf83f34cb2e30c226a53b10f7da4e8d6f7b0df15567e8cb9b881a1"
           }
         }
       },
       "status": "active",
       "validated_by": [
-        "tests/fixtures/test_american_option_fixtures.py::test_price_and_delta_with_cash_dividends_match_quantlibs_escrowed_finite_difference_engine"
+        "tests/fixtures/test_american_option_fixtures.py::test_price_and_delta_with_cash_dividends_match_quantlibs_escrowed_finite_difference_engine",
+        "tests/fixtures/test_american_option_fixtures.py::test_the_default_step_count_stays_within_a_thousandth_of_delta_of_the_second_engine",
+        "tests/fixtures/test_american_option_fixtures.py::test_a_price_the_second_engine_computed_with_dividends_is_solved_back_to_its_volatility"
       ]
     },
     {
@@ -2008,12 +2010,12 @@
           "content_sha256": {
             "input.json": "b5a8bf53739c69520b9feb26f0c715e5e8de4413375306b0e2958a3310871aa1",
             "output.json": "d98707f65bc3a9991aaa4dd3b800da340b794f90bd525527a168d062555f661b",
-            "attribution.md": "bb52d2eb4329a2ed3efacb79b3d693745398ac235f8eca0acc26f7e2c8b83040"
+            "attribution.md": "07aa1d444d7e4b166439fc2a4f561e54d4e0325b8929cabc7ed3de619ca77b8a"
           },
           "file_sha256": {
             "input.json": "0280e0d01913045682e9e949b245fe7c63c28c9d59e92517012174ed55ced82d",
             "output.json": "d35a87f1fbc3938e739d05074bd61406499ebc481258579abde4178ede7dd603",
-            "attribution.md": "bb52d2eb4329a2ed3efacb79b3d693745398ac235f8eca0acc26f7e2c8b83040"
+            "attribution.md": "07aa1d444d7e4b166439fc2a4f561e54d4e0325b8929cabc7ed3de619ca77b8a"
           }
         }
       },

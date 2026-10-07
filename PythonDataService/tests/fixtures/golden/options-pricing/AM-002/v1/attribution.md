@@ -1,4 +1,4 @@
-# AM-002 — American option price and delta, with cash dividends
+# AM-002 — American option price and delta from a second engine, with cash dividends
 
 ## Source
 
@@ -8,8 +8,9 @@ The escrowed model is the one in Hull, Options, Futures, and Other Derivatives, 
 
 ## What is in it
 
-68 cases at a price of 100, calls and puts, volatilities 0.2 and 0.4:
+96 cases at a price of 100, calls and puts, volatilities 0.2 and 0.4:
 
+- 30 days with no dividend, strikes 80 to 120, so the same engine also checks the tree where nothing is paid;
 - 30 days with $1.75 going ex on day 12, strikes 80 to 120;
 - 7 days with $0.60 going ex on day 3, strikes 90 to 110;
 - 90 days with $0.90 going ex on day 20 and again on day 80, strikes 80 to 120.
@@ -18,6 +19,7 @@ The escrowed model is the one in Hull, Options, Futures, and Other Derivatives, 
 
 - A dividend's time is the whole number of days to its ex-date, over 365.
 - This is a second engine for the same model, not the same algorithm. QuantLib's binomial engines take no cash dividends, so the tree cannot be compared with a tree here.
+- QuantLib counts a dividend on the expiry day as going ex before expiry. So does the canonical tree. None of these cases has one; `tests/options/test_american.py` pins it.
 
 ## Independent numerical oracle
 
@@ -25,17 +27,26 @@ The escrowed model is the one in Hull, Options, Futures, and Other Derivatives, 
 
 ## Tolerance
 
-Price `atol=1e-3`, delta `atol=2e-4`, `rtol=0`, with the canonical tree run at 2,001 steps. This is looser than the strict default, and the reason is discretization: two different numerical schemes agree only as closely as both have converged. Largest gap over the 68 cases as the tree's steps rise:
+**This is looser than the repository's strict default, and it is an accepted divergence, not rounding.** Price `atol=1e-3`, delta `atol=2e-4`, `rtol=0`, with the canonical tree run at 2,001 steps. A second test holds the default 401 steps to price `atol=5e-3`, delta `atol=1e-3`.
+
+The gap is the tree's own discretization error. The reference has converged: at 4,000 by 4,000 its answers move by 2.6e-5 in price and 3.4e-6 in delta from the stored 2,000 by 2,000. Largest gap over the 96 cases as the tree's steps rise:
 
 | Tree steps | Price | Delta |
 |---|---|---|
-| 401 | 3.2e-3 | 3.8e-4 |
+| 401 | 3.2e-3 | 4.2e-4 |
+| 1,001 | 1.4e-3 | 1.5e-4 |
 | 2,001 | 5.9e-4 | 7.2e-5 |
 | 4,001 | 1.8e-4 | 3.9e-5 |
+| 8,001 | 2.0e-4 | 2.0e-5 |
 
-The gap falls roughly in proportion to the steps. It is not a difference of model: under QuantLib's other cash-dividend model (`Spot`) the same cases move by up to 2.5e-2 in price and 3e-3 in delta. A delta rule's own tolerance is 0.05, so the gap at the default 401 steps is under one percent of it.
+- The price gap stops falling near 2e-4. The tree's last step before an ex-date can sit up to one step's interest on the strike away from it; that is the likely cause and was not isolated.
+- It is not a difference of model. Under QuantLib's other cash-dividend model (`Spot`) the dividend cases move by up to 8e-2 in price and 3e-3 in delta.
+- Five cases are worth under 1e-3 with a delta under 2e-4 (the far out-of-the-money ones at volatility 0.2). An absolute tolerance barely tests them.
+- A delta rule's own tolerance is 0.05, so the gap at the default 401 steps is under one percent of it.
 
-The manifest's tolerance records the delta figure; the test file states both.
+**Implied volatility.** A third test gives the solver each price here and asks for the volatility back, for the 52 cases within one standard deviation of the money: volatility `atol=5e-4`, delta `atol=1e-3`, at the default steps. Largest gaps measured: 3.0e-4 and 5.0e-4. The volatility gap is the price gap divided by vega, so farther from the money, where vega is small, it reaches 0.1 and those cases are left to the price test. Solving the dividend cases as if the stock paid nothing misses by 2e-2 or more.
+
+The manifest's tolerance records the delta figure at 2,001 steps; the test file states all of them.
 
 ## Regeneration
 
