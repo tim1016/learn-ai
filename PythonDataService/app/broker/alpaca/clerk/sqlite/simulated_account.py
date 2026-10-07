@@ -12,6 +12,13 @@ Canonical implementation: this composition; FIFO and fees retain their existing
   authorities. No balance, position or fee ledger is introduced.
 Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py
   (exact ``Fraction`` oracle at a whole-cent boundary for equity and open P&L).
+
+An open option contract has no bars (ADR 0076). A Dry Run marks one it
+bought at the bid of the newest quote kept for it
+(``kept_option_quotes``), which is what it could be sold for, and only while
+that bid is no older than a share bar may be. With none, the reading is
+unavailable, as it is for shares with no fresh bar. A bid of zero is a mark:
+nothing is bid for the contract.
 """
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuote, KeptOptionQuotes
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
@@ -130,12 +138,45 @@ class SimulatedAccountProjection:
             raise SimulationEvidenceUnavailable("Choose simulated starting cash before deploying this Dry Run.")
         return normalize_money(self.initial_cash), False
 
+    def _option_mark(self, symbol: str, *, long: bool, at_ms: int) -> KeptOptionQuote:
+        """The quote an open option contract is marked from at ``at_ms``, or the reading is unavailable.
+
+        A contract the account bought is worth what it could be sold for: the
+        bid. The bid must have been received no longer before ``at_ms`` than
+        a share bar may close before it, which also holds a previous close's
+        mark to that close.
+        """
+        if not long:
+            raise SimulationEvidenceUnavailable(f"A sold option position in {symbol} cannot be marked yet.")
+        if not self.repo.account_id.startswith("sim:"):
+            raise SimulationEvidenceUnavailable(f"Only a Dry Run keeps option quotes; {symbol} cannot be marked here.")
+        kept = KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id).newest(
+            symbol, at_or_before_ms=at_ms, with_side="bid"
+        )
+        bid_received_ms = None if kept is None else kept.quote.bid_received_ms
+        if kept is None or bid_received_ms is None or not 0 <= at_ms - bid_received_ms <= SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
+            raise SimulationEvidenceUnavailable(
+                f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
+            )
+        return kept
+
     def _marks(self, records: tuple[FillRecord, ...], *, at_ms: int, exact_close: bool = False) -> tuple[dict[str, Decimal], tuple[str, ...], int | None]:
-        open_symbols = {lot.symbol for lot in compute_fifo_pnl(records).open_lots}
+        open_lots = compute_fifo_pnl(records).open_lots
+        open_symbols = {lot.symbol for lot in open_lots}
+        # A symbol holds one multiplier, so its lots are all shares or all contracts.
+        contracts = {lot.symbol: lot.side is OrderSide.BUY for lot in open_lots if lot.multiplier is not None}
         marks: dict[str, Decimal] = {}
         refs: list[str] = []
         valid_until: int | None = None
         for symbol in open_symbols:
+            if symbol in contracts:
+                kept = self._option_mark(symbol, long=contracts[symbol], at_ms=at_ms)
+                assert kept.quote.bid is not None and kept.quote.bid_received_ms is not None
+                marks[symbol] = normalize_money(kept.quote.bid)
+                refs.append(kept.ref)
+                expires = kept.quote.bid_received_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
+                valid_until = expires if valid_until is None else min(valid_until, expires)
+                continue
             if self.repo.account_id.startswith("sim:"):
                 accounts = {self.repo.account_id}
                 provider = None

@@ -25,6 +25,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.options.quotes import HeldQuote, receipt_times
 from app.services.jsonl_wal import JsonlWal
 from app.utils.advisory_lock import advisory_file_lock
@@ -77,6 +78,14 @@ class KeptOptionQuotes:
     def beside(cls, evidence_file: Path) -> KeptOptionQuotes:
         """The store that sits in the same account folder as ``evidence_file``."""
         return cls(path=evidence_file.with_name(KEPT_OPTION_QUOTES_FILENAME), trusted_root=evidence_file.parent)
+
+    @classmethod
+    def of_account(cls, *, artifacts_root: Path, account_id: str) -> KeptOptionQuotes:
+        """One simulated account's store, in the folder its retained bars and simulated orders are in."""
+        account_dir = resolve_contained_path(
+            Path(artifacts_root), "accounts", "alpaca", safe_path_component(account_id, "account id")
+        )
+        return cls(path=account_dir / KEPT_OPTION_QUOTES_FILENAME, trusted_root=account_dir)
 
     def keep(self, symbol: str, quote: HeldQuote, *, kept_at_ms: int) -> None:
         """Keep one quote for a contract. A quote with no side, or one already kept, is not written again."""

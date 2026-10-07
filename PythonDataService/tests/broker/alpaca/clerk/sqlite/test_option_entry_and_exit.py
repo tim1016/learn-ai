@@ -27,11 +27,15 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
+from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
+from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.contract.models import OrderSide
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
@@ -40,10 +44,16 @@ from app.schemas.action_plan import ActionPlan
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
-from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.source_bar_ledger import RetainedSourceBar
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
+from tests.broker.alpaca.clerk.sqlite.test_runtime_pricing_bar import _minute_bar
+from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import (
+    _OneAccount,
+    one_account,  # noqa: F401 -- pytest fixture, used by name
+)
 
 SID = "dry-run-buys-a-call"
 RUN = "run-dry"
@@ -94,6 +104,7 @@ class _DryRun:
     clock: _TestClock
     authority: SyntheticBindingAuthority
     binding: BrokerBotBinding
+    artifacts_root: Path
     decisions: int = 0
 
     def evidence(self, bid: str = "1.90", ask: str = "1.94", **changes: Any) -> OptionEntryEvidence:
@@ -171,6 +182,23 @@ class _DryRun:
         with self.repo._write_lock:
             return self.repo._conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
 
+    def fees(self) -> Any:
+        with self.repo._write_lock:
+            return custody_fee_attribution(
+                self.repo._conn, now_ms=self.clock(), simulated_fill_cutoff_ms=self.clock()
+            )
+
+    def account_reading(self) -> Any:
+        """The simulated account's cash, equity and open P&L now, as its envelope would read them."""
+        projection = SimulatedAccountProjection(repo=self.repo, artifacts_root=self.artifacts_root)
+        return projection.observe(reference_cash=0, observed_at_ms=self.clock(), now_ms=self.clock())
+
+    async def read_account(self) -> None:
+        """One tick of the account's own reading cadence, which a later entry waits on."""
+        runtime = get_clerk_runtime(self.binding.sealed_account_id or "")
+        assert runtime is not None and runtime.envelope_sync is not None
+        await runtime.envelope_sync.tick()
+
 
 def _binding(plan: ActionPlan = BUYS_ONE_CALL, *, budget_cents: int = 100_000) -> BrokerBotBinding:
     return BrokerBotBinding(
@@ -193,7 +221,7 @@ async def _open(tmp_path: Path, clock: _TestClock, binding: BrokerBotBinding) ->
     await authority.ensure_recoverable()
     runtime = get_clerk_runtime(binding.sealed_account_id or "")
     assert runtime is not None and runtime.clerk is not None
-    return _DryRun(clerk=runtime.clerk, clock=clock, authority=authority, binding=binding)
+    return _DryRun(clerk=runtime.clerk, clock=clock, authority=authority, binding=binding, artifacts_root=tmp_path)
 
 
 @pytest.fixture
@@ -274,6 +302,30 @@ async def test_the_entry_sets_aside_its_commitment_and_a_filled_entry_claims_not
     # Once cash has seen the fill nothing is claimed; until then the fill is claimed at what it cost.
     assert (seen.unfilled_cost, seen.unseen_fill_cost, seen.unfilled_fee) == (0, 0, 0)
     assert (unseen.unfilled_cost, unseen.unseen_fill_cost) == (0, Decimal("194"))
+
+
+async def test_an_entry_accepted_and_not_yet_filled_claims_its_whole_commitment(dry_run: _DryRun) -> None:
+    """A simulation fills at once, so the wait is made here: the entry is accepted and nothing is sent.
+
+    One contract at $1.94 a share is $194.00 of the budget, with six cents of
+    fees: counted with the contract's hundred, not as one share at $1.94.
+    """
+    from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
+    from app.broker.alpaca.clerk.sqlite.envelope_reservations import entry_cash_claims
+    from app.broker.alpaca.clerk.sqlite.option_admission import work_out_option_entry
+
+    entry = work_out_option_entry(BUYS_ONE_CALL, evidence=dry_run.evidence(), units=1, now_ms=dry_run.clock())
+    accept_option_enter(
+        dry_run.repo, account_id=dry_run.repo.account_id, strategy_instance_id=SID, decision_id="enter-waits",
+        lifecycle_run_id=RUN, entry=entry, envelope=dry_run.clerk.live_envelope,
+    )
+
+    with dry_run.repo._write_lock:
+        [claim] = entry_cash_claims(dry_run.repo._conn, seen_before_ms=dry_run.clock() + 1)
+    assert (claim.unfilled_cost, claim.unfilled_fee, claim.unseen_fill_cost) == (Decimal("194"), Decimal("0.06"), 0)
+    budget = dry_run.repo.account_budget(cash=1000, seen_before_ms=dry_run.clock() + 1)
+    assert budget.deployments[0].pending_orders == Decimal("194.06")
+    assert budget.deployments[0].free == Decimal("805.94")
 
 
 # ── refusals, each by its own name ───────────────────────────────────────
@@ -457,3 +509,258 @@ async def test_an_exit_closes_every_contract_the_entry_bought(dry_run: _DryRun) 
     assert dry_run.fills()[-1] == (SYMBOL, "sell", 3.0, 2.00, 100)
     # Three contracts, six cents a share, a hundred shares each.
     assert dry_run.realized_pnl() == Decimal("18")
+
+
+# ── the money a simulation keeps: fees, marks, and going on ──────────────
+
+
+async def test_a_simulated_option_round_trip_is_charged_the_option_fees_of_its_day(dry_run: _DryRun) -> None:
+    """One contract bought at $1.94 and sold at $2.40 on 2026-09-08.
+
+    SEC, on the $240.00 sold: $0.004944. TAF, on the one contract sold:
+    $0.00329. CAT, on two hundred equivalent shares: $0.0006. ORF, two
+    contracts: $0.03. OCC, two contracts: $0.05. Each fee type is rounded up
+    to the cent: 1 + 1 + 1 + 3 + 5.
+    """
+    await dry_run.enter(dry_run.evidence())
+    after_the_buy = dry_run.fees()
+    dry_run.wait(60_000)
+    await dry_run.exit(dry_run.exit_quotes("2.40", "2.46"))
+
+    fees = dry_run.fees()
+
+    assert after_the_buy.known and after_the_buy.total_for(f"bot:{SID}") == Decimal("0.06")
+    assert fees.known, fees.unresolved
+    assert fees.total_for(f"bot:{SID}") == Decimal("0.11")
+    assert {share.charge_id.rsplit(":", 1)[-1]: share.amount for share in fees.shares} == {
+        "sec": Decimal("0.01"), "taf": Decimal("0.01"), "cat": Decimal("0.01"),
+        "orf": Decimal("0.03"), "occ": Decimal("0.05"),
+    }
+
+
+async def test_an_open_contract_is_marked_at_the_bid_of_a_fresh_quote_and_not_at_all_without_one(
+    dry_run: _DryRun,
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+
+    # The entry's own quote is fresh: bid $1.90 against $1.94 paid, a hundred shares.
+    assert dry_run.account_reading().unrealized_pl_usd == Decimal("-4")
+
+    dry_run.wait(180_000)
+    with pytest.raises(SimulationEvidenceUnavailable, match=SYMBOL):
+        dry_run.account_reading()
+
+    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.50", "2.56", received_ms=dry_run.clock() - 500)})
+    reading = dry_run.account_reading()
+    assert reading.unrealized_pl_usd == Decimal("56")
+    # $1,000.00 less the $194.00 paid; the day's fees are an estimate until the day is over.
+    assert reading.cash_available_usd == Decimal("806")
+    assert reading.equity_usd == Decimal("1000") + Decimal("56") - Decimal("0.06")
+
+
+async def test_a_dry_run_goes_on_trading_after_its_first_option_round_trip(dry_run: _DryRun) -> None:
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    await dry_run.exit(dry_run.exit_quotes("2.40", "2.46"))
+    dry_run.wait(20_000)
+    await dry_run.read_account()
+
+    again = await dry_run.enter(dry_run.evidence("2.40", "2.44"))
+
+    assert again.state is EffectOperationState.SUBMITTED, again.explanation
+    assert dry_run.fills()[-1] == (SYMBOL, "buy", 1.0, 2.44, 100)
+
+
+# ── a close the simulation cannot price ──────────────────────────────────
+
+
+async def test_a_close_with_nothing_bid_is_not_recorded_as_a_sale_for_nothing_and_the_position_stays(
+    dry_run: _DryRun,
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+
+    refused = await dry_run.exit(dry_run.exit_quotes("0", "0.05"))
+
+    assert refused.state is EffectOperationState.REJECTED, refused.explanation
+    assert dry_run.held() == {SYMBOL: 1.0}
+    assert len(dry_run.fills()) == 1
+    still_open = dry_run.repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID
+    )
+    assert still_open is not None, "the failed close is on the books as a position still open"
+
+
+async def test_a_close_is_still_priced_from_the_entrys_own_quote_when_the_quotes_kept_are_lost(
+    dry_run: _DryRun,
+) -> None:
+    """The file of quotes kept is gone. The entry's own quote is in its facts, and the Clerk hands it back.
+
+    Only an account with nothing kept and nothing in its entry's facts could
+    not price a close, and an entry is never accepted without its quote.
+    """
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    (dry_run.artifacts_root / "accounts" / "alpaca").rglob("kept_option_quotes.jsonl").__next__().unlink()
+
+    closed = await dry_run.exit(None)
+
+    assert closed.state is EffectOperationState.FLAT, closed.explanation
+    sale = dry_run.clerk.synthesized_option_fills()[closed.child_order_refs[-1]]
+    assert (sale.fill_model, sale.fill_price) == (SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("1.90"))
+
+
+# ── a run that ends holding, and a restart ───────────────────────────────
+
+
+async def test_a_run_that_ends_holding_has_its_contract_closed_at_the_newest_quote_kept(dry_run: _DryRun) -> None:
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() - 1_000)})
+    await dry_run.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {}
+    assert dry_run.fills()[-1] == (SYMBOL, "sell", 1.0, 2.10, 100)
+    [sale] = [fill for fill in dry_run.clerk.synthesized_option_fills().values() if fill.request.side is OrderSide.SELL]
+    assert (sale.fill_model, sale.quote_age_ms) == (SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, 1_000)
+
+
+async def test_after_a_restart_while_holding_the_exit_closes_the_contract_stored_with_the_entry(
+    dry_run: _DryRun, tmp_path: Path
+) -> None:
+    """The process dies holding one call. Reopened, the store still says which contract, with what multiplier.
+
+    A restart ends the run, and a Dry Run closes what an ended run left. The
+    close is made from the entry's own stored contract: nothing asks the
+    plan's rules which contract to sell.
+    """
+    await dry_run.enter(dry_run.evidence())
+    await close_synthetic_clerk_runtimes()
+
+    reopened = await _open(tmp_path, dry_run.clock, dry_run.binding)
+
+    assert reopened.held() == {}
+    assert reopened.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100), (SYMBOL, "sell", 1.0, 1.90, 100)]
+    assert reopened.realized_pnl() == Decimal("-4")
+
+
+async def test_the_books_rebuilt_from_their_mirror_hold_the_contract_and_its_multiplier(
+    dry_run: _DryRun, tmp_path: Path
+) -> None:
+    bought = await dry_run.enter(dry_run.evidence())
+    dry_run.wait(20_000)
+    closed = await dry_run.exit(dry_run.exit_quotes("2.40", "2.46"))
+    account_id, database = dry_run.repo.account_id, dry_run.repo.db_path
+    await close_synthetic_clerk_runtimes()
+    database.rename(database.with_suffix(".saved"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=account_id, artifacts_root=tmp_path, clock=dry_run.clock)
+    try:
+        for order_ref in (bought.child_order_refs[0], closed.child_order_refs[-1]):
+            assert order_contract(rebuilt, order_ref) == ContractTerms(symbol=SYMBOL, multiplier=100)
+        with rebuilt._write_lock:
+            records = effective_fill_records(rebuilt._conn, account_id=account_id)
+        assert compute_fifo_pnl(records).exact_realized_pnl == Decimal("46")
+        verify_database(rebuilt.db_path, expected_account_id=account_id)
+    finally:
+        rebuilt.close()
+
+
+# ── what does not change, and who is still refused ───────────────────────
+
+
+async def test_a_paper_account_refuses_an_option_entry_and_sends_nothing(
+    one_account: _OneAccount,  # noqa: F811 -- the imported fixture
+) -> None:
+    quote = _quote("1.90", "1.94", received_ms=NOON - 300)
+    evidence = OptionEntryEvidence(
+        picked={LEG: CALL}, multipliers={LEG: 100}, quotes={LEG: quote}, generation=GENERATION,
+        rechecked_at_ms=NOON - 100, leg_gap_limit_percent=EIGHT, cost_limit_percent=TEN,
+    )
+
+    refused = await one_account.clerk.execute_for_instance(
+        strategy_instance_id="b", run_id="run-b", decision_id="enter-1", purpose=EffectPurpose.ENTER,
+        action_plan=BUYS_ONE_CALL, quantity=1, option_entry=evidence,
+    )
+
+    assert refused.state is EffectOperationState.REJECTED
+    assert refused.explanation.startswith("OPTION_PLAN_NEEDS_A_DRY_RUN: "), refused.explanation
+    assert one_account.trade.submitted_legs == []
+    assert one_account.enter_commands() == 0
+
+
+async def test_a_paper_account_refuses_to_register_a_bot_that_trades_options(
+    one_account: _OneAccount,  # noqa: F811 -- the imported fixture
+) -> None:
+    binding = BrokerBotBinding(
+        strategy_instance_id="options-on-paper", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
+        mode="trade", quantity=1, action_plan=BUYS_ONE_CALL, run_id="run-1", created_at_ms=0,
+        sealed_account_id=one_account.repo.account_id, exit_terms=TERMS,
+    )
+
+    with pytest.raises(OptionPlanRefused) as refused:
+        await one_account.clerk.register_strategy_run(binding)
+
+    assert refused.value.reason.value == "OPTION_PLAN_NEEDS_A_DRY_RUN"
+    assert one_account.repo.strategy_instance("options-on-paper") is None
+
+
+async def test_a_dry_run_refuses_to_register_a_bot_whose_plan_it_does_not_take(tmp_path: Path) -> None:
+    market_liveness.reset_market_liveness_store_for_testing()
+    spread = _plan(
+        _option_leg("long_call"),
+        _option_leg("short_call", position="short", strike={"selector": "leg_distance", "leg_id": "long_call", "dollars": 5.0}),
+    )
+    try:
+        account = await _open(tmp_path, _TestClock(NOON), _binding(spread))
+
+        with pytest.raises(OptionPlanRefused) as refused:
+            await account.clerk.register_strategy_run(account.binding)
+
+        assert refused.value.reason.value == "OPTION_STRUCTURE_NOT_SUPPORTED"
+    finally:
+        await close_synthetic_clerk_runtimes()
+        market_liveness.reset_market_liveness_store_for_testing()
+
+
+async def test_a_stock_dry_run_beside_it_buys_and_sells_as_it_always_did(tmp_path: Path) -> None:
+    """The same harness, a bot in shares: its orders, fills and flat proof are a stock bot's own."""
+    market_liveness.reset_market_liveness_store_for_testing()
+    publish_quotes(NOON, SPY=100.0)
+    clock = _TestClock(NOON)
+    plan = alpaca_v1_action_plan("SPY")
+    try:
+        account = await _open(tmp_path, clock, _binding(plan))
+        await account.clerk.register_strategy_run(account.binding)
+        bars = account.authority.source_bars()
+        try:
+            bought_on: RetainedSourceBar = bars.append(_minute_bar("SPY", close="100.10"), run_id=RUN)
+            sold_on: RetainedSourceBar = bars.append(
+                _minute_bar("SPY", close="101.10", end_ms=NOON + 60_000), run_id=RUN
+            )
+        finally:
+            bars.close()
+        clock.value = NOON + 1_000
+
+        bought = await account.clerk.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN, decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=plan, quantity=1, retained_source_bar=bought_on,
+        )
+        account.wait(60_000)
+        sold = await account.clerk.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN, decision_id="exit-1", purpose=EffectPurpose.EXIT,
+            action_plan=plan, quantity=1, retained_source_bar=sold_on,
+        )
+
+        assert bought.state is EffectOperationState.SUBMITTED, bought.explanation
+        assert sold.state is EffectOperationState.FLAT, sold.explanation
+        assert account.fills() == [("SPY", "buy", 1.0, 100.10, None), ("SPY", "sell", 1.0, 101.10, None)]
+        assert account.realized_pnl() == Decimal("1")
+        for order_ref in (*bought.child_order_refs, sold.child_order_refs[-1]):
+            assert order_contract(account.repo, order_ref) is None, "an order in shares trades no contract"
+        assert account.clerk.synthesized_option_fills() == {}
+    finally:
+        await close_synthetic_clerk_runtimes()
+        market_liveness.reset_market_liveness_store_for_testing()
