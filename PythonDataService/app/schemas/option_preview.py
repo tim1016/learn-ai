@@ -27,7 +27,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
@@ -36,42 +36,16 @@ from app.options.deadlines import CloseTerms
 from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_PERCENT
 from app.options.named_structures import NamedStructure
 from app.schemas.action_plan import ExpirySelector, StrikeSelector
+from app.schemas.option_order_terms import (
+    CostLimitPercent,
+    EntryWaitSeconds,
+    ExpiryCloseLeadMinutes,
+    GapLimitPercent,
+)
 
 # The most legs a request may carry. More than a structure may have, so that one leg too many is answered
-# with the plan's own verdict and not with a malformed request.
-_MAX_LEGS_ASKED = 8
-
-
-def _as_an_owner_writes_it(percent: Decimal) -> Decimal:
-    """``1e1`` is 10, ``10.000`` is 10 and ``-0`` is 0: a percent is carried back and printed as written out."""
-    if not percent:
-        # Nothing, whatever sign it was written with.
-        return Decimal(0)
-    return Decimal(format(percent.normalize(), "f"))
-
-
-def _places(step: Decimal | None) -> int:
-    """How many decimal places a step allows: six for a millionth."""
-    assert step is not None
-    return -int(step.normalize().as_tuple().exponent)
-
-
-# The four order terms, each held to the one range ``app.options.order_terms`` states for it. A percent is
-# bounded before it is written out, so that a number too large to write is refused and never formatted.
-_GapLimitPercent = Annotated[
-    Decimal,
-    Field(decimal_places=_places(order_terms.GAP_LIMIT_PERCENT.step)),
-    *order_terms.GAP_LIMIT_PERCENT.held_by(Decimal),
-    AfterValidator(_as_an_owner_writes_it),
-]
-_CostLimitPercent = Annotated[
-    Decimal,
-    Field(decimal_places=_places(order_terms.COST_LIMIT_PERCENT.step)),
-    *order_terms.COST_LIMIT_PERCENT.held_by(Decimal),
-    AfterValidator(_as_an_owner_writes_it),
-]
-_EntryWaitSeconds = Annotated[int, *order_terms.ENTRY_WAIT_SECONDS.held_by(int)]
-_ExpiryCloseLeadMinutes = Annotated[int, *order_terms.EXPIRY_CLOSE_LEAD_MINUTES.held_by(int)]
+# with the plan's own verdict and not with a malformed request. A Deploy's option choice takes the same.
+MAX_LEGS_ASKED = 8
 
 
 class OptionLegRules(BaseModel):
@@ -101,17 +75,17 @@ class OptionStructurePreviewRequest(BaseModel):
     listens_to: Annotated[str, Field(pattern=US_EQUITY_SYMBOL_PATTERN)] | None = None
     # The named structure the legs are still an example of. None: Custom.
     structure: NamedStructure | None = None
-    legs: Annotated[list[OptionLegRules], Field(max_length=_MAX_LEGS_ASKED)]
+    legs: Annotated[list[OptionLegRules], Field(max_length=MAX_LEGS_ASKED)]
     structures: Annotated[int, Field(ge=1, le=100)] = 1
     # The widest bid-ask gap a leg may have, as a percent of its mid. An entry with a leg quoted wider is skipped.
     # A request says a number or leaves the field out, which is the limit an owner starts from. Null is neither.
-    gap_limit_percent: _GapLimitPercent = DEFAULT_LEG_GAP_LIMIT_PERCENT
+    gap_limit_percent: GapLimitPercent = DEFAULT_LEG_GAP_LIMIT_PERCENT
     # The most opening and closing at once may cost, as a percent of what the entry sets aside.
-    cost_limit_percent: _CostLimitPercent = DEFAULT_COST_LIMIT_PERCENT
+    cost_limit_percent: CostLimitPercent = DEFAULT_COST_LIMIT_PERCENT
     # How long an entry would wait for its fill, and how long before the close an expiring contract is
     # closed. Between them they set how late in its last session a contract is still picked.
-    entry_wait_seconds: _EntryWaitSeconds = order_terms.entry_wait_seconds(CloseTerms())
-    expiry_close_lead_minutes: _ExpiryCloseLeadMinutes = order_terms.expiry_close_lead_minutes(CloseTerms())
+    entry_wait_seconds: EntryWaitSeconds = order_terms.entry_wait_seconds(CloseTerms())
+    expiry_close_lead_minutes: ExpiryCloseLeadMinutes = order_terms.expiry_close_lead_minutes(CloseTerms())
 
 
 PreviewState = Literal[

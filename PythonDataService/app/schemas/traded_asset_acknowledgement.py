@@ -70,7 +70,26 @@ def traded_asset_acknowledgement_fault(
     instrument's type and identity, never by comparing two tickers: options
     on the bot's own symbol are something else.
     """
-    needs_one = mode == "trade" and not trades_the_signals_shares(action_plan, signal_symbol)
+    return acknowledgement_fault(
+        mode=mode,
+        trades_something_else=not trades_the_signals_shares(action_plan, signal_symbol),
+        acknowledgement=acknowledgement,
+    )
+
+
+def acknowledgement_fault(
+    *,
+    mode: Literal["log_only", "dry_run", "trade"],
+    trades_something_else: bool,
+    acknowledgement: UntestedTradedAssetAcknowledgement | None,
+) -> AcknowledgementFault | None:
+    """The rule itself, for a caller that knows what the bot trades without its plan in hand.
+
+    A Deploy of an option structure is one: it trades something else
+    whatever its legs come to, so the rule is asked before the plan is
+    built (#2913).
+    """
+    needs_one = mode == "trade" and trades_something_else
     if needs_one:
         return "required" if acknowledgement is None else None
     return None if acknowledgement is None else "not_applicable"
@@ -110,6 +129,37 @@ class UntestedTradedAssetWarning(BaseModel):
             ),
             acceptance_label=(
                 f"I accept that this strategy is untested trading {traded_symbol}."
+                if acceptance_required
+                else None
+            ),
+        )
+
+    @classmethod
+    def for_options(
+        cls,
+        signal_symbol: str,
+        underlying: str,
+        *,
+        structure_in_a_sentence: str | None = None,
+        acceptance_required: bool,
+    ) -> UntestedTradedAssetWarning:
+        """The warning for a bot that trades options (#2913). Options on the symbol it listens to included.
+
+        ``structure_in_a_sentence`` is the structure as a sentence names it
+        ("a bull call spread on"), once one is built; before that the
+        warning says "options on".
+        """
+        traded = f"{structure_in_a_sentence or 'options on'} {underlying}"
+        return cls(
+            headline="Options have no backtest here.",
+            detail=(
+                f"This strategy's evidence comes from trading {signal_symbol} shares. "
+                f"Its results trading {traded} on {signal_symbol}'s signal have not been tested. "
+                "Options also lose value with time and move with volatility, which a share signal does not look at. "
+                "Nothing here says the trade is profitable."
+            ),
+            acceptance_label=(
+                f"I accept that this strategy is untested trading options on {underlying}."
                 if acceptance_required
                 else None
             ),

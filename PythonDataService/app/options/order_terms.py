@@ -33,8 +33,11 @@ Why each range is what it is:
   came to within fifty seconds of its decision bar's close (#2913). The
   wait, and the proof that what did not fill was cancelled, both come out
   of that fifty, so a longer wait leaves less time to take the entry. At
-  thirty seconds an entry taken late in that time may not fit. The runner's
-  wait is not in this module and is not held to this range by a test yet.
+  thirty seconds an entry taken late in that time does not fit, and the
+  runner refuses it by name and sends nothing. The runner's wait and its
+  two guards are not in this module: ``tests/services/bot_runner/
+  test_option_entry_wait_offered.py`` holds this range, and the sentence
+  an owner is given for it, to the runner's own guards.
 - A close lead is no longer than a whole regular session of 390 minutes,
   which nothing could be counted back from. The Clerk holds every term but
   the entry wait to that.
@@ -73,8 +76,9 @@ COST_LIMIT_PERCENT = Bounds(Decimal(0), True, Decimal(100), True, _MILLIONTH)
 ENTRY_WAIT_SECONDS = Bounds(Decimal(MIN_ENTRY_WAIT_MS // _MS_PER_SECOND), True, Decimal(30), True, _WHOLE)
 # Said to the owner beside the range, and with a wait that is refused for being above it.
 ENTRY_WAIT_RANGE_REASON = (
-    "The bot has 50 seconds from its decision bar's close to learn what an entry came to, so a longer "
-    "wait would leave it too little time to take the entry."
+    "The bot has 50 seconds from its decision bar's close to learn what an entry came to. The wait for a "
+    "fill and the proof that what did not fill was cancelled both come out of that. So an entry taken too "
+    "late for its wait is refused by name, and nothing is sent: the longer the wait, the earlier that is."
 )
 EXPIRY_CLOSE_LEAD_MINUTES = Bounds(Decimal(0), True, Decimal(MAX_ORDER_TERM_MS // _MS_PER_MINUTE), True, _WHOLE)
 
