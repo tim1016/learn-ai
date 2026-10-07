@@ -395,6 +395,20 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.queryByText(/Every engine run of this study/)).toBeNull();
   });
 
+  it('All runs belongs to the study it was opened on: another study opens on its steps', async () => {
+    const other = studyDetail('awaiting_validation', { id: 'study-0002-bbbb' });
+    const service = fakeService(studyDetail('awaiting_validation'));
+    const view = await renderStudy(service);
+    fireEvent.click(screen.getByRole('button', { name: /all runs/i }));
+    await screen.findByText(/Every engine run of this study/);
+
+    service.get.mockResolvedValue(other);
+    view.fixture.componentRef.setInput('studyId', other.id);
+
+    await waitFor(() => expect(screen.queryByText(/Every engine run of this study/)).toBeNull());
+    expect((await screen.findByRole('button', { name: /all runs/i })).getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('Hide asks once, then hides the study and reports it', async () => {
     const service = fakeService(studyDetail('awaiting_validation'));
     const view = await renderStudy(service);
