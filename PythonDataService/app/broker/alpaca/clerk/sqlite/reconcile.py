@@ -52,7 +52,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
 from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
-from app.broker.alpaca.clerk.sqlite.option_events import poll_option_events
+from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     asked_of_a_real_option_order,
     look_up_by_client_order_id,
@@ -1446,6 +1446,9 @@ def _finalize_reconciliation_verdict(
         known_broker_order_ids=captured_broker_order_ids,
     )
     plan = _contain_unfoldable_orders(repo, plan)
+    # An order just observed in an option contract a bot holds is held against that bot in
+    # this same pass, from the books' own record of it (ADR 0076 decision 22).
+    book_option_events(repo, None)
     _sync_unexplained_order_hold(repo, plan.unexplained_orders)
     _sync_position_drift(
         repo,
