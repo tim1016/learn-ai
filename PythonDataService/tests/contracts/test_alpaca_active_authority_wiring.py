@@ -200,7 +200,9 @@ def test_the_hold_sync_starts_only_once_its_providers_are_installed() -> None:
     # this seam, and its start/stop order is semantic -- it holds a second
     # projection handle on the repository, so it starts first and stops first.
     # Stated exactly once, in `_ordered_taps`, and read by all three sites.
-    assert source.count("(fee_sync, envelope_sync, hold_sync, sweep)") == 1, (
+    # ADR 0076: the deadline keeper joined them, stopped before the sweep whose
+    # heartbeat keeps the lease its writes need.
+    assert source.count("(fee_sync, envelope_sync, hold_sync, deadline_keeper, sweep)") == 1, (
         "the tap order belongs in one tuple; three hand-kept branch orders is "
         "what `_ordered_taps` exists to retire"
     )

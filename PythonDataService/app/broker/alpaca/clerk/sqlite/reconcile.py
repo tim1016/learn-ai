@@ -66,6 +66,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.resting_entries import cancel_entries_past_their_wait
 from app.broker.alpaca.clerk.sqlite.run_ownership import (
     RunOwnership,
     retire_runs_whose_runner_is_gone,
@@ -1281,6 +1282,12 @@ async def _reconcile_account_serialized(
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
     # POST that landed after Stop is cancelled within one sweep.
     await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
+
+    # No option entry rests past its owner's wait (ADR 0076). The deadline
+    # keeper runs this same step on time; run here too, a keeper that died
+    # or was late costs one pass and never a deadline. On books with no
+    # option entry it reads an empty worklist and writes nothing.
+    await cancel_entries_past_their_wait(repo, trade=trade, off_loop=to_thread)
 
     # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``
     # authority, whatever an ended run left is closed at the last price it saw.

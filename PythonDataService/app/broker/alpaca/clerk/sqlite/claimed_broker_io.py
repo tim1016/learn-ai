@@ -1,4 +1,14 @@
-"""Broker I/O fenced by one exclusive, renewable operation-claim token."""
+"""Broker I/O fenced by one exclusive, renewable operation-claim token.
+
+An order in an option contract (ADR 0076) is sent, and looked up, through
+the option port. On a real account that port reads strictly, and here every
+answer it gives is held to the contract, the side and the contracts the
+books asked for before it becomes the order evidence the folds take
+(``option_order_evidence``). An answer that cannot be read, or is about
+something else, raises a ``BrokerError`` that is not a refusal: the outcome
+stays unknown. A simulation's own record of the order is read as it always
+was, by the lookup of its ledger.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +21,11 @@ from app.broker.alpaca.clerk.sqlite.account_open_work import (
     OpenOrdersThenPositions,
     read_open_orders_then_positions,
 )
+from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
+    AskedOptionOrder,
+    asked_option_order,
+    evidence_of_the_order_asked,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -18,7 +33,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLostAfterBrokerIO,
     OperationClaimError,
 )
-from app.broker.contract.errors import BrokerError, BrokerEvidenceUnavailable, BrokerOptionsNotSupported
+from app.broker.contract.errors import BrokerError, BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
 from app.broker.contract.options import SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
@@ -81,32 +96,41 @@ class ClaimedBrokerIO:
         return observed
 
     async def _submit_option_order(self, order: SingleOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
-        """Send one option order to a simulation and read back the fill it recorded.
+        """Send one option order and return the broker's answer as order evidence.
 
-        Only a simulation is sent one for now: nothing about an option order
-        has been shown on a real account, so any other port is refused here
-        before it is contacted, whatever let the order get this far.
+        To a real account it is sent once, through the option port. The
+        answer is evidence only when it is about the order sent: the same
+        contract, side and contracts. Otherwise it raises as evidence that
+        is unavailable, which the caller folds as an unknown outcome and
+        settles by the exact lookup, never as a refusal: the broker may hold
+        the order.
 
-        The simulation executes inside the call. Its own record of the order
+        A simulation executes inside the call. Its own record of the order
         is then read by the exact lookup every resolution uses, and that
         record is what the Clerk folds: its symbol is the contract's, and its
         fill carries the simulation's own execution identity. An answer with
         no record behind it leaves the outcome unknown, to be settled by the
         same lookup.
         """
-        if not trade_port_folds_simulated_evidence(self.trade):
-            raise BrokerOptionsNotSupported(
-                "The account Clerk sends an option order only to a simulation for now.",
-                broker=self.trade.broker_id,
-                detail="Nothing was sent and no order exists.",
-            )
         answer = await self.trade.submit_option_order(order, client_order_id=client_order_id)
+        if not trade_port_folds_simulated_evidence(self.trade):
+            return evidence_of_the_order_asked(answer, asked=AskedOptionOrder.of_request(order))
         recorded = await self.trade.get_order_by_client_order_id(client_order_id)
         if recorded is None or recorded.order_id != answer.order_id:
             raise BrokerEvidenceUnavailable(
                 "The simulation answered an option order it holds no record of.", broker=self.trade.broker_id
             )
         return recorded
+
+    def _asked_of_a_real_option_order(self, order_ref: str) -> AskedOptionOrder | None:
+        """What the books asked a real broker for under ``order_ref``, when it is an order in an option contract.
+
+        ``None`` for an order in shares, and for every order of a simulation,
+        whose ledger is read by the one lookup it has.
+        """
+        if trade_port_folds_simulated_evidence(self.trade):
+            return None
+        return asked_option_order(self.repo, order_ref)
 
     def bind_option_close_quotes(
         self,
@@ -174,9 +198,20 @@ class ClaimedBrokerIO:
         self._renew_after_io()
 
     async def lookup(self, client_order_id: str) -> BrokerOrder | None:
+        """The broker's own record of the order sent under ``client_order_id``, or ``None`` when it has none.
+
+        An order in an option contract on a real account is read by the
+        option port's strict lookup: an answer it cannot read whole, or one
+        about another order, raises and leaves the outcome unknown.
+        """
         self._renew()
         try:
-            observed = await self.trade.get_order_by_client_order_id(client_order_id)
+            asked = self._asked_of_a_real_option_order(client_order_id)
+            if asked is None:
+                observed = await self.trade.get_order_by_client_order_id(client_order_id)
+            else:
+                answer = await self.trade.get_option_order_by_client_order_id(client_order_id)
+                observed = None if answer is None else evidence_of_the_order_asked(answer, asked=asked)
         except BrokerError:
             self._renew()
             raise
@@ -184,7 +219,7 @@ class ClaimedBrokerIO:
         return observed
 
     async def observe_broker_order(
-        self, broker_order_id: str
+        self, broker_order_id: str, *, order_ref: str | None = None
     ) -> BrokerOrder | BrokerError | None:
         """Exact evidence for one broker order id, or a value-domain error (#2656).
 
@@ -193,10 +228,19 @@ class ClaimedBrokerIO:
         escape: it follows a manual order's Alpaca replacement chain, whose
         later members carry no client order id of ours. An answer naming
         another order is an error, never evidence.
+
+        ``order_ref`` names the Clerk's own order the id was recorded for,
+        when the caller knows it. An order in an option contract is then read
+        by the option port, as :meth:`lookup` reads it.
         """
         self._renew()
         try:
-            observed = await self.trade.get_order_by_broker_order_id(broker_order_id)
+            asked = None if order_ref is None else self._asked_of_a_real_option_order(order_ref)
+            if asked is None:
+                observed = await self.trade.get_order_by_broker_order_id(broker_order_id)
+            else:
+                answer = await self.trade.get_option_order_by_broker_order_id(broker_order_id)
+                observed = None if answer is None else evidence_of_the_order_asked(answer, asked=asked)
         except BrokerError as exc:
             self._renew()
             return exc

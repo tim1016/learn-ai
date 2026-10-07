@@ -279,6 +279,12 @@ def redriven_episode_token(decision_id: str) -> str | None:
         return None
     token, _, _attempt = decision_id.removeprefix(EXIT_REDRIVE_DECISION_PREFIX).rpartition("-")
     return token or None
+#: Why an entry is cancelled when nothing says otherwise: an EXIT, or a stopped
+#: run's cleanup, must prove the entry ended before anything else is done.
+ENTRY_TERMINAL_PROOF = "EXIT_ENTRY_TERMINAL_PROOF"
+#: Why a resting option entry is cancelled: the owner's entry wait ran out (ADR 0076).
+ENTRY_WAIT_ENDED = "ENTRY_WAIT_ENDED"
+
 # A Dry Run's run-end close (``dry_run_close``, owner decision 2026-09-29): the
 # simulation closing what an ended run left, at the last price the run saw.
 DRY_RUN_CLOSE_DECISION_PREFIX = "dry-run-close-"
@@ -521,11 +527,15 @@ async def cancel_and_prove_owned_entry(
     entry_order_ref: str,
     trade: BrokerTradePort,
     off_loop: OffLoop | None = None,
+    reason: str = ENTRY_TERMINAL_PROOF,
 ) -> OrderResource:
     """Cancel one exact owned ENTRY under its current durable custodian.
 
     ``off_loop`` moves each synchronous repository run onto a worker thread
     (#1993); the default keeps the pre-#1993 inline behavior.
+
+    ``reason`` is why the cancel is asked for, recorded on the order's
+    ``ORDER_CANCEL_REQUESTED`` the first time one is written for it.
     """
     run = off_loop if off_loop is not None else run_inline
     entry = await run(lambda: repo.order(entry_order_ref))
@@ -550,6 +560,7 @@ async def cancel_and_prove_owned_entry(
             repo,
             effect_operation_id=effect_operation_id,
             order=entry,
+            reason=reason,
             broker=broker,
             run=claim_scoped(run),
         )
@@ -1893,7 +1904,7 @@ async def _cancel_and_prove_order(
     *,
     effect_operation_id: str,
     order: OrderResource,
-    reason: str = "EXIT_ENTRY_TERMINAL_PROOF",
+    reason: str = ENTRY_TERMINAL_PROOF,
     broker: ClaimedBrokerIO,
     run: OffLoop,
 ) -> bool:
@@ -2307,7 +2318,7 @@ async def _observe_by_broker_order_id(
     another client order id is an error, never this order's state.
     """
     assert reducing.broker_order_id is not None
-    observed = await broker.observe_broker_order(reducing.broker_order_id)
+    observed = await broker.observe_broker_order(reducing.broker_order_id, order_ref=reducing.order_ref)
     if isinstance(observed, BrokerOrder) and observed.client_order_id != reducing.client_order_id:
         return BrokerError(
             f"broker order {reducing.broker_order_id!r} carries "
@@ -2497,9 +2508,13 @@ async def _submit_reducing_order(
         # a no-submit world binds the price it fills at, or nothing goes out.
         # No order sent before to a real broker is refused here: a real port
         # binds every recovery, and refuses a run-end close on its first send.
-        if option_close is not None:
-            # A close of an option contract is priced from a quote, never a
-            # bar, whatever made the EXIT: the newest kept for the contract.
+        if option_close is not None and not trade_port_folds_simulated_evidence(broker.trade):
+            # A real account's close is a market order the broker fills: it needs no
+            # quote of ours, as a stock decision's sale needs no bar (ADR 0076).
+            bound, why = True, ""
+        elif option_close is not None:
+            # A simulated close of an option contract is priced from a quote, never
+            # a bar, whatever made the EXIT: the newest kept for the contract.
             bound = broker.bind_option_close_quotes(
                 reducing.client_order_id,
                 symbol=facts.symbol,
@@ -3557,6 +3572,8 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
 
 
 __all__ = [
+    "ENTRY_TERMINAL_PROOF",
+    "ENTRY_WAIT_ENDED",
     "attested_absent_exit_episodes",
     "cancel_and_prove_owned_entry",
     "flatten_send_refusal",

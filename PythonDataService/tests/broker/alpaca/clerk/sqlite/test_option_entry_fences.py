@@ -601,7 +601,7 @@ async def test_a_live_shadow_account_refuses_to_register_a_bot_that_trades_optio
     with pytest.raises(OptionPlanRefused) as refused:
         await live_shadow.register_strategy_run(binding)
 
-    assert refused.value.reason.value == "OPTION_PLAN_NEEDS_A_DRY_RUN"
+    assert refused.value.reason.value == "OPTION_PLAN_ACCOUNT_NOT_OPEN"
     assert _written(live_shadow) == before
     assert live_shadow.repository.strategy_instance("options-on-shadow") is None
 
@@ -618,7 +618,7 @@ async def test_a_live_shadow_account_refuses_an_option_entry_and_an_option_exit_
         option_entry=_evidence_at(SHADOW_NOON) if purpose is EffectPurpose.ENTER else None,
     )
 
-    _refused(refused, "OPTION_PLAN_NEEDS_A_DRY_RUN")
+    _refused(refused, "OPTION_PLAN_ACCOUNT_NOT_OPEN")
     assert _written(live_shadow) == before
     assert await live_shadow._read.list_orders() == []
 

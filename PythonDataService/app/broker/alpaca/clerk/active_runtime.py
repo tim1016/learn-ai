@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     guard_broker_ports,
     guard_broker_read_port,
 )
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
@@ -154,6 +155,7 @@ def _ordered_taps(
     hold_sync: BackgroundSweep | None,
     sweep: BackgroundSweep | None,
     fee_sync: BackgroundSweep | None = None,
+    deadline_keeper: BackgroundSweep | None = None,
 ) -> tuple[BackgroundSweep, ...]:
     """The background taps an authority owns, in start order, absent ones dropped.
 
@@ -163,8 +165,13 @@ def _ordered_taps(
     be stopped. Both stop sites -- the runtime's ``close()`` and the failed
     startup cleanup in :func:`compose_repository_runtime` -- read it from
     here rather than each keeping their own branch order true.
+
+    The deadline keeper (ADR 0076) is stopped before the sweep: the sweep's
+    heartbeat keeps the execution lease the keeper's writes need.
     """
-    return tuple(tap for tap in (fee_sync, envelope_sync, hold_sync, sweep) if tap is not None)
+    return tuple(
+        tap for tap in (fee_sync, envelope_sync, hold_sync, deadline_keeper, sweep) if tap is not None
+    )
 
 
 @dataclass(frozen=True)
@@ -205,6 +212,10 @@ class ActiveClerkRuntime:
     hold_sync: StreamHealthHoldSync | None = None
     envelope_sync: LiveEnvelopeSync | None = None
     fee_sync: FeeEvidenceSync | None = None
+    # ADR 0076: cancels what has not filled of a resting option entry when its
+    # wait runs out. ``None`` where no option entry can rest: a Live Shadow's
+    # and a Live authority, which take no option plan yet.
+    deadline_keeper: BackgroundSweep | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
@@ -225,7 +236,8 @@ class ActiveClerkRuntime:
 
     def _taps(self) -> tuple[BackgroundSweep, ...]:
         return _ordered_taps(
-            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep, fee_sync=self.fee_sync
+            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=self.sweep, fee_sync=self.fee_sync,
+            deadline_keeper=self.deadline_keeper,
         )
 
     def start_background_taps(self) -> None:
@@ -242,7 +254,12 @@ class ActiveClerkRuntime:
         makes "did anything start the taps?" one question main.py answers in
         one place.
         """
-        for tap in _ordered_taps(envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None, fee_sync=self.fee_sync):
+        for tap in _ordered_taps(
+            envelope_sync=self.envelope_sync, hold_sync=self.hold_sync, sweep=None, fee_sync=self.fee_sync,
+            # Started here, after boot recovery stopped every run: its first
+            # round acts at once on any entry still past its deadline.
+            deadline_keeper=self.deadline_keeper,
+        ):
             tap.start()
 
     async def close(self) -> None:
@@ -256,6 +273,7 @@ class ActiveClerkRuntime:
         self.fee_sync = None
         self.envelope_sync = None
         self.hold_sync = None
+        self.deadline_keeper = None
         self.sweep = None
         if isinstance(self.clerk, SqliteAlpacaClerkFacade):
             await self.clerk.drain_effects()
@@ -321,6 +339,7 @@ class _ComposedAuthority:
     hold_sync: StreamHealthHoldSync
     envelope_sync: LiveEnvelopeSync | None
     fee_sync: FeeEvidenceSync | None
+    deadline_keeper: DeadlineKeeper | None = None
 
 
 async def compose_repository_runtime(
@@ -363,6 +382,7 @@ async def compose_repository_runtime(
     hold_sync: StreamHealthHoldSync | None = None
     envelope_sync: LiveEnvelopeSync | None = None
     fee_sync: FeeEvidenceSync | None = None
+    deadline_keeper: DeadlineKeeper | None = None
     try:
         repository = await open_repository_after_lease_expiry(
             repository_opener,
@@ -405,6 +425,11 @@ async def compose_repository_runtime(
                     if repository.account_id.startswith(("sim:", "shadow:")) else None),
             )
         )
+        # ADR 0076: only a Paper account's Clerk rests an option entry at the
+        # broker, so only it keeps the deadline. A Live Shadow's and a Live
+        # Clerk take no option plan, and gain no new task until they do.
+        if authority_kind == "sqlite" and account_mode == "paper":
+            deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade)
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
@@ -417,6 +442,7 @@ async def compose_repository_runtime(
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             live_envelope=live_envelope,
             entry_reading=None if envelope_sync is None else envelope_sync.read_for_entry,
+            entry_deadline_nudge=None if deadline_keeper is None else deadline_keeper.nudge,
         )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
@@ -477,6 +503,7 @@ async def compose_repository_runtime(
             hold_sync=hold_sync,
             envelope_sync=envelope_sync,
             fee_sync=fee_sync,
+            deadline_keeper=deadline_keeper,
         )
     except BaseException:
         # Whatever was built before the failure, stopped in the same declared
@@ -485,7 +512,8 @@ async def compose_repository_runtime(
         # composition -- a reconnect interrupted by shutdown (#2582) --
         # releases its execution lease the same way.
         for tap in _ordered_taps(
-            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep, fee_sync=fee_sync
+            envelope_sync=envelope_sync, hold_sync=hold_sync, sweep=sweep, fee_sync=fee_sync,
+            deadline_keeper=deadline_keeper,
         ):
             await tap.stop()
         if repository is not None:

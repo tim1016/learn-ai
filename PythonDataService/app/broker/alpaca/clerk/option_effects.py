@@ -14,8 +14,8 @@ facts the pick stands on, and the Clerk works out the money from them itself:
 Neither carries a price, a commitment or a fee. Those are the Clerk's to
 compute (``app.options.entry.prepare_entry``, ``app.broker.alpaca.option_fees``).
 
-Today the Clerk takes one shape of option plan, on one kind of account: a
-single bought call or put, in a Dry Run. Every other plan is refused by name
+Today the Clerk takes one shape of option plan: a single bought call or put,
+in a Dry Run or on a Paper account. Every other plan is refused by name
 here, before anything is written.
 """
 
@@ -38,8 +38,10 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 class OptionEffectRefusal(StrEnum):
     """Why the Clerk took no option effect. A quote's own fault and a structure's own refusal keep their codes."""
 
-    # The account is not a Dry Run's: nothing about option orders has been shown on a real account.
-    ACCOUNT_NOT_SIMULATED = "OPTION_PLAN_NEEDS_A_DRY_RUN"
+    # The account is a Live Shadow's or a Live one: only a Dry Run and a Paper account take an option plan.
+    ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
+    # The broker's listing of the picked contract could not be read, so the contract was not confirmed.
+    CONTRACT_REFERENCE_UNREAD = "OPTION_CONTRACT_REFERENCE_UNREAD"
     # The plan has a sold leg, several legs, or a leg of more than one contract a structure.
     STRUCTURE_NOT_SUPPORTED = "OPTION_STRUCTURE_NOT_SUPPORTED"
     # An ENTER came with no picked contracts and no quotes.

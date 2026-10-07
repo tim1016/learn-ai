@@ -99,6 +99,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Order submission uncertain",
         "The Account Clerk cannot yet prove the broker outcome.",
     ),
+    "ENTRY_SETTLED": (
+        "Entry settled",
+        "The Clerk recorded whether the strategy counts itself in after this option entry.",
+    ),
     "ORDER_CANCEL_REQUESTED": (
         "Order cancellation requested",
         "The Account Clerk recorded the exact cancellation target before broker contact.",

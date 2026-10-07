@@ -891,7 +891,15 @@ async def test_the_books_rebuilt_from_their_mirror_hold_the_contract_and_its_mul
 # ── what does not change, and who is still refused ───────────────────────
 
 
-async def test_a_paper_account_refuses_an_option_entry_and_sends_nothing(
+def _live_clerk(one_account: _OneAccount) -> SqliteAlpacaClerkFacade:  # noqa: F811
+    """The same real account's books behind a Clerk that learned at activation that the account is Live."""
+    return SqliteAlpacaClerkFacade(
+        repo=one_account.repo, read=one_account.account, trade=one_account.trade, account_mode="live",
+        live_envelope=one_account.clerk.live_envelope,
+    )
+
+
+async def test_a_live_account_refuses_an_option_entry_by_name_and_sends_nothing(
     one_account: _OneAccount,  # noqa: F811 -- the imported fixture
 ) -> None:
     quote = _quote("1.90", "1.94", received_ms=NOON - 300)
@@ -900,64 +908,32 @@ async def test_a_paper_account_refuses_an_option_entry_and_sends_nothing(
         rechecked_at_ms=NOON - 100, leg_gap_limit_percent=EIGHT, cost_limit_percent=TEN,
     )
 
-    refused = await one_account.clerk.execute_for_instance(
+    refused = await _live_clerk(one_account).execute_for_instance(
         strategy_instance_id="b", run_id="run-b", decision_id="enter-1", purpose=EffectPurpose.ENTER,
         action_plan=BUYS_ONE_CALL, quantity=1, option_entry=evidence,
     )
 
     assert refused.state is EffectOperationState.REJECTED
-    assert refused.explanation.startswith("OPTION_PLAN_NEEDS_A_DRY_RUN: "), refused.explanation
-    assert one_account.trade.submitted_legs == []
+    assert refused.explanation.startswith("OPTION_PLAN_ACCOUNT_NOT_OPEN: "), refused.explanation
+    assert "A Live account" in refused.explanation
+    assert one_account.trade.submitted_legs == [] and one_account.trade.option_submit_calls == []
     assert one_account.enter_commands() == 0
 
 
-async def test_beneath_every_gate_the_clerks_own_send_takes_an_option_order_to_a_simulation_only() -> None:
-    """Whatever let an option order get as far as the send, a real broker's port is not contacted with it."""
-    from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
-    from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerUnavailable
-    from app.broker.contract.models import OrderType
-    from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
-    from tests.broker.alpaca.clerk.sqlite.test_claimed_broker_io import _Repo
-
-    class _RealPort:
-        broker_id = "alpaca"
-
-        def __init__(self) -> None:
-            self.sent: list[str] = []
-
-        async def submit_option_order(self, order: Any, *, client_order_id: str) -> Any:
-            self.sent.append(client_order_id)
-            raise AssertionError("an option order reached a real broker's port")
-
-    port = _RealPort()
-    order = SingleOptionOrderRequest(
-        contract=CALL, side=OrderSide.BUY, intent=OptionPositionIntent.OPEN, quantity=1,
-        order_type=OrderType.LIMIT, limit_price=Decimal("1.94"),
-    )
-    io = ClaimedBrokerIO(repo=_Repo(lose_on_call=0), effect_operation_id="op-1", claim_token="tok", trade=port)  # type: ignore[arg-type]
-
-    with pytest.raises(BrokerOptionsNotSupported) as refused:
-        await io.submit(order, client_order_id="ref-1")
-
-    # Definitive: nothing was sent, so there is no unknown outcome to settle.
-    assert not isinstance(refused.value, BrokerUnavailable)
-    assert port.sent == []
-
-
-async def test_a_paper_account_refuses_to_register_a_bot_that_trades_options(
+async def test_a_live_account_refuses_to_register_a_bot_that_trades_options(
     one_account: _OneAccount,  # noqa: F811 -- the imported fixture
 ) -> None:
     binding = BrokerBotBinding(
-        strategy_instance_id="options-on-paper", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
+        strategy_instance_id="options-on-live", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
         mode="trade", quantity=1, action_plan=BUYS_ONE_CALL, run_id="run-1", created_at_ms=0,
         sealed_account_id=one_account.repo.account_id, exit_terms=TERMS,
     )
 
     with pytest.raises(OptionPlanRefused) as refused:
-        await one_account.clerk.register_strategy_run(binding)
+        await _live_clerk(one_account).register_strategy_run(binding)
 
-    assert refused.value.reason.value == "OPTION_PLAN_NEEDS_A_DRY_RUN"
-    assert one_account.repo.strategy_instance("options-on-paper") is None
+    assert refused.value.reason.value == "OPTION_PLAN_ACCOUNT_NOT_OPEN"
+    assert one_account.repo.strategy_instance("options-on-live") is None
 
 
 async def test_a_dry_run_refuses_to_register_a_bot_whose_plan_it_does_not_take(tmp_path: Path) -> None:
