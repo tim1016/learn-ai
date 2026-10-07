@@ -20,11 +20,17 @@ order until its next round. The keeper and an EXIT act under different
 effects and can each ask the broker to cancel one order; asking twice for
 the same order is a retry, never a second intent.
 
-**A round is a list of steps.** Cancel what has not filled of every entry
-past its wait (``resting_entries``). Then read and book what ended an option
-position with no order of ours (``option_events``); that step keeps its own
-cadence and reads the broker only when a read is due. A position's scheduled
-close is one more step of the same round, not a second task.
+**A round is a list of steps.** Today there is one: cancel what has not
+filled of every entry past its wait (``resting_entries``). A position's
+scheduled close is one more step of the same round, not a second task.
+
+**One thing the round starts and does not wait for:** the read of what ended
+an option position with no order of ours (``option_events``, ADR 0076
+decision 22). It walks the account's activities at the broker, which can
+take seconds, and a resting entry's cancel must not wait behind it. So the
+round starts it when none is running and goes on. It keeps its own cadence,
+and between reads it touches nothing. It keeps no list either: a read that
+is lost with the task is made again by the next one, and by the pass.
 
 **One round reads the worklist once.** What is due, and when to wake, both
 come from that one read.
@@ -99,8 +105,6 @@ class KeeperRound:
 
     entries: WaitEndedRound
     wake_in_ms: int
-    # What the round's read of option events did. None when the keeper has no read port.
-    option_events: OptionEventPoll | None = None
 
 
 class DeadlineKeeper:
@@ -131,6 +135,8 @@ class DeadlineKeeper:
         self._task: asyncio.Task[None] | None = None
         # When each due entry was last asked about, on the Clerk's clock. A pause, not a worklist.
         self._asked_at_ms: dict[str, int] = {}
+        # The read of option events the last round started, while it runs.
+        self._option_events: asyncio.Task[OptionEventPoll | None] | None = None
 
     def nudge(self) -> None:
         """End the keeper's sleep: a deadline may have been stored that is sooner than it knew."""
@@ -149,15 +155,35 @@ class DeadlineKeeper:
             order_ref: asked for order_ref, asked in self._asked_at_ms.items()
             if order_ref in listed and order_ref not in entries.ended
         }
-        # One more step: an assignment, an exercise or an expiry is read and booked (ADR 0076
-        # decision 22). The step keeps its own cadence; between reads it touches nothing.
-        option_events = (
-            None if self._read is None
-            else await poll_option_events(self._repo, read=self._read, off_loop=self._off_loop)
+        self._start_reading_option_events()
+        return KeeperRound(entries=entries, wake_in_ms=self._wake_in_ms(resting, ended=entries.ended))
+
+    def _start_reading_option_events(self) -> None:
+        """Start the read of option events when none is running. Never waited for: a deadline comes first."""
+        if self._read is None or (self._option_events is not None and not self._option_events.done()):
+            return
+        self._option_events = asyncio.create_task(
+            self._read_option_events(self._read), name="alpaca-sqlite-option-events"
         )
-        return KeeperRound(
-            entries=entries, wake_in_ms=self._wake_in_ms(resting, ended=entries.ended), option_events=option_events
-        )
+
+    async def _read_option_events(self, read: BrokerReadPort) -> OptionEventPoll | None:
+        try:
+            return await poll_option_events(self._repo, read=read, off_loop=self._off_loop)
+        except Exception:
+            # Its own failure, not the round's: the next read, and the pass, book what this one did not.
+            logger.exception(
+                "the keeper's read of option events failed",
+                extra={"action": "deadline_keeper_option_events_failed", "account_id": self._repo.account_id},
+            )
+            return None
+
+    async def option_events_read(self) -> OptionEventPoll | None:
+        """Wait for the read of option events the last round started, and say what it did.
+
+        For a caller that must see it finished. ``None`` when the keeper has
+        no read port, when no round has run, or when the read failed.
+        """
+        return None if self._option_events is None else await self._option_events
 
     def _may_ask_again(self, entry: RestingEntry, now_ms: int) -> bool:
         """Whether a due entry's pause since it was last asked about is over."""
@@ -214,6 +240,11 @@ class DeadlineKeeper:
             self._task = asyncio.create_task(self.run(), name="alpaca-sqlite-deadline-keeper")
 
     async def stop(self) -> None:
+        reading, self._option_events = self._option_events, None
+        if reading is not None:
+            reading.cancel()
+            with suppress(asyncio.CancelledError):
+                await reading
         task, self._task = self._task, None
         if task is None:
             return

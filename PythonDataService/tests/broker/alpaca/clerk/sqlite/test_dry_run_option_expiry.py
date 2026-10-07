@@ -57,10 +57,12 @@ def _keeps_spy(account: _DryRun, close: str, *, end_ms: int = EXPIRY_CLOSE) -> N
 
 
 async def _keepers_round(account: _DryRun) -> Any:
-    """One round of the Clerk's own task: the only thing that acts on a Dry Run while no pass runs."""
+    """One round of the Clerk's own task, the only thing that acts on a Dry Run while no pass runs, and the
+    read of option events that round started, once it has finished."""
     runtime = get_clerk_runtime(account.repo.account_id)
     assert runtime is not None and runtime.deadline_keeper is not None
-    return await runtime.deadline_keeper.tick()
+    await runtime.deadline_keeper.tick()
+    return await runtime.deadline_keeper.option_events_read()
 
 
 def _booked(account: _DryRun) -> list[dict[str, Any]]:
@@ -95,13 +97,15 @@ async def test_the_clerks_own_task_settles_an_expired_contract_with_no_pass_and_
     _keeps_spy(dry_run, "580.00")
     _wait_until(dry_run, SATURDAY_NOON)
 
-    done = await _keepers_round(dry_run)
+    await _keepers_round(dry_run)
 
-    assert done.option_events is not None and done.option_events.read
+    # The running keeper's own round may have made the read a moment before this one asked: either way
+    # the contract is settled, by a round and by no pass.
     assert dry_run.held() == {}
+    assert _booked(dry_run)[0]["summary_code"] == "OPTION_EXPIRED"
     # Nothing is read again until the next read is due, and nothing more is written.
     written = dry_run.repo.last_custody_sequence()
-    assert (await _keepers_round(dry_run)).option_events.read is False
+    assert (await _keepers_round(dry_run)).read is False
     assert dry_run.repo.last_custody_sequence() == written
 
 

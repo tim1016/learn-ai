@@ -75,13 +75,14 @@ async def test_a_stock_only_accounts_poll_asks_alpaca_nothing_and_writes_nothing
         written = repo.last_custody_sequence()
         keeper = DeadlineKeeper(repo=repo, trade=_FakeTradePort(), read=_NeverAsked(), off_loop=run_inline)
 
-        round_ = await keeper.tick()
+        await keeper.tick()
+        as_the_keeper = await keeper.option_events_read()
         as_the_pass = await poll_option_events(
             repo, read=_NeverAsked(), off_loop=run_inline, broker_positions=[], act_on_the_books_between_reads=True
         )
         booked = book_option_events(repo, None)
 
-        assert round_.option_events is not None and not round_.option_events.read
+        assert as_the_keeper is not None and not as_the_keeper.read
         assert not as_the_pass.read and as_the_pass.round is None
         assert booked == option_events.OptionEventRound()
         assert repo.last_custody_sequence() == written
@@ -102,6 +103,7 @@ async def test_a_stock_only_accounts_books_are_never_read_for_option_events_howe
             keeper = DeadlineKeeper(repo=repo, trade=_FakeTradePort(), read=_NeverAsked(), off_loop=run_inline)
             with _StepsCounted(repo) as the_round:
                 await keeper.tick()
+                await keeper.option_events_read()
             with _StepsCounted(repo) as the_passes_step:
                 await poll_option_events(
                     repo, read=_NeverAsked(), off_loop=run_inline, broker_positions=[],
@@ -208,9 +210,10 @@ async def test_the_keepers_round_books_an_expiry_with_no_pass_and_starts_none(pa
     paper.account.option_events.rows = [_expiry_row()]
     keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
 
-    done = await keeper.tick()
+    await keeper.tick()
+    read = await keeper.option_events_read()
 
-    assert done.option_events is not None and done.option_events.read
+    assert read is not None and read.read
     assert paper.held() == {}
     # No pass ran: nothing was reconciled, and no entry was refused for one in progress.
     kinds = {kind for kind, _summary, _facts in paper.log()}
@@ -226,6 +229,7 @@ async def test_the_other_bot_on_the_account_is_not_held_by_one_bots_option_hold(
     keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
 
     await keeper.tick()
+    await keeper.option_events_read()
 
     assert option_holds(paper.repo).keys() == {("a", "OPTION_EVENT_UNREADABLE")}
     assert decide_capability(paper.repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id="b").allowed
@@ -488,13 +492,50 @@ async def test_a_poll_that_raises_is_tried_again_a_minute_later_and_not_on_the_k
         raise RuntimeError("a fault in the booking of option events")
 
     monkeypatch.setattr(option_events, "book_option_events", breaks)
-    with pytest.raises(RuntimeError):
-        await keeper.tick()
+    # The read's failure is its own: the round that started it is not failed by it.
+    await keeper.tick()
+    assert await keeper.option_events_read() is None
     paper.wait(5_000)
 
-    assert (await keeper.tick()).option_events.read is False
+    await keeper.tick()
+    assert (await keeper.option_events_read()).read is False
     assert len(paper.account.option_events.reads) == 1
 
     monkeypatch.setattr(option_events, "book_option_events", real_booking)
     paper.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
-    assert (await keeper.tick()).option_events.read is True
+    await keeper.tick()
+    assert (await keeper.option_events_read()).read is True
+
+
+async def test_a_slow_read_of_option_events_does_not_hold_the_keepers_round_or_the_next_one(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """A resting entry's cancel is owed within two seconds. The walk of the account's activities can take
+    longer, so the round starts it and does not wait: two rounds finish while one read is still out."""
+    import asyncio
+
+    await _holding_one_call(paper)
+    answered = asyncio.Event()
+    real_read = paper.account.option_events.read_option_event_activities
+    asked = 0
+
+    async def slow(**asked_for: Any) -> Any:
+        nonlocal asked
+        asked += 1
+        await answered.wait()
+        return await real_read(**asked_for)
+
+    paper.account.option_events.read_option_event_activities = slow  # type: ignore[method-assign]
+    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
+    try:
+        await asyncio.wait_for(keeper.tick(), timeout=5)
+        await asyncio.sleep(0)
+        await asyncio.wait_for(keeper.tick(), timeout=5)
+        assert asked == 1, "a second read was started while the first was still out"
+
+        answered.set()
+        read = await keeper.option_events_read()
+        assert read is not None and read.read
+    finally:
+        answered.set()
+        await keeper.stop()
