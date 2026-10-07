@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 
 import type { BotEndFields } from '../bot-end/bot-end-fields';
 import type { DeployBotStrategy, DeploySizingOption } from '../v2-panel/lib/broker-v2-panel.service';
+import type { DeployOptionSettings } from './option-structure/option-structure';
 
 /**
  * The settings a Deploy form carries: what the owner picked in What and How.
@@ -21,6 +22,10 @@ export interface DeployTicketSettings {
   /** What it trades when the owner picked another stock or ETF (#2912);
    * `null` trades the symbol it listens to. */
   tradedSymbol: string | null;
+  /** The option structure it trades and its order terms, when the owner
+   * chose Options (#2913); `null` for a bot that trades shares. Never set
+   * together with `tradedSymbol`. */
+  options: DeployOptionSettings | null;
   sizingPreset: DeploySizingOption['preset'];
   quantity: number;
   // Spelled out, not `Extract<DeployExecutionMode['mode'], ...>`: the backend
@@ -73,6 +78,7 @@ export const EMPTY_DEPLOY_SETTINGS: DeployTicketSettings = {
   strategyKey: '',
   symbol: '',
   tradedSymbol: null,
+  options: null,
   sizingPreset: 'safe_canary',
   quantity: 1,
   executionMode: null,

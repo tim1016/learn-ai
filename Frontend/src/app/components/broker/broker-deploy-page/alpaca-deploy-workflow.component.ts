@@ -89,6 +89,8 @@ import {
   budgetReviewContext,
   type MoneyReview,
 } from './deploy-money-step.component';
+import { DeployOptionOrderTermsComponent } from './deploy-option-order-terms.component';
+import { DeployOptionStructureComponent } from './deploy-option-structure.component';
 import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployPaperAccessComponent } from './deploy-paper-access.component';
 import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
@@ -97,6 +99,16 @@ import { DeployTradedAssetComponent } from './deploy-traded-asset.component';
 import { DeployEndSectionComponent } from './deploy-end-section.component';
 import { DeployStepComponent, type DeployStepStatus } from './deploy-step.component';
 import { DEPLOY_WORLDS } from './deploy-world';
+import {
+  freshOptionSettings,
+  optionTradesLine,
+  optionsMissing,
+  orderTermsInWords,
+  orderTermsSet,
+  startingOrderTerms,
+  type DeployOptionSettings,
+  type OptionOrderTerms,
+} from './option-structure/option-structure';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { mediaQuerySignal } from '../../../shared/media-query';
@@ -250,6 +262,7 @@ function settingsOf(ticket: AlpacaDeployTicket): DeployTicketSettings {
     strategyKey: ticket.strategyKey,
     symbol: ticket.symbol,
     tradedSymbol: ticket.tradedSymbol,
+    options: ticket.options,
     sizingPreset: ticket.sizingPreset,
     quantity: ticket.quantity,
     executionMode: ticket.executionMode,
@@ -339,6 +352,8 @@ type EndCheckAnswer =
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployMoneyStepComponent,
+    DeployOptionOrderTermsComponent,
+    DeployOptionStructureComponent,
     DeployPaperAccessComponent,
     DeployParametersSectionComponent,
     DeployStepComponent,
@@ -548,8 +563,8 @@ export class AlpacaDeployWorkflowComponent {
     required(ticket.strategyKey, { message: 'Choose a deployment strategy.' });
     required(ticket.symbol, { message: 'Enter the strategy signal symbol.' });
     pattern(ticket.symbol, SYMBOL_RE, { message: 'Enter a valid stock symbol.' });
-    min(ticket.quantity, 1, { message: 'Quantity must be at least one whole share.' });
-    max(ticket.quantity, 100, { message: 'Quantity cannot exceed 100 shares.' });
+    min(ticket.quantity, 1, { message: () => `Quantity must be at least one whole ${this.sizingUnit()}.` });
+    max(ticket.quantity, 100, { message: () => `Quantity cannot exceed 100 ${this.sizingUnit()}s.` });
     validate(ticket.quantity, ({ value }) =>
       Number.isInteger(value())
         ? undefined
@@ -687,6 +702,39 @@ export class AlpacaDeployWorkflowComponent {
       : 'Give at least 10 characters explaining why this risk is accepted.';
   });
 
+  // ── A bot that trades an option structure (#2913) ─────────────────────────
+
+  /** The account whose option bot is being built, or nothing for a bot that
+   * trades shares. A value of its own, so that no other change to the form
+   * reads the catalogue again. */
+  private readonly optionsAccount = computed(() => {
+    const account = this.accountId().trim();
+    return this.ticket().options !== null && account !== '' ? account : undefined;
+  });
+
+  /**
+   * What the structure builder offers on this account, read once the owner
+   * chooses Options and never for a bot that trades shares: the named
+   * structures, the rules a leg may be given, and the order terms a Deploy
+   * starts from.
+   */
+  protected readonly optionCatalogue = resource({
+    params: () => this.optionsAccount(),
+    loader: ({ params }) => this.panelService.getOptionStructures(this.deployTarget(params)),
+  });
+  protected readonly optionCatalogueView = computed(() =>
+    this.optionCatalogue.hasValue() ? this.optionCatalogue.value() : null);
+  protected readonly optionCatalogueFailure = computed(() => {
+    const error = this.optionCatalogue.error();
+    return error === undefined ? null : extractServerMessage(error, 'The option structures could not be read.');
+  });
+
+  /** What position size counts: whole structures for an option bot, whole shares otherwise. */
+  protected readonly sizingUnit = computed(() => (this.ticket().options === null ? 'share' : 'structure'));
+  /** How many units the bot opens at an entry. */
+  protected readonly entrySize = computed(() =>
+    this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity);
+
   // Backend-authored reason this account's own broker option — Paper, Shadow
   // or Live (slice 7) — is unreachable for the selected strategy (#1702).
   // `null` whenever this account's broker mode is admissible or no strategy
@@ -716,17 +764,29 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   protected readonly quantityLabel = computed(() => {
-    const quantity = this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity;
-    return `${quantity} ${quantity === 1 ? 'share' : 'shares'}`;
+    const quantity = this.entrySize();
+    return `${quantity} ${this.sizingUnit()}${quantity === 1 ? '' : 's'}`;
   });
 
   /** Confirm's "Trades" line: the backend's own once Money has reviewed these
-   * settings; until then, the symbol and size on screen. */
-  protected readonly tradesSummary = computed(() =>
-    this.currentMoneyReview()?.preview.trades_summary
-    ?? `${this.ticket().symbol || 'No symbol yet'} · ${this.quantityLabel()}`);
+   * settings; until then, the symbol and size on screen. An option bot's
+   * money is not reviewed yet, so its line names the structure it trades. */
+  protected readonly tradesSummary = computed(() => {
+    const { symbol, options } = this.ticket();
+    return this.currentMoneyReview()?.preview.trades_summary
+      ?? (options === null ? null : optionTradesLine(symbol, options, this.optionCatalogueView(), this.quantityLabel()))
+      ?? `${symbol || 'No symbol yet'} · ${this.quantityLabel()}`;
+  });
+
+  /** The option order terms on one line, in the catalogue's labels and units. */
+  private readonly orderTermsSummary = computed(() => {
+    const terms = this.ticket().options?.order_terms ?? null;
+    const offered = this.optionCatalogueView();
+    return offered !== null && orderTermsSet(terms) ? orderTermsInWords(terms, offered.order_terms) : 'Order terms not set';
+  });
 
   protected readonly exitsSummary = computed(() => {
+    if (this.ticket().options !== null) return this.orderTermsSummary();
     const terms = this.exitTerms();
     return terms === null
       ? 'Exit terms not set'
@@ -837,6 +897,9 @@ export class AlpacaDeployWorkflowComponent {
   private readonly whatMissing = computed<string | null>(() => {
     if (this.selectedStrategy() === null) return 'Choose a strategy';
     if (this.ticketForm.symbol().invalid()) return 'Needs a valid symbol';
+    const options = this.ticket().options;
+    const structure = options === null ? null : optionsMissing(options);
+    if (structure !== null) return structure;
     if (this.invalidParameterFields().size > 0) return 'Check its settings';
     if (this.permissionPending()) return 'Needs permission';
     return null;
@@ -855,7 +918,12 @@ export class AlpacaDeployWorkflowComponent {
       return 'Can’t trade there';
     }
     if (ticket.sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) return 'Needs a valid size';
-    if (this.exitTerms() === null) return 'Needs exit terms';
+    // An option bot has its own order terms in place of the stock exit terms.
+    if (ticket.options !== null) {
+      if (!orderTermsSet(ticket.options.order_terms)) return 'Needs order terms';
+    } else if (this.exitTerms() === null) {
+      return 'Needs exit terms';
+    }
     return this.endMissing();
   });
   protected readonly howComplete = computed(() => this.howMissing() === null);
@@ -1009,6 +1077,12 @@ export class AlpacaDeployWorkflowComponent {
           : 'Choose where this bot trades in How.',
       };
     }
+    // An option bot cannot be deployed from this form yet: the Deploy request
+    // for one, with its own money review, blockers and acknowledgement, does
+    // not exist (#2913). Nothing is said here; the button stays off.
+    if (this.ticket().options !== null) {
+      return { canSubmit: false, guidance: '' };
+    }
     if (this.exitTerms() === null) {
       return { canSubmit: false, guidance: 'Set this bot’s exit allowance, band multiple and spread cap in How.' };
     }
@@ -1132,6 +1206,10 @@ export class AlpacaDeployWorkflowComponent {
     const mode = this.ticket().executionMode;
     if (strategy === null || mode === null || this.exitTerms() === null
       || this.ticketForm.symbol().invalid() || this.ticketForm.quantity().invalid() || this.invalidParameterFields().size > 0) return null;
+    // The request Money reviews is a share bot's. With Options chosen it would
+    // price shares the bot will not trade, so nothing is reviewed, and with no
+    // review nothing can be deployed (#2913).
+    if (this.ticket().options !== null) return null;
     return this.deployBody(this.ticket(), strategy, mode);
   }, { equal: (left, right) => canonicalJson(left) === canonicalJson(right) });
 
@@ -1392,6 +1470,14 @@ export class AlpacaDeployWorkflowComponent {
       untracked(() => this.ticket.update((ticket) =>
         ticket.executionMode === null ? { ...ticket, executionMode: lane } : ticket,
       ));
+    });
+
+    // An option bot's order terms start from the catalogue's own (#2913),
+    // once, as the exit terms start from the account's defaults.
+    effect(() => {
+      const offered = this.optionCatalogueView();
+      if (offered === null || this.ticket().options?.order_terms !== null) return;
+      untracked(() => this.setOptionOrderTerms(startingOrderTerms(offered.order_terms)));
     });
 
     // A step the owner is working in stays open until they press Done: a
@@ -1663,7 +1749,41 @@ export class AlpacaDeployWorkflowComponent {
   protected setTradedSymbol(value: string | null): void {
     this.clearAdmission();
     this.tradedReasonTouched.set(false);
-    this.ticket.update((current) => ({ ...current, tradedSymbol: value, tradedAcknowledged: false, tradedReason: '' }));
+    this.ticket.update((current) => ({
+      ...current,
+      tradedSymbol: value,
+      // A bot trades one thing: picking a stock leaves Options.
+      options: value === null ? current.options : null,
+      tradedAcknowledged: false,
+      tradedReason: '',
+    }));
+  }
+
+  /** The owner chose Options, on the symbol the bot listens to until they
+   * pick another underlying; or left them, which clears everything set
+   * under them (#2913). */
+  protected setOptionsChosen(chosen: boolean): void {
+    this.clearAdmission();
+    this.tradedReasonTouched.set(false);
+    this.ticket.update((current) => ({
+      ...current,
+      tradedSymbol: chosen ? null : current.tradedSymbol,
+      options: chosen ? current.options ?? freshOptionSettings(current.symbol) : null,
+      tradedAcknowledged: false,
+      tradedReason: '',
+    }));
+  }
+
+  /** The underlying or the structure changed. Held only: no Deploy sends it yet. */
+  protected setOptions(options: DeployOptionSettings): void {
+    this.clearAdmission();
+    this.ticket.update((current) => (current.options === null ? current : { ...current, options }));
+  }
+
+  protected setOptionOrderTerms(terms: OptionOrderTerms): void {
+    this.clearAdmission();
+    this.ticket.update((current) =>
+      current.options === null ? current : { ...current, options: { ...current.options, order_terms: terms } });
   }
 
   protected setTradedAcknowledged(checked: boolean): void {

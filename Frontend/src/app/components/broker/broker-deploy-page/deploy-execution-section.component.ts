@@ -7,14 +7,16 @@ import type {
 } from '../v2-panel/lib/broker-v2-panel.service';
 
 export type DeploySizingPreset = DeploySizingOption['preset'];
+/** What position size counts: whole shares, or whole option structures (#2913). */
+export type DeploySizingUnit = 'share' | 'structure';
 
-const DEPLOY_SIZING_LABELS: Record<DeploySizingPreset, string> = {
-  safe_canary: 'One share',
-  custom: 'Custom shares',
+const DEPLOY_SIZING_LABELS: Record<DeploySizingUnit, Record<DeploySizingPreset, string>> = {
+  share: { safe_canary: 'One share', custom: 'Custom shares' },
+  structure: { safe_canary: 'One structure', custom: 'Custom structures' },
 };
 
-export function deploySizingLabel(preset: DeploySizingPreset): string {
-  return DEPLOY_SIZING_LABELS[preset];
+export function deploySizingLabel(preset: DeploySizingPreset, unit: DeploySizingUnit = 'share'): string {
+  return DEPLOY_SIZING_LABELS[unit][preset];
 }
 
 @Component({
@@ -46,6 +48,9 @@ export class DeployExecutionSectionComponent {
   readonly selectedMode = input.required<DeployExecutionMode['mode'] | null>();
   readonly sizingOptions = input.required<DeploySizingOption[]>();
   readonly sizingPreset = input.required<DeploySizingPreset>();
+  /** A bot that trades options is sized in whole structures. The backend's
+   * sizing explanations are about shares, so they are shown for shares only. */
+  readonly sizingUnit = input<DeploySizingUnit>('share');
   readonly quantity = input.required<number>();
   readonly quantityError = input<string | null>(null);
   readonly carryoverAvailable = input.required<boolean>();
@@ -84,7 +89,7 @@ export class DeployExecutionSectionComponent {
   }
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {
-    return deploySizingLabel(preset);
+    return deploySizingLabel(preset, this.sizingUnit());
   }
 
   protected changeExecutionMode(event: Event): void {

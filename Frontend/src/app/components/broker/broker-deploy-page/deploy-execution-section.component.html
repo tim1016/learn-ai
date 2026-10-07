@@ -47,19 +47,21 @@
             />
             <strong>{{ sizingOptionLabel(option.preset) }}</strong>
           </label>
-          <button
-            type="button"
-            class="info-tip"
-            [pTooltip]="option.explanation"
-            tooltipPosition="top"
-            [attr.aria-label]="'About ' + sizingOptionLabel(option.preset) + ': ' + option.explanation"
-          >i</button>
+          @if (sizingUnit() === 'share') {
+            <button
+              type="button"
+              class="info-tip"
+              [pTooltip]="option.explanation"
+              tooltipPosition="top"
+              [attr.aria-label]="'About ' + sizingOptionLabel(option.preset) + ': ' + option.explanation"
+            >i</button>
+          }
         </div>
       }
     </div>
     @if (sizingPreset() === 'custom') {
       <label class="quantity">
-        <span>Whole shares per entry</span>
+        <span>Whole {{ sizingUnit() }}s per entry</span>
         <input
           type="number"
           inputmode="numeric"

@@ -1,0 +1,24 @@
+<fieldset class="order-terms" aria-labelledby="deploy-option-order-terms-title">
+  <legend><span id="deploy-option-order-terms-title">Option order terms · fixed for this bot’s life</span></legend>
+  @if (fields(); as list) {
+    <div class="order-terms__fields">
+      @for (field of list; track field.name) {
+        <div class="order-terms__field">
+          <label [for]="field.id">{{ field.label }}<span class="sr-only"> ({{ field.unit }})</span></label>
+          <span class="order-terms__unit">
+            <input
+              type="number" step="any" min="0"
+              [id]="field.id"
+              [value]="field.value"
+              [attr.aria-invalid]="field.invalid"
+              (change)="set(field.name, $event)"
+            />
+            <span aria-hidden="true">{{ field.unit }}</span>
+          </span>
+        </div>
+      }
+    </div>
+  } @else {
+    <p role="status">Reading the option order terms…</p>
+  }
+</fieldset>
