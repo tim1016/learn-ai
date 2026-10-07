@@ -37,8 +37,8 @@ from app.utils.timestamps import Clock, now_ms_utc
 if TYPE_CHECKING:
     # The option side brings the resolver, the calendar and the pricer with it. A Clerk that watches no
     # option contract never loads them.
-    from app.broker.ibkr.option_quotes import OptionQuoteLines
-    from app.options.resolver import FeedState
+    from app.broker.ibkr.option_quotes import LineUse, OptionQuoteLines
+    from app.options.resolver import Chain, FeedState
 
 logger = logging.getLogger(__name__)
 _HALT_RECORDS = TypeAdapter(dict[str, SymbolTradingStatusEvidence])
@@ -280,6 +280,15 @@ class IbkrMarketStatusSource:
             # The lines may be part way between what was wanted and what is: no decision is made on them.
             unhealthy = "the option quote lines failed a step and have not completed a pass since"
         return FeedState(generation=self._options.generation, unhealthy=unhealthy)
+
+    def option_chain(self, underlying: str) -> Chain | None:
+        """The underlying's chain as it is known now, with the quote held for each watched contract. None
+        while this Clerk watches no option contract, or the chain's expiries are not known yet."""
+        return None if self._options is None else self._options.chain(underlying)
+
+    def option_line_use(self) -> LineUse | None:
+        """How this Clerk's option quote lines stand. None while it watches no option contract."""
+        return None if self._options is None else self._options.line_use()
 
     def _underlying_mid(self, symbol: str) -> Decimal | None:
         """Where a window is centred when no bar close is given: the mid of a quote a decision could use."""
