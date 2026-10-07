@@ -29,6 +29,8 @@ export interface SessionLine {
   readonly endLabel: boolean;
   /** Whether the fall line is filled: the line the chart is about. */
   readonly filled: boolean;
+  /** A background line: the pointer passes over it, so a crowd of them never dims the lines that matter. */
+  readonly quiet?: boolean;
 }
 
 /** The session closes any of the lists holds, in order, and each as an ET date. */
@@ -92,7 +94,8 @@ export function sessionCurvesOption(lines: readonly SessionLine[], dates: readon
     series: lines.flatMap((line, index) => {
       const color = line.color;
       const lineStyle = { color, width: line.width, type: line.dashed ? ('dashed' as const) : ('solid' as const), ...(line.opacity === undefined ? {} : { opacity: line.opacity }) };
-      const common = { type: 'line' as const, name: line.name, showSymbol: false, connectNulls: false, z: line.z, lineStyle, itemStyle: { color }, emphasis: { focus: 'series' as const, blurScope: 'global' as const, lineStyle: { width: 'bolder' as const } } };
+      const emphasis = line.quiet ? { disabled: true } : { focus: 'series' as const, blurScope: 'global' as const, lineStyle: { width: 'bolder' as const } };
+      const common = { type: 'line' as const, name: line.name, showSymbol: false, connectNulls: false, z: line.z, lineStyle, itemStyle: { color }, emphasis, ...(line.quiet ? { silent: true } : {}) };
       return [
         { ...common, id: `equity:${line.key}`, xAxisIndex: 0, yAxisIndex: 0, data: plotted(line.returns), endLabel: { show: line.endLabel, color, fontSize: 11, formatter: () => signedPercentText(lastValue(line.returns)) } },
         {

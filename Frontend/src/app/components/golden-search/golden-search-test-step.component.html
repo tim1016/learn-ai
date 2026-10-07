@@ -61,6 +61,9 @@
           }
           <p caption class="caption">Each searched knob on its own range: dashed, the all-period winner; dotted, the current settings.</p>
         </app-golden-search-panel>
+        <app-golden-search-curve-set data-span="12" [study]="study()" curves="fold_tests" chart="fold-test-curves"
+          caption="Each fold's winner on its own test window, beside the current settings on the same window. Every fold starts flat with fresh capital, so the lines do not join."
+          empty="The folds' test runs appear here as testing over time finishes them." />
         <app-golden-search-panel chart="fold-returns" data-span="6">
           @if (returns(); as spec) { <app-golden-search-chart [spec]="spec" [height]="220" /> }
           <p caption class="caption">The current settings ran on every fold's test window too, for comparison.</p>

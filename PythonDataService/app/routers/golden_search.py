@@ -26,13 +26,14 @@ from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.golden_search import service
 from app.research.golden_search.models import CandidateKey, GoldenSearchRefusal, RefusalKind, StudyRow
-from app.research.golden_search.run_curves import MAX_CURVES, RunGroup, RunSort
+from app.research.golden_search.run_curves import MAX_CURVES, CurveSet, RunGroup, RunSort
 from app.routers import research_records as records
 from app.schemas.golden_search import (
     GoldenSearchCandidateDetail,
     GoldenSearchCapability,
     GoldenSearchCommandRequest,
     GoldenSearchCreateStudyRequest,
+    GoldenSearchCurveSet,
     GoldenSearchDefaults,
     GoldenSearchJobAccepted,
     GoldenSearchJobRequest,
@@ -226,6 +227,20 @@ async def get_run_curves(
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     return GoldenSearchRunCurves.model_validate(result)
+
+
+@router.get("/studies/{study_id}/charts/run-curves", response_model=GoldenSearchCurveSet, responses=_REFUSALS)
+async def get_curve_set(
+    study_id: StudyId,
+    curve_set: Annotated[CurveSet, Query(alias="set", description="Which step's runs to draw.")],
+    candidate: CandidateKey | None = Query(None, description="The candidate whose run, stresses and neighbors to draw; for the candidate set only."),
+) -> GoldenSearchCurveSet:
+    """The runs one step draws together, each with its role and its daily curve (#2930)."""
+    try:
+        result = await service.curve_set(study_id, curve_set=curve_set, candidate_key=candidate)
+    except GoldenSearchRefusal as exc:
+        raise await _refused(exc) from exc
+    return GoldenSearchCurveSet.model_validate(result)
 
 
 @router.get("/studies/{study_id}/charts/plan", response_model=GoldenSearchPlanCharts, responses=_REFUSALS)

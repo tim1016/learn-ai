@@ -6,14 +6,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchStudyComponent } from './golden-search-study.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
-import type { PlanCharts, RunsPage, RunsQuery, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { emaCapability, frequencyProtocol, planCharts, QUALIFICATION_FAILURE, runsPage, studyDetail, tradeActivity } from './testing/fixtures';
+import type { CurveSet, CurveSetKey, PlanCharts, RunsPage, RunsQuery, StudyCommandRequest, StudyDetail } from './golden-search.types';
+import { curveSet, emaCapability, frequencyProtocol, planCharts, QUALIFICATION_FAILURE, runsPage, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
   get: ReturnType<typeof vi.fn<(id: string) => Promise<StudyDetail>>>;
   command: ReturnType<typeof vi.fn<(id: string, request: StudyCommandRequest) => Promise<CommandOutcome>>>;
   hide: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
   planCharts: ReturnType<typeof vi.fn<(id: string) => Promise<PlanCharts>>>;
+  curveSet: ReturnType<typeof vi.fn<(id: string, set: CurveSetKey) => Promise<CurveSet>>>;
   runs: ReturnType<typeof vi.fn<(id: string, query: RunsQuery) => Promise<RunsPage>>>;
 }
 
@@ -23,6 +24,7 @@ function fakeService(study: StudyDetail): FakeService {
     command: vi.fn(async (_id: string, _request: StudyCommandRequest) => ({ study, jobId: null })),
     hide: vi.fn(async (_id: string) => undefined),
     planCharts: vi.fn(async (_id: string) => planCharts()),
+    curveSet: vi.fn(async (_id: string, set: CurveSetKey) => curveSet(set)),
     runs: vi.fn(async (_id: string, _query: RunsQuery) => runsPage()),
   };
 }
@@ -391,6 +393,20 @@ describe('GoldenSearchStudyComponent', () => {
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Research steps' })).getByRole('button', { name: /search/i }));
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     expect(screen.queryByText(/Every engine run of this study/)).toBeNull();
+  });
+
+  it('All runs belongs to the study it was opened on: another study opens on its steps', async () => {
+    const other = studyDetail('awaiting_validation', { id: 'study-0002-bbbb' });
+    const service = fakeService(studyDetail('awaiting_validation'));
+    const view = await renderStudy(service);
+    fireEvent.click(screen.getByRole('button', { name: /all runs/i }));
+    await screen.findByText(/Every engine run of this study/);
+
+    service.get.mockResolvedValue(other);
+    view.fixture.componentRef.setInput('studyId', other.id);
+
+    await waitFor(() => expect(screen.queryByText(/Every engine run of this study/)).toBeNull());
+    expect((await screen.findByRole('button', { name: /all runs/i })).getAttribute('aria-pressed')).toBe('false');
   });
 
   it('Hide asks once, then hides the study and reports it', async () => {

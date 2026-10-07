@@ -35,7 +35,7 @@ from app.research.golden_search.protocol import (
     SelectionPolicy,
     ZoomSettings,
 )
-from app.research.golden_search.run_curves import RunGroup, RunSort
+from app.research.golden_search.run_curves import LineRole, RunGroup, RunSort
 from app.research.golden_search.zoom import StopReason
 from app.research.sweep.identity import TreeState
 from app.research.sweep.ranking import RankingMeasure
@@ -1194,6 +1194,24 @@ class GoldenSearchRunCurve(_Wire):
 class GoldenSearchRunCurves(_Wire):
     curves: list[GoldenSearchRunCurve]
     not_recorded: list[str] = Field(description="The runs asked for that kept no daily equity; never drawn as a flat line.")
+
+
+class GoldenSearchCurveLine(_Wire):
+    """One run a step draws: its role says how, its label what to call it on that chart."""
+
+    role: LineRole
+    label: str
+    current_settings: bool = Field(description="The run's settings are the current settings, whatever its role: a winner can be the incumbent.")
+    params_sentence: str = Field(description="The run's settings in words.")
+    curve: GoldenSearchRunCurve
+
+
+class GoldenSearchCurveSet(_Wire):
+    lines: list[GoldenSearchCurveLine]
+    left_out: int = Field(description="Other scored points with a curve that this read did not return, past its cap; named lines are never left out.")
+    not_recorded: int = Field(description="Completed runs of the set that kept no daily equity.")
+    failed: int = Field(description="Runs of the set that failed, so they have no curve.")
+    notes: list[str] = Field(description="What the set could not show, in words, e.g. that the current settings were not run on this window.")
 
 
 class GoldenSearchCumulativeReturnPoint(_Wire):

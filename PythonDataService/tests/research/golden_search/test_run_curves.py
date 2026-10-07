@@ -12,7 +12,15 @@ from app.research.golden_search.declarations import declaration_for, point_hash
 from app.research.golden_search.evidence import drawdown_series
 from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.procedure_history import FoldWindow
-from app.research.golden_search.run_curves import curve_view, curves_view, group_of, named_points, runs_page
+from app.research.golden_search.run_curves import (
+    MAX_OTHER_LINES,
+    curve_set_lines,
+    curve_view,
+    curves_view,
+    group_of,
+    named_points,
+    runs_page,
+)
 
 EMA = declaration_for("ema_crossover_signal")
 assert EMA is not None
@@ -168,3 +176,203 @@ def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_n
 
     assert [curve["evaluation_key"] for curve in view["curves"]] == ["a", "b"]
     assert view["not_recorded"] == ["old"]
+
+
+# ── A step's set of lines ────────────────────────────────────────────────
+
+DEVELOPMENT = (0, 300)
+RECENT = (200, 300)
+SEARCHED = {"procedure": {"winner": WINNER}, "window": {"start_ms": 0, "end_ms": 300}}
+
+
+def _set_study(**results: Any) -> StudyRow:
+    study = _study(**results)
+    protocol = {
+        **study.protocol,
+        "development_start_ms": DEVELOPMENT[0],
+        "development_end_ms": DEVELOPMENT[1],
+        "knobs": [{"name": "gap", "mode": "search"}, {"name": "rsi_min", "mode": "fixed"}],
+        "stress": [{"key": "slippage_1c", "label": "Extra 1¢/share slippage"}],
+    }
+    return StudyRow(**{**{field: getattr(study, field) for field in study.__dataclass_fields__}, "protocol": protocol})
+
+
+def _chosen(records: list[EvaluationRecord], curve_set: str, candidate: str | None = None, **results: Any) -> Any:
+    return curve_set_lines(_set_study(**results), records, folds=FOLDS, declaration=EMA, curve_set=curve_set, candidate_key=candidate)  # type: ignore[arg-type]
+
+
+def _drawn(records: list[EvaluationRecord], curve_set: str, candidate: str | None = None, **results: Any) -> list[tuple[str, str, str]]:
+    return [(line.record.evaluation_key, line.role, line.label) for line in _chosen(records, curve_set, candidate, **results).lines]
+
+
+def test_a_search_set_is_every_point_the_procedure_scored_with_its_winner_and_the_incumbent_named() -> None:
+    records = [
+        _run("s1", "search", INCUMBENT),
+        _run("s2", "search", {**INCUMBENT, "gap": 0.25}),
+        _run("s3", "search", WINNER),
+        # Another procedure's point, and a neighbor the evidence asked for, are not this search's.
+        _run("r1", "recent", WINNER, window_start_ms=200),
+        _run("n1", "evidence", {**INCUMBENT, "gap": 0.35}),
+    ]
+
+    assert _drawn(records, "search", search=SEARCHED) == [("s1", "incumbent", "Current settings"), ("s2", "other", "Scored point"), ("s3", "winner", "Winner")]
+    assert _drawn(records, "recent", recent={"procedure": {"winner": WINNER}, "window": {"start_ms": 200, "end_ms": 300}})[0] == ("r1", "winner", "Winner")
+
+
+def test_a_search_that_did_not_score_the_incumbent_draws_it_from_the_step_that_did_and_says_so_when_none_did() -> None:
+    # The search started from another seed, as it must when the incumbent is a qualified version.
+    searched = [_run("s3", "search", WINNER), _run("c1", "evidence", INCUMBENT, detail=True)]
+
+    assert _drawn(searched, "search", search=SEARCHED) == [("s3", "winner", "Winner"), ("c1", "incumbent", "Current settings")]
+    # Nothing ran the incumbent on the recent window: the set says so and draws no line for it.
+    recent = _chosen([_run("r1", "recent", WINNER, window_start_ms=200)], "recent", recent={"procedure": {"winner": WINNER}, "window": {"start_ms": 200, "end_ms": 300}})
+    assert [line.role for line in recent.lines] == ["winner"]
+    assert recent.notes == ("The current settings were not run on this window, so they have no line here.",)
+
+
+def test_an_incumbent_run_that_kept_no_curve_gives_way_to_one_that_did_and_the_set_says_so_when_none_did() -> None:
+    # The search's own run of the incumbent kept no curve; the evidence's detail run of it did.
+    twinned = [_run("s1", "search", INCUMBENT, has_curve=False), _run("s3", "search", WINNER), _run("c1", "evidence", INCUMBENT, detail=True)]
+    chosen = _chosen(twinned, "search", search=SEARCHED)
+
+    assert [(line.record.evaluation_key, line.role) for line in chosen.lines] == [("s3", "winner"), ("c1", "incumbent")]
+    assert (chosen.notes, chosen.not_recorded) == ((), 0)
+    # A failed run, and no other on the window: no line, and the set says why.
+    failed = _chosen([_run("s1", "search", INCUMBENT, status="failed", has_curve=False), _run("s3", "search", WINNER)], "search", search=SEARCHED)
+    assert [line.role for line in failed.lines] == ["winner"]
+    assert failed.notes == ("The current settings’ run on this window kept no curve, so they have no line here.",)
+
+
+def test_a_named_run_is_a_base_cost_run_and_the_first_that_kept_a_curve() -> None:
+    records = [
+        # A stressed run of the incumbent recorded first is never its line; nor is an earlier run that kept no curve.
+        _run("x-inc", "evidence", INCUMBENT, scenario="slippage_1c"),
+        _run("old", "evidence", INCUMBENT, has_curve=False),
+        _run("c1", "evidence", INCUMBENT, detail=True),
+        _run("s3", "search", WINNER),
+    ]
+
+    assert _drawn(records, "search", search=SEARCHED) == [("s3", "winner", "Winner"), ("c1", "incumbent", "Current settings")]
+
+
+def test_a_search_that_returned_the_incumbent_names_one_line_for_both() -> None:
+    kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
+    chosen = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
+
+    assert [(line.role, line.label) for line in chosen.lines] == [("winner", "Winner · current settings"), ("other", "Scored point")]
+    assert chosen.notes == ()
+
+
+def test_a_fold_test_set_finds_each_run_by_what_it_is_even_when_another_step_scored_it_first() -> None:
+    validation = {"folds": [{"fold_index": 0, "winner": FOLD_WINNER}, {"fold_index": 1, "winner": WINNER}]}
+    records = [
+        # Fold 1's test window is the recent window here: the recent search scored both runs first.
+        _run("r-win", "recent", WINNER, window_start_ms=200, window_end_ms=300),
+        _run("r-inc", "recent", INCUMBENT, window_start_ms=200, window_end_ms=300),
+        _run("t0", "validation", INCUMBENT, fold_index=0, window_start_ms=100, window_end_ms=200),
+        _run("w0", "validation", FOLD_WINNER, fold_index=0, window_start_ms=100, window_end_ms=200),
+        # A training run of the winner is not a test.
+        _run("x0", "validation", FOLD_WINNER, fold_index=0, window_start_ms=0, window_end_ms=100),
+    ]
+
+    assert _drawn(records, "fold_tests", validation=validation) == [
+        ("w0", "winner", "Fold 1 winner"),
+        ("t0", "incumbent", "Fold 1 current settings"),
+        ("r-win", "winner", "Fold 2 winner"),
+        ("r-inc", "incumbent", "Fold 2 current settings"),
+    ]
+    # A fold with no winner still shows the incumbent; a fold that chose the incumbent is one line.
+    assert _drawn(records, "fold_tests", validation={"folds": [{"fold_index": 0, "winner": None}, {"fold_index": 1, "winner": INCUMBENT}]}) == [
+        ("t0", "incumbent", "Fold 1 current settings"),
+        ("r-inc", "winner", "Fold 2 winner · current settings"),
+    ]
+
+
+def _evidence(key: str, point: dict[str, Any], *, below: tuple[float, str] | None = None, above: tuple[float, str] | None = None) -> dict[str, Any]:
+    """A stored candidate; ``below`` / ``above`` are its gap neighbors as the audit recorded them (value, status), none when it was not audited."""
+    neighbors = []
+    if below is not None and above is not None:
+        rows = [{"value": value, "status": status, "metrics": None, "reason": None} for value, status in (below, (point["gap"], "center"), above)]
+        neighbors = [{"knob": "gap", "rows": rows, "one_sided": False}]
+    return {"key": key, "point": point, "point_hash": point_hash(STRATEGY, point), "neighbors_audited": bool(neighbors), "neighbors": neighbors}
+
+
+def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_wherever_they_were_scored() -> None:
+    below, above = {**INCUMBENT, "gap": 0.25}, {**INCUMBENT, "gap": 0.35}
+    records = [
+        # The search scored the candidate and one neighbor before the evidence asked; the other is the evidence's own.
+        _run("s-win", "search", WINNER),
+        _run("s-below", "search", below),
+        _run("d-win", "evidence", WINNER, detail=True),
+        _run("n-above", "evidence", above),
+        _run("x-win", "evidence", WINNER, scenario="slippage_1c"),
+        # The same settings on the final test, and another point's stress, are not this candidate's development evidence.
+        _run("f-win", "exam", WINNER, detail=True, window_start_ms=300, window_end_ms=400),
+        _run("x-inc", "evidence", INCUMBENT, scenario="slippage_1c"),
+    ]
+    evidence = {"candidates": [_evidence("all_period", WINNER, below=(0.25, "tested"), above=(0.35, "tested")), _evidence("incumbent", INCUMBENT)]}
+
+    assert _drawn(records, "candidate", "all_period", evidence=evidence) == [
+        ("s-win", "candidate", "All-period fit"),
+        ("x-win", "stress", "Extra 1¢/share slippage"),
+        ("s-below", "neighbor", "Crossover gap one step below (0.25)"),
+        ("n-above", "neighbor", "Crossover gap one step above (0.35)"),
+    ]
+    # The incumbent's neighbors were not audited: the search's nearby points are not passed off as an audit.
+    incumbent = _drawn([*records, _run("s-inc", "search", INCUMBENT)], "candidate", "incumbent", evidence=evidence)
+    assert incumbent == [("s-inc", "candidate", "Current settings"), ("x-inc", "stress", "Extra 1¢/share slippage")]
+    assert _drawn(records, "candidate", "recent", evidence=evidence) == []
+    # The audit ran out of budget before the neighbor below: the search's run of that point is not drawn as its audit.
+    partly = {"candidates": [_evidence("all_period", WINNER, below=(0.25, "untested"), above=(0.35, "tested"))]}
+    assert [key for key, role, _ in _drawn(records, "candidate", "all_period", evidence=partly) if role == "neighbor"] == ["n-above"]
+
+
+def test_a_neighbor_is_found_by_the_value_its_audit_recorded_not_by_the_knobs_step_today() -> None:
+    # The audit stepped the gap by 0.2 when it ran; the knob's neighbor step is another size now.
+    records = [
+        _run("d-win", "evidence", WINNER, detail=True),
+        _run("n-far", "evidence", {**INCUMBENT, "gap": 0.1}),
+        # One step below by today's declaration, scored by the search: never the audit's neighbor.
+        _run("s-near", "search", {**INCUMBENT, "gap": 0.3 - float(EMA.knob("gap").neighbor_step)}),
+    ]
+    evidence = {"candidates": [_evidence("all_period", WINNER, below=(0.1, "tested"), above=(0.5, "tested"))]}
+
+    neighbors = [(key, label) for key, role, label in _drawn(records, "candidate", "all_period", evidence=evidence) if role == "neighbor"]
+
+    assert neighbors == [("n-far", "Crossover gap one step below (0.1)")]
+
+
+def test_a_set_marks_the_current_settings_whatever_their_role_and_counts_its_failed_runs() -> None:
+    kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
+    returned = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
+    assert [(line.role, line.incumbent) for line in returned.lines] == [("winner", True), ("other", False)]
+    searched = _chosen([_run("s1", "search", INCUMBENT), _run("s3", "search", WINNER)], "search", search=SEARCHED)
+    assert [(line.role, line.incumbent) for line in searched.lines] == [("incumbent", True), ("winner", False)]
+    evidence = {"candidates": [_evidence("incumbent", INCUMBENT)]}
+    assert [line.incumbent for line in _chosen([_run("c1", "evidence", INCUMBENT, detail=True)], "candidate", "incumbent", evidence=evidence).lines] == [True]
+
+    # Every run of the set failed: nothing to draw, and the set says they failed rather than that nothing ran.
+    failed = _chosen([_run("s1", "search", INCUMBENT, status="failed", has_curve=False), _run("s3", "search", WINNER, status="failed", has_curve=False)], "search", search=SEARCHED)
+    assert (failed.lines, failed.failed, failed.not_recorded) == ((), 2, 0)
+
+
+def test_a_set_keeps_every_named_line_spreads_the_others_over_the_search_and_counts_only_completed_runs_without_a_curve() -> None:
+    crowd = [_run(f"o{index:04d}", "search", {**INCUMBENT, "gap": 1 + index / 1000}) for index in range(MAX_OTHER_LINES * 2)]
+    records = [
+        *crowd,
+        _run("old", "search", {**INCUMBENT, "gap": 9.0}, has_curve=False),
+        _run("failed", "search", {**INCUMBENT, "gap": 9.1}, status="failed", has_curve=False),
+        _run("pending", "search", {**INCUMBENT, "gap": 9.2}, status="pending", has_curve=False),
+        _run("inc", "search", INCUMBENT),
+        _run("win", "search", WINNER),
+    ]
+
+    chosen = _chosen(records, "search", search=SEARCHED)
+
+    drawn = [line.record.evaluation_key for line in chosen.lines]
+    others = [key for key in drawn if key.startswith("o")]
+    # Both named lines arrived last and are still drawn; the others are every second point, first to last.
+    assert drawn[-2:] == ["inc", "win"] and len(others) == MAX_OTHER_LINES
+    assert others == [f"o{index:04d}" for index in range(0, MAX_OTHER_LINES * 2, 2)]
+    # A run still pending or one that failed never had a curve to keep.
+    assert (chosen.left_out, chosen.not_recorded) == (MAX_OTHER_LINES, 1)

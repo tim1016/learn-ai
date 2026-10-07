@@ -960,6 +960,65 @@ async def test_every_run_keeps_its_daily_curve_and_the_runs_read_groups_them(con
     assert curve["deepest_drawdown"] == min(point["drawdown"] for point in detail["drawdown"])
 
 
+async def test_each_step_draws_its_own_runs_with_the_line_each_one_is(driver: Driver, symbol: str) -> None:
+    row = await _two_fits_to_review(driver, symbol)
+
+    search = await service.curve_set(row.id, curve_set="search")
+    roles = [line["role"] for line in search["lines"]]
+    assert roles.count("winner") == 1 and roles.count("incumbent") == 1 and roles.count("other") == len(roles) - 2
+    winner = next(line for line in search["lines"] if line["role"] == "winner")
+    assert winner["params_sentence"].startswith("Gap $0.30") and len(winner["curve"]["close_ms"]) == len(winner["curve"]["cumulative_return"]) > 0
+    # Two lines never read the same: a scored point is told apart by its settings.
+    assert len({(line["label"], line["params_sentence"]) for line in search["lines"]}) == len(search["lines"])
+    assert (search["left_out"], search["not_recorded"], search["notes"]) == (0, 0, [])
+    recent = await service.curve_set(row.id, curve_set="recent")
+    assert [line["role"] for line in recent["lines"]].count("winner") == 1
+
+    folds = await service.curve_set(row.id, curve_set="fold_tests")
+    assert [line["label"] for line in folds["lines"]] == ["Fold 1 winner", "Fold 1 current settings", "Fold 2 winner", "Fold 2 current settings"]
+    # Each fold's line covers its own test window and no other; none reaches the final interval.
+    assert folds["lines"][0]["curve"]["close_ms"][-1] < folds["lines"][2]["curve"]["close_ms"][0]
+    assert all(line["curve"]["close_ms"][-1] < row.protocol["final_start_ms"] for line in folds["lines"])
+
+    candidate = await service.curve_set(row.id, curve_set="candidate", candidate_key="all_period")
+    by_role: dict[str, list[str]] = {}
+    for line in candidate["lines"]:
+        by_role.setdefault(line["role"], []).append(line["label"])
+        assert line["curve"]["close_ms"][-1] < row.protocol["final_start_ms"]  # development only, though the fit also sat the final test
+    assert by_role["candidate"] == ["All-period fit"]
+    assert sorted(by_role["stress"]) == ["Extra $1 per order", "Extra 1¢/share slippage"]
+    # Gap and hold are searched: one step either side of each.
+    assert sorted(by_role["neighbor"]) == sorted(
+        f"{knob} one step {side} ({value:g})"
+        for knob, values in (("Crossover gap", (0.25, 0.35)), ("Hold time", (6, 8)))
+        for side, value in zip(("below", "above"), values, strict=True)
+    )
+    # The incumbent is a candidate too: its own run and its stresses, and no neighbors, because none were audited.
+    incumbent = await service.curve_set(row.id, curve_set="candidate", candidate_key="incumbent")
+    assert sorted({line["role"] for line in incumbent["lines"]}) == ["candidate", "stress"]
+
+    for query in ({"curve_set": "candidate"}, {"curve_set": "search", "candidate_key": "recent"}):
+        with pytest.raises(GoldenSearchRefusal) as refused:
+            await service.curve_set(row.id, **query)
+        assert refused.value.code == "RUNS_QUERY_INVALID"
+
+
+async def test_a_step_drawn_while_its_runs_are_still_coming_counts_no_missing_curve(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.lock(symbol), "continue")
+    one = (await service.runs(row.id, group="search"))["rows"][-1]
+    await conn.execute(
+        "UPDATE research_golden_search_evaluations SET status = 'pending', equity_close_ms = NULL, equity_values = NULL WHERE study_id = $1 AND evaluation_key = $2",
+        row.id,
+        one["evaluation_key"],
+    )
+
+    search = await service.curve_set(row.id, curve_set="search")
+
+    # The run in flight has no line yet, and is not reported as one that kept no curve.
+    assert search["not_recorded"] == 0
+    assert len(search["lines"]) == (await service.runs(row.id, group="search"))["total"] - 1
+
+
 async def test_a_run_recorded_before_runs_kept_their_curve_reads_not_recorded(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
     row = await driver.advance(await driver.lock(symbol), "continue")
     first, second = (await service.runs(row.id, group="search"))["rows"][:2]

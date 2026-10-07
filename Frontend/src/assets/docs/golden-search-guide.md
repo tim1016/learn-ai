@@ -399,6 +399,35 @@ The landscape is a two-knob slice: it says nothing about combinations of the oth
 
 A topographic map around a campsite. A campsite on a wide plateau is safe if you wander a little; one on a narrow ridge is not.
 
+### Every scored point {#search-curves}
+
+#### The question it answers
+
+Does the winner travel with the crowd, or stand alone?
+
+#### What you're looking at
+
+One line for every point the search scored, all on the same window: the cumulative return on top and the fall from peak beneath. The winner is bold, the current settings dashed, and every other point faint. The recent-window search has its own copy, on the recent window only.
+
+When the search did not score the current settings itself, their line comes from the run another step made on the same window; if no step ran them there, the panel says so. A search that scored more points than the chart can hold draws an even spread of them and says how many it left out; All runs lists every one. Hover a session for the named lines and the best of the rest, each with its settings.
+
+#### How to read it
+
+1. Each faint line is one point the search scored, on the same window.
+2. The bold line is the winner; the dashed line is the current settings.
+3. Look at where the bold line sits among the faint ones through the whole window, not only at the end.
+4. Drop to the lower part: the winner’s fall from its peak beside everyone else’s.
+
+#### Good signs and warning signs
+
+- Good: the winner inside a band of faint lines that rise together. Many settings worked, and it is one of them.
+- Warning: the winner far above a flat or falling crowd. The search may have found one lucky setting.
+- Warning: the winner ahead only after a single late jump.
+
+#### An everyday comparison
+
+A marathon's field on one chart: a winner who ran with the leading pack is more believable than one who appears from nowhere at the line.
+
 ## Test over time
 
 Test over time checks the search procedure itself. It cuts the development period into folds. Each fold searches again, from the same starting point and the same ranges, on its own training window only, then tests the winner it chose on the months right after. The current settings run on every test window too, as a benchmark. Every test result here is out-of-sample for the winner that produced it, and none of it judges a single candidate: it judges the way candidates are chosen.
@@ -590,6 +619,33 @@ Hover a fold for its test trades and the current settings' trades on the same wi
 
 A survey that needs a thousand answers in total. A few hundred from each town is fine; nine hundred from one town is not much of a survey of the others.
 
+### Fold test equity {#fold-test-curves}
+
+#### The question it answers
+
+How did each fold’s winner travel through its test window?
+
+#### What you're looking at
+
+For each fold, the fold's winner on its own test window as a bold line, and the current settings on the same window as a dashed line. Every fold starts flat with fresh capital, so the lines sit side by side along the date axis and do not join. A fold whose winner is the current settings shows one line for both. Beneath, each run's fall from its own peak inside its window.
+
+#### How to read it
+
+1. Each bold line is one fold’s winner on that fold’s test window, starting flat with fresh capital.
+2. The dashed line beside it is the current settings on the same window.
+3. Read fold by fold, left to right: which line ends higher, and which climbs more steadily.
+4. Drop to the lower part for each run’s fall from its own peak inside its window.
+
+#### Good signs and warning signs
+
+- Good: the bold line at or above the dashed one in most folds.
+- Warning: a fold won on one day's jump.
+- Warning: the bold line below the dashed one in the latest folds. The method may be losing its edge.
+
+#### An everyday comparison
+
+A season of away games, one after another: each starts at nil–nil, and what matters is how many you won and how.
+
 ## Compare
 
 Compare lines up the candidates on the development data, the data used to choose them. The candidates are the all-period fit (blue), the recent fit (amber) and your current settings (grey, dashed).
@@ -772,6 +828,34 @@ Hover a bar to see its net return, its change from the top bar, its worst fall, 
 #### An everyday comparison
 
 A bridge engineer tests a bridge with more weight than it should ever carry. If it still stands, the extra margin gives confidence. Here the extra weight is higher costs and slower fills.
+
+### Stress and neighbor equity {#candidate-curves}
+
+#### The question it answers
+
+Does the candidate’s path survive higher costs and a one-step change?
+
+#### What you're looking at
+
+The selected candidate's development run as a bold line. Beside it, in teal, the same settings rerun under each cost stress the plan declared. In light blue, its neighbors: the settings with one searched knob moved one neighbor step down or up and everything else unchanged. A neighbor is drawn only where the study's neighbor audit tested it for this candidate. The bold line takes the candidate's own colour, and the current settings are dashed. Beneath, each run's fall from its own peak.
+
+#### How to read it
+
+1. The bold line is the candidate itself on the development period.
+2. The teal lines are the same settings rerun under each cost stress.
+3. The light blue lines are its neighbors: one knob moved one step, everything else unchanged.
+4. Lines that stay close to the bold one mean the result is not a knife edge.
+
+#### Good signs and warning signs
+
+- Good: the stress lines a little below the bold one and the same shape.
+- Good: neighbors on both sides close to the bold line.
+- Warning: a neighbor that falls away early and never recovers. One step of the knob changes the whole path.
+- Warning: a stress line that ends below zero.
+
+#### An everyday comparison
+
+A bridge tested with heavier lorries and a little side wind: it should sag slightly, not snap.
 
 ## Compare: by month
 
