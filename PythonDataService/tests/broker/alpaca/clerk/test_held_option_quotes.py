@@ -291,18 +291,25 @@ async def test_the_quote_a_line_held_before_a_reconnect_is_no_mark_until_it_tick
     ],
 )
 async def test_a_line_that_shows_one_side_since_a_reconnect_is_put_back_as_it_stands_and_is_never_a_mark(
-    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, bid: str | None, ask: str | None,
-    a_sale_is_priced_at: Decimal | None,
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bid: str | None,
+    ask: str | None, a_sale_is_priced_at: Decimal | None,
 ) -> None:
     """Marked at $4.08 bid. Five seconds on, after a reconnect, one side of the line has ticked and the other
     has not. That is the line's last word, so it is in the account's file at once, as of its own receipt:
     a close is priced from it alone, and the $4.08 from before the reconnect prices nothing. It is no mark,
-    then or later, and it is written once, not at every pass."""
+    then or later, and ends none. It is written once, not at every pass."""
     account, ibkr = _Account(held, tmp_path), _Supervisor()
     account.holds = [CALL.occ_symbol]
     await held.read_books()
     ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
     assert await held.keep(ibkr) == 1
+    put_back, restore = [], account.kept.restore
+
+    def counted(symbol: str, quote: HeldQuote, **when: int) -> None:
+        put_back.append(symbol)
+        restore(symbol, quote, **when)
+
+    monkeypatch.setattr(account.kept, "restore", counted)
 
     ibkr.generation += 1
     clock.value += 5_000
@@ -321,12 +328,13 @@ async def test_a_line_that_shows_one_side_since_a_reconnect_is_put_back_as_it_st
     assert newest is not None
     assert (newest.quote.bid, newest.quote.ask) == (None if bid is None else Decimal(bid), None if ask is None else Decimal(ask))
     assert newest.kept_at_ms == received, "it is put back as of its own receipt, never as of now"
-    # The only mark there can be is the whole quote stated before the reconnect, for as long as that stands.
-    assert set(marks) <= {None, (Decimal("4.08"), Decimal("4.12"), NOW)}
+    # The mark is still the whole quote stated before the reconnect, as with nothing put back: never this one.
+    assert set(marks) == {(Decimal("4.08"), Decimal("4.12"), NOW)}
     sale = account.kept.closing_quote(CALL.occ_symbol, side="sell", at_ms=clock.value)
     assert (None if sale is None else sale.quote.bid) == a_sale_is_priced_at
     assert account.kept.prices_a_close(CALL.occ_symbol, side="sell", at_ms=clock.value) is (a_sale_is_priced_at is not None)
-    assert account.rows() == rows_after_the_first_pass == 2, "what the line shows was written again though it had not changed"
+    assert account.rows() == rows_after_the_first_pass == 2
+    assert put_back == [CALL.occ_symbol], "what the line shows was written again though it had not changed"
     # The other side ticks: the quote is whole, and is the contract's mark at once.
     ibkr.quotes[CALL.occ_symbol] = _quote("2.00", "2.04", clock.value - 100, generation=ibkr.generation)
     assert await held.keep(ibkr) == 1
@@ -349,6 +357,32 @@ async def test_a_line_that_shows_another_price_on_its_one_side_is_put_back_again
     newest = account.kept.newest(CALL.occ_symbol, at_or_before_ms=clock.value)
     assert newest is not None and (newest.quote.ask, newest.kept_at_ms) == (Decimal("2.10"), clock.value - 100)
     assert account.mark(CALL, clock.value) is None
+
+
+async def test_a_line_that_loses_the_same_side_again_after_it_was_whole_is_put_back_again(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path
+) -> None:
+    """Only the ask at $2.04, then both sides, then the bid is gone again with the ask where it was. The last
+    state looks like the first, and is the line's last word all the same: it is put back again, so the
+    whole quote between them does not go on pricing a sale at a bid the line no longer shows."""
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote(None, "2.04", NOW - 300)
+    await held.keep(ibkr)
+    clock.value += 2_000
+    ibkr.quotes[CALL.occ_symbol] = _quote("2.00", "2.04", clock.value - 300)
+    assert await held.keep(ibkr) == 1
+    priced_while_whole = account.kept.prices_a_close(CALL.occ_symbol, side="sell", at_ms=clock.value)
+
+    clock.value += 2_000
+    ibkr.quotes[CALL.occ_symbol] = _quote(None, "2.04", clock.value - 300)
+    await held.keep(ibkr)
+
+    newest = account.kept.newest(CALL.occ_symbol, at_or_before_ms=clock.value)
+    assert priced_while_whole is True
+    assert newest is not None and (newest.quote.bid, newest.kept_at_ms) == (None, clock.value - 300)
+    assert account.kept.prices_a_close(CALL.occ_symbol, side="sell", at_ms=clock.value) is False
 
 
 @pytest.mark.parametrize(

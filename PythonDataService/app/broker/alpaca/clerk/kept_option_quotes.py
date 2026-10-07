@@ -25,7 +25,8 @@ So a hand-over is written every time, even of a quote already kept
 this file was lost, says nothing of what is current: it is written as of its
 own receipt (``restore``). So is what a held contract's line shows while one
 of its sides has still to arrive, which the Clerk's keeping puts back: it is
-the newest quote by receipt, and never a mark (``stated_mark``).
+the newest quote by receipt, and never a mark: the account's reading passes
+over a quote with one side (``stated_mark``).
 
 Nothing here judges a quote. Whether one is usable for a decision is
 ``app.options.quotes.quote_fault``'s to say, whether one may be stated as a
@@ -441,15 +442,24 @@ class KeptOptionQuotes:
     def stated_mark(self, symbol: str, *, at_or_before_ms: int) -> KeptOptionQuote | None:
         """The quote a bought contract is marked from at an instant, before its freshness is asked.
 
-        The one most lately stated with a bid (``last_stated``), when it is
-        whole. ``None`` when nothing with a bid was stated by then, and when
-        the last such statement shows one side: a line's quote put back
-        while its other side was still to arrive is the line's last word,
-        and is never a mark. An older whole quote does not stand in for it:
-        its bid is no longer what the line shows.
+        The whole quote most lately handed over as the newest held, no
+        later than the instant. A quote with one side is passed over. It
+        states nothing: a line's quote put back while its other side was
+        still to arrive is the line's last word for a close, and it neither
+        is a mark nor ends the one stated before it, which stands for as
+        long as any statement does.
+
+        A cut keeps the last statement of each side. So it keeps the last
+        whole one, unless a quote with only a bid and one with only an ask
+        were both put back after it. The contract then has no mark until the
+        next whole quote is stated: a missing mark, never a wrong one.
         """
-        stated = self.last_stated(symbol, at_or_before_ms=at_or_before_ms, with_side="bid")
-        return None if stated is None or stated.quote.ask is None else stated
+        whole = [
+            row
+            for row in self._kept_for(symbol)
+            if row.kept_at_ms <= at_or_before_ms and row.quote.bid is not None and row.quote.ask is not None
+        ]
+        return max(whole, key=lambda row: (row.kept_at_ms, row.seq), default=None)
 
 
 __all__ = [

@@ -182,7 +182,8 @@ class SimulatedAccountProjection:
         bid. The quote must have been handed over as the newest held no
         longer before ``at_ms`` than a share bar may close before it, which
         also holds a previous close's mark to that close. It must be whole:
-        a quote with one side is never a mark (``stated_mark``).
+        a quote with one side is never a mark, and is passed over
+        (``stated_mark``).
 
         From its last session's close on a contract has no mark, whatever
         was handed over and however lately: a bid from before the close is

@@ -49,8 +49,8 @@ missing side is written as of its own receipt (``shows_one_side``,
 changes. The newest quote alone prices a close, on both roads: with no bid
 on it a sale is not priced, and with only a bid on it a sale is priced at
 that bid. It is never stated as the newest held, and the account's reading
-takes no mark from a quote with one side (``KeptOptionQuotes.stated_mark``).
-One from an older generation is never written.
+passes over a quote with one side (``KeptOptionQuotes.stated_mark``): it is
+no mark, and it ends none. One from an older generation is never written.
 
 **It outlives the Clerk's runtime.** A Dry Run's runtime is closed when its
 run ends. The books give their last word as it closes, and this goes on

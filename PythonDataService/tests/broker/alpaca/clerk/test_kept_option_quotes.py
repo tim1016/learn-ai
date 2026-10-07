@@ -480,26 +480,23 @@ def test_a_quote_put_back_by_a_caller_that_says_what_time_it_is_cuts_a_file_that
 
 
 @pytest.mark.parametrize(
-    ("bid", "ask", "marked_from"),
-    [
-        pytest.param(None, "2.04", Decimal("1.90"), id="only an ask: the whole quote stated before still stands"),
-        pytest.param("2.00", None, None, id="only a bid: nothing is a mark until a whole quote is stated"),
-    ],
+    ("bid", "ask"),
+    [pytest.param(None, "2.04", id="only an ask"), pytest.param("2.00", None, id="only a bid")],
 )
 def test_a_bought_contract_is_marked_from_a_whole_statement_and_never_from_one_side_put_back(
-    tmp_path: Path, bid: str | None, ask: str | None, marked_from: Decimal | None
+    tmp_path: Path, bid: str | None, ask: str | None
 ) -> None:
     """A mark is a bid, stated with its ask. A line's quote put back while a side was still to arrive is the
     newest quote by receipt, and prices a close alone, but it is no mark: not even its own bid, however
-    lately it ticked. An older whole quote's bid does not stand in once the line has shown a newer bid."""
+    lately it ticked. It states nothing, so the whole quote stated before it is the mark still."""
     store = _store(tmp_path)
     store.keep(SYMBOL, _quote("1.90", "1.94", bid_at=9_000, ask_at=9_000), kept_at_ms=10_000)
 
     store.restore(SYMBOL, _quote(bid, ask, bid_at=12_000, ask_at=12_000), now_ms=12_500)
 
     mark = store.stated_mark(SYMBOL, at_or_before_ms=12_500)
-    assert (None if mark is None else mark.quote.bid) == marked_from
-    assert mark is None or (mark.quote.ask, mark.kept_at_ms) == (Decimal("1.94"), 10_000)
+    assert mark is not None and (mark.quote.bid, mark.quote.ask, mark.kept_at_ms) == (Decimal("1.90"), Decimal("1.94"), 10_000)
+    assert store.stated_mark(SYMBOL, at_or_before_ms=9_999) is None, "nothing was stated before the hand-over"
     newest = store.newest(SYMBOL, at_or_before_ms=12_500)
     assert newest is not None and newest.kept_at_ms == 12_000
     # A whole quote stated after it is the mark again.

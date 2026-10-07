@@ -46,6 +46,7 @@ from app.schemas.market_liveness import MarketStatusSnapshot, MarketStatusSource
 from app.services import bot_option_run, market_liveness, option_search
 from app.services.bot_option_run import OptionOrderTerms
 from app.services.broker_v2_panel import budget_deploy
+from app.services.option_model_inputs import ModelInputsBeingRead
 from app.services.option_search import OptionSearches, OptionSearchLane
 from app.services.option_watch import get_option_watch_list
 from tests._helpers.bot_runner.custody import _SID, _T0, _registry
@@ -501,8 +502,19 @@ async def test_a_leg_picked_by_delta_is_bought_when_the_dividends_are_known(on_t
 # ---- A fault on the way is that decision's refusal, never the end of the run --------------
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        pytest.param(LookupError("the series is not there"), id="the read breaks"),
+        # A waiting entry can join a lookup a page began, and a page's lookup does not wait for the coordinator.
+        pytest.param(
+            ModelInputsBeingRead("the coordinator is looking up the rate and the dividends for SPY"),
+            id="the lookup it joined says it is still running",
+        ),
+    ],
+)
 async def test_a_fault_in_the_read_of_the_rate_and_dividends_refuses_that_entry_by_name_and_the_run_goes_on(
-    floor: Floor,
+    floor: Floor, fault: Exception
 ) -> None:
     """The read itself breaks: not "the dividends are unknown", which it reports, but an error. The entry is one
     refused decision with a code of its own, and the three bars after it are decided on as usual."""
@@ -510,7 +522,7 @@ async def test_a_fault_in_the_read_of_the_rate_and_dividends_refuses_that_entry_
     def a_reader_that_breaks(asked_as_of_ms: int) -> None:
         # The read the decision itself waits for, not the one made in the background as the bar closed.
         if asked_as_of_ms > ENTER_MS:
-            raise LookupError("the series is not there")
+            raise fault
 
     floor.while_inputs_are_read = a_reader_that_breaks
 
@@ -866,8 +878,10 @@ async def test_on_a_clerk_that_reads_its_market_status_from_a_shared_source_an_o
 ) -> None:
     """Such a Clerk makes no IBKR pass of its own, and that pass is what quotes option contracts. Nothing could
     ever be picked or priced on it. The run is refused once, by a name of its own and in words, before it
-    asks for a bar, a quote line or a search worker: not at every entry, as a feed that is down."""
-    floor = await on_the_floor(status_from=SHARED_STATUS, watch=get_option_watch_list()).open()
+    asks for a bar, a quote line or a search worker: not at every entry, as a feed that is down. That is
+    the reason given though this Clerk's line budget is too small for the bot's window as well: no budget
+    would help."""
+    floor = await on_the_floor(status_from=SHARED_STATUS, watch=get_option_watch_list(), line_budget=4).open()
     searches = OptionSearches(executor=lambda: floor.worker)
     monkeypatch.setattr(option_search, "_searches", searches)
     set_market_liveness_consumer(floor.consumer)
@@ -1178,11 +1192,20 @@ async def test_a_call_the_stop_could_not_sell_is_still_quoted_with_its_clerk_clo
     assert floor.held.held() == {}
 
 
-async def _the_call_is_quoted_whole_again(floor: Floor, bid: str, ask: str) -> None:
-    """A line with no whole quote is given up and asked for again, a little later each time. Once it is open
-    both sides tick, and the Clerk's keeping states the quote within its fifteen seconds."""
-    while CALL not in floor.ibkr.open_option_lines():
+async def _until_the_calls_line_is_open(floor: Floor) -> None:
+    """A line with no whole quote is given up and asked for again, a little later each time. Wait for the
+    held call's to be open, for ten minutes at most: a call nobody asks for any more never has one."""
+    for _ in range(40):
+        if CALL in floor.ibkr.open_option_lines():
+            return
         await floor.time_passes_to(floor.clock.value + 15_000)
+    pytest.fail("the held call's line was never asked for again")
+
+
+async def _the_call_is_quoted_whole_again(floor: Floor, bid: str, ask: str) -> None:
+    """Once the call's line is open again both sides tick, and the Clerk's keeping states the quote within
+    its fifteen seconds."""
+    await _until_the_calls_line_is_open(floor)
     floor.quote(585, bid, ask)
     await floor.time_passes_to(floor.clock.value + 15_000)
 
@@ -1231,9 +1254,10 @@ async def test_with_no_runner_a_call_that_shows_only_a_bid_since_a_data_loss_is_
     floor: Floor,
 ) -> None:
     """The other way round: only the bid has ticked since the data came back, at $2.00. A quote with one
-    side is never the account's mark, not even for its bid, so the account cannot be read. It is what the
-    call can be sold for all the same: the Stop sells at $2.00, as a runner's EXIT handing over the same
-    line does, and never at the $4.08 from before the loss."""
+    side is never the account's mark, not even for its bid: the account reads as it would with nothing put
+    back, at the $4.08 stated before the loss while that statement stands, and not at all once it has
+    lapsed. The $2.00 is what the call can be sold for all the same: the Stop sells at it, as a runner's
+    EXIT handing over the same line does, and never at the $4.08."""
     await _bought_and_never_requoted(floor)
     await floor.time_passes_to(ENTER_MS + MINUTE)
     stated_before = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
@@ -1242,15 +1266,17 @@ async def test_with_no_runner_a_call_that_shows_only_a_bid_since_a_data_loss_is_
     floor.ibkr.tick(CALL, bid=2.00)
     await floor.time_passes_to(floor.clock.value + 15_000)
 
-    mark = floor.kept_quotes().stated_mark(CALL, at_or_before_ms=floor.clock.value)
+    put_back = floor.kept_quotes().newest(CALL, at_or_before_ms=floor.clock.value)
+    while_the_old_statement_stands = _reading(floor).unrealized_pl_usd
+    await floor.time_passes_to(floor.clock.value + 45_000)
+    # The bid ticked 60 seconds ago: fresh enough to be a mark, if a quote with one side could be one.
     with pytest.raises(SimulationEvidenceUnavailable, match=CALL):
         _reading(floor)
     await floor.stop_is_pressed()
 
-    assert stated_before is not None and floor.clock.value - stated_before.kept_at_ms < 80_000, (
-        "the whole quote stated before the loss is too old by now to show that the one-sided one was refused"
-    )
-    assert mark is None, "a quote with one side was read as the account's mark"
+    assert stated_before is not None and put_back is not None
+    assert (put_back.quote.bid, put_back.quote.ask, put_back.kept_at_ms) == (Decimal("2"), None, only_the_bid_ticked_at)
+    assert while_the_old_statement_stands == Decimal("-4"), "the account was marked at the one-sided quote's bid"
     (sale,) = floor.sales_the_simulation_made()
     assert (sale.fill_model, sale.fill_price) == (SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("2"))
     assert sale.quote_age_ms == floor.clock.value - only_the_bid_ticked_at
@@ -1413,9 +1439,7 @@ async def test_after_a_data_loss_the_quote_the_line_held_is_no_mark_until_the_ca
     stated_after = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
     with pytest.raises(SimulationEvidenceUnavailable, match=CALL):
         _reading(floor)
-    while CALL not in floor.ibkr.open_option_lines():
-        # A line with no whole quote is given up and asked for again, a little later each time.
-        await floor.time_passes_to(floor.clock.value + 15_000)
+    await _until_the_calls_line_is_open(floor)
     floor.quote(585, "4.00", "4.04")
     await floor.time_passes_to(floor.clock.value + 15_000)
     ticked = floor.kept_quotes().last_stated(CALL, at_or_before_ms=floor.clock.value, with_side="bid")
