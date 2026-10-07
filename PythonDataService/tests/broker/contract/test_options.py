@@ -25,6 +25,7 @@ from app.broker.contract.options import (
     OptionPositionIntent,
     SingleOptionOrderRequest,
     closing_order,
+    only_closes,
     opening_order,
     option_contract_refusal,
 )
@@ -33,6 +34,11 @@ from app.options.requirement import LegQuote, natural_net_price
 from app.options.structure import ResolvedLeg, ResolvedStructure
 
 _EXPIRY = date(2026, 12, 18)
+
+
+@pytest.mark.parametrize("order", [MultiLegOptionOrderRequest.model_construct(legs=()), object()])
+def test_an_empty_or_unexpected_request_does_not_qualify_as_a_close(order: object) -> None:
+    assert only_closes(order) is False  # type: ignore[arg-type]
 
 
 def _contract(right: str, strike: str, *, root: str = "SPY", expiry: date = _EXPIRY) -> OptionContract:

@@ -15,11 +15,23 @@ not. So it is given only when all of these hold:
   written, and each thing it named. A notice that has changed since, or
   names other things, is not the one they looked at;
 - a reconciliation pass made for the request compared the account with the
-  broker, nothing was written to the books since, and for every contract or
-  underlying the hold names, and the symbol its bot trades, the broker's
-  position equals the books'. A symbol that differs is named;
+  broker, nothing was written to the books after the pass reached its
+  verdict, and for every contract or underlying the hold names, and the
+  symbol its bot trades, the broker's position equals the books' as the
+  pass's plan compared them. A symbol that differs is named;
 - who acknowledges is this installation's operator, never a field of the
   request.
+
+**What the fence covers.** The newest record is read at the end of the
+pass's verdict. The verdict's own booking of an outside order's fill comes
+after the plan compared the positions and before that read, so it is inside
+the fence: after such a booking the comparison is older than the books, and
+the acknowledgement is refused for positions that differ though they no
+longer do. It is given after the next pass. A record the pass writes after
+its verdict is outside the fence: while a bot's exit is being retried the
+pass writes one whenever its decision changes, and the acknowledgement is
+refused as the books having moved until the retry has ended. Both err
+toward refusing.
 
 A draining lane refuses it, as it refuses the review of an outside order:
 neither can stop a bot or reduce what it holds.

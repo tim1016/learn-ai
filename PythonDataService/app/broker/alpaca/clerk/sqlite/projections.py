@@ -19,7 +19,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.account_authority import is_shadow_account_id, is_synthetic_account_id
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes, KeptOptionQuotesUnavailable
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
@@ -645,14 +645,14 @@ class SqliteClerkProjectionReader:
     def _unpriced_option_closes(
         self, positions: tuple[ProjectedPosition, ...], now_ms: int
     ) -> tuple[tuple[str, str], ...]:
-        """A Dry Run's option positions that nothing kept can price a close of now (ADR 0076).
+        """A Dry Run's or a Live Shadow's option positions that nothing kept can price a close of now (ADR 0076).
 
         Asked of the quotes kept beside this account's custody, by the rule
         the simulation itself fills a close by
         (``KeptOptionQuotes.prices_a_close``). Any other account keeps no
         option quotes and has none. Quotes that cannot be read price nothing.
         """
-        if not is_synthetic_account_id(self._account_id):
+        if not (is_synthetic_account_id(self._account_id) or is_shadow_account_id(self._account_id)):
             return ()
         kept = KeptOptionQuotes.beside(self._db_path)
         unpriced: list[tuple[str, str]] = []

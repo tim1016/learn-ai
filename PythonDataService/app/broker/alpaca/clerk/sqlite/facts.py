@@ -285,6 +285,81 @@ class EntrySettledFacts:
         return cls(**json.loads(facts_json))
 
 
+_BUYING_POWER_RESULTS = ("consistent", "unknown", "over_reserved", "under_reserved_unexplained")
+
+
+@dataclass(frozen=True)
+class EntryBuyingPowerComparedFacts:
+    """What one option entry's comparison with the broker's option buying power came to (ADR 0076 decision 26).
+
+    Recorded once on the ENTER's own timeline, for an entry on a real
+    account. It is evidence about the entry and moves nothing: no order, no
+    effect, no money.
+
+    ``result`` is one of four (``app.options.buying_power_check``), and
+    ``reason_code`` says why exactly when it is ``unknown``
+    (``entry_buying_power.NotComparedReason``). Every amount is whole cents.
+    The two readings are kept as the broker wrote them, in dollars, each
+    with the Clerk's clock as its read began and ended, and ``sent_at_ms``
+    is that clock as the order was handed to the broker's port. A figure
+    that could not be had is ``None``, never zero. ``holds`` is whether
+    this record raised the bot's notice: only an under-reserved result
+    judged with the account's setting on does.
+    """
+
+    result: str
+    reason_code: str | None
+    contracts_asked: int
+    contracts_filled: int
+    # What the entry set aside when it was accepted, and its share for the contracts that filled.
+    commitment_cents: int
+    set_aside_for_filled_cents: int | None
+    # From the executions on the books; and with the broker's requirement for what filled added.
+    premium_paid_cents: int | None
+    cost_of_filled_cents: int | None
+    first_began_ms: int | None
+    first_ended_ms: int | None
+    first_buying_power: str | None
+    sent_at_ms: int | None
+    second_began_ms: int | None
+    second_ended_ms: int | None
+    second_buying_power: str | None
+    # First reading less second, when both are whole cents.
+    fall_cents: int | None
+    compared_at_ms: int
+    holds: bool
+
+    def __post_init__(self) -> None:
+        if self.result not in _BUYING_POWER_RESULTS:
+            raise ValueError(f"a comparison comes to one of {_BUYING_POWER_RESULTS}; got {self.result!r}")
+        if (self.result == "unknown") != (self.reason_code is not None):
+            raise ValueError("a comparison names its reason exactly when its result is unknown")
+        if self.holds and self.result != "under_reserved_unexplained":
+            raise ValueError("only an under-reserved comparison holds a bot")
+        for name in ("contracts_asked", "contracts_filled", "commitment_cents", "compared_at_ms"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} is a whole number, zero or more; got {value!r}")
+        for name in (
+            "set_aside_for_filled_cents", "premium_paid_cents", "cost_of_filled_cents", "first_began_ms",
+            "first_ended_ms", "sent_at_ms", "second_began_ms", "second_ended_ms",
+        ):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"{name} is a whole number, zero or more, or absent; got {value!r}")
+        if self.fall_cents is not None and type(self.fall_cents) is not int:
+            raise ValueError(f"fall_cents is whole cents or absent; got {self.fall_cents!r}")
+        if type(self.holds) is not bool:
+            raise ValueError("holds is true or false")
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> EntryBuyingPowerComparedFacts:
+        return cls(**json.loads(facts_json))
+
+
 @dataclass(frozen=True)
 class UnknownOutcomeNotice:
     """What the operator is told about an order whose outcome is unknown for a reason other than a lost answer (#2854).

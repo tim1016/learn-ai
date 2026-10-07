@@ -83,6 +83,22 @@ def is_shadow_account_id(account_id: str) -> bool:
     return account_id.startswith(SHADOW_ACCOUNT_PREFIX)
 
 
+def is_simulated_account_id(account_id: str) -> bool:
+    """Whether custody belongs to a Dry Run or Live Shadow."""
+    return simulated_account_named(account_id) is not None
+
+
+def simulated_account_named(account_id: str) -> str | None:
+    """What a simulated account is called in a sentence an owner reads, or ``None`` for a real account.
+
+    A Dry Run and a Live Shadow hold nothing real: no broker fills, exercises,
+    assigns or sells what either holds.
+    """
+    if is_synthetic_account_id(account_id):
+        return "Dry Run"
+    return "Live Shadow" if is_shadow_account_id(account_id) else None
+
+
 def require_real_account_id(account_id: str) -> str:
     """Reject a reserved-namespace identity before it can bind an Alpaca port."""
     if not isinstance(account_id, str) or not account_id:
@@ -367,6 +383,7 @@ __all__ = [
     "evidence_account_id_for",
     "is_shadow_account_id",
     "is_shadow_evidence_account_id",
+    "is_simulated_account_id",
     "is_synthetic_account_id",
     "live_account_id_for_shadow_account",
     "live_evidence_account_id_for_strategy",
@@ -376,5 +393,6 @@ __all__ = [
     "require_synthetic_account_id",
     "shadow_account_id_for_live_account",
     "shadow_evidence_account_id_for_strategy",
+    "simulated_account_named",
     "synthetic_account_id_for_strategy",
 ]

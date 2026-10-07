@@ -37,14 +37,14 @@ from app.broker.alpaca.multi_leg_option_orders import multi_leg_option_orders_en
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
-from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg
+from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg, is_option_plan
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class OptionEffectRefusal(StrEnum):
     """Why the Clerk took no option effect. A quote's own fault and a structure's own refusal keep their codes."""
 
-    # The account is a Live Shadow's or a Live one: only a Dry Run and a Paper account take an option plan.
+    # The account is a Live one: only a Dry Run, a Live Shadow and a Paper account take an option plan.
     ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
     # The broker's listing of the picked contract could not be read, so the contract was not confirmed.
     CONTRACT_REFERENCE_UNREAD = "OPTION_CONTRACT_REFERENCE_UNREAD"
@@ -94,6 +94,9 @@ class OptionEffectRefusal(StrEnum):
     # taken and still be cancelled and proven ended in time. Refused when the run starts, not at every
     # entry.
     ENTRY_WAIT_OVER_OUTCOME_WAIT = "OPTION_ENTRY_WAIT_OVER_OUTCOME_WAIT"
+    # The bot was started with no order terms sealed with it. They are fixed at Deploy for the bot's
+    # life, and nothing a decision says supplies them. Refused when the run starts.
+    ORDER_TERMS_NOT_SEALED = "OPTION_ORDER_TERMS_NOT_SEALED"
 
 
 # Shares one standard contract's price stands for. A listing with any other
@@ -197,11 +200,6 @@ class OptionExitEvidence:
     def for_other_contracts_than(self, symbol: str) -> tuple[str, ...]:
         """The contracts quoted here that are not ``symbol``, in order."""
         return tuple(sorted(quoted for quoted in self.quotes if quoted != symbol))
-
-
-def is_option_plan(action_plan: ActionPlan) -> bool:
-    """Whether the plan's entry is in option contracts. A plan cannot mix them with a stock leg."""
-    return any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
 
 
 # Which structures of several legs the Clerk takes. Each is set True by the piece that makes it

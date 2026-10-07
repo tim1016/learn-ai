@@ -39,7 +39,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerPosition
 from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
-from app.broker.contract.options import BrokerOptionContract
+from app.broker.contract.options import BrokerOptionAccountSnapshot, BrokerOptionContract
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
@@ -80,6 +80,10 @@ class PaperAccountRead(_Account):
         self.listed: dict[str, BrokerOptionContract] = {SYMBOL: documented_option_listing(CALL)}
         self.listing_error: Exception | None = None
         self.listing_reads: list[str] = []
+        # What the account states of its option buying power, in dollars; a test may change it.
+        self.buying_power: Decimal | None = Decimal(100_000)
+        self.option_account_reads = 0
+
         # The account's option events, as a test scripts them: none, read whole, until it does.
         self.option_events = ScriptedOptionEvents()
         # Contracts Alpaca has taken off the account (expired, exercised, assigned or sold by it),
@@ -88,6 +92,12 @@ class PaperAccountRead(_Account):
         self.shares: dict[str, float] = {}
         self.outside_orders: list[BrokerOrder] = []
 
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        self.option_account_reads += 1
+        return BrokerOptionAccountSnapshot(
+            broker="alpaca", account_id="PA-OPTIONS", account_mode="paper", options_buying_power=self.buying_power,
+            options_approved_level=3, options_trading_level=3, observed_at_ms=NOON,
+        )
     async def read_option_event_activities(
         self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
     ) -> BrokerOptionEventEvidence:

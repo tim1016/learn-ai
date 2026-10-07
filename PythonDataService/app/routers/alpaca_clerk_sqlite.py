@@ -90,9 +90,14 @@ from app.schemas.alpaca_clerk_sqlite import (
     TimelinePageResponse,
     safe_flatten_pricing_response,
 )
+from app.schemas.option_buying_power_check import (
+    OptionBuyingPowerChecksResponse,
+    OptionBuyingPowerHoldReviewResponse,
+)
 from app.services.broker_v2_panel.bot_custody import bot_action_facade, bot_custody_facade
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
+from app.services.option_buying_power_views import option_buying_power_checks
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
@@ -390,6 +395,67 @@ async def get_bot_snapshot(
             detail={"reason": "unknown_strategy_instance"},
         )
     return ClerkProjectionResponse.from_projection(projection)
+
+
+def _option_buying_power_checks(
+    facade: SqliteAlpacaClerkFacade, strategy_instance_id: str
+) -> OptionBuyingPowerChecksResponse:
+    if facade.repository.strategy_instance(strategy_instance_id) is None:
+        raise UnknownStrategyInstanceError(strategy_instance_id)
+    return option_buying_power_checks(
+        facade.repository,
+        strategy_instance_id=strategy_instance_id,
+        simulation=not facade.compares_option_buying_power,
+        judged=settings.ALPACA_OPTION_BUYING_POWER_JUDGED,
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/option-buying-power-checks",
+    response_model=OptionBuyingPowerChecksResponse,
+)
+async def get_bot_option_buying_power_checks(
+    account_id: str,
+    strategy_instance_id: str,
+) -> OptionBuyingPowerChecksResponse:
+    """Each option entry of one bot beside Alpaca's option buying power, newest first (ADR 0076 decision 26).
+
+    Reads the Clerk's books only. A bot in a simulation is answered as
+    that: no comparison is made there, and none is implied.
+    """
+    async with _bot_facade(account_id, strategy_instance_id) as facade:
+        try:
+            return await asyncio.to_thread(_option_buying_power_checks, facade, strategy_instance_id)
+        except UnknownStrategyInstanceError as exc:
+            raise _unknown_bot_response(exc) from exc
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/option-buying-power-hold/review",
+    response_model=OptionBuyingPowerHoldReviewResponse,
+)
+async def review_bot_option_buying_power_hold(
+    account_id: str,
+    strategy_instance_id: str,
+) -> OptionBuyingPowerHoldReviewResponse:
+    """The owner has reviewed one bot's under-reserved notice: end it, and let the bot enter again.
+
+    The only way that notice ends. Asked again, or for a bot with no notice
+    open, it changes nothing and says so.
+    """
+    async with _bot_action_facade(account_id, strategy_instance_id) as facade:
+        try:
+            if await asyncio.to_thread(facade.repository.strategy_instance, strategy_instance_id) is None:
+                raise UnknownStrategyInstanceError(strategy_instance_id)
+            reviewed = await facade.review_option_buying_power_hold(
+                strategy_instance_id, operator=settings.PANEL_OPERATOR_IDENTITY
+            )
+            state = await asyncio.to_thread(_option_buying_power_checks, facade, strategy_instance_id)
+        except UnknownStrategyInstanceError as exc:
+            raise _unknown_bot_response(exc) from exc
+        except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+            raise _unavailable_response(exc) from exc
+    return OptionBuyingPowerHoldReviewResponse(reviewed=reviewed, state=state)
 
 
 async def _timeline(

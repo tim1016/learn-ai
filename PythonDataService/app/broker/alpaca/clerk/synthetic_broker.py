@@ -18,6 +18,7 @@ A run-end close (the simulation closing what an ended run left, owner decision
 instant it sold so the fill never predates its EXIT.
 
 An option order of one leg is filled from a quote, never a bar (ADR 0076).
+How it is filled lives in ``simulated_option_orders``, which the shadow world's port shares.
 The Clerk binds the quote to the order before it sends: an opening order is
 filled from the quote its limit was worked out from, a closing order from the
 newest quote kept for its contract (``kept_option_quotes``). Both are filled
@@ -62,44 +63,19 @@ of option events settles nothing and reports none.
 from __future__ import annotations
 
 import logging
-import threading
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date
-from decimal import Decimal
-from typing import Literal, NamedTuple
+from typing import Literal
 
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.fill_models import immediate_fill_price
-from app.broker.alpaca.clerk.kept_option_quotes import (
-    KeptOptionQuote,
-    KeptOptionQuotes,
-    KeptOptionQuotesUnavailable,
-)
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.money import contract_multiplier, money_context, normalize_money
-from app.broker.alpaca.clerk.option_effects import RecordedQuote
-from app.broker.alpaca.clerk.simulated_multi_leg_orders import (
-    BoundLegQuote,
-    filled_multi_leg_order,
-    legs_recorded,
-    multi_leg_order_view,
-)
+from app.broker.alpaca.clerk.simulated_option_expiry import SimulatedOptionExpiry
+from app.broker.alpaca.clerk.simulated_option_orders import SimulatedOptionOrders, contract_multipliers
 from app.broker.alpaca.clerk.simulated_option_settlement import (
-    SETTLEMENT_BAR_MAX_AGE_MS,
-    SETTLEMENT_GRACE_MS,
-    SIMULATED_CASH_SETTLEMENT_ACTIVITY,
-    SIMULATED_EXPIRY_ACTIVITY,
-    SIMULATED_OWNER_ENDING_ACTIVITY,
-    SIMULATED_OWNER_ENDING_RULE,
-    SIMULATED_SETTLEMENT_RULE,
     OwnersWord,
-    SettlementPrice,
     SimulatedOptionSettlements,
-    SimulatedOutcome,
-    SimulatedSettlement,
-    SynthesizedOptionSettlement,
-    exercise_value,
-    settlement_activity_id,
 )
 from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -112,14 +88,11 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     SynthesizedBarBindingError,
     SynthesizedOptionFill,
     SynthesizedOrderLedger,
-    SynthesizedOrderRecord,
     observed_in_send_session,
     project_positions,
 )
-from app.broker.alpaca.option_fees import fees_for_option_fill, option_fee_provision_cents
-from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOptionsNotSupported, BrokerOrderRejected
+from app.broker.contract.errors import BrokerOptionsNotSupported
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -129,14 +102,11 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPortfolioHistory,
     BrokerPosition,
-    OrderSide,
     PortfolioHistoryRange,
 )
 from app.broker.contract.option_events import (
-    BrokerOptionEventActivity,
     BrokerOptionEventEvidence,
     BrokerOptionEventResume,
-    OptionActivityStatus,
 )
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
@@ -144,19 +114,12 @@ from app.broker.contract.options import (
     BrokerOptionOrder,
     MultiLegOptionOrderRequest,
     OptionOrderRequest,
-    OptionPositionIntent,
-    SingleOptionOrderRequest,
 )
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.options.contract import OptionContract
-from app.options.deadlines import last_session_close_ms, past_last_session
-from app.options.event_allocation import OptionEventKind
 from app.options.quotes import HeldQuote
-from app.options.simulated_fill import SimulatedFillModel, simulated_entry_fills, simulated_exit_fills
-from app.options.structure import LegPosition, ResolvedLeg, ResolvedStructure
 from app.schemas.market_liveness import TopOfBookQuote
-from app.services.market_liveness import QUOTE_MAX_AGE_MS, prepared_top_of_book
+from app.services.market_liveness import prepared_top_of_book
 from app.services.session_authority import order_session_state_at_ms, session_state_at_ms
 from app.services.source_bar_ledger import (
     RECOVERY_QUOTE_PROVIDER,
@@ -165,7 +128,6 @@ from app.services.source_bar_ledger import (
     SourceBarConflictError,
     SourceBarLedger,
 )
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -179,8 +141,8 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     supports_extended_hours=True,
     extended_hours_window=ALPACA_EXTENDED_HOURS_WINDOW,
     supported_order_types=("market", "limit"),
-    # The simulation fills an option order from the quotes handed to it: one leg, or an opening
-    # order of several legs, every leg at once or none (#2913).
+    # The simulation fills an option order of one leg from a quote handed to it. One of several
+    # legs it does not take (#2913).
     supports_option_orders=True,
     supports_multi_leg_option_orders=True,
     data_feed="retained_source_bars",
@@ -195,57 +157,11 @@ class SimulatedPriceUnavailableError(RuntimeError):
     """No retained bar exists from which a synthetic fill may be derived."""
 
 
-class _BoundOptionQuote(NamedTuple):
-    """The quote one option order is to be filled from."""
-
-    symbol: str
-    quote: RecordedQuote
-    # Where it is kept, when it was read back from the quotes kept.
-    quote_ref: str | None
-    # For a close: the generation its exit decision read quotes in, or None when it read none.
-    usable_generation: int | None
-    # For an opening order: the shares one contract's price stands for, as the Clerk's books record
-    # it. None for a close, which opens nothing.
-    multiplier: int | None
-
-
-# How this simulation names an order: the prefix, then the client order id it was sent under.
-_SIM_ORDER_ID_PREFIX = "sim-order:"
-# The one leg of a single option order, as the fill model names it.
-_THE_LEG = "leg"
-# What the order's leg is in the structure it opens or closes: a closing sale closes a bought leg.
-_LEG_POSITION: Mapping[tuple[OptionPositionIntent, OrderSide], LegPosition] = {
-    (OptionPositionIntent.OPEN, OrderSide.BUY): "long",
-    (OptionPositionIntent.OPEN, OrderSide.SELL): "short",
-    (OptionPositionIntent.CLOSE, OrderSide.SELL): "long",
-    (OptionPositionIntent.CLOSE, OrderSide.BUY): "short",
-}
-
-
-class OptionOrdersNotTaken:
-    """The option methods of a trade port that takes no option order and holds none (#2913).
-
-    Each refuses by type. "Absent" would be an answer about an order, and
-    such a port never held one to answer about.
-    """
+class UnsupportedOptionOrderRefusal:
+    """The shared refusal for an unsupported option order (ADR 0076)."""
 
     broker_id: str
-    # How a refusal names the port: "The simulated broker".
     _named_in_option_refusals: str
-
-    async def submit_option_order(
-        self, order: OptionOrderRequest, *, client_order_id: str
-    ) -> BrokerOptionOrder:
-        del order, client_order_id
-        raise self._option_orders_not_taken("takes no option orders")
-
-    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
-        del client_order_id
-        raise self._option_orders_not_taken("holds no option orders")
-
-    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
-        del order_id
-        raise self._option_orders_not_taken("holds no option orders")
 
     def _option_orders_not_taken(self, what: str) -> BrokerOptionsNotSupported:
         return BrokerOptionsNotSupported(
@@ -255,7 +171,7 @@ class OptionOrdersNotTaken:
         )
 
 
-class SyntheticBroker(OptionOrdersNotTaken):
+class SyntheticBroker(UnsupportedOptionOrderRefusal):
     """Durable immediate-fill port that derives prices only from retained bars.
 
     A market leg, or a limit leg marketable against the decision bar's close,
@@ -288,14 +204,20 @@ class SyntheticBroker(OptionOrdersNotTaken):
                 account_id=self._account_id, source_bars=source_bars, label="simulated_order"
             )
         )
-        self._kept_quotes: KeptOptionQuotes | None = (
-            None if source_bars is None else KeptOptionQuotes.beside(source_bars.path)
+        # The option orders of one leg this simulation fills, from the quotes kept beside its order
+        # ledger. None with no ledger to record a fill in.
+        self._options: SimulatedOptionOrders | None = (
+            None
+            if source_bars is None or self._ledger is None
+            else SimulatedOptionOrders(
+                account_id=self._account_id,
+                ledger=self._ledger,
+                kept=KeptOptionQuotes.beside(source_bars.path),
+                clock=clock,
+                broker_id=self.broker_id,
+                id_prefix="sim",
+            )
         )
-        self._bound_option_quotes: dict[str, _BoundOptionQuote] = {}
-        # Every quote bound under one order id, by contract: what an order of several legs is
-        # filled from, a quote for each leg. An order of one leg reads the one above.
-        self._bound_leg_quotes: dict[str, dict[str, _BoundOptionQuote]] = {}
-        self._option_binding_lock = threading.Lock()
 
     def capabilities(self) -> BrokerCapabilities:
         return SYNTHETIC_CAPABILITIES
@@ -326,7 +248,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
             self.broker_id,
             [record.order for record in records],
             observed_at_ms=self._clock(),
-            contract_multipliers=_contract_multipliers(records),
+            contract_multipliers=contract_multipliers(records),
         )
 
     async def list_orders(
@@ -365,237 +287,18 @@ class SyntheticBroker(OptionOrdersNotTaken):
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
 
+
+
+
+
+
     def settle_expired_options(
         self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None
     ) -> SimulatedOptionSettlements:
-        """Settle every contract this simulation holds past its last session, and say what it settled and what it could not.
-
-        The one step that settles. It writes each settlement to this
-        simulation's own order ledger, once, and then hands back every
-        settlement dated in the window, the ones an earlier run made among
-        them: a settlement the Clerk has not booked yet is handed over
-        until it has. Everything is read under the ledger's own lock, so
-        what is handed back is what the ledger holds.
-
-        A contract is settled in cash at its exercise value, or expires at
-        nothing (``simulated_option_settlement``). It is never exercised
-        into shares. A contract whose closing price is still awaited, or
-        that has none, stays held and is named in the answer.
-
-        ``at_the_owners_word`` is the owner's word to end a contract that
-        nothing will settle, by contract symbol. The price is asked for
-        once more first. Only a contract that still has none is let go of,
-        at nothing. One that has a price by now is settled by the rule, and
-        the owner's word for it is not used.
-        """
-        if self._ledger is None:
-            return SimulatedOptionSettlements()
-        at_ms = self._clock()
-        window_start_ms = et_midnight_ms(et_date_at_ms(after_ms))
-        not_settled: dict[str, str] = {}
-        waiting: dict[str, int] = {}
-        with self._ledger.transaction() as records:
-            latest = list(self._ledger.latest_records_from(records).values())
-            multipliers = _contract_multipliers(latest)
-            held = project_positions([record.order for record in latest])
-            for symbol, (quantity, _notional) in held.items():
-                # A contract is a symbol this ledger opened with a multiplier. Shares are never settled.
-                if symbol not in multipliers or not position_quantity_is_nonzero(quantity):
-                    continue
-                contract = OptionContract.from_occ_symbol(symbol)
-                if not past_last_session(contract.expiry_date, at_ms):
-                    continue
-                unsettled = self._settle_one(
-                    records, contract, held=quantity, multiplier=multipliers[symbol], at_ms=at_ms
-                )
-                word = (at_the_owners_word or {}).get(symbol)
-                if isinstance(unsettled, _NoPriceAtTheClose) and word is not None:
-                    self._let_go_at_the_owners_word(
-                        records, contract, contracts=int(quantity), multiplier=multipliers[symbol], at_ms=at_ms,
-                        word=word, why=unsettled.why,
-                    )
-                elif isinstance(unsettled, _AwaitingTheClosingBar):
-                    waiting[symbol] = unsettled.until_ms
-                elif unsettled is not None:
-                    not_settled[symbol] = unsettled.why if isinstance(unsettled, _NoPriceAtTheClose) else unsettled
-            settled = tuple(
-                SimulatedSettlement(
-                    event=self._settlement_as_an_event(record.settlement, observed_at_ms=at_ms),
-                    record=record.settlement,
-                )
-                for record in self._ledger.latest_records_from(records).values()
-                if record.settlement is not None
-                and et_midnight_ms(record.settlement.contract.expiry_date) >= window_start_ms
-            )
-        return SimulatedOptionSettlements(settled=settled, not_settled=not_settled, waiting=waiting)
-
-    def _settlement_as_an_event(
-        self, settlement: SynthesizedOptionSettlement, *, observed_at_ms: int
-    ) -> BrokerOptionEventActivity:
-        """One settlement of the ledger in the shape an option event travels in.
-
-        It travels as an expiry, whatever its outcome: it ends a bought
-        position and moves no shares, and the rule that chooses lots knows
-        an expiry (``app/options/event_allocation.py``). The price a cash
-        settlement was booked at is in the simulation's own record, never
-        on this row, which states no cash.
-        """
-        contract = settlement.contract
-        activity_id = settlement_activity_id(contract.occ_symbol)
-        sold = settlement.outcome is SimulatedOutcome.SETTLED_IN_CASH
-        return BrokerOptionEventActivity(
-            broker=self.broker_id,
-            activity_id=activity_id,
-            activity_type=_ACTIVITY_CODES[settlement.outcome],
-            kind=OptionEventKind.EXPIRED,
-            status=OptionActivityStatus.EXECUTED,
-            activity_date_ms=et_midnight_ms(contract.expiry_date),
-            contract=contract,
-            position_change=-settlement.contracts,
-            net_amount=None if sold else Decimal(0),
-            group_id=activity_id,
-            created_at_ms=settlement.settled_at_ms,
-            observed_at_ms=observed_at_ms,
-        )
-
-    def _price_at_the_close(
-        self, contract: OptionContract, *, close_ms: int, at_ms: int
-    ) -> SettlementPrice | _AwaitingTheClosingBar | _NoPriceAtTheClose:
-        """The price a contract is settled from, the wait for it, or why there is none.
-
-        Only a bar the market delivered for the underlying counts, and only
-        one that ended inside the contract's last session. The bar that
-        ends exactly at the close is the price at once. Without it the
-        simulation waits out the grace, in case that bar is still on its
-        way, and then takes the newest bar of the session when it is not
-        too old to stand for the close.
-        """
-        assert self._source_bars is not None
-        root = contract.root
-        open_ms = session_open_ms_utc(et_date_at_ms(close_ms - 1))
-        bar = self._source_bars.latest_for_symbol(root, market_only=True, at_or_before_ms=close_ms)
-        in_the_session = bar is not None and bar.end_ms > open_ms
-        if bar is not None and in_the_session and bar.end_ms == close_ms:
-            return _settlement_price(bar, close_ms=close_ms)
-        if at_ms < close_ms + SETTLEMENT_GRACE_MS:
-            return _AwaitingTheClosingBar(until_ms=close_ms + SETTLEMENT_GRACE_MS)
-        if bar is None or not in_the_session:
-            return _NoPriceAtTheClose(
-                f"This simulation kept no price of {root} from the contract's last session, so it cannot say "
-                "what the contract was worth at the close."
-            )
-        if close_ms - bar.end_ms > SETTLEMENT_BAR_MAX_AGE_MS:
-            return _NoPriceAtTheClose(
-                f"The newest price of {root} this simulation kept from the contract's last session is from "
-                f"{_minutes(close_ms - bar.end_ms)} before the close. Its rule takes none older than "
-                f"{_minutes(SETTLEMENT_BAR_MAX_AGE_MS)}, so it cannot say what the contract was worth at the close."
-            )
-        return _settlement_price(bar, close_ms=close_ms)
-
-    def _settle_one(
-        self,
-        records: list[SynthesizedOrderRecord],
-        contract: OptionContract,
-        *,
-        held: float,
-        multiplier: int,
-        at_ms: int,
-    ) -> _AwaitingTheClosingBar | _NoPriceAtTheClose | str | None:
-        """Settle one expired contract in the ledger. None when it was settled; else the wait, or why it cannot be.
-
-        A contract with no price at the close is the one kind the owner can
-        end at their word. Any other reason is in plain words: a holding
-        this simulation settles in no way.
-
-        The figures are ``simulated_option_settlement.exercise_value``'s. One
-        record takes the option position out of the ledger at the booked
-        price, stamped at the close of the contract's last session. No
-        shares move.
-        """
-        assert self._ledger is not None
-        symbol = contract.occ_symbol
-        if held < 0 or not float(held).is_integer():
-            return "This simulation settles only whole contracts it bought."
-        if self._source_bars is None:
-            return "This simulation keeps no prices of the underlying, so it cannot say what the contract was worth at the close."
-        close_ms = last_session_close_ms(contract.expiry_date)
-        price = self._price_at_the_close(contract, close_ms=close_ms, at_ms=at_ms)
-        if not isinstance(price, SettlementPrice):
-            return price
-        contracts = int(held)
-        worth = exercise_value(
-            contract, underlying_price=price.underlying_price, contracts=contracts, multiplier=multiplier
-        )
-        sold = worth.booked > 0
-        settlement = SynthesizedOptionSettlement(
-            contract=contract,
-            outcome=SimulatedOutcome.SETTLED_IN_CASH if sold else SimulatedOutcome.EXPIRED,
-            contracts=contracts, multiplier=multiplier, last_session_close_ms=close_ms, settled_at_ms=at_ms,
-            rule=SIMULATED_SETTLEMENT_RULE, price=price, exercise_value=worth.worked_out, booked_price=worth.booked,
-            cash_cents=worth.cash_cents,
-            fee_cents=_sale_fee_cents(
-                et_date_at_ms(close_ms - 1), contracts=contracts, price=worth.booked, multiplier=multiplier
-            ) if sold else None,
-        )
-        self._ledger.append_locked(
-            records,
-            order=_settlement_order(
-                self.broker_id, settlement_client_order_id(symbol), symbol=symbol, quantity=float(contracts),
-                price=float(worth.booked), happened_at_ms=close_ms, observed_at_ms=at_ms,
-            ),
-            settlement=settlement,
-        )
-        logger.info(
-            "the simulation settled a contract it held past its last session",
-            extra={
-                "action": "simulated_option_settled", "account_id": self._account_id, "symbol": symbol,
-                "outcome": settlement.outcome.value, "contracts": contracts,
-                "underlying_price": str(price.underlying_price), "booked_price": str(worth.booked),
-                "bar_ref": price.bar_ref, "bar_before_close_ms": price.bar_before_close_ms,
-            },
-        )
-        return None
-
-    def _let_go_at_the_owners_word(
-        self,
-        records: list[SynthesizedOrderRecord],
-        contract: OptionContract,
-        *,
-        contracts: int,
-        multiplier: int,
-        at_ms: int,
-        word: OwnersWord,
-        why: str,
-    ) -> None:
-        """Take a contract with no price at the close out of the ledger, at nothing, at the owner's word.
-
-        One record, named as a settlement of the contract is named. It
-        takes the whole position out, so a price that turns up later finds
-        nothing to settle.
-        """
-        assert self._ledger is not None
-        symbol = contract.occ_symbol
-        close_ms = last_session_close_ms(contract.expiry_date)
-        self._ledger.append_locked(
-            records,
-            order=_settlement_order(
-                self.broker_id, settlement_client_order_id(symbol), symbol=symbol, quantity=float(contracts),
-                price=0.0, happened_at_ms=close_ms, observed_at_ms=at_ms,
-            ),
-            settlement=SynthesizedOptionSettlement(
-                contract=contract, outcome=SimulatedOutcome.ENDED_BY_OWNER, contracts=contracts,
-                multiplier=multiplier, last_session_close_ms=close_ms, settled_at_ms=at_ms,
-                rule=SIMULATED_OWNER_ENDING_RULE, booked_price=Decimal(0), cash_cents=0, owner=word,
-                why_no_settlement=why,
-            ),
-        )
-        logger.warning(
-            "the simulation let go of an expired contract it had no price for, at the owner's word",
-            extra={
-                "action": "simulated_option_ended_by_owner", "account_id": self._account_id, "symbol": symbol,
-                "contracts": contracts, "operator": word.operator,
-            },
-        )
+        return SimulatedOptionExpiry(
+            account_id=self._account_id, broker_id=self.broker_id, ledger=self._ledger,
+            source_bars=self._source_bars, clock=self._clock,
+        ).settle_expired_options(after_ms=after_ms, at_the_owners_word=at_the_owners_word)
 
     async def list_assets(
         self,
@@ -671,7 +374,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
 
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How each option order this world answered was priced, by client order id."""
-        return {} if self._ledger is None else self._ledger.option_fills()
+        return {} if self._options is None else self._options.fills()
 
     def bind_option_entry_quote(
         self, client_order_id: str, *, symbol: str, quote: HeldQuote, multiplier: int
@@ -684,16 +387,9 @@ class SyntheticBroker(OptionOrdersNotTaken):
         the order, and the position the order opens is counted in dollars
         by it (``synthesized_positions``).
         """
-        if self._ledger is None or self._kept_quotes is None:
+        if self._options is None:
             raise SynthesizedBarBindingError("A simulated option fill requires the account's order ledger.")
-        if not client_order_id:
-            raise SynthesizedBarBindingError("A simulated option fill requires a client order id.")
-        self._kept_quotes.keep(symbol, quote, kept_at_ms=self._clock())
-        with self._option_binding_lock:
-            self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
-                symbol, RecordedQuote.of(quote), None, quote.generation, multiplier
-            )
-            self._bound_leg_quotes.setdefault(client_order_id, {})[symbol] = self._bound_option_quotes[client_order_id]
+        self._options.bind_entry_quote(client_order_id, symbol=symbol, quote=quote, multiplier=multiplier)
 
     def bind_option_close_quotes(
         self,
@@ -715,23 +411,11 @@ class SyntheticBroker(OptionOrdersNotTaken):
         the newest quote kept by now has not the side this close fills at,
         or the contract is past its last session and nothing trades in it.
         """
-        if self._ledger is None or self._kept_quotes is None:
+        if self._options is None:
             return False
-        try:
-            for quote in quotes:
-                self._kept_quotes.restore(symbol, quote)
-            newest = self._closing_quote(symbol, side=side)
-        except KeptOptionQuotesUnavailable:
-            self._log_kept_quotes_unreadable(symbol, client_order_id=client_order_id)
-            return False
-        if newest is None:
-            return False
-        with self._option_binding_lock:
-            self._bound_option_quotes[client_order_id] = _BoundOptionQuote(
-                symbol, newest.quote, newest.ref, usable_generation, None
-            )
-            self._bound_leg_quotes.setdefault(client_order_id, {})[symbol] = self._bound_option_quotes[client_order_id]
-        return True
+        return self._options.bind_close_quotes(
+            client_order_id, symbol=symbol, side=side, quotes=quotes, usable_generation=usable_generation
+        )
 
     def bind_evaluated_bar(
         self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
@@ -742,23 +426,6 @@ class SyntheticBroker(OptionOrdersNotTaken):
                 "Synthetic bar binding requires an authority-scoped retained-bar ledger."
             )
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
-
-    def _closing_quote(self, symbol: str, *, side: Literal["buy", "sell"]) -> KeptOptionQuote | None:
-        """The quote kept for a contract that a close of it made now is filled from, or None.
-
-        None for a contract past its last session. Otherwise the quote whose
-        sides were received last, when it has the side the close fills at,
-        the bid for a sale: an older quote does not stand in for a newest
-        one that lacks it (``KeptOptionQuotes.closing_quote``). A quote
-        stamped later than this simulation's clock is left out: it is not a
-        price the close could have met.
-        """
-        if self._kept_quotes is None:
-            return None
-        now_ms = self._clock()
-        if past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms):
-            return None
-        return self._kept_quotes.closing_quote(symbol, side=side, at_ms=now_ms)
 
     def recovery_price_available(self, symbol: str, *, side: Literal["buy", "sell"] = "sell") -> bool:
         """Whether a recovery EXIT for ``symbol`` sent now has a price to fill at.
@@ -775,25 +442,8 @@ class SyntheticBroker(OptionOrdersNotTaken):
         """
         contract_symbol = symbol.upper()
         if is_option_contract_symbol(contract_symbol):
-            now_ms = self._clock()
-            expiry = OptionContract.from_occ_symbol(contract_symbol).expiry_date
-            if self._kept_quotes is None or past_last_session(expiry, now_ms):
-                return False
-            try:
-                return self._kept_quotes.prices_a_close(contract_symbol, side=side, at_ms=now_ms)
-            except KeptOptionQuotesUnavailable:
-                self._log_kept_quotes_unreadable(contract_symbol, client_order_id=None)
-                return False
+            return self._options is not None and self._options.prices_a_close(contract_symbol, side=side)
         return self._recovery_quote(symbol) is not None
-
-    def _log_kept_quotes_unreadable(self, symbol: str, *, client_order_id: str | None) -> None:
-        """An unreadable file of kept quotes prices nothing: the close is left unsent, and this says why."""
-        logger.error(
-            "the option quotes kept for a Dry Run cannot be read; a close of the contract cannot be priced",
-            exc_info=True,
-            extra={"action": "kept_option_quotes_unreadable", "account_id": self._account_id,
-                   "symbol": symbol, "client_order_id": client_order_id},
-        )
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
         """Bind a recovery EXIT to the live IBKR quote read now, retained as its evidence bar.
@@ -976,216 +626,33 @@ class SyntheticBroker(OptionOrdersNotTaken):
         and the two lookups itself. What it still does not take, an order of
         several legs or any order when it has no ledger to record a fill in,
         it refuses in the words every simulated port refuses option orders
-        in (``OptionOrdersNotTaken``).
+        in (``UnsupportedOptionOrderRefusal``).
 
         The order's record is one more in the same ledger. Its ``order`` is
         the fill as the Clerk folds every simulated fill, under the
         contract's own symbol, so the stock lookups, the open orders and the
         positions all show it.
         """
-        if self._ledger is None:
+        if self._options is None:
             raise self._option_orders_not_taken("takes no option orders without its order ledger")
         if isinstance(order, MultiLegOptionOrderRequest):
-            return self._submit_multi_leg_option_order(order, client_order_id=client_order_id, ledger=self._ledger)
-        symbol = order.contract.occ_symbol
-        with self._ledger.transaction() as records:
-            existing = self._ledger.find_record(records, client_order_id)
-            bound = self._consume_option_binding(client_order_id)
-            if existing is not None:
-                if existing.option is None:
-                    raise BrokerOrderRejected(
-                        "That client order id already names a stock order in this simulation.", broker=self.broker_id
-                    )
-                return _option_order_view(existing, observed_at_ms=self._clock())
-            at_ms = self._clock()
-            if past_last_session(order.contract.expiry_date, at_ms):
-                raise BrokerOrderRejected(
-                    f"{symbol} expired on {order.contract.expiry_date.isoformat()} and its last session is over. "
-                    "Nothing trades in it, and the simulation invents no fill.",
-                    broker=self.broker_id,
-                )
-            if order.intent is OptionPositionIntent.CLOSE:
-                self._refuse_a_close_of_more_than_is_held(order, self._ledger.latest_orders_from_records(records))
-            if bound is None or bound.symbol != symbol:
-                raise BrokerOrderRejected(
-                    f"The simulation was handed no quote of {symbol} to fill this order from, and it invents no fill.",
-                    broker=self.broker_id,
-                )
-            if order.intent is OptionPositionIntent.OPEN and bound.multiplier is None:
-                # Its position could be counted only as shares: a hundred times too small.
-                raise BrokerOrderRejected(
-                    f"The simulation was not told how many shares one contract of {symbol} stands for, so it "
-                    "could not count the position this order opens. It fills no such order.",
-                    broker=self.broker_id,
-                )
-            fill = self._simulated_option_fill(order, bound, at_ms=at_ms)
-            within_limit = order.limit_price is None or (
-                fill.price <= order.limit_price if order.side is OrderSide.BUY else fill.price >= order.limit_price
-            )
-            record = self._ledger.append_locked(
-                records,
-                order=_option_order_evidence(
-                    order, client_order_id=client_order_id, broker_id=self.broker_id, at_ms=at_ms,
-                    fill_price=fill.price if within_limit else None,
-                ),
-                option=SynthesizedOptionFill(
-                    request=order,
-                    quote=bound.quote,
-                    multiplier=bound.multiplier,
-                    quote_ref=bound.quote_ref,
-                    fill_model=fill.model if within_limit else None,
-                    fill_price=fill.price if within_limit else None,
-                    quote_age_ms=fill.quote_age_ms if within_limit else None,
-                    filled_at_ms=at_ms if within_limit else None,
-                ),
-            )
-            return _option_order_view(record, observed_at_ms=at_ms)
-
-    def _refuse_a_close_of_more_than_is_held(self, order: SingleOptionOrderRequest, orders: list[BrokerOrder]) -> None:
-        """Refuse a closing order this simulation's own position does not cover.
-
-        A sale to close needs that many contracts held long, and a purchase
-        to close that many held short. Filled beyond that, a closing order
-        would open the other side, which no close may do.
-        """
-        symbol = order.contract.occ_symbol
-        held, _notional = project_positions(orders).get(symbol, (0.0, 0.0))
-        closable = held if order.side is OrderSide.SELL else -held
-        if order.quantity > closable:
-            raise BrokerOrderRejected(
-                f"This closing order would {order.side.value} {order.quantity} of {symbol}, and the simulation "
-                f"holds {held:g}. A closing order never opens a position.",
-                broker=self.broker_id,
-            )
-
-    def _simulated_option_fill(
-        self, order: SingleOptionOrderRequest, bound: _BoundOptionQuote, *, at_ms: int
-    ) -> _PricedOptionFill:
-        """The one leg's fill at the natural price of the bound quote, or a definitive refusal."""
-        symbol = order.contract.occ_symbol
-        structure = ResolvedStructure(
-            legs=(
-                ResolvedLeg(
-                    leg_id=_THE_LEG, contract=order.contract, position=_LEG_POSITION[order.intent, order.side], ratio=1
-                ),
-            )
-        )
-        quotes = {_THE_LEG: bound.quote.held}
-        try:
-            if order.intent is OptionPositionIntent.OPEN:
-                (fill,) = simulated_entry_fills(structure, quotes, units=order.quantity, at_ms=at_ms)
-            else:
-                (fill,) = simulated_exit_fills(
-                    structure, quotes, units=order.quantity, at_ms=at_ms,
-                    generation=bound.usable_generation, max_age_ms=QUOTE_MAX_AGE_MS,
-                )
-        except ValueError as exc:
-            raise BrokerOrderRejected(
-                f"The quote handed over for {symbol} cannot fill this order: {exc}.", broker=self.broker_id
-            ) from exc
-        if fill.price is None or fill.quote_age_ms is None:
-            raise BrokerOrderRejected(
-                f"Nothing kept for {symbol} gives a price to close it at, and the simulation invents no fill.",
-                broker=self.broker_id,
-            )
-        if fill.price <= 0:
-            # The books record no fill at a price of zero, so a contract nobody bids for stays open.
-            raise BrokerOrderRejected(
-                f"Nothing is bid for {symbol}. The simulation does not record a sale for nothing.",
-                broker=self.broker_id,
-            )
-        return _PricedOptionFill(fill.price, fill.model, fill.quote_age_ms)
-
-    def _consume_option_binding(self, client_order_id: str) -> _BoundOptionQuote | None:
-        with self._option_binding_lock:
-            self._bound_leg_quotes.pop(client_order_id, None)
-            return self._bound_option_quotes.pop(client_order_id, None)
-
-    def _consume_leg_bindings(self, client_order_id: str) -> dict[str, _BoundOptionQuote]:
-        """Every quote bound under one order id, by contract, taken once: an order of several legs' own."""
-        with self._option_binding_lock:
-            self._bound_option_quotes.pop(client_order_id, None)
-            return self._bound_leg_quotes.pop(client_order_id, {})
-
-    def _submit_multi_leg_option_order(
-        self, order: MultiLegOptionOrderRequest, *, client_order_id: str, ledger: SynthesizedOrderLedger
-    ) -> BrokerOptionOrder:
-        """Fill an opening order of several legs, every leg at once from the quote bound for it, or none.
-
-        The fill is ``simulated_multi_leg_orders``'s. Here the bindings are
-        taken, the order is answered again from its legs' records when it
-        was already answered, and every leg's record is written in one
-        ledger write.
-        """
-        with ledger.transaction() as records:
-            bound = self._consume_leg_bindings(client_order_id)
-            if ledger.find_record(records, client_order_id) is not None:
-                raise BrokerOrderRejected(
-                    "That client order id already names an order of one leg in this simulation.", broker=self.broker_id
-                )
-            at_ms = self._clock()
-            already = legs_recorded(ledger.latest_records_from(records), client_order_id)
-            if already:
-                return self._multi_leg_order_view(already, client_order_id, observed_at_ms=at_ms)
-            legs = filled_multi_leg_order(
-                order,
-                client_order_id=client_order_id,
-                bound={
-                    symbol: BoundLegQuote(quoted.quote, quoted.quote_ref, quoted.multiplier)
-                    for symbol, quoted in bound.items()
-                },
-                at_ms=at_ms,
-                broker_id=self.broker_id,
-                shape_leg_order=lambda request, leg_client_order_id, fill_price, order_type: _option_order_evidence(
-                    request, client_order_id=leg_client_order_id, broker_id=self.broker_id, at_ms=at_ms,
-                    fill_price=fill_price,
-                ).model_copy(update={"order_type": order_type}),
-            )
-            appended = ledger.append_option_legs_locked(records, legs)
-            return self._multi_leg_order_view(appended, client_order_id, observed_at_ms=at_ms)
-
-    def _multi_leg_order_view(
-        self, legs: Sequence[SynthesizedOrderRecord], client_order_id: str, *, observed_at_ms: int
-    ) -> BrokerOptionOrder:
-        if len(legs) < 2:
-            # Every leg of an order is written in one ledger write. A part of one is a torn ledger.
-            raise BrokerEvidenceUnavailable(
-                "The simulation's ledger holds a part of an option order of several legs.",
-                broker=self.broker_id,
-                detail=f"Order {client_order_id!r} has {len(legs)} of its legs on record.",
-            )
-        return multi_leg_order_view(
-            legs, parent_client_order_id=client_order_id, parent_order_id=f"{_SIM_ORDER_ID_PREFIX}{client_order_id}",
-            broker_id=self.broker_id, observed_at_ms=observed_at_ms,
-        )
-
-    def _multi_leg_order_sent_as(self, client_order_id: str) -> BrokerOptionOrder | None:
-        """The order of several legs this simulation answered under ``client_order_id``, or None."""
-        if self._ledger is None:
-            return None
-        legs = legs_recorded(self._ledger.latest_records(), client_order_id)
-        return self._multi_leg_order_view(legs, client_order_id, observed_at_ms=self._clock()) if legs else None
+            return self._options.submit_multi(order, client_order_id=client_order_id)
+        return self._options.submit(order, client_order_id=client_order_id)
 
     async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
-        return self._option_order_where(
+        if self._options is None:
+            return None
+        return self._options.order_where(
             lambda record: record.order.client_order_id == client_order_id
-        ) or self._multi_leg_order_sent_as(client_order_id)
+        ) or self._options.multi_leg_sent_as(client_order_id)
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
-        one_leg = self._option_order_where(lambda record: record.order.order_id == order_id)
-        if one_leg is not None or not order_id.startswith(_SIM_ORDER_ID_PREFIX):
-            return one_leg
-        # An order of several legs has no record of its own: its id is the prefix and its client order id.
-        return self._multi_leg_order_sent_as(order_id.removeprefix(_SIM_ORDER_ID_PREFIX))
-
-    def _option_order_where(self, matches: Callable[[SynthesizedOrderRecord], bool]) -> BrokerOptionOrder | None:
-        """The option order this simulation holds that ``matches``, or None: it holds no such option order."""
-        if self._ledger is None:
+        if self._options is None:
             return None
-        record = next(
-            (row for row in self._ledger.latest_records().values() if row.option is not None and matches(row)), None
-        )
-        return None if record is None else _option_order_view(record, observed_at_ms=self._clock())
+        one_leg = self._options.order_where(lambda record: record.order.order_id == order_id)
+        if one_leg is not None or not order_id.startswith("sim-order:"):
+            return one_leg
+        return self._options.multi_leg_sent_as(order_id.removeprefix("sim-order:"))
 
     def _latest_orders(self) -> list[BrokerOrder]:
         return [] if self._ledger is None else self._ledger.latest_orders()
@@ -1229,205 +696,21 @@ class SyntheticBroker(OptionOrdersNotTaken):
         )
 
 
-class _PricedOptionFill(NamedTuple):
-    """A simulated option fill that has a price above zero."""
-
-    price: Decimal
-    model: SimulatedFillModel
-    quote_age_ms: int
 
 
-def _option_order_evidence(
-    order: SingleOptionOrderRequest,
-    *,
-    client_order_id: str,
-    broker_id: str,
-    at_ms: int,
-    fill_price: Decimal | None,
-) -> BrokerOrder:
-    """A simulated option order as the Clerk folds every simulated order: filled at one price, or ended unfilled.
-
-    The symbol is the contract's, the quantity is contracts and the price is
-    dollars a share. ``fill_price`` is None for a limit the quote did not
-    reach: the simulation cannot rest an order, so it ends on the spot with
-    nothing filled (ruling R9).
-    """
-    filled = fill_price is not None
-    contracts = float(order.quantity)
-    return BrokerOrder(
-        broker=broker_id,
-        order_id=f"sim-order:{client_order_id}",
-        client_order_id=client_order_id,
-        symbol=order.contract.occ_symbol,
-        asset_class="us_option",
-        side=order.side.value,
-        order_type=order.order_type.value,
-        time_in_force="day",
-        quantity=contracts,
-        limit_price=None if order.limit_price is None else float(order.limit_price),
-        stop_price=None,
-        extended_hours=False,
-        submitted_at_ms=at_ms,
-        created_at_ms=at_ms,
-        updated_at_ms=at_ms,
-        expired_at_ms=None,
-        observed_at_ms=at_ms,
-        filled_quantity=contracts if filled else 0.0,
-        filled_avg_price=float(fill_price) if fill_price is not None else None,
-        status="filled" if filled else "canceled",
-        filled_at_ms=at_ms if filled else None,
-        canceled_at_ms=None if filled else at_ms,
-        events=(
-            [
-                {
-                    "event_type": "fill",
-                    "occurred_at_ms": at_ms,
-                    "price": float(fill_price),
-                    "quantity": contracts,
-                    "execution_id": f"sim-execution:{client_order_id}",
-                }
-            ]
-            if fill_price is not None
-            else []
-        ),
-    )
-
-
-class _AwaitingTheClosingBar(NamedTuple):
-    """A contract's last session is over and its closing bar may still arrive: the simulation waits."""
-
-    until_ms: int
-
-
-class _NoPriceAtTheClose(NamedTuple):
-    """Nothing kept says what the underlying closed at. No price comes by itself: only the owner's word ends it."""
-
-    why: str
 
 
 # What each outcome is handed over as, where a broker's activity carries the broker's own code.
-_ACTIVITY_CODES: Mapping[SimulatedOutcome, str] = {
-    SimulatedOutcome.EXPIRED: SIMULATED_EXPIRY_ACTIVITY,
-    SimulatedOutcome.SETTLED_IN_CASH: SIMULATED_CASH_SETTLEMENT_ACTIVITY,
-    SimulatedOutcome.ENDED_BY_OWNER: SIMULATED_OWNER_ENDING_ACTIVITY,
-}
 
 
-def settlement_client_order_id(symbol: str) -> str:
-    """The id of the one ledger record that takes a contract out of this simulation past its last session."""
-    return f"sim-settlement:{symbol}:option"
 
 
-def _minutes(ms: int) -> str:
-    minutes = ms // 60_000
-    return f"{minutes} minute{'' if minutes == 1 else 's'}"
 
 
-def _settlement_price(bar: RetainedSourceBar, *, close_ms: int) -> SettlementPrice:
-    """The close of one kept bar as the price a contract is settled from."""
-    return SettlementPrice(
-        underlying_price=bar.close, bar_ref=bar.bar_ref, bar_provider=bar.provider, bar_end_ms=bar.end_ms,
-        bar_before_close_ms=close_ms - bar.end_ms,
-    )
 
 
-def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multiplier: int) -> int | None:
-    """What the option fee model charges one simulated sale taken as a day of its own, or None when it cannot say.
-
-    For the settlement's own record. The account's fees are worked out
-    from its fills where every fee is (``fee_evidence``), which settles a
-    day over all of that day's option fills, so the day's charge can differ
-    from this by a cent a fee type.
-
-    Formula: ``option_fee_provision_cents`` of the one fill: each fee type of a
-      sale of ``contracts`` at ``price`` a share, rounded up to the cent, summed.
-    Reference: ADR 0076 decision 13; Alpaca's fee schedule as ``option_fees.py`` cites it.
-    Canonical implementation: ``app/broker/alpaca/option_fees.py``. Nothing is worked out here.
-    Validated against: tests/broker/alpaca/clerk/test_synthetic_broker_option_settlement.py
-      (one call sold at 5.25: nine cents, by hand).
-    """
-    try:
-        return option_fee_provision_cents([
-            fees_for_option_fill(
-                trade_date=trade_date, side=OrderSide.SELL, contracts=Decimal(contracts), premium=price,
-                multiplier=multiplier,
-            )
-        ])
-    except RateNotPinnedError:
-        # A fee rate is not pinned for that day. The record says the fee is not known, never that it is nothing.
-        return None
 
 
-def _settlement_order(
-    broker_id: str,
-    client_order_id: str,
-    *,
-    symbol: str,
-    quantity: float,
-    price: float,
-    happened_at_ms: int,
-    observed_at_ms: int,
-) -> BrokerOrder:
-    """A settlement in the shape the ledger's position fold reads: a sale of the contracts, filled once, in full.
-
-    It is no order anyone sent. It is written as one so that the
-    simulation's positions, which are a fold of its orders, show what the
-    settlement did. It is stamped at the close of the contract's last session.
-    """
-    return BrokerOrder(
-        broker=broker_id,
-        order_id=f"sim-order:{client_order_id}",
-        client_order_id=client_order_id,
-        symbol=symbol,
-        asset_class="us_option",
-        side="sell",
-        order_type="market",
-        time_in_force="day",
-        quantity=quantity,
-        limit_price=None,
-        stop_price=None,
-        extended_hours=False,
-        submitted_at_ms=happened_at_ms,
-        created_at_ms=happened_at_ms,
-        updated_at_ms=happened_at_ms,
-        expired_at_ms=None,
-        observed_at_ms=observed_at_ms,
-        filled_quantity=quantity,
-        filled_avg_price=price,
-        status="filled",
-        filled_at_ms=happened_at_ms,
-        canceled_at_ms=None,
-    )
-
-
-def _option_order_view(record: SynthesizedOrderRecord, *, observed_at_ms: int) -> BrokerOptionOrder:
-    """One recorded option order as the option port answers about it."""
-    option, order = record.option, record.order
-    assert option is not None
-    request = option.request
-    return BrokerOptionOrder(
-        broker=order.broker,
-        order_id=order.order_id,
-        client_order_id=order.client_order_id,
-        multi_leg=False,
-        contract=request.contract,
-        side=request.side,
-        intent=request.intent,
-        order_type=request.order_type.value,
-        time_in_force="day",
-        quantity=request.quantity,
-        filled_quantity=request.quantity if option.fill_price is not None else 0,
-        limit_price=request.limit_price,
-        filled_avg_price=option.fill_price,
-        status=order.status,
-        submitted_at_ms=order.submitted_at_ms,
-        created_at_ms=order.created_at_ms,
-        updated_at_ms=order.updated_at_ms,
-        filled_at_ms=order.filled_at_ms,
-        canceled_at_ms=order.canceled_at_ms,
-        expired_at_ms=order.expired_at_ms,
-        observed_at_ms=observed_at_ms,
-    )
 
 
 def shape_immediate_order(
@@ -1491,15 +774,6 @@ def shape_immediate_order(
             else []
         ),
     )
-
-
-def _contract_multipliers(records: Sequence[SynthesizedOrderRecord]) -> dict[str, int]:
-    """The multiplier each option contract was opened with, by OCC symbol, from the orders' own records."""
-    return {
-        record.order.symbol: record.option.multiplier
-        for record in records
-        if record.option is not None and record.option.multiplier is not None
-    }
 
 
 def _position_dollars(per_share: float, multiplier: int | None) -> float:

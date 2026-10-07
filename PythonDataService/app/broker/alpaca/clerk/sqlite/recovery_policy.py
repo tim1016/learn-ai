@@ -17,6 +17,7 @@ from typing import Literal, NamedTuple, TypeGuard
 
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_account_id,
+    is_simulated_account_id,
     is_synthetic_account_id,
 )
 from app.broker.alpaca.clerk.recovery_reduction import market_leg_sendable
@@ -36,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
     END_EXPIRED_OPTION_LABEL,
     expired_contract_hold_ref,
+    owner_ending_not_possible_ref,
     owner_ending_offered_from_ms,
 )
 from app.broker.alpaca.clerk.sqlite.projection_models import (
@@ -178,9 +180,10 @@ class RecoveryPolicyContext:
     # This bot's closing orders whose outcome is unknown and that an operator
     # may settle (#2854); empty for an account-scoped context.
     unknown_exit_orders: tuple[ProjectedUnknownExitOrder, ...] = ()
-    # A Dry Run's positions in option contracts that nothing kept can price a
-    # close of now, each as its contract and the side that closes it
-    # (ADR 0076). Empty on every other account, which keeps no option quotes.
+    # A Dry Run's or a Live Shadow's positions in option contracts that nothing
+    # kept can price a close of now, each as its contract and the side that
+    # closes it (ADR 0076). Empty on every other account, which keeps no
+    # option quotes.
     unpriced_option_closes: tuple[tuple[str, str], ...] = ()
 
 
@@ -1138,6 +1141,13 @@ def _why_an_expired_contract_is_not_ended_yet(
     of the session after the contract's last, so the broker's record has
     had a full business day to come. A sold contract is never ended this
     way: if it was assigned, shares moved.
+
+    Nor is it offered while the hold itself says the contract is not ended
+    at the owner's word as things stand (``owner_ending_not_possible_ref``):
+    a row of the broker's that may be the contract's end stands in the way,
+    and the press could only be refused. The hold's words are written by
+    the function that decides the press, so what is offered here does not
+    fail there for a reason that was already known.
     """
     symbol = position.symbol.upper()
     if position.attributed_qty < 0:
@@ -1146,13 +1156,15 @@ def _why_an_expired_contract_is_not_ended_yet(
             f"{symbol} is held sold. If it was assigned, shares moved, and no word undoes that.",
             "Compare this bot's positions with the broker's.",
         )
-    held_for = any(
-        uncertainty.reason_code == OPTION_EXPIRED_NOT_SETTLED_REASON_CODE
-        and uncertainty.strategy_instance_id == ctx.strategy_instance_id
-        and expired_contract_hold_ref(symbol) in uncertainty.evidence_refs
+    named_by_its_hold = {
+        ref
         for uncertainty in ctx.uncertainties
-    )
-    simulated = is_synthetic_account_id(ctx.account_id)
+        if uncertainty.reason_code == OPTION_EXPIRED_NOT_SETTLED_REASON_CODE
+        and uncertainty.strategy_instance_id == ctx.strategy_instance_id
+        for ref in uncertainty.evidence_refs
+    }
+    held_for = expired_contract_hold_ref(symbol) in named_by_its_hold
+    simulated = is_simulated_account_id(ctx.account_id)
     if not held_for:
         return (
             "EXPIRED_OPTION_CONTRACT_MAY_STILL_BE_SETTLED",
@@ -1162,6 +1174,13 @@ def _why_an_expired_contract_is_not_ended_yet(
                 else f"The Clerk has not yet read the broker's records since {symbol} expired and found none for it."
             ),
             "Nothing to do yet: the Clerk looks for the contract's settlement by itself.",
+        )
+    if owner_ending_not_possible_ref(symbol) in named_by_its_hold:
+        return (
+            "EXPIRED_OPTION_CONTRACT_RECORD_IN_THE_WAY",
+            f"A record of the broker's that may be {symbol}'s end is not booked whole as it reads, and the contract "
+            "is not ended at your word while that stands.",
+            "Nothing to do here. The notice that the contract is not settled says what is known of the record.",
         )
     if simulated:
         return None
@@ -1498,7 +1517,7 @@ def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision
     them would go stale under the operator's hands every 15 s with nothing
     about the order changed. A send made again changes the token.
     """
-    simulated = is_synthetic_account_id(ctx.account_id) or is_shadow_account_id(ctx.account_id)
+    simulated = is_simulated_account_id(ctx.account_id) or is_shadow_account_id(ctx.account_id)
     bot_scoped = ctx.strategy_instance_id is not None
     order = (
         ctx.unknown_exit_orders[0]

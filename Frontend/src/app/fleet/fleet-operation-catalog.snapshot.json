@@ -317,6 +317,16 @@
       "path_template": "/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare",
       "requires_account": true
     },
+    "custody_option_buying_power_checks": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/option-buying-power-checks",
+      "requires_account": true
+    },
+    "custody_option_buying_power_hold_review": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/custody/bots/{sid}/option-buying-power-hold/review",
+      "requires_account": true
+    },
     "custody_option_event_hold_ack": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/custody/option-event-holds/acknowledge",

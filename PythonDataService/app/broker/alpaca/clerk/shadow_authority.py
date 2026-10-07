@@ -33,6 +33,8 @@ from app.broker.alpaca.clerk.active_runtime import (
     transient_startup_failure,
     unavailable_runtime,
 )
+from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
     LiveEnvelopeGate,
@@ -218,6 +220,15 @@ async def select_shadow_clerk_runtime(
     # unready; they never manufacture a baseline after an evidence gap.
     if composed.envelope_sync is not None:
         await composed.envelope_sync.tick()
+    # The option contracts this Shadow's bots hold are asked for and quoted from its own books,
+    # whether a runner is alive or not, into the file its order book fills and its account
+    # reading marks from (ADR 0076 decision 25). Reading them writes nothing. Followed last: nothing
+    # after this can fail and leave them followed with no runtime to close them.
+    option_books = get_held_option_quotes().follow(
+        shadow.account_id,
+        books=composed.repository.option_contracts_to_watch,
+        kept=KeptOptionQuotes.of_account(artifacts_root=artifacts_root, account_id=shadow.account_id),
+    )
     return ActiveClerkRuntime(
         authority_kind="shadow",
         clerk=composed.facade,
@@ -225,7 +236,9 @@ async def select_shadow_clerk_runtime(
         hold_sync=composed.hold_sync,
         fee_sync=composed.fee_sync,
         envelope_sync=composed.envelope_sync,
+        deadline_keeper=composed.deadline_keeper,
         evidence_sink=NullTradeUpdateEvidenceSink(),
+        option_books=option_books,
         _sqlite_repository=composed.repository,
         account_id=shadow.account_id,
         account_authority_kind="shadow",

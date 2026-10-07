@@ -293,10 +293,10 @@ class GuardedBrokerTradePort:
         self._assert_unfenced("bind_option_entry_quote")
         bind = getattr(self._inner, "bind_option_entry_quote", None)
         if not callable(bind):
-            # A port that fills no option order from a quote: a Live Shadow's, or a real broker's.
+            # A port that fills no option order from a quote: a real broker's.
             # Definitive, as any refusal before contact is: nothing was sent and no order exists.
             raise BrokerOptionsNotSupported(
-                "This account's trade port takes no option order filled from a quote; only a Dry Run's does.",
+                "This account's trade port takes no option order filled from a quote; only a simulation's does.",
                 broker=self._inner.broker_id,
                 detail="Nothing was sent and no order exists.",
             )

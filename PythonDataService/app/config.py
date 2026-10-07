@@ -256,6 +256,21 @@ class Settings(BaseSettings):
     # Account-level half of the two-key carryover permission. A deployment
     # must also opt in explicitly; the default remains flat-only Resume.
     ALPACA_PAPER_CARRYOVER_ENABLED: bool = False
+    # Whether a Live account may run a bot that trades option contracts (ADR
+    # 0076 decision 24). Off: Deploy, the account Clerk and the Alpaca port
+    # each refuse it by name, because no option order from this system has
+    # been checked against Alpaca. Turn it on only after the first Paper
+    # option orders have been checked there. A Dry Run and a Paper account
+    # never read it, and a Live Shadow simulates option orders either way.
+    #
+    # Off stops what opens, never what closes. A contract bought while it
+    # was on is still held after it is switched off (or after a restart
+    # that lost the variable), and every order that only closes still goes
+    # out: the bot's own EXIT, the Clerk's scheduled close, Stop's close and
+    # Flatten. Off, a held bot cannot be started again, so its contract is
+    # closed by the Clerk or by the owner. The one reader is
+    # ``app.broker.alpaca.live_option_bots``.
+    ALPACA_LIVE_OPTION_BOTS_ENABLED: bool = False
     # Startup join (#2410): how long a starting or resuming bot may spend
     # filling the minutes before its live stream from IBKR history, counted
     # from the close of the minute the stream joined. One fixed deadline per
@@ -281,6 +296,14 @@ class Settings(BaseSettings):
     # one bought call or put never does either. The one reader is
     # ``app.broker.alpaca.multi_leg_option_orders``.
     ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED: bool = False
+    # The comparison of an option entry with Alpaca's option buying power (ADR
+    # 0076 decision 26). Off: both readings, the fall and what was set aside are
+    # recorded for every option entry on a real account, each comparison reads
+    # "unknown: not switched on", and no bot is ever held. On: a clean pair of
+    # readings is judged, and a fall of more than the bot set aside holds that
+    # bot's new entries until the owner has reviewed it. Stays off until Alpaca
+    # has been seen, on the account, to move the figure by an order's cost.
+    ALPACA_OPTION_BUYING_POWER_JUDGED: bool = False
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
     # live/production path — it exists to rehearse reject/throttle/conflict/

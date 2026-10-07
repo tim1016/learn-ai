@@ -150,9 +150,46 @@ def _closes_the_long_call() -> SingleOptionOrderRequest:
     )
 
 
+def _closes_the_ratio_spread() -> MultiLegOptionOrderRequest:
+    """The ratio spread closed: every side reversed, every leg closing, at the market."""
+    opened = _ratio_spread()
+    return MultiLegOptionOrderRequest(
+        legs=tuple(
+            OptionLegRequest(
+                contract=leg.contract,
+                side=OrderSide.SELL if leg.side is OrderSide.BUY else OrderSide.BUY,
+                intent=OptionPositionIntent.CLOSE,
+                ratio=leg.ratio,
+            )
+            for leg in opened.legs
+        ),
+        quantity=1,
+        order_type=OrderType.MARKET,
+    )
+
+
+def _closes_one_leg_and_opens_another() -> MultiLegOptionOrderRequest:
+    """A roll: one leg closes what is held and the other opens a new position."""
+    closing, opening = _closes_the_ratio_spread().legs[0], _ratio_spread().legs[1]
+    return MultiLegOptionOrderRequest(legs=(closing, opening), quantity=1, order_type=OrderType.MARKET)
+
+
+def _single_sell_to_open() -> SingleOptionOrderRequest:
+    return _long_call().model_copy(update={"side": OrderSide.SELL})
+
+
+def _opens_one_leg_and_closes_another() -> MultiLegOptionOrderRequest:
+    order = _closes_one_leg_and_opens_another()
+    return order.model_copy(update={"legs": tuple(reversed(order.legs))})
+
+
 @responses.activate
-@pytest.mark.parametrize("order", [_long_call, _closes_the_long_call, _ratio_spread], ids=["open", "close", "several legs"])
-async def test_a_live_account_is_sent_no_option_order_and_the_refusal_says_nothing_was_sent(
+@pytest.mark.parametrize(
+    "order",
+    [_long_call, _ratio_spread, _closes_one_leg_and_opens_another, _single_sell_to_open, _opens_one_leg_and_closes_another],
+    ids=["open", "several legs", "one leg opens", "single sell to open", "first leg opens"],
+)
+async def test_a_live_account_is_sent_no_option_order_that_opens_and_the_refusal_says_nothing_was_sent(
     live_broker: AlpacaBroker, order: Any
 ) -> None:
     with pytest.raises(BrokerOptionsNotSupported) as refused:
@@ -161,6 +198,49 @@ async def test_a_live_account_is_sent_no_option_order_and_the_refusal_says_nothi
     # Definitive, and before any request: nothing reached Alpaca's live endpoint.
     assert not isinstance(refused.value, BrokerUnavailable | BrokerEvidenceUnavailable)
     assert len(responses.calls) == 0
+
+
+@responses.activate
+@pytest.mark.parametrize(
+    ("order", "answer", "intents"),
+    [
+        (_closes_the_long_call, "OptionOrderResponse", ["sell_to_close"]),
+        (_closes_the_ratio_spread, "MultilegOptionsOrderResponse", ["sell_to_close", "buy_to_close"]),
+    ],
+    ids=["one leg", "several legs"],
+)
+async def test_an_order_whose_every_leg_closes_is_sent_to_a_live_account_while_live_is_switched_off(
+    live_broker: AlpacaBroker, order: Any, answer: str, intents: list[str]
+) -> None:
+    """A fence against opening never stops a close: a contract bought while the setting was on has a way out
+    after it is switched off. The endpoint here is a stand-in: nothing leaves this process."""
+    live_orders = "https://api.alpaca.markets/v2/orders"
+    responses.add(responses.POST, live_orders, json=_answer(answer))
+
+    await live_broker.submit_option_order(order(), client_order_id=_REF)
+
+    assert [call.request.url for call in responses.calls] == [live_orders]
+    sent = _sent()
+    assert [leg["position_intent"] for leg in sent.get("legs", [sent])] == intents
+
+
+@responses.activate
+async def test_the_one_setting_that_opens_live_to_option_bots_is_what_lifts_the_ports_refusal(
+    live_broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Off, a Live binding sends nothing. On, the same broker posts the same order to its own endpoint, which
+    here is a stand-in: nothing leaves this process."""
+    live_orders = "https://api.alpaca.markets/v2/orders"
+    responses.add(responses.POST, live_orders, json=_answer("OptionOrderResponse"))
+    with pytest.raises(BrokerOptionsNotSupported) as refused:
+        await live_broker.submit_option_order(_long_call(), client_order_id=_REF)
+    assert "ALPACA_LIVE_OPTION_BOTS_ENABLED" in (refused.value.detail or "")
+    assert len(responses.calls) == 0
+
+    monkeypatch.setattr("app.config.settings.ALPACA_LIVE_OPTION_BOTS_ENABLED", True)
+    await live_broker.submit_option_order(_long_call(), client_order_id=_REF)
+
+    assert [call.request.url for call in responses.calls] == [live_orders]
 
 
 @responses.activate

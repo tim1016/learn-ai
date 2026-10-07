@@ -352,10 +352,10 @@ class LiveEnvelopeSync:
                     return self._simulation.observe(reference_cash=account.cash,
                         observed_at_ms=observed_at_ms, now_ms=returned_at_ms)
             except MoneyInputError as exc:
-                self.discard_observation()
+                self.discard_observation(reason=str(exc))
                 raise SimulationEvidenceUnavailable(str(exc)) from exc
-            except BrokerError:
-                self.discard_observation()
+            except BrokerError as exc:
+                self.discard_observation(reason=str(exc))
                 raise
         current_start = day_pnl_window_start_ms(observed_at_ms)
         hold = self.risk_snapshot().hold
@@ -448,9 +448,9 @@ class LiveEnvelopeSync:
                 return None
             return reading.observation
 
-    def discard_observation(self) -> None:
+    def discard_observation(self, *, reason: str | None = None) -> None:
         with self._repo._write_lock:
-            self.envelope.withdraw()
+            self.envelope.withdraw(reason=reason)
             self._last_reading = None
 
     def apply_risk_policy(self, policy: AccountRiskPolicy, *, expected_revision: int) -> AccountRiskSnapshot:

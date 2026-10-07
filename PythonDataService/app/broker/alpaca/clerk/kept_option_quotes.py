@@ -5,7 +5,9 @@ price is the quotes kept for it: an entry's as its order is sent, an exit
 decision's as its close is priced, and the mark the Clerk's own keeping
 states of each contract a bot holds (``held_option_quotes``). Each is
 appended here, beside the account's simulated orders, with both sides'
-receipt times as they arrived.
+receipt times as they arrived. A Live Shadow fills and marks the same way,
+from the same kind of file in its own account's folder (ADR 0076 decision
+25): where this module says a Dry Run, it holds for a Shadow too.
 
 Two questions are asked of what is kept, and they are not the same:
 
@@ -295,7 +297,7 @@ class KeptOptionQuotes:
             rows = self._wal.read_all()
         except _KeptFileCorrupt as exc:
             raise KeptOptionQuotesUnavailable(
-                "The option quotes kept for this Dry Run cannot be read, so nothing can be priced or marked "
+                "The option quotes kept for this simulated account cannot be read, so nothing can be priced or marked "
                 "from them.",
                 detail=str(exc),
             ) from exc
