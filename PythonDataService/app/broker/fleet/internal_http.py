@@ -232,6 +232,22 @@ def build_internal_client(
     )
 
 
+def build_internal_sync_client(
+    *, timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S, read_timeout_s: float = DEFAULT_INTERNAL_TIMEOUT_S
+) -> httpx.Client:
+    """The same pinned client for an internal call made from a worker thread.
+
+    A caller that already blocks in a thread of its own (the option model
+    inputs' lookup, #2913) has no event loop to await on. The posture is
+    ``build_internal_client``'s: no redirects, no environment proxies,
+    every phase bounded. There is no unbounded read here: no stream is read
+    from a thread.
+    """
+    return httpx.Client(
+        timeout=httpx.Timeout(timeout_s, read=read_timeout_s), follow_redirects=False, trust_env=False
+    )
+
+
 def _split_sse_line(buffer: str) -> tuple[str | None, str]:
     """Split one complete WHATWG SSE line off the buffer.
 
@@ -355,6 +371,7 @@ __all__ = [
     "SseEvent",
     "address_is_private",
     "build_internal_client",
+    "build_internal_sync_client",
     "enforce_private_http_target",
     "iter_sse_events",
     "iter_sse_from_response",

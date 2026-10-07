@@ -532,6 +532,63 @@ async def test_a_preview_is_refused_a_line_when_none_is_spare_and_displaces_noth
     assert (use.budget, use.open, use.ceiling) == (5, 5, None)
 
 
+def _page_on(underlying: str) -> WatchRequest:
+    leg = scenes._leg("only", "put", _AT_THE_MONEY)
+    leg["instrument"]["underlying"] = underlying
+    return WatchRequest(underlying=underlying, line_class=LineClass.PREVIEW, plan=scenes._plan(leg))
+
+
+async def test_a_page_asks_ibkr_for_nothing_while_no_line_is_spare_for_it_even_as_the_bot_ahead_of_it_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bot on SPY and a page on QQQ start in the same pass, with a budget the bot's window fills. The bot's
+    window is not known until its chain is read, and is counted at its most meanwhile: QQQ's quote is never
+    asked for, and its chain is never read."""
+    status, lines, ibkr, wanted = _watching(monkeypatch, _bot(), _page_on("QQQ"), budget=5)
+
+    await _settle(status)
+    taken_by_the_bot = lines.line_use().pages_not_served
+    chains_read_for = [call.kwargs["underlyingSymbol"] for call in ibkr.client.ib.reqSecDefOptParamsAsync.await_args_list]
+
+    assert ibkr.open_option_lines() == _symbols(583, 584, 585, 586, 587)
+    assert "QQQ" not in ibkr.asked and chains_read_for == ["SPY"] and lines.chain("QQQ") is None
+    assert taken_by_the_bot == NoLine.OVER_BUDGET
+
+    # The bot goes. A line is spare, and the page's underlying and chain are asked for.
+    del wanted[0]
+    await _settle(status)
+
+    assert lines.line_use().pages_not_served is None
+    assert "QQQ" in ibkr.lines and lines.chain("QQQ") is not None
+
+
+async def test_a_page_is_served_while_a_line_is_spare_after_the_bots_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot(), _page_on("QQQ"), budget=6)
+
+    await _settle(status)
+    ibkr.tick("QQQ", bid=585.10, ask=585.12)
+    await _settle(status)
+
+    assert lines.line_use().pages_not_served is None
+    # Five for the bot, and the one left for the page: the strike nearest its window's centre.
+    assert len(ibkr.open_option_lines()) == 6
+    assert "QQQ261009P00585000" in ibkr.open_option_lines()
+
+
+async def test_with_ibkrs_own_allowance_taken_by_bots_a_page_is_told_it_is_ibkrs_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Clerk's budget has room for twenty. IBKR grants three, and the bot's window wants five."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot(), _page_on("QQQ"), budget=20, allowance=3)
+
+    await _settle(status, passes=8)
+
+    use = lines.line_use()
+    assert (use.ceiling, len(ibkr.open_option_lines())) == (3, 3)
+    assert use.pages_not_served == NoLine.NO_CAPACITY
+    assert "QQQ" not in ibkr.lines
+
+
 async def test_one_contract_two_bots_want_is_one_line(monkeypatch: pytest.MonkeyPatch) -> None:
     status, _, ibkr, _ = _watching(monkeypatch, _bot(), _bot({"selector": "atm_offset", "offset": 1}))
     await _settle(status)
@@ -713,6 +770,71 @@ async def test_a_line_ibkr_refuses_for_another_reason_stays_refused_until_the_co
     ibkr.reconnect()
     await _settle(status)
     assert ibkr.asked.count(name) == 2
+
+
+async def _a_bot_holding_just_what_ibkr_is_known_to_grant(
+    monkeypatch: pytest.MonkeyPatch, **gateway: Any
+) -> tuple[Watching, set[str]]:
+    """IBKR grants three lines and refuses a fourth, so three is all it is known to grant. The bot then holds
+    exactly those three and wants no more: no contract is left waiting for capacity. A page on QQQ asks."""
+    held = (_call(584), _call(585), _call(586), _call(587))
+    watching = _watching(monkeypatch, WatchRequest("SPY", LineClass.CANDIDATE, held=held), budget=20, allowance=3)
+    status, lines, ibkr, wanted = watching
+    await _settle(status)
+    granted = ibkr.open_option_lines()
+    assert (lines.line_use().ceiling, len(granted)) == (3, 3)
+    wanted[0] = WatchRequest(
+        "SPY", LineClass.CANDIDATE, held=tuple(contract for contract in held if contract.occ_symbol in granted)
+    )
+    wanted.append(_page_on("QQQ"))
+    for name, value in gateway.items():
+        setattr(ibkr, name, value)
+    await _settle(status)
+    return watching, granted
+
+
+async def test_a_page_is_not_kept_out_for_good_by_a_ceiling_learned_before_ibkr_gave_its_lines_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IBKR's allowance has come back since it refused. The page is asked nothing for, so nothing of its is
+    without a line; it still counts as waiting, and one more line is tried a minute after the refusal, as it
+    would be for a bot's contract."""
+    (status, lines, ibkr, _), granted = await _a_bot_holding_just_what_ibkr_is_known_to_grant(monkeypatch, allowance=None)
+    kept_out = (lines.line_use().pages_not_served, lines.line_use().ceiling, "QQQ" in ibkr.asked)
+
+    ibkr.now += CEILING_PROBE_MS - 1
+    ibkr.keep_alive()
+    await _settle(status)
+    too_soon = (lines.line_use().pages_not_served, lines.line_use().ceiling, "QQQ" in ibkr.asked)
+    ibkr.now += 1
+    await _settle(status)
+    ibkr.tick("QQQ", bid=585.10, ask=585.12)
+    await _settle(status)
+
+    assert kept_out == too_soon == (NoLine.NO_CAPACITY, 3, False)
+    assert lines.line_use().pages_not_served is None
+    # One line more than IBKR was known to grant, and it is the page's: the strike nearest its window's centre.
+    assert ibkr.open_option_lines() == granted | {"QQQ261009P00585000"}
+    assert not granted & set(ibkr.cancelled)
+
+
+async def test_a_page_waiting_on_ibkrs_allowance_is_tried_for_once_a_minute_and_takes_nothing_from_a_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IBKR still has no line to give. The try costs one request, which is refused, and the bot's three lines
+    are as they were."""
+    (status, lines, ibkr, _), granted = await _a_bot_holding_just_what_ibkr_is_known_to_grant(monkeypatch)
+
+    ibkr.now += CEILING_PROBE_MS
+    ibkr.keep_alive()
+    await _settle(status)
+    ibkr.tick("QQQ", bid=585.10, ask=585.12)
+    await _settle(status, passes=6)
+
+    use = lines.line_use()
+    assert [name for name in ibkr.asked if name.startswith("QQQ2")] == ["QQQ261009P00585000"]
+    assert (use.ceiling, use.pages_not_served) == (3, NoLine.NO_CAPACITY)
+    assert ibkr.open_option_lines() == granted and not granted & set(ibkr.cancelled)
 
 
 # ---- Reconnects and repairs ---------------------------------------------------

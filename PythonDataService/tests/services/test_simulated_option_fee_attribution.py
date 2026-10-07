@@ -98,6 +98,21 @@ def test_a_day_whose_fills_are_not_all_known_charges_no_bot_and_says_so() -> Non
     assert not result.known and result.shares == ()
 
 
+def test_an_option_fill_with_no_multiplier_is_refused_and_never_priced_as_shares() -> None:
+    """Read as one share at $2.40, the stock fee model would charge the sale and call the day known."""
+    no_multiplier = FeeFill(
+        fill_id="sell", subject_id="bot:a", side=OrderSide.SELL, quantity=Decimal(1), price=Decimal("2.40")
+    )
+
+    result = attribute_simulated_option_fees(
+        trade_date=_DAY, fills=[_fill("buy", "bot:a", OrderSide.BUY, 1, "1.94"), no_multiplier],
+        population_complete=True, session_ended=True, settlement_at_ms=7,
+    )
+
+    assert not result.known and result.shares == ()
+    assert result.unattributed == 0 and result.predicted_total is None
+
+
 def test_no_option_fills_is_no_charge() -> None:
     result = attribute_simulated_option_fees(
         trade_date=_DAY, fills=[], population_complete=True, session_ended=True, settlement_at_ms=7

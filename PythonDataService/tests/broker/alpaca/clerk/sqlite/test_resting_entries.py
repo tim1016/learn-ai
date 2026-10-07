@@ -32,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_execution import RecoveryExecutionRequest, execute_recovery_action
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.resting_entries import (
     RestingEntry,
     WaitEndedRound,
@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
     entries_past_their_wait,
     resting_entries,
 )
+from app.broker.alpaca.clerk.sqlite.stopped_run_entries import cancel_entries_of_inactive_runs, entries_owed_a_cancel
 from app.broker.alpaca.clerk.sqlite.uncertainty import ENTRY_ORDER_WORKING_REASON_CODE, admit_new_exposure
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLED_REASON_CODE
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
@@ -493,6 +494,55 @@ async def test_a_voided_entry_that_filled_where_no_stream_showed_it_is_found_by_
     assert FAILED_ENTER_FILLED_REASON_CODE in {raised["reason_code"] for raised in paper.repo.active_uncertainties()}
 
 
+# ── a closing order is never an entry ────────────────────────────────────
+
+
+async def _a_working_closing_order(paper: PaperOptions) -> str:  # noqa: F811
+    """The bot holds one contract and its EXIT's closing order works at Alpaca; that order's reference."""
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != order_ref)
+    assert paper.order_state(closing_ref) == "new" and paper.repo.order(closing_ref).role == "REDUCING"
+    return closing_ref
+
+
+async def test_the_entry_gates_question_counts_only_an_entry_order_never_a_working_closing_order(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    await _a_working_closing_order(paper)
+
+    with paper.repo.write_fence() as conn:
+        working_entry = reads.working_option_entry_for_strategy(conn, "a")
+
+    assert working_entry is None
+    # The bot's next entry waits for its EXIT, and is told so by that name.
+    assert admit_new_exposure(paper.repo, strategy_instance_id="a").reason_code == "EXIT_IN_PROGRESS"
+
+
+async def test_a_stopped_runs_working_closing_order_under_an_ended_exit_is_never_on_the_stopped_run_worklist(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Cancelling it would take a closing order out of the market. The worklist is of entries only."""
+    closing_ref = await _a_working_closing_order(paper)
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+    closing = paper.repo.order(closing_ref)
+    # While its EXIT has not ended the order is that EXIT's, whatever its role. The books are set
+    # here to the one state where only the role keeps it off the list: the EXIT has ended and
+    # Alpaca still shows its order working. No path of this harness ends an EXIT that way.
+    with paper.repo.write_fence() as conn:
+        conn.execute(
+            "UPDATE effect_operations SET state = 'failed' WHERE effect_operation_id = ?", (closing.effect_operation_id,)
+        )
+        conn.commit()
+    assert paper.repo.active_exit_for_strategy("a") is None
+
+    assert entries_owed_a_cancel(paper.repo) == []
+    await cancel_entries_of_inactive_runs(paper.repo, trade=paper.venue)
+
+    assert paper.venue.cancel_calls == [] and paper.order_state(closing_ref) == "new"
+
+
 # ── a clock that is set back ─────────────────────────────────────────────
 
 
@@ -575,6 +625,37 @@ async def test_an_entry_whose_cancel_raises_is_left_for_the_next_round_and_the_o
     broken = third
     paper.wait(WAIT_MS)
     assert await cancel_entries_past_their_wait(paper.repo, trade=paper.venue) == WaitEndedRound(still_due=(third,))
+
+
+@pytest.mark.parametrize("run_by", ["the keeper's round", "the pass"])
+async def test_a_lease_found_lost_during_one_entrys_cancel_comes_out_of_the_round_and_out_of_the_pass(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, run_by: str  # noqa: F811
+) -> None:
+    """A lost lease is the Clerk's own loss of the account, never one entry's failure to log and try again."""
+    await paper.resting()
+    paper.wait(WAIT_MS)
+    real_cancel, real_renewal = paper.venue.cancel, paper.repo.renew_operation_claim
+    cancel_answered = False
+
+    async def cancel(order_id: str) -> None:
+        nonlocal cancel_answered
+        await real_cancel(order_id)
+        cancel_answered = True
+
+    def renewal_that_finds_the_lease_gone_after_the_cancel(**claim: object) -> bool:
+        nonlocal cancel_answered
+        if cancel_answered:
+            cancel_answered = False
+            raise ExecutionLeaseLost("another Clerk now holds this account", account_id=paper.repo.account_id)
+        return real_renewal(**claim)
+
+    paper.venue.cancel = cancel  # type: ignore[method-assign]
+    monkeypatch.setattr(paper.repo, "renew_operation_claim", renewal_that_finds_the_lease_gone_after_the_cancel)
+
+    with pytest.raises(ExecutionLeaseLost):
+        await (paper.round() if run_by == "the keeper's round" else paper.pass_())
+
+    assert len(paper.venue.cancel_calls) == 1
 
 
 # ── a cancel that keeps failing ──────────────────────────────────────────

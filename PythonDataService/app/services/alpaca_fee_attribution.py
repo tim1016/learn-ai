@@ -34,15 +34,34 @@ option fills alone. The row's total is kept to the cent, and each share is
 ``observed`` as a stock fill's is: the total is Alpaca's, the split is the
 models'. An option fill is never by itself a reason to leave a row unowned.
 
-None of Alpaca's own option fee activities has been seen. Two gaps are known
-and left open (ADR 0076):
+None of Alpaca's own option fee activities has been seen. Seven gaps are
+known and left open. ADR 0076 decision 19 names the same seven, by the same
+letters:
 
-- A row is shared among the fills of the day it is dated. If Alpaca dates an
-  option fee by the day it posts, and that day has no option fill, the day's
-  stock fills are charged it. If that day has no fill at all the row has no
-  weight to follow and is unowned, as any such row always was.
-- An option order placed outside the Clerk fills with no multiplier on the
-  books, so the stock model prices its fills.
+- (a) A row is shared among the fills of the day it is dated. If Alpaca
+  dates an option fee by the day it posts, and that day has only stock
+  fills, those stock bots are charged it as ``observed`` and nothing reads
+  unresolved. The option fill it was for keeps its estimate, which no row
+  then replaces and which goes on being held back from cash: the fee is
+  counted twice, once on each bot. If that day has no fill at all the row
+  has no weight to follow and is unowned, as any such row always was.
+- (b) An option order placed outside the Clerk fills with no multiplier on
+  the books, so the stock model prices its fills.
+- (c) An estimate whose rows never come goes on being held back from cash,
+  as a stock fill's does. Nothing bounds it.
+- (d) No real row's fee type is read: the Clerk's activity record does not
+  carry it, so every real row is shared by all types together.
+- (e) Any untyped row, of any size, ends every estimate of its day. A row
+  of one cent is shared out and leaves no estimate beside it. A row of
+  nothing charges nothing and leaves none either.
+- (f) A row dated to a New York day that has not ended is nobody's until
+  midnight, and the account's fees read unresolved until then. Harmless for
+  stock fees, which post after the close. If Alpaca posts an option fee with
+  the fill, the first option fill of a day holds every bot's entries until
+  midnight.
+- (g) A negative row can never be linked to the charge it refunds: the
+  Clerk's fee evidence carries no such link. So a negative row on an option
+  day is nobody's and leaves the account's fees unresolved.
 """
 
 from __future__ import annotations
@@ -228,14 +247,26 @@ def attribute_simulated_option_fees(
     Validated against: tests/services/test_simulated_option_fee_attribution.py.
 
     ``fills`` are the day's fills of option contracts: each carries its
-    contract's multiplier. They settle as a population of their own. A real
-    day that also traded stock rounds SEC, TAF and CAT once across both; how
-    Alpaca does that has not been seen, so a simulated day rounds the two
-    apart, which is never less than rounding them together. Every amount is
-    the model's: nothing is observed in a simulation.
+    contract's multiplier. A fill with none is refused: the day is
+    unresolved and nothing is charged. The fills settle as a population of
+    their own. A real day that also traded stock rounds SEC, TAF and CAT
+    once across both; how Alpaca does that has not been seen, so a simulated
+    day rounds the two apart, which is never less than rounding them
+    together. Every amount is the model's: nothing is observed in a
+    simulation.
     """
     if not fills:
         return FeeAttribution((), ZERO, (), None, ZERO)
+    # An option fill is never priced as shares (ADR 0076). The shared rule below reads a fill with no
+    # multiplier as a fill in shares, so one is refused here: unresolved, and nothing is charged.
+    if any(fill.multiplier is None for fill in fills):
+        unresolved = [] if population_complete else [
+            "The complete fee-bearing fill population is unavailable. Reconcile account executions."
+        ]
+        unresolved.append(
+            "An option fill cannot be priced by the option fee model: an option fill needs its contract's multiplier."
+        )
+        return FeeAttribution((), ZERO, tuple(unresolved), None, None)
     return attribute_session_fees(
         trade_date=trade_date, fills=fills, charges=(), population_complete=population_complete,
         activities_complete=True, simulated=True, session_ended=session_ended, settlement_at_ms=settlement_at_ms,

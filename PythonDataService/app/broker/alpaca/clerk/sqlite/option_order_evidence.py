@@ -14,10 +14,13 @@ is held to the order the books asked for.
 - ``asked_option_order`` reads what the books asked for under an order
   reference: the contract, the side and the contracts.
 - ``evidence_of_the_order_asked`` is both: the answer's evidence, once it
-  names that contract, that side, that many contracts, that kind of order
-  and that limit price. An answer that differs is about something the books
-  did not ask for, so it states no outcome: the order's outcome stays
-  unknown, to be asked again.
+  names that contract, that side and that many contracts. An answer that
+  differs in one of those is about something the books did not ask for, so
+  it states no outcome: the order's outcome stays unknown, to be asked
+  again. An answer that states another kind of order or another limit price
+  is still about our order, found by our own id: both values are logged and
+  the evidence is taken, because what the order filled is real (ADR 0076
+  decision 19).
 - ``look_up_by_client_order_id`` and ``look_up_by_broker_order_id`` are the
   one place that chooses which reader reads a Clerk-owned order: the option
   port's strict reader for an order the books bind to a contract on a real
@@ -32,6 +35,7 @@ books keep every price as; a limit price is compared as the exact decimal.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -47,6 +51,8 @@ from app.broker.contract.ports import BrokerTradePort
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+
+logger = logging.getLogger(__name__)
 
 _OPTION_ASSET_CLASS = "us_option"
 
@@ -74,6 +80,10 @@ class AskedOptionOrder:
     def words(self) -> str:
         price = "at market" if self.limit_price is None else f"at a limit of {self.limit_price}"
         return f"{self.side} {self.contracts} of {self.symbol}, a {self.order_type} order {price}"
+
+    def what_was_traded(self) -> tuple[str, str, int]:
+        """The contract, the side and the contracts: what an answer must name to be about this order."""
+        return (self.symbol, self.side, self.contracts)
 
 
 def asked_option_order(repo: ClerkSqliteRepository, order_ref: str) -> AskedOptionOrder | None:
@@ -195,21 +205,40 @@ def evidence_of_the_order_asked(answer: BrokerOptionOrder, *, asked: AskedOption
     """``answer`` as order evidence, once it is about the order the books asked for.
 
     Raises ``BrokerEvidenceUnavailable``, an unknown outcome, when the answer
-    names another contract, another side, another number of contracts,
-    another kind of order or another limit price: a fill counted from it
-    would be counted against the wrong order. The limit is compared as the
-    exact decimal, so ``1.9`` and ``1.90`` are one price.
+    names another contract, another side or another number of contracts: a
+    fill counted from it would be counted against the wrong order.
+
+    An answer that states another kind of order or another limit price is
+    taken, and both values are logged. It was found by our own order id, and
+    what it filled is real: refusing it would leave a filled entry's bot
+    with a close that is never sent (ADR 0076 decision 19). The limit is
+    compared as the exact decimal, so ``1.9`` and ``1.90`` are one price.
     """
     (evidence,) = option_order_evidence(answer)
     answered = AskedOptionOrder(
         symbol=evidence.symbol.upper(), side=evidence.side.lower(), contracts=answer.quantity,
         order_type=answer.order_type.lower(), limit_price=answer.limit_price,
     )
-    if answered != asked:
+    if answered.what_was_traded() != asked.what_was_traded():
         raise BrokerEvidenceUnavailable(
             "The broker answered about a different option order from the one the account Clerk asked for.",
             broker=answer.broker,
             detail=f"Asked to {asked.words()}; the answer is to {answered.words()}.",
+        )
+    if answered != asked:
+        logger.warning(
+            "The broker states another kind of order or another limit than the account Clerk sent; its answer is taken.",
+            extra={
+                "action": "option_order_answer_states_other_terms",
+                "broker": answer.broker,
+                "client_order_id": answer.client_order_id,
+                "broker_order_id": answer.order_id,
+                "symbol": asked.symbol,
+                "asked_order_type": asked.order_type,
+                "answered_order_type": answered.order_type,
+                "asked_limit_price": None if asked.limit_price is None else str(asked.limit_price),
+                "answered_limit_price": None if answered.limit_price is None else str(answered.limit_price),
+            },
         )
     return evidence
 

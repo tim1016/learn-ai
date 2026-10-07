@@ -91,8 +91,8 @@ def _until(account: _DryRun, at_ms: int) -> None:
 
 
 def _hand_over(account: _DryRun, bid: str, ask: str, *, age_ms: int = 200) -> None:
-    """The runner passes the Clerk the newest quote it holds for the contract."""
-    account.clerk.keep_option_quotes({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
+    """The newest quote held for the contract is stated to the account's kept quotes, as the Clerk's keeping does."""
+    account.hand_over({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
 
 
 def _notice(account: _DryRun, reason_code: str = SCHEDULED_CLOSE_MISSED_REASON_CODE) -> dict | None:

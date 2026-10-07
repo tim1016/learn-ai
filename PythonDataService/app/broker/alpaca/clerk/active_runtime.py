@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.account_authority import (
     AccountBoundBrokerPorts,
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
+from app.broker.alpaca.clerk.held_option_quotes import FollowedBooks
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
@@ -218,6 +219,9 @@ class ActiveClerkRuntime:
     deadline_keeper: BackgroundSweep | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
+    # A Dry Run's books, followed for the option contracts its bots hold (ADR 0076). None for an
+    # authority whose held contracts nobody keeps quotes for.
+    option_books: FollowedBooks | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
     account_id: str | None = None
     account_authority_kind: AccountAuthorityKind | None = None
@@ -269,6 +273,8 @@ class ActiveClerkRuntime:
         # handles are dropped afterwards and a second ``close()`` re-stops
         # nothing, exactly as ``_sqlite_repository`` below.
         for tap in self._taps():
+            if tap is self.deadline_keeper:
+                await self._leave_no_option_entry_resting()
             await tap.stop()
         self.fee_sync = None
         self.envelope_sync = None
@@ -277,9 +283,38 @@ class ActiveClerkRuntime:
         self.sweep = None
         if isinstance(self.clerk, SqliteAlpacaClerkFacade):
             await self.clerk.drain_effects()
+        if self.option_books is not None:
+            # After the last effect has finished and before the books close: what a Dry Run holds
+            # now is what the process goes on keeping quotes for.
+            self.option_books.close()
+            self.option_books = None
         if self._sqlite_repository is not None:
             self._sqlite_repository.close()
             self._sqlite_repository = None
+
+    async def _leave_no_option_entry_resting(self) -> None:
+        """What a closing Clerk does just before its deadline keeper stops (ADR 0076 decision 19).
+
+        First every accepted effect is finished, while the keeper still
+        keeps its deadlines: an option ENTER that was still being sent has
+        by then left its order at the broker, or has not. The envelope sync
+        is stopped before this, which is what ends an ENTER that waits for
+        an account reading. Then the keeper makes one last round, which
+        cancels and proves every option entry still resting. An order left
+        at the broker by a Clerk that has closed would have nobody to
+        cancel it at its deadline.
+
+        Only a real account's Clerk makes the round. A simulation fills at
+        once and rests nothing, so a Dry Run's keeper is only stopped, for a
+        read and for a run alike. A Live Shadow has no keeper. The sweep is
+        stopped after this: its heartbeat keeps the lease the round writes
+        under.
+        """
+        if isinstance(self.clerk, SqliteAlpacaClerkFacade):
+            await self.clerk.drain_effects()
+        keeper = self.deadline_keeper
+        if self.authority_kind == "sqlite" and isinstance(keeper, DeadlineKeeper):
+            await keeper.last_round()
 
     @property
     def selected_account_id(self) -> str | None:
