@@ -1440,6 +1440,9 @@ async def poll_option_events(
             return OptionEventPoll(read=False)
         return OptionEventPoll(read=False, round=await off_loop(lambda: book_option_events(repo, None)))
     async with state.lock:
+        # Counted from the attempt: a read or a booking that raises is tried again a minute
+        # later, never on the keeper's every round.
+        state.read_at_ms, state.nothing_pending = now_ms, False
         after_ms = await off_loop(lambda: option_event_window_start_ms(repo))
         events = await _read_events(repo, read, after_ms=after_ms)
         positions = broker_positions

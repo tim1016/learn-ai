@@ -475,3 +475,26 @@ async def test_a_fault_in_the_option_step_does_not_fail_the_pass_and_the_positio
 
     assert result.verdict == "position_drift" and result.drifted_symbols == (SYMBOL,)
     assert paper.held() == {SYMBOL: 1.0}
+
+
+async def test_a_poll_that_raises_is_tried_again_a_minute_later_and_not_on_the_keepers_next_round(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    await _holding_one_call(paper)
+    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
+    real_booking = option_events.book_option_events
+
+    def breaks(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("a fault in the booking of option events")
+
+    monkeypatch.setattr(option_events, "book_option_events", breaks)
+    with pytest.raises(RuntimeError):
+        await keeper.tick()
+    paper.wait(5_000)
+
+    assert (await keeper.tick()).option_events.read is False
+    assert len(paper.account.option_events.reads) == 1
+
+    monkeypatch.setattr(option_events, "book_option_events", real_booking)
+    paper.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
+    assert (await keeper.tick()).option_events.read is True
