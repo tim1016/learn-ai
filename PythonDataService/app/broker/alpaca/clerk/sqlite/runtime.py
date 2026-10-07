@@ -1512,7 +1512,7 @@ class SqliteAlpacaClerkFacade:
                 # anything is judged again: its quotes have aged since, and a
                 # refusal now would deny an entry the bot may already hold.
                 already = self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}")
-                if already is not None and already.effect_operation_id is not None:
+                if already is not None and already.action == "ENTER" and already.effect_operation_id is not None:
                     existing = self._repo.order_for_effect_operation(already.effect_operation_id)
                     return receipt(already.state, () if existing is None else (existing.order_ref,))
                 worked_out = work_out_option_entry(

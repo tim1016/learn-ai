@@ -24,6 +24,7 @@ import pytest
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
@@ -277,6 +278,34 @@ async def test_the_entry_keeps_the_contract_the_quote_and_the_money_it_was_admit
     assert kept.admitted_at_ms == dry_run.clock()
 
 
+async def test_the_entrys_identity_is_hashed_over_its_option_order_under_a_key_no_stock_entry_has(
+    dry_run: _DryRun,
+) -> None:
+    import hashlib
+    import json
+
+    bought = await dry_run.enter(dry_run.evidence(), decision="enter-hashed")
+
+    [order_ref] = bought.child_order_refs
+    kept = option_entry_of_order(dry_run.repo, order_ref)
+    assert kept is not None
+    command = dry_run.repo.get_command(f"cmd:{SID}:enter-hashed")
+    expected = hashlib.sha256(
+        json.dumps(
+            {
+                "account_id": dry_run.repo.account_id, "strategy_instance_id": SID, "decision_id": "enter-hashed",
+                "action": "ENTER",
+                "option_order": {
+                    "contract": {"root": "SPY", "expiry_ms": CALL.expiry_ms, "right": "call", "strike_thousandths": 585_000},
+                    "side": "buy", "intent": "open", "quantity": 1, "order_type": "limit", "limit_price": "1.94",
+                },
+            },
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    assert command is not None and command.payload_hash == expected
+
+
 async def test_the_simulated_fill_records_its_model_its_quotes_age_and_its_limit(dry_run: _DryRun) -> None:
     bought = await dry_run.enter(dry_run.evidence())
 
@@ -401,6 +430,60 @@ async def test_a_plan_the_clerk_does_not_take_yet_is_refused_by_name(dry_run: _D
     assert "not built yet" in refused.explanation
 
 
+async def test_the_books_and_the_simulated_broker_agree_on_what_the_bot_holds(dry_run: _DryRun) -> None:
+    """The account's reconciliation pass compares the two. One contract held is no drift and no hold."""
+    await dry_run.enter(dry_run.evidence())
+
+    assert await dry_run.clerk.reconcile_once() == "clean"
+    assert dry_run.held() == {SYMBOL: 1.0}
+    assert dry_run.repo.active_holds_for_admission(strategy_instance_id=SID) == []
+
+
+def _decision(name: str, outcome: str, at_ms: int) -> EffectDecisionEvidence:
+    import hashlib
+
+    evaluation_id = hashlib.sha256(name.encode()).hexdigest()
+    return EffectDecisionEvidence(
+        evaluation_id=evaluation_id, bar_ref=f"bar-{name}", symbol="SPY", outcome=outcome, observed_at_ms=at_ms,
+        decision_bar_close_ms=at_ms,
+    )
+
+
+async def test_an_option_entrys_decision_receipt_is_kept_with_it_and_a_refusals_says_why(dry_run: _DryRun) -> None:
+    refused_on = _decision("too-wide", "enter_intent", dry_run.clock())
+    entered_on = _decision("enters", "enter_intent", dry_run.clock())
+
+    refused = await dry_run.clerk.execute_for_instance(
+        strategy_instance_id=SID, run_id=RUN, decision_id=refused_on.evaluation_id, purpose=EffectPurpose.ENTER,
+        action_plan=BUYS_ONE_CALL, quantity=1, option_entry=dry_run.evidence("1.70", "1.94"),
+        decision_evidence=refused_on,
+    )
+    bought = await dry_run.clerk.execute_for_instance(
+        strategy_instance_id=SID, run_id=RUN, decision_id=entered_on.evaluation_id, purpose=EffectPurpose.ENTER,
+        action_plan=BUYS_ONE_CALL, quantity=1, option_entry=dry_run.evidence(), decision_evidence=entered_on,
+    )
+
+    assert refused.state is EffectOperationState.REJECTED and bought.state is EffectOperationState.SUBMITTED
+    with dry_run.repo._write_lock:
+        receipts = dry_run.repo._conn.execute(
+            "SELECT outcome, json_extract(facts_json, '$.reason_code') FROM decision_receipts ORDER BY rowid"
+        ).fetchall()
+    assert [tuple(row) for row in receipts] == [
+        ("blocked", "OPTION_STRUCTURE_LEG_GAP_OVER_LIMIT"),
+        ("enter_intent", "STRATEGY_ENTER"),
+    ]
+
+
+async def test_option_evidence_handed_over_with_a_plan_that_trades_shares_is_the_callers_mistake(
+    dry_run: _DryRun,
+) -> None:
+    with pytest.raises(ValueError, match="trades shares"):
+        await dry_run.clerk.execute_for_instance(
+            strategy_instance_id=SID, run_id=RUN, decision_id="enter-1", purpose=EffectPurpose.ENTER,
+            action_plan=alpaca_v1_action_plan("SPY"), quantity=1, option_entry=dry_run.evidence(),
+        )
+
+
 # ── one decision, one order ──────────────────────────────────────────────
 
 
@@ -477,6 +560,63 @@ async def test_an_exit_uses_a_newer_quote_the_runner_handed_over_while_the_bot_h
     assert (sale.fill_model, sale.fill_price, sale.quote_age_ms) == (
         SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("2.20"), 30_200
     )
+
+
+async def test_an_exit_decided_after_the_regular_session_is_held_for_the_next_one_and_sells_nothing(
+    dry_run: _DryRun,
+) -> None:
+    """An option order is never sent outside the regular session, and never re-priced for an extended one."""
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(5 * 3_600_000)
+
+    held_back = await dry_run.exit(dry_run.exit_quotes("2.40", "2.46"))
+
+    # Accepted and waiting: it is still the bot's one EXIT, and nothing says it failed.
+    assert held_back.state is EffectOperationState.ACCEPTED, held_back.explanation
+    assert dry_run.repo.active_exit_for_strategy(SID) is not None
+    assert dry_run.repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID
+    ) is None
+    assert dry_run.held() == {SYMBOL: 1.0}
+    assert len(dry_run.fills()) == 1, "nothing was sold"
+
+    # The next morning, a minute after the open, the account's own pass sends it.
+    dry_run.wait(16 * 3_600_000 + 31 * 60_000)
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {}
+    assert dry_run.fills()[-1] == (SYMBOL, "sell", 1.0, 2.40, 100)
+
+
+async def test_an_exit_of_an_option_position_takes_no_extended_hours_limit(dry_run: _DryRun) -> None:
+    """A stock exit may carry a priced after-hours limit. An option position is closed by a market order only."""
+    from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg, regular_session_shape
+    from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+    from app.broker.contract.models import OrderType, TimeInForce
+
+    bought = await dry_run.enter(dry_run.evidence())
+    [entry_ref] = bought.child_order_refs
+    after_hours = ProgramLeg(
+        shape=LegShape(
+            order_type=OrderType.LIMIT, time_in_force=TimeInForce.DAY, limit_price=1.9, extended_hours=True,
+            side=OrderSide.SELL,
+        ),
+        valid_until_ms=dry_run.clock() + 3_600_000,
+    )
+
+    with pytest.raises(ValueError, match="no priced leg"):
+        accept_exit(
+            dry_run.repo, account_id=dry_run.repo.account_id, strategy_instance_id=SID, decision_id="exit-priced",
+            lifecycle_run_id=RUN, entry_order_ref=entry_ref, program_leg=after_hours,
+        )
+    accepted = accept_exit(
+        dry_run.repo, account_id=dry_run.repo.account_id, strategy_instance_id=SID, decision_id="exit-market",
+        lifecycle_run_id=RUN, entry_order_ref=entry_ref,
+        program_leg=ProgramLeg(shape=regular_session_shape(OrderSide.SELL), valid_until_ms=None),
+    )
+
+    assert accepted.created
+    assert dry_run.repo.get_command(f"cmd:{SID}:exit-priced") is None
 
 
 async def test_a_second_exit_for_a_position_already_closed_sends_nothing(dry_run: _DryRun) -> None:
@@ -556,6 +696,22 @@ async def test_an_open_contract_is_marked_at_the_bid_of_a_fresh_quote_and_not_at
     # $1,000.00 less the $194.00 paid; the day's fees are an estimate until the day is over.
     assert reading.cash_available_usd == Decimal("806")
     assert reading.equity_usd == Decimal("1000") + Decimal("56") - Decimal("0.06")
+
+
+async def test_a_quiet_contract_whose_bid_has_not_moved_is_still_marked_while_it_is_handed_over(
+    dry_run: _DryRun,
+) -> None:
+    """Nobody has changed the bid for five minutes. It is still the bid, and each hand-over says so."""
+    await dry_run.enter(dry_run.evidence())
+    unchanged = _quote("2.50", "2.56", received_ms=dry_run.clock())
+
+    dry_run.wait(300_000)
+    dry_run.clerk.keep_option_quotes({SYMBOL: unchanged})
+
+    assert dry_run.account_reading().unrealized_pl_usd == Decimal("56")
+    dry_run.wait(100_000)
+    with pytest.raises(SimulationEvidenceUnavailable, match=SYMBOL):
+        dry_run.account_reading()
 
 
 async def test_a_dry_run_goes_on_trading_after_its_first_option_round_trip(dry_run: _DryRun) -> None:
@@ -689,6 +845,39 @@ async def test_a_paper_account_refuses_an_option_entry_and_sends_nothing(
     assert refused.explanation.startswith("OPTION_PLAN_NEEDS_A_DRY_RUN: "), refused.explanation
     assert one_account.trade.submitted_legs == []
     assert one_account.enter_commands() == 0
+
+
+async def test_beneath_every_gate_the_clerks_own_send_takes_an_option_order_to_a_simulation_only() -> None:
+    """Whatever let an option order get as far as the send, a real broker's port is not contacted with it."""
+    from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
+    from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerUnavailable
+    from app.broker.contract.models import OrderType
+    from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
+    from tests.broker.alpaca.clerk.sqlite.test_claimed_broker_io import _Repo
+
+    class _RealPort:
+        broker_id = "alpaca"
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def submit_option_order(self, order: Any, *, client_order_id: str) -> Any:
+            self.sent.append(client_order_id)
+            raise AssertionError("an option order reached a real broker's port")
+
+    port = _RealPort()
+    order = SingleOptionOrderRequest(
+        contract=CALL, side=OrderSide.BUY, intent=OptionPositionIntent.OPEN, quantity=1,
+        order_type=OrderType.LIMIT, limit_price=Decimal("1.94"),
+    )
+    io = ClaimedBrokerIO(repo=_Repo(lose_on_call=0), effect_operation_id="op-1", claim_token="tok", trade=port)  # type: ignore[arg-type]
+
+    with pytest.raises(BrokerOptionsNotSupported) as refused:
+        await io.submit(order, client_order_id="ref-1")
+
+    # Definitive: nothing was sent, so there is no unknown outcome to settle.
+    assert not isinstance(refused.value, BrokerUnavailable)
+    assert port.sent == []
 
 
 async def test_a_paper_account_refuses_to_register_a_bot_that_trades_options(

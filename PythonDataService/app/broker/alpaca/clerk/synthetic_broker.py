@@ -347,19 +347,18 @@ class SyntheticBroker:
     ) -> bool:
         """Bind a closing order to the newest quote kept for its contract.
 
-        ``quotes`` are the ones the Clerk holds for this close: the exit
-        decision's, and the entry's own. They are kept first, so a close is
-        priced from the newest of everything the account was ever handed for
-        the contract. ``usable_generation`` is the generation the exit
+        ``quotes`` are the ones the Clerk holds durably for this close: the
+        exit decision's, and the entry's own. They are put back first if this
+        account's kept quotes have lost them, so a close is priced from the
+        newest of everything the account was ever handed for the contract. ``usable_generation`` is the generation the exit
         decision read its quotes in; None says it read none, and the close is
         then priced from an older quote. ``False`` (nothing kept has the side
         this close fills at) leaves the close unsent.
         """
         if self._ledger is None or self._kept_quotes is None:
             return False
-        now_ms = self._clock()
         for quote in quotes:
-            self._kept_quotes.keep(symbol, quote, kept_at_ms=now_ms)
+            self._kept_quotes.restore(symbol, quote)
         newest = self._kept_quotes.newest(symbol, with_side="bid" if side == "sell" else "ask")
         if newest is None:
             return False

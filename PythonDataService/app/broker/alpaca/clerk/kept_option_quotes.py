@@ -6,10 +6,20 @@ decision, and whenever the runner passes on the newest one it holds for a
 contract the bot holds. Each is appended here, beside the account's
 simulated orders, with both sides' receipt times as they arrived.
 
-Three readers ask for the newest quote kept for a contract: a simulated
-close with no usable quote of its own, the run-end close, and the simulated
-account's mark of an open contract. "Newest" is by when the quote's sides
-were received, never by when it was written here.
+Two questions are asked of what is kept, and they are not the same:
+
+- **Which is the newest quote?** By when its sides were received. A simulated
+  close with no usable quote of its own, and the run-end close, are priced
+  from it, and carry its age.
+- **What was last stated to be the newest held, and when?** By when it was
+  handed over. The simulated account marks an open contract from it. A quiet
+  contract's bid can stand unchanged for minutes: its receipt time grows old
+  while it is still the bid, and each hand-over says so again.
+
+So a hand-over is written every time, even of a quote already kept
+(``keep``). A quote the Clerk hands back from its own durable facts, in case
+this file was lost, says nothing of what is current: it is written once, as
+of its own receipt (``restore``).
 
 Nothing here judges a quote. Whether one is usable for a decision is
 ``app.options.quotes.quote_fault``'s to say, and how a fill is priced from
@@ -88,13 +98,30 @@ class KeptOptionQuotes:
         return cls(path=account_dir / KEPT_OPTION_QUOTES_FILENAME, trusted_root=account_dir)
 
     def keep(self, symbol: str, quote: HeldQuote, *, kept_at_ms: int) -> None:
-        """Keep one quote for a contract. A quote with no side, or one already kept, is not written again."""
+        """Keep the quote that is the newest held for a contract at ``kept_at_ms``.
+
+        Written every time, so that a quote unchanged since it was last kept
+        is stated again as the newest held. A quote with no side says
+        nothing and is not written; nor is the same statement made twice.
+        """
+        self._append(symbol, quote, kept_at_ms=kept_at_ms, once=False)
+
+    def restore(self, symbol: str, quote: HeldQuote) -> None:
+        """Put back a quote the caller holds durably, if it is not kept: as of its own receipt, never as of now."""
+        times = receipt_times(quote)
+        if times:
+            self._append(symbol, quote, kept_at_ms=max(times), once=True)
+
+    def _append(self, symbol: str, quote: HeldQuote, *, kept_at_ms: int, once: bool) -> None:
         if not receipt_times(quote):
             return
         recorded = RecordedQuote.of(quote)
         with _KEEP_LOCK, advisory_file_lock(self._wal.path):
             rows = self._wal.read_all()
-            if any(row.symbol == symbol and row.quote == recorded for row in rows):
+            if any(
+                row.symbol == symbol and row.quote == recorded and (once or row.kept_at_ms == kept_at_ms)
+                for row in rows
+            ):
                 return
             next_seq = rows[-1].seq + 1 if rows else 1
             # Another process may have written since this one last did.
@@ -124,6 +151,25 @@ class KeptOptionQuotes:
             and (with_side is None or getattr(row.quote, with_side) is not None)
         ]
         return max(candidates, key=lambda row: (row.received_ms, row.seq), default=None)
+
+    def last_stated(
+        self,
+        symbol: str,
+        *,
+        at_or_before_ms: int,
+        with_side: Literal["bid", "ask"] | None = None,
+    ) -> KeptOptionQuote | None:
+        """The quote most lately handed over as the newest held for ``symbol``, no later than an instant."""
+        if not self._wal.path.exists():
+            return None
+        candidates = [
+            row
+            for row in self._wal.read_all()
+            if row.symbol == symbol
+            and row.kept_at_ms <= at_or_before_ms
+            and (with_side is None or getattr(row.quote, with_side) is not None)
+        ]
+        return max(candidates, key=lambda row: (row.kept_at_ms, row.seq), default=None)
 
 
 __all__ = ["KEPT_OPTION_QUOTES_FILENAME", "KeptOptionQuote", "KeptOptionQuotes"]

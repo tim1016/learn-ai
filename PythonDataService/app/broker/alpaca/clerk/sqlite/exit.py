@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from app.broker.alpaca.clerk.option_effects import OptionExitEvidence
-from app.broker.alpaca.clerk.program_leg import ProgramLeg
+from app.broker.alpaca.clerk.program_leg import ProgramLeg, regular_session_shape
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryShape,
     RecoveryPricing,
@@ -211,8 +211,11 @@ def _accept_exit_capture(
         run_id = resolve_run_id(target)
         symbol = entry_order_symbol(repo, target.order_ref)
         closes_an_option = option_entry_of_order(repo, target.order_ref) is not None
-        if closes_an_option and recorded is not None:
-            raise ValueError("a position in an option contract is closed by a market order; it takes no priced leg")
+        if closes_an_option and recorded is not None and recorded.shape != regular_session_shape(recorded.shape.side):
+            raise ValueError(
+                "a position in an option contract is closed by a market order in the regular session; "
+                "it takes no priced leg"
+            )
         entry_order_refs: list[str] = []
         for candidate in _exit_cancellable_entries(
             repo,

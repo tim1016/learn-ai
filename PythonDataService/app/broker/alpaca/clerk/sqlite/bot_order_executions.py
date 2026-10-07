@@ -41,6 +41,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.activity_executions import BOT_ORDER, first_report, record_activity_executions
+from app.broker.alpaca.clerk.sqlite.contract_terms import keeps_option_contracts, order_contract_terms
 from app.broker.alpaca.clerk.sqlite.execution_coverage import custody_subject_has_coverage_conflict
 from app.broker.alpaca.clerk.sqlite.fee_evidence import retained_activities
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError, read_order_details
@@ -133,9 +134,14 @@ def _accepted_leg(repo: ClerkSqliteRepository, *, order: _HeldCumulative) -> Bro
     except OrderProjectionReadError as error:
         reason = str(error)
     else:
-        if details.symbol is not None and details.side is not None and details.quantity is not None:
+        if keeps_option_contracts(repo._conn) and order_contract_terms(repo._conn, order.order_ref) is not None:
+            # Its instruction is no leg in shares, and how Alpaca reports an
+            # option order's executions as account activities has not been seen (#2913).
+            reason = "the order trades an option contract, whose executions are not recovered from account activities yet"
+        elif details.symbol is not None and details.side is not None and details.quantity is not None:
             return BrokerOrderLeg(symbol=details.symbol, side=details.side.lower(), quantity=details.quantity)
-        reason = "the accepted instruction names no symbol, side or quantity"
+        else:
+            reason = "the accepted instruction names no symbol, side or quantity"
     action = "bot_order_instruction_unreadable"
     if first_report(repo, (action, order.order_ref, reason)):
         logger.warning(

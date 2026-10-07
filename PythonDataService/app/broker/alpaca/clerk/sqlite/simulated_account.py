@@ -14,11 +14,12 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py
   (exact ``Fraction`` oracle at a whole-cent boundary for equity and open P&L).
 
 An open option contract has no bars (ADR 0076). A Dry Run marks one it
-bought at the bid of the newest quote kept for it
+bought at the bid of the quote last handed over as the newest held for it
 (``kept_option_quotes``), which is what it could be sold for, and only while
-that bid is no older than a share bar may be. With none, the reading is
-unavailable, as it is for shares with no fresh bar. A bid of zero is a mark:
-nothing is bid for the contract.
+that hand-over is no older than a share bar may be. A quiet contract's bid
+can stand for minutes, so it is the hand-over that must be fresh, not the
+bid's own receipt. With none, the reading is unavailable, as it is for shares
+with no fresh bar. A bid of zero is a mark: nothing is bid for the contract.
 """
 from __future__ import annotations
 
@@ -142,19 +143,18 @@ class SimulatedAccountProjection:
         """The quote an open option contract is marked from at ``at_ms``, or the reading is unavailable.
 
         A contract the account bought is worth what it could be sold for: the
-        bid. The bid must have been received no longer before ``at_ms`` than
-        a share bar may close before it, which also holds a previous close's
-        mark to that close.
+        bid. The quote must have been handed over as the newest held no
+        longer before ``at_ms`` than a share bar may close before it, which
+        also holds a previous close's mark to that close.
         """
         if not long:
             raise SimulationEvidenceUnavailable(f"A sold option position in {symbol} cannot be marked yet.")
         if not self.repo.account_id.startswith("sim:"):
             raise SimulationEvidenceUnavailable(f"Only a Dry Run keeps option quotes; {symbol} cannot be marked here.")
-        kept = KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id).newest(
+        kept = KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id).last_stated(
             symbol, at_or_before_ms=at_ms, with_side="bid"
         )
-        bid_received_ms = None if kept is None else kept.quote.bid_received_ms
-        if kept is None or bid_received_ms is None or not 0 <= at_ms - bid_received_ms <= SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
+        if kept is None or at_ms - kept.kept_at_ms > SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS:
             raise SimulationEvidenceUnavailable(
                 f"A fresh quote for the option contract {symbol} is unavailable. Wait for its market feed."
             )
@@ -171,10 +171,10 @@ class SimulatedAccountProjection:
         for symbol in open_symbols:
             if symbol in contracts:
                 kept = self._option_mark(symbol, long=contracts[symbol], at_ms=at_ms)
-                assert kept.quote.bid is not None and kept.quote.bid_received_ms is not None
+                assert kept.quote.bid is not None
                 marks[symbol] = normalize_money(kept.quote.bid)
                 refs.append(kept.ref)
-                expires = kept.quote.bid_received_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
+                expires = kept.kept_at_ms + SOURCE_BAR_MS + DELIVERY_ALLOWANCE_MS
                 valid_until = expires if valid_until is None else min(valid_until, expires)
                 continue
             if self.repo.account_id.startswith("sim:"):

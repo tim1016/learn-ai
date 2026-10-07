@@ -59,17 +59,44 @@ def test_a_side_can_be_asked_for_and_a_quote_without_it_is_passed_over(tmp_path:
     assert newest is not None and newest.quote.bid is None
 
 
-def test_one_quote_is_kept_once_and_a_quote_with_no_side_is_not_kept(tmp_path: Path) -> None:
+def _rows(tmp_path: Path) -> int:
+    return (tmp_path / "accounts" / "alpaca" / "sim:buys-a-call" / "kept_option_quotes.jsonl").read_text().count("\n")
+
+
+def test_a_quote_unchanged_since_it_was_kept_is_stated_again_as_the_newest_held(tmp_path: Path) -> None:
+    """A quiet contract's bid stands for minutes. Each hand-over says it is still the bid."""
     store = _store(tmp_path)
-    quote = _quote("1.90", "1.94")
+    quote = _quote("1.90", "1.94", bid_at=1_000, ask_at=1_000)
 
     store.keep(SYMBOL, quote, kept_at_ms=2_000)
-    store.keep(SYMBOL, quote, kept_at_ms=3_000)
-    store.keep(SYMBOL, _quote(None, None), kept_at_ms=4_000)
+    store.keep(SYMBOL, quote, kept_at_ms=62_000)
+    store.keep(SYMBOL, quote, kept_at_ms=62_000)
+    store.keep(SYMBOL, _quote(None, None), kept_at_ms=63_000)
 
-    kept = store.newest(SYMBOL)
-    assert kept is not None and kept.seq == 1
-    assert (tmp_path / "accounts" / "alpaca" / "sim:buys-a-call" / "kept_option_quotes.jsonl").read_text().count("\n") == 1
+    stated = store.last_stated(SYMBOL, at_or_before_ms=70_000)
+    assert stated is not None and (stated.kept_at_ms, stated.received_ms) == (62_000, 1_000)
+    earlier = store.last_stated(SYMBOL, at_or_before_ms=30_000)
+    assert earlier is not None and earlier.kept_at_ms == 2_000
+    assert store.last_stated(SYMBOL, at_or_before_ms=1_500) is None
+    # The same statement twice is one row, and a quote with no side is none.
+    assert _rows(tmp_path) == 2
+
+
+def test_a_quote_put_back_is_written_once_and_says_nothing_of_what_is_current(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    old = _quote("1.90", "1.94", bid_at=1_000, ask_at=1_200)
+
+    store.restore(SYMBOL, old)
+    store.restore(SYMBOL, old)
+
+    assert _rows(tmp_path) == 1
+    newest = store.newest(SYMBOL)
+    assert newest is not None and newest.quote.held == old
+    # It is kept as of its own receipt, so it is nobody's statement about now.
+    assert newest.kept_at_ms == 1_200
+    store.keep(SYMBOL, old, kept_at_ms=500_000)
+    store.restore(SYMBOL, old)
+    assert _rows(tmp_path) == 2
 
 
 def test_each_contract_has_its_own_newest_and_a_store_never_written_has_none(tmp_path: Path) -> None:
