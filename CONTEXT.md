@@ -1618,6 +1618,8 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option structure** — one to four option legs on one underlying, opened by one order and closed by one exit that closes every leg exactly once. Each leg is bought or sold, a call or a put, with a rule for its strike and a rule for its expiry.
   _Avoid_: strategy (that is the signal), combo, spread (one kind of structure).
 - **Resolved structure** — the contracts a structure's rules picked at one entry, leg by leg. The exit closes these contracts and never asks the rules again.
+- **Watched window** — the contracts a quote line is open for. A rule can pick only inside it; a contract that could be the pick and is outside it, or whose quote has not arrived yet, makes the search incomplete, never "nothing close enough". A rule by delta that finds every watched contract's quote faulty is refused for the quotes, not the window.
+- **Entry cutoff** — how long before a contract's last trade an entry on it must be selected. Nothing is opened inside it, half days included.
 - **Named structure** — one of twelve structures an option structure may be named for, such as a bull call spread. The name fixes what the legs are and what shape the picked contracts must have; strikes and expiries stay the owner's.
 - **Custom (structure)** — an option structure with no name. Its picked contracts are checked as any structure's are, and for no shape.
 - **Option expiry** — one instant per expiry date: 16:00 New York time on that date. It names the date; it is not when the contract stops trading.
