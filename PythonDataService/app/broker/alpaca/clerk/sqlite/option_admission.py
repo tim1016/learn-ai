@@ -4,7 +4,7 @@ The caller hands over which contract each leg's rule came to, its listed
 multiplier and the quote it read just before. It hands over no price and no
 money. Here the Clerk asks, in order, and the first "no" refuses the entry:
 
-1. Is the plan one the Clerk takes today: one bought call or put?
+1. Is the plan one the Clerk takes today (``option_plan_taken``)?
 2. Did the facts come, do they cover the plan's leg, and is each of them
    what it must be: two limits that are percents, a generation and a read
    time that are whole numbers, and the owner's order terms, each inside
@@ -63,7 +63,7 @@ from app.broker.alpaca.clerk.option_effects import (
     OptionEffectRefusal,
     OptionEntryEvidence,
     OptionPlanRefused,
-    the_one_bought_option_leg,
+    option_plan_taken,
 )
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.option_fees import OptionRateNotPinnedError, fees_for_option_fill, option_fee_provision_cents
@@ -232,13 +232,24 @@ def entry_quote_refusal(
 
 
 def work_out_option_entry(
-    action_plan: ActionPlan, *, evidence: OptionEntryEvidence | None, units: int, now_ms: int
+    action_plan: ActionPlan, *, evidence: OptionEntryEvidence | None, units: int, now_ms: int, real_account: bool = True
 ) -> OptionEntryFacts | OptionEntryRefused:
-    """The entry ``action_plan`` makes of the facts handed over, at the Clerk's clock ``now_ms``, or why it makes none."""
+    """The entry ``action_plan`` makes of the facts handed over, at the Clerk's clock ``now_ms``, or why it makes none.
+
+    ``real_account`` is the account's own word to the one rule
+    (``option_plan_taken``): a Paper or a Live account, which a plan of
+    several legs needs the deployment's setting for.
+    """
     try:
-        leg = the_one_bought_option_leg(action_plan)
+        taken = option_plan_taken(action_plan, real_account=real_account)
     except OptionPlanRefused as exc:
         return OptionEntryRefused(exc.reason.value, exc.detail)
+    if len(taken.legs) != 1:
+        return OptionEntryRefused(
+            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED.value,
+            f"This plan opens {len(taken.legs)} option legs. The entry of a structure of several legs is not built yet.",
+        )
+    (leg,) = taken.legs
     if evidence is None:
         return OptionEntryRefused(
             OptionEffectRefusal.ENTRY_EVIDENCE_MISSING.value,

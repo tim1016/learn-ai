@@ -14,9 +14,13 @@ facts the pick stands on, and the Clerk works out the money from them itself:
 Neither carries a price, a commitment or a fee. Those are the Clerk's to
 compute (``app.options.entry.prepare_entry``, ``app.broker.alpaca.option_fees``).
 
-Today the Clerk takes one shape of option plan: a single bought call or put,
-in a Dry Run or on a Paper account. Every other plan is refused by name
-here, before anything is written.
+Which option plans the Clerk takes is one rule, ``option_plan_taken``. Today
+it takes a single bought call or put. A structure of two to four legs is
+taken once the pieces that close it and count its sold legs are built: each
+of the two gates below is opened by the piece that makes it true. A real
+account also needs the deployment's setting for orders of several legs
+(``app.broker.alpaca.multi_leg_option_orders``). Every other plan is refused
+by name here, before anything is written.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.broker.alpaca.multi_leg_option_orders import SETTING as _SEVERAL_LEGS_SETTING
+from app.broker.alpaca.multi_leg_option_orders import multi_leg_option_orders_enabled
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
@@ -42,8 +48,19 @@ class OptionEffectRefusal(StrEnum):
     ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
     # The broker's listing of the picked contract could not be read, so the contract was not confirmed.
     CONTRACT_REFERENCE_UNREAD = "OPTION_CONTRACT_REFERENCE_UNREAD"
-    # The plan has a sold leg, several legs, or a leg of more than one contract a structure.
+    # The plan is not one the Clerk takes: a stock leg beside option legs, legs on two underlyings,
+    # a lone sold leg, a lone leg of more than one contract a structure, or a structure a gate
+    # still keeps shut (``option_plan_taken``).
     STRUCTURE_NOT_SUPPORTED = "OPTION_STRUCTURE_NOT_SUPPORTED"
+    # The plan has several legs and the account is a real one, whose deployment has not turned on
+    # option orders of several legs. A Dry Run takes it.
+    SEVERAL_LEGS_SETTING_OFF = "OPTION_SEVERAL_LEGS_SETTING_OFF"
+    # The structure's net price came to exactly zero. An order of several legs pays or receives;
+    # the broker's reference describes nothing between.
+    ENTRY_NET_PRICE_ZERO = "OPTION_ENTRY_NET_PRICE_ZERO"
+    # A leg would sell a contract the account already holds bought for another bot or outside every
+    # bot, or buy one it holds sold. At the broker the two would be one position of nothing.
+    CONTRACT_HELD_ON_THE_OTHER_SIDE = "OPTION_CONTRACT_HELD_ON_THE_OTHER_SIDE"
     # An ENTER came with no picked contracts and no quotes.
     ENTRY_EVIDENCE_MISSING = "OPTION_ENTRY_QUOTES_NOT_KEPT"
     # What came does not cover the plan's legs, or a part of it is not what it must be:
@@ -187,47 +204,103 @@ def is_option_plan(action_plan: ActionPlan) -> bool:
     return any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
 
 
-def the_one_bought_option_leg(action_plan: ActionPlan) -> OptionEntryLeg:
-    """The plan's single bought option leg; refuses every other option plan by what it is.
+# Which structures of several legs the Clerk takes. Each is set True by the piece that makes it
+# true (ADR 0076). Read each time the rule is asked, never at import.
+#
+# A structure of two to four bought legs: taken once every close of it is built.
+BOUGHT_LEG_STRUCTURES_TAKEN: bool = False
+# A structure with a sold leg: taken once a sold leg's money and its option events are counted.
+SOLD_LEG_STRUCTURES_TAKEN: bool = False
 
-    A sold leg has a requirement the books cannot yet reserve, and several
-    legs fill as several orders the books cannot yet tell apart.
+
+@dataclass(frozen=True, slots=True)
+class TakenOptionPlan:
+    """An option plan the Clerk takes, and what its callers need of it."""
+
+    # The plan's option legs, in its order: one to four.
+    legs: tuple[OptionEntryLeg, ...]
+    # What the bot is registered under, and what stream health is asked of.
+    underlying: str
+
+
+def option_plan_taken(action_plan: ActionPlan, *, real_account: bool) -> TakenOptionPlan:
+    """The option plan as the Clerk takes it; refuses every plan it does not take by what it is.
+
+    The one rule, asked at registration, at the entry, at the contract
+    reference and by the preview's verdict. ``real_account`` is True for a
+    Paper and a Live account and False for a Dry Run and a Live Shadow.
+    Only a real account, and only for a plan of several legs, reads the
+    deployment's setting for orders of several legs. The gates are asked
+    before the setting, so a structure no account takes yet is refused
+    under one code on every account.
+
+    Whether an account takes option plans at all is asked before this, by
+    the account. Raises ``OptionPlanRefused``.
     """
-    legs = [leg for leg in action_plan.on_enter if isinstance(leg, OptionEntryLeg)]
+    legs = tuple(leg for leg in action_plan.on_enter if isinstance(leg, OptionEntryLeg))
     if len(legs) != len(action_plan.on_enter) or any(isinstance(leg, StockEntryLeg) for leg in action_plan.on_enter):
         raise OptionPlanRefused(
             OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
             "This plan mixes option legs with a stock leg. A bot trades one or the other.",
         )
-    if len(legs) != 1:
+    if not legs:
+        raise OptionPlanRefused(
+            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED, "This plan opens no option leg. It is not an option plan."
+        )
+    underlyings = sorted({leg.instrument.underlying for leg in legs})
+    if len(underlyings) != 1:
+        raise OptionPlanRefused(
+            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
+            f"This plan's legs are on {', '.join(underlyings)}. Every leg of a structure is on one underlying.",
+        )
+    sold = [leg for leg in legs if leg.position != "long"]
+    if len(legs) == 1:
+        (leg,) = legs
+        if sold:
+            raise OptionPlanRefused(
+                OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
+                f"Leg {leg.leg_id!r} sells an option to open. The account Clerk takes one bought call or put for "
+                "now; a sold leg is not built yet.",
+            )
+        if leg.qty_ratio != 1:
+            raise OptionPlanRefused(
+                OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
+                f"Leg {leg.leg_id!r} holds {leg.qty_ratio} contracts a structure. A single option is one contract "
+                "a structure; more of it is more structures.",
+            )
+        return TakenOptionPlan(legs=legs, underlying=underlyings[0])
+    if not BOUGHT_LEG_STRUCTURES_TAKEN:
         raise OptionPlanRefused(
             OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
             f"This plan opens {len(legs)} option legs. The account Clerk takes one bought call or put for now; "
             "structures of several legs are not built yet.",
         )
-    (leg,) = legs
-    if leg.position != "long":
+    if sold and not SOLD_LEG_STRUCTURES_TAKEN:
         raise OptionPlanRefused(
             OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            f"Leg {leg.leg_id!r} sells an option to open. The account Clerk takes one bought call or put for now; "
-            "a sold leg is not built yet.",
+            f"Leg {sold[0].leg_id!r} sells an option to open. The account Clerk takes structures of bought legs "
+            "for now; a sold leg is not built yet.",
         )
-    if leg.qty_ratio != 1:
+    if real_account and not multi_leg_option_orders_enabled():
         raise OptionPlanRefused(
-            OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
-            f"Leg {leg.leg_id!r} holds {leg.qty_ratio} contracts a structure. A single option is one contract a "
-            "structure; more of it is more structures.",
+            OptionEffectRefusal.SEVERAL_LEGS_SETTING_OFF,
+            f"This plan opens {len(legs)} option legs as one order. A Paper or a Live account takes such an order "
+            f"only once its deployment turns on {_SEVERAL_LEGS_SETTING}, which is off: no order of several legs "
+            "has been checked against Alpaca yet. A Dry Run takes this plan.",
         )
-    return leg
+    return TakenOptionPlan(legs=legs, underlying=underlyings[0])
 
 
 __all__ = [
+    "BOUGHT_LEG_STRUCTURES_TAKEN",
+    "SOLD_LEG_STRUCTURES_TAKEN",
     "STANDARD_CONTRACT_MULTIPLIER",
     "OptionEffectRefusal",
     "OptionEntryEvidence",
     "OptionExitEvidence",
     "OptionPlanRefused",
     "RecordedQuote",
+    "TakenOptionPlan",
     "is_option_plan",
-    "the_one_bought_option_leg",
+    "option_plan_taken",
 ]

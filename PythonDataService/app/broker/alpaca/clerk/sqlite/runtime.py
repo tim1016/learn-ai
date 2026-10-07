@@ -55,7 +55,7 @@ from app.broker.alpaca.clerk.option_effects import (
     OptionExitEvidence,
     OptionPlanRefused,
     is_option_plan,
-    the_one_bought_option_leg,
+    option_plan_taken,
 )
 from app.broker.alpaca.clerk.program_leg import (
     PRICING_BAR_MISMATCH,
@@ -1044,15 +1044,15 @@ class SqliteAlpacaClerkFacade:
 
         A bot in shares: the symbol its orders are in. A bot in option
         contracts: their underlying, and only on a Dry Run's or a Paper
-        account and only as one bought call or put (``OptionPlanRefused``
-        otherwise).
+        account and only a plan the one rule takes (``option_plan_taken``;
+        ``OptionPlanRefused`` otherwise).
         """
         if not is_option_plan(action_plan):
             return _entry_leg(action_plan).instrument.underlying
         refusal = self._option_plan_account_refusal()
         if refusal is not None:
             raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
-        return the_one_bought_option_leg(action_plan).instrument.underlying
+        return option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
 
     def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
         """Raise the typed refusal of an option plan this account does not take (ADR 0076).
@@ -1080,6 +1080,16 @@ class SqliteAlpacaClerkFacade:
             f"This bot trades option contracts. {account} does not take an option bot yet: a Dry Run and a "
             "Paper account do. Option orders have not been checked against Alpaca with real money at stake."
         )
+
+    @property
+    def _is_a_real_account(self) -> bool:
+        """Whether this is a Paper or a Live account: one whose orders are sent to Alpaca.
+
+        What the one rule for option plans is told (``option_plan_taken``): a
+        real account takes a plan of several legs only once its deployment
+        says so. A Dry Run and a Live Shadow send nothing.
+        """
+        return self.authority_kind == "sqlite"
 
     @property
     def _sends_to_a_simulation(self) -> bool:
@@ -1122,9 +1132,19 @@ class SqliteAlpacaClerkFacade:
         if self._sends_to_a_simulation or option_entry is None:
             return None
         try:
-            leg = the_one_bought_option_leg(action_plan)
+            taken = option_plan_taken(action_plan, real_account=self._is_a_real_account)
         except OptionPlanRefused:
             return None
+        if len(taken.legs) != 1:
+            # A real account's entry of several legs needs every leg's listing read, which is not
+            # built yet. Refused by name, so nothing is ever sent on a listing nobody read.
+            return OptionEntryRefused(
+                OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
+                f"This entry opens {len(taken.legs)} option legs on a real account. Alpaca's listing of each "
+                "leg's contract is not read for a structure of several legs yet, so no contract was confirmed and "
+                "the entry was not taken.",
+            )
+        (leg,) = taken.legs
         picked = option_entry.picked
         contract = picked.get(leg.leg_id) if isinstance(picked, Mapping) else None
         if not isinstance(contract, OptionContract):
@@ -1132,7 +1152,7 @@ class SqliteAlpacaClerkFacade:
         if self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}") is not None:
             return None
         if (
-            stream_health_refusal(self._stream_health, symbol=leg.instrument.underlying) is not None
+            stream_health_refusal(self._stream_health, symbol=taken.underlying) is not None
             or not market_leg_sendable(self._repo.clock())
         ):
             return _LISTING_NOT_ASKED
@@ -1860,7 +1880,8 @@ class SqliteAlpacaClerkFacade:
                         next_step=_ENTRY_NOT_RETRIED,
                     )
                 worked_out = work_out_option_entry(
-                    action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock()
+                    action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock(),
+                    real_account=self._is_a_real_account,
                 )
                 if isinstance(worked_out, OptionEntryRefused):
                     logger.info(
@@ -1879,7 +1900,7 @@ class SqliteAlpacaClerkFacade:
                         next_step=_ENTRY_NOT_RETRIED,
                     )
                 entry = worked_out
-                underlying = the_one_bought_option_leg(action_plan).instrument.underlying
+                underlying = option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
                 if stream_health_refusal(self._stream_health, symbol=underlying) is not None:
                     return rejected(
                         reason_code=STREAM_HEALTH_REASON_CODE,
