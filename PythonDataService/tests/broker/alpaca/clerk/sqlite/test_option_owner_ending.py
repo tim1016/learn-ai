@@ -1672,3 +1672,87 @@ async def test_the_owner_ends_a_contract_an_outside_order_sold_and_the_books_cou
     # The ended bot is held for nothing more, the order included, and the account agrees once more.
     assert option_holds(paper.repo) == {}
     assert (await paper.pass_()).verdict == "clean"
+
+
+async def test_an_outside_order_that_stands_against_another_bot_is_no_part_of_this_bots_ending(tmp_path: Path) -> None:
+    """Bot-a holds the call bought and bot-b holds it sold. An order the Clerk did not place buys two back.
+
+    It reduces the sold side, more than bot-b's lots hold, so it is not
+    booked and it stands against bot-b alone. Bot-a's call is ended at the
+    owner's word as one no record came for: its record names no order.
+    """
+    repo = _books(tmp_path, bot_a=1, bot_b=-1)
+    observe_external_order(
+        repo, order=_outside("by-hand-buy", status="filled", side="buy", quantity=2, filled=2, price=0.4, symbol=CALL)
+    )
+    account = _FakeReadPort()
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        await poll(repo, account)
+        assert ("bot-b", "OPTION_ORDER_NOT_OURS") in option_holds(repo)
+        assert ("bot-a", "OPTION_ORDER_NOT_OURS") not in option_holds(repo)
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert outcome.result == "ended"
+        word = _the_owners_word(repo)
+        assert "outside_orders_not_booked" not in word and "by-hand-buy" not in word["why_no_settlement"]
+        assert fifo(repo, "bot-a").exact_realized_pnl == Decimal("-194") and held(repo, "bot-a") == {}
+    finally:
+        repo.close()
+
+
+# ── several contracts of a Dry Run, through the books ────────────────────
+
+
+async def test_a_dry_run_settles_three_contracts_in_one_sale_and_the_money_is_three_contracts_worth(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Three 585 calls bought at $1.94: $582.00, and 14 cents of fees. SPY closes at 590.255.
+
+    Worth 5.255 a share, booked at 5.25, down to the cent: 5.25 x 3 x 100 =
+    $1,575.00 in. Made: 1,575.00 - 582.00 = $993.00. The sale's own fees
+    are 19 cents. Balance: 1,000.00 + 993.00 - 0.33 = $1,992.67, nothing in
+    position, and no share booked.
+    """
+    await dry_run.enter(dry_run.evidence(), units=3)
+    assert dry_run.held() == {SYMBOL: 3.0}
+    _keeps_spy(dry_run, "590.255")
+    _wait_until(dry_run, SATURDAY_NOON)
+    await _passes(dry_run, 2)
+
+    [booked] = _booked(dry_run)
+    record = booked["simulation"]
+    assert (booked["summary_code"], booked["close_price"], booked["contracts"]) == ("OPTION_SETTLED_IN_CASH", "5.25", 3)
+    assert (record["contracts"], record["cash_cents"], record["fee_cents"]) == (3, 157_500, 19)
+    assert dry_run.held() == {} and dry_run.realized_pnl() == Decimal("993")
+    assert _fees(dry_run) == Decimal("0.33")
+    budget = _budget(dry_run)
+    assert (budget.balance, budget.position_cost) == (Decimal("1992.67"), 0)
+    assert not any(symbol == "SPY" for symbol, *_rest in dry_run.fills())
+    assert await dry_run.clerk._read.list_positions() == []
+
+
+async def test_a_dry_run_ends_three_contracts_at_the_owners_word_and_what_all_three_cost_is_the_loss(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Three calls bought at $1.94 and no price kept: $582.00 lost, and the simulation lets go of all three.
+
+    Balance: 1,000.00 - 582.00 - 0.14 = $417.86, nothing in position.
+    """
+    await dry_run.enter(dry_run.evidence(), units=3)
+    _wait_until(dry_run, SATURDAY_NOON)
+    await _passes(dry_run, 2)
+    assert dry_run.held() == {SYMBOL: 3.0}
+
+    ended = await _press(dry_run.clerk, SID)
+
+    assert ended.applied and dry_run.held() == {}
+    [booked] = _booked(dry_run)
+    assert (booked["summary_code"], booked["contracts"], booked["simulation"]["contracts"]) == (
+        "OPTION_ENDED_BY_OWNER", 3, 3
+    )
+    assert dry_run.realized_pnl() == Decimal("-582") and _fees(dry_run) == Decimal("0.14")
+    budget = _budget(dry_run)
+    assert (budget.balance, budget.position_cost) == (Decimal("417.86"), 0)
+    assert await dry_run.clerk._read.list_positions() == []

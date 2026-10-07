@@ -1022,7 +1022,9 @@ def acknowledge_option_event_hold(
         if reads.last_custody_sequence(conn) != compared.through_sequence:
             raise OptionEventHoldNotAcknowledged(
                 acknowledgement.BOOKS_MOVED,
-                "The books changed while the account was being compared with the broker. Try again.",
+                "The books changed after the account was compared with the broker, so the comparison is older than "
+                "the books. While a bot's exit is being retried the pass itself writes a record after it compares: "
+                "wait until that retry has ended, then acknowledge the notice. Otherwise try again.",
             )
         registered = None if sid is None else reads.strategy_instance(conn, sid)
         differ = sorted(
@@ -1033,7 +1035,9 @@ def acknowledge_option_event_hold(
             raise OptionEventHoldNotAcknowledged(
                 acknowledgement.POSITIONS_DIFFER,
                 f"The broker's position differs from the books' in {', '.join(differ)}. An acknowledgement books "
-                "nothing, so it would leave them apart. Bring them together first, then acknowledge the notice.",
+                "nothing, so it would leave them apart. Bring them together first, then acknowledge the notice. "
+                "If the pass has just booked an order's fill there, it compared before that booking: acknowledge "
+                "again after the next pass.",
                 symbols=differ,
             )
         _resolve_hold(
