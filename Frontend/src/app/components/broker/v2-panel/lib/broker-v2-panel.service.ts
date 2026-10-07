@@ -63,6 +63,13 @@ export type DeploySubmissionBody = components['schemas']['AlpacaDeploySubmission
 /** Deploy again: one earlier bot's sealed settings, never its money or consent. */
 export type BotDeployPrefill = components['schemas']['BotDeployPrefill'];
 export type DeployTradedAssetView = components['schemas']['DeployTradedAssetView'];
+/** What the structure builder offers (#2913): the named structures in their
+ * groups, the rules a leg may be given, and the order terms a Deploy starts from. */
+export type OptionStructureCatalogue = components['schemas']['OptionStructureCatalogue'];
+/** One structure the owner is building, asked what it would pick right now. */
+export type OptionStructurePreviewRequest = components['schemas']['OptionStructurePreviewRequest'];
+/** The preview's answer. `state` is a closed set, and only `resolved` carries figures. */
+export type OptionStructurePreview = components['schemas']['OptionStructurePreview'];
 export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
 /** The recovery read's answer for a key whose Deploy has not committed:
  * `in_flight` while this clerk is still sending it, `not_committed` when
@@ -194,6 +201,20 @@ export class BrokerV2PanelService {
     const params = new HttpParams().set('symbol', symbol).set('traded_symbol', tradedSymbol);
     return firstValueFrom(
       this.http.get<DeployTradedAssetView>(operationUrl('bot_traded_asset_read', target), { params }),
+    );
+  }
+
+  /** What the structure builder offers on this account (#2913). */
+  getOptionStructures(target: ResourceTarget): Promise<OptionStructureCatalogue> {
+    return firstValueFrom(this.http.get<OptionStructureCatalogue>(operationUrl('bot_option_structures_read', target)));
+  }
+
+  /** What a structure the owner is building would pick right now, and its
+   * figures (#2913). A POST that reads only. Each ask under one
+   * `preview_key` renews that page's hold on quote lines for a minute. */
+  previewOptionStructure(target: ResourceTarget, body: OptionStructurePreviewRequest): Promise<OptionStructurePreview> {
+    return firstValueFrom(
+      this.http.post<OptionStructurePreview>(operationUrl('bot_option_structure_preview', target), body),
     );
   }
 

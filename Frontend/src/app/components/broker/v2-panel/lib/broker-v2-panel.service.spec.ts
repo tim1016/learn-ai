@@ -82,6 +82,23 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(change).resolves.toMatchObject({ headline: 'Ends today 15:59 ET · keeps its shares' });
   });
 
+  it('reads what the structure builder offers, and asks a preview as a read with the structure in its body (#2913)', async () => {
+    const offered = service.getOptionStructures(target('PA9'));
+    const read = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/option-structures');
+    expect(read.request.method).toBe('GET');
+    read.flush({ groups: [], max_legs: 4 });
+    await expect(offered).resolves.toMatchObject({ max_legs: 4 });
+
+    const body = { preview_key: 'preview-key-1', underlying: 'SPY', structure: null, legs: [] };
+    const preview = service.previewOptionStructure(target('PA9'), body);
+    const ask = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/option-structure-preview');
+    expect(ask.request.method).toBe('POST');
+    // The structure itself, with no command envelope: a preview changes nothing.
+    expect(ask.request.body).toEqual(body);
+    ask.flush({ state: 'plan_refused' });
+    await expect(preview).resolves.toMatchObject({ state: 'plan_refused' });
+  });
+
   it('reads budget and durable deployment status through the selected account and escaped bot identity', async () => {
     const budget = service.getBudget(target('PA9'), 'sid/1');
     const money = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/budget');
