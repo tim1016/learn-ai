@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 
 FEE_EVIDENCE_KIND = "FEE_EVIDENCE_OBSERVED"
 FEE_EVIDENCE_MAX_AGE_MS = 90_000
+OPTION_FILL_FEES_NOT_ATTRIBUTED = (
+    "This account holds option fills, and fees on option fills are not worked out here yet."
+)
 
 
 class FeeEvidenceFacts(BaseModel):
@@ -479,6 +482,25 @@ def _effective_fills(
     return grouped, orders, complete and conflicts is None
 
 
+def _has_option_fill(conn: sqlite3.Connection) -> bool:
+    """Whether the books hold a fill of an order that trades an option contract.
+
+    The fee model and the settlement rule this projection applies are the
+    listed-stock ones (``regulatory_fees``): they would charge a contract as
+    one share. Until option fees are attributed here from Alpaca's own fee
+    activities, such a fill leaves the fees unresolved, never mispriced
+    (ADR 0076 decision 13).
+
+    Asked from the bound orders: books that bind no order to a contract
+    hold no option fill, and are answered without reading a fill. Each
+    bound order is then looked up in the fills by its own index.
+    """
+    return conn.execute(
+        "SELECT 1 FROM order_contracts c"
+        " WHERE EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = c.order_ref) LIMIT 1"
+    ).fetchone() is not None
+
+
 def _witnessed_executions(conn: sqlite3.Connection) -> tuple[frozenset[str], bool]:
     """Every broker execution custody names, and whether they explain every cumulative-recovery fill.
 
@@ -707,6 +729,8 @@ def custody_fee_attribution(
             predicted += result.predicted_total
     if not population_complete:
         unresolved.append("Account fill coverage is incomplete. Reconcile account executions before deploying.")
+    if _has_option_fill(conn):
+        unresolved.append(OPTION_FILL_FEES_NOT_ATTRIBUTED)
     return FeeAttribution(
         tuple(shares),
         unattributed,

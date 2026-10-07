@@ -45,6 +45,11 @@ from app.broker.alpaca.clerk.fifo_pnl import (
 )
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ORDER_CONTRACT_JOINS_SQL,
+    ORDER_CONTRACT_MULTIPLIER_SQL,
+    ORDER_CONTRACT_SYMBOL_SQL,
+)
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
@@ -119,6 +124,20 @@ EFFECTIVE_FILL_LINEAGE_CTE = """
     )"""
 
 
+# How a reader of fills names the instrument each fill traded, for a query over
+# ``orders o``, ``strategy_instances s`` and ``manual_acceptance``. An order
+# bound to an option contract trades that contract, and its money is counted
+# with the contract's multiplier (ADR 0076 decision 13). Every other order
+# joins to nothing: it trades its bot's symbol, or its manual leg's, in shares,
+# and its multiplier is NULL.
+_FILL_SYMBOL_SQL = (
+    f"COALESCE({ORDER_CONTRACT_SYMBOL_SQL}, s.symbol, "
+    "json_extract(manual_acceptance.facts_json, '$.leg.symbol'))"
+)
+_FILL_MULTIPLIER_SQL = f"{ORDER_CONTRACT_MULTIPLIER_SQL} AS contract_multiplier"
+_FILL_CONTRACT_JOINS_SQL = ORDER_CONTRACT_JOINS_SQL.format(order="o")
+
+
 class EconomicProjectionError(RuntimeError):
     """SQLite could not produce a coherent execution-economic projection."""
 
@@ -148,9 +167,13 @@ class _CachedFifo:
     numerical operation; this cache only retains its mutable inputs between
     equal or append-only SQLite revisions.  A correction or historical insert
     invalidates the prefix and rebuilds from authoritative effective rows.
+    A fill FIFO refuses leaves nothing behind: the cache is emptied, so the
+    next read rebuilds from its own records and never from a batch that
+    stopped part-way.
     Reference: ``fifo_pnl.py``.
     Canonical implementation: ``fifo_pnl.py::apply_fill_to_lots``.
-    Validated against: ``test_economic_projection.py``.
+    Validated against: ``test_economic_projection.py``; the refusal in
+      ``test_option_custody.py``.
     """
 
     records: tuple[FillRecord, ...] = ()
@@ -164,23 +187,33 @@ class _CachedFifo:
         records: tuple[FillRecord, ...],
     ) -> tuple[list[ClosedLot], dict[str, deque[_Lot]], FeeFidelity]:
         if not _is_prefix(self.records, records):
-            self.records = ()
-            self.lots = {}
-            self.closed_lots = []
-            self.fee_total = 0.0
-            self.fee_missing = False
+            self._forget()
 
-        for record in records[len(self.records) :]:
-            apply_fill_to_lots(self.lots, record, self.closed_lots)
-            if record.fee is None:
-                self.fee_missing = True
-                self.fee_total = None
-            elif not self.fee_missing:
-                self.fee_total = (self.fee_total or 0.0) + record.fee
+        try:
+            for record in records[len(self.records) :]:
+                apply_fill_to_lots(self.lots, record, self.closed_lots)
+                if record.fee is None:
+                    self.fee_missing = True
+                    self.fee_total = None
+                elif not self.fee_missing:
+                    self.fee_total = (self.fee_total or 0.0) + record.fee
+        except BaseException:
+            # The fills before the one that stopped the batch are already in
+            # the lots, and ``records`` does not say so: a later read would
+            # apply them again.
+            self._forget()
+            raise
 
         self.records = records
         fee_fidelity: FeeFidelity = "not_reported" if self.fee_missing else "reported"
         return self.closed_lots, self.lots, fee_fidelity
+
+    def _forget(self) -> None:
+        self.records = ()
+        self.lots = {}
+        self.closed_lots = []
+        self.fee_total = 0.0
+        self.fee_missing = False
 
 
 def _is_prefix(prefix: tuple[FillRecord, ...], values: tuple[FillRecord, ...]) -> bool:
@@ -942,7 +975,7 @@ class SqliteEconomicProjectionReader:
             where.append("e.strategy_instance_id = ?")
             params.append(bot)
         if symbol is not None:
-            where.append("COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) = ?")
+            where.append(f"{_FILL_SYMBOL_SQL} = ?")
             params.append(symbol.upper())
         if origin is not None:
             where.append("CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END = ?")
@@ -971,7 +1004,7 @@ class SqliteEconomicProjectionReader:
                    f.recorded_transition_sequence,
                    e.subject_id, e.strategy_instance_id,
                    CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                   COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                   {_FILL_SYMBOL_SQL} AS symbol, {_FILL_MULTIPLIER_SQL},
                    CASE WHEN EXISTS (
                        SELECT 1 FROM fills successor
                        WHERE successor.superseded_execution_ref = f.execution_id
@@ -982,6 +1015,7 @@ class SqliteEconomicProjectionReader:
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            {_FILL_CONTRACT_JOINS_SQL}
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)
@@ -1022,7 +1056,7 @@ class SqliteEconomicProjectionReader:
                        f.recorded_transition_sequence,
                        e.subject_id, e.strategy_instance_id,
                        CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                       COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                       {_FILL_SYMBOL_SQL} AS symbol, {_FILL_MULTIPLIER_SQL},
                        'effective' AS state,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                                 f.source_event_at_ms, f.recorded_at_ms) AS filled_at_ms,
@@ -1031,6 +1065,7 @@ class SqliteEconomicProjectionReader:
                 JOIN orders o ON o.order_ref = f.order_ref
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
                 LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                {_FILL_CONTRACT_JOINS_SQL}
                 LEFT JOIN custody_transitions manual_acceptance
                     ON manual_acceptance.sequence = (
                         SELECT MIN(acceptance.sequence)
@@ -1147,7 +1182,7 @@ def effective_fill_rows(
                    e.subject_id, e.strategy_instance_id, o.broker_order_id,
                    COALESCE(roots.root_recorded_at_ms, f.recorded_at_ms) AS root_recorded_at_ms,
                    CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
-                   COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
+                   {_FILL_SYMBOL_SQL} AS symbol, {_FILL_MULTIPLIER_SQL},
                    COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                             f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
                    COALESCE(roots.root_transition_sequence,
@@ -1157,6 +1192,7 @@ def effective_fill_rows(
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            {_FILL_CONTRACT_JOINS_SQL}
             LEFT JOIN custody_transitions manual_acceptance
                 ON manual_acceptance.sequence = (
                     SELECT MIN(acceptance.sequence)
@@ -1236,6 +1272,7 @@ def _to_fill_record(
         ledger_sequence=_required_ledger_sequence(row, field="economic_ledger_sequence"),
         native_order_id=row["broker_order_id"],
         recorded_at_ms=int(row["root_recorded_at_ms"]),
+        multiplier=row["contract_multiplier"],
     )
 
 
@@ -1281,6 +1318,7 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         recorded_at_ms=int(row["recorded_at_ms"]),
         subject_id=row["subject_id"],
         journal_seq=_required_ledger_sequence(row),
+        multiplier=row["contract_multiplier"],
     )
 
 

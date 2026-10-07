@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.models import EpochMs
-from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money, notional
+from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
@@ -86,7 +86,7 @@ def _committed_starting_cash(conn: sqlite3.Connection) -> Decimal | None:
 
 def _cash_after_fills(capital: Decimal, records: tuple[FillRecord, ...], fees: FeeAttribution) -> Decimal:
     """The one simulated cash formula: capital - net fill spending - settled modelled fees."""
-    spending = sum((notional(fill.quantity, fill.fill_price) * (1 if fill.side is OrderSide.BUY else -1) for fill in records), ZERO)
+    spending = sum((fill.exact_notional * (1 if fill.side is OrderSide.BUY else -1) for fill in records), ZERO)
     settled = sum((share.amount for share in fees.shares if share.state == "modelled_settled"), ZERO)
     return capital - spending - settled
 
