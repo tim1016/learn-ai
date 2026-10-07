@@ -49,6 +49,14 @@ from app.broker.alpaca.clerk.models import (
     ReconciliationVerdict,
     RecoveryEvaluationObservation,
 )
+from app.broker.alpaca.clerk.option_effects import (
+    OptionEffectRefusal,
+    OptionEntryEvidence,
+    OptionExitEvidence,
+    OptionPlanRefused,
+    is_option_plan,
+    the_one_bought_option_leg,
+)
 from app.broker.alpaca.clerk.program_leg import (
     PRICING_BAR_MISMATCH,
     PRICING_BAR_UNAVAILABLE,
@@ -85,8 +93,10 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionRecei
 from app.broker.alpaca.clerk.sqlite.enter import (
     MARKET_CLOSED,
     MARKET_LIVENESS_BLOCKED,
+    EnterSubmission,
     EntrySubmissionRefusal,
     accept_enter,
+    accept_option_enter,
     submit_accepted_enter,
 )
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, newest_reducible_entry, resolve_accepted_exit
@@ -131,6 +141,8 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
+from app.broker.alpaca.clerk.sqlite.option_admission import OptionEntryRefused, work_out_option_entry
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts, option_entry_contracts
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     is_working_order,
     trade_port_folds_simulated_evidence,
@@ -181,6 +193,7 @@ from app.broker.alpaca.clerk.stream_health import (
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
+from app.broker.contract.options import BrokerOptionOrder, OptionOrderRequest
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
@@ -194,7 +207,9 @@ from app.services.session_authority import SessionAuthorityState
 from app.utils.session_anchors import et_date_at_ms
 
 if TYPE_CHECKING:
-    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+    from app.broker.alpaca.clerk.sqlite.models import ExitSubmission
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
+    from app.options.quotes import HeldQuote
     from app.services.bot_binding_repository import BrokerBotBinding
     from app.services.source_bar_ledger import RetainedSourceBar
 
@@ -216,6 +231,11 @@ _ENTRY_NOT_RETRIED: Final = "No order was sent. The bot decides again on its nex
 _MARKET_ENTRY_AFTER_THE_CLOSE: Final = (
     "The regular session has closed, or closes within seconds. A market order sent now "
     "could reach the broker after the close and wait there until the next open."
+)
+# An option order is for the day and for regular hours, whatever its type (ADR 0076).
+_OPTION_ORDER_OUTSIDE_THE_SESSION: Final = (
+    "The regular session has closed, or closes within seconds. An option order is sent only inside "
+    "the regular session."
 )
 logger = logging.getLogger(__name__)
 
@@ -314,6 +334,51 @@ class _PricingBarBoundTradePort:
 
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return await self._inner.get_order_by_broker_order_id(order_id)
+
+
+class _OptionQuoteBoundTradePort:
+    """Bind a simulated option entry to the one quote its limit price was worked out from (ADR 0076).
+
+    The option twin of ``_PricingBarBoundTradePort``: the quote is bound to
+    the order's own id just before the order is sent, so the simulation fills
+    from the quote the entry was admitted on and from no other.
+    """
+
+    def __init__(self, inner: GuardedBrokerTradePort, *, symbol: str, quote: HeldQuote) -> None:
+        self._inner = inner
+        self._symbol = symbol
+        self._quote = quote
+
+    @property
+    def broker_id(self) -> str:
+        return self._inner.broker_id
+
+    @property
+    def submission_response_is_authoritative_evidence(self) -> bool:
+        """Binding a quote changes the price, never whose execution this is: the no-submit port says."""
+        return self._inner.submission_response_is_authoritative_evidence
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        return await self._inner.submit(leg, client_order_id=client_order_id)
+
+    async def cancel(self, order_id: str) -> None:
+        await self._inner.cancel(order_id)
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        return await self._inner.get_order_by_client_order_id(client_order_id)
+
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        return await self._inner.get_order_by_broker_order_id(order_id)
+
+    async def submit_option_order(self, order: OptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
+        self._inner.bind_option_entry_quote(client_order_id, symbol=self._symbol, quote=self._quote)
+        return await self._inner.submit_option_order(order, client_order_id=client_order_id)
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        return await self._inner.get_option_order_by_client_order_id(client_order_id)
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        return await self._inner.get_option_order_by_broker_order_id(order_id)
 
 
 class StrategyRegistrationConflictError(RuntimeError):
@@ -794,8 +859,9 @@ class SqliteAlpacaClerkFacade:
             # The Clerk keeps custody, so the symbol it registers a bot under is
             # the one the bot's orders are in: the Action Plan's traded
             # instrument, which is the Signal stream's symbol only when the
-            # bot trades what it listens to (#2912).
-            traded_symbol = _entry_leg(binding.action_plan).instrument.underlying
+            # bot trades what it listens to (#2912). A bot that trades option
+            # contracts is registered under their underlying (ADR 0076).
+            traded_symbol = self._symbol_to_register(binding.action_plan)
             existing = self._repo.strategy_instance(binding.strategy_instance_id)
             if existing is None:
                 if binding.exit_terms is None or binding.exit_terms.provenance != "deployed":
@@ -837,12 +903,18 @@ class SqliteAlpacaClerkFacade:
                 world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
                 if consent.world != world or self._live_envelope is None:
                     raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
-                # One estimated position is priced from the asset the bot
-                # buys, as the Deploy review priced it (#2912).
-                quote = self._quote_source(traded_symbol, self._repo.clock())
-                if quote is None:
-                    raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
-                required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
+                if is_option_plan(binding.action_plan):
+                    # One option position's cost is known only from its
+                    # contract's quotes. No minimum is asked of the budget
+                    # here; each entry is admitted on its own commitment.
+                    required = Decimal(0)
+                else:
+                    # One estimated position is priced from the asset the bot
+                    # buys, as the Deploy review priced it (#2912).
+                    quote = self._quote_source(traded_symbol, self._repo.clock())
+                    if quote is None:
+                        raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
+                    required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
                 submission = submit_budgeted_deploy(
                     self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
                     world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
@@ -872,6 +944,42 @@ class SqliteAlpacaClerkFacade:
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
             self._hold_run(binding, run_owner)
+
+    def _symbol_to_register(self, action_plan: ActionPlan) -> str:
+        """The symbol a bot is registered under, or a typed refusal of a plan this account cannot take.
+
+        A bot in shares: the symbol its orders are in. A bot in option
+        contracts: their underlying, and only on a Dry Run's account and only
+        as one bought call or put (``OptionPlanRefused`` otherwise).
+        """
+        if not is_option_plan(action_plan):
+            return _entry_leg(action_plan).instrument.underlying
+        refusal = self._option_plan_account_refusal()
+        if refusal is not None:
+            raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_SIMULATED, refusal)
+        return the_one_bought_option_leg(action_plan).instrument.underlying
+
+    def _option_plan_account_refusal(self) -> str | None:
+        """Why this account takes no option plan, or ``None`` when it does: only a Dry Run's does for now."""
+        if self.authority_kind == "synthetic":
+            return None
+        return (
+            "This bot trades option contracts. Only a Dry Run takes an option bot for now: option orders "
+            "have not been checked against Alpaca on a Paper, Live Shadow or Live account."
+        )
+
+    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
+        """Hand a Dry Run the newest quote held for each contract a bot holds, by OCC symbol (ADR 0076).
+
+        A simulated close and the simulated account's mark of an open
+        contract are priced from the newest quote kept. Any other account
+        keeps none.
+        """
+        self._trade.keep_option_quotes(quotes)
+
+    def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
+        """How a simulation priced each option order it answered, by client order id."""
+        return self._trade.synthesized_option_fills()
 
     async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
         async with self._intake:
@@ -1054,6 +1162,8 @@ class SqliteAlpacaClerkFacade:
         retained_source_bar: RetainedSourceBar | None = None,
         pricing_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
+        option_entry: OptionEntryEvidence | None = None,
+        option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
 
@@ -1067,10 +1177,17 @@ class SqliteAlpacaClerkFacade:
         own bar for that minute, and prices the order. A bot that trades the
         symbol it listens to passes none: its decision bar is its pricing bar
         (``_order_pricing_bar``).
+
+        A bot whose plan trades option contracts hands over ``option_entry``
+        with an ENTER and may hand ``option_exit`` with an EXIT (ADR 0076,
+        ``option_effects``): the contract its rules picked and the quotes it
+        read. A bot in shares hands neither.
         """
         key = (strategy_instance_id, decision_id)
         if decision_evidence is not None and decision_evidence.evaluation_id != decision_id:
             raise ValueError("decision_id must equal the Signal Program evaluation_id")
+        if (option_entry is not None or option_exit is not None) and not is_option_plan(action_plan):
+            raise ValueError("option contracts and quotes were handed over with a plan that trades shares")
         task = self._effect_tasks.get(key)
         if task is None or task.done():
             task = asyncio.create_task(
@@ -1085,6 +1202,8 @@ class SqliteAlpacaClerkFacade:
                     retained_source_bar=retained_source_bar,
                     pricing_bar=pricing_bar,
                     decision_evidence=decision_evidence,
+                    option_entry=option_entry,
+                    option_exit=option_exit,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
             )
@@ -1132,6 +1251,8 @@ class SqliteAlpacaClerkFacade:
         retained_source_bar: RetainedSourceBar | None = None,
         pricing_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
+        option_entry: OptionEntryEvidence | None = None,
+        option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt:
         """Judge one decision; an ENTER behind the account reading waits for a new one (#2623).
 
@@ -1159,6 +1280,8 @@ class SqliteAlpacaClerkFacade:
                 pricing_bar=pricing_bar,
                 decision_evidence=decision_evidence,
                 reading_outcome=reading_outcome,
+                option_entry=option_entry,
+                option_exit=option_exit,
             )
             if isinstance(outcome, EffectOperationReceipt):
                 return outcome
@@ -1183,6 +1306,355 @@ class SqliteAlpacaClerkFacade:
         active = self._repo.active_run(strategy_instance_id)
         return active is not None and active.lifecycle_run_id == run_id
 
+    def _rejected_effect(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+        purpose: EffectPurpose,
+        action_plan: ActionPlan,
+        quantity: int,
+        decision_evidence: EffectDecisionEvidence | None,
+        reason_code: str,
+        explanation: str,
+        next_step: str | None = None,
+        order_refs: tuple[str, ...] = (),
+    ) -> EffectOperationReceipt:
+        """Refuse one effect before custody: its durable refusal receipt, then the caller's."""
+        if decision_evidence is not None:
+            _append_pre_custody_refusal(
+                self._repo,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                evidence=decision_evidence,
+                reason_code=reason_code,
+                explanation=explanation,
+            )
+        return _effect_receipt(
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            decision_id=decision_id,
+            purpose=purpose,
+            action_plan=action_plan,
+            quantity=quantity,
+            state="rejected",
+            order_refs=order_refs,
+            explanation=f"{reason_code}: {explanation}",
+            next_step=next_step,
+        )
+
+    def _entry_wait_dropped(
+        self,
+        reading_outcome: EntryReadingOutcome | None,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+    ) -> str | None:
+        """Why an ENTER's wait for an account reading ended without it, or ``None`` to judge the decision (#2623)."""
+        ending = (
+            None
+            if reading_outcome is None
+            else _entry_wait_ending(reading_outcome, run_active=self._run_active(strategy_instance_id, run_id))
+        )
+        if ending is None:
+            return None
+        logger.warning(
+            "an ENTER waiting for an account reading was dropped",
+            extra={
+                "action": "enter_account_reading_wait_ended",
+                "account_id": self._repo.account_id,
+                "strategy_instance_id": strategy_instance_id,
+                "decision_id": decision_id,
+                "why": ending,
+            },
+        )
+        return _ENTRY_WAIT_ENDINGS[ending]
+
+    def _entry_admission_blocked(
+        self,
+        exc: AdmissionBlockedError,
+        *,
+        decision_evidence: EffectDecisionEvidence | None,
+        rejected: Callable[..., EffectOperationReceipt],
+    ) -> EffectOperationReceipt | _AwaitReading:
+        """What an ENTER the Clerk would not admit comes to: a wait for a newer reading, or a refusal.
+
+        #2623: the one refusal a newer account reading can lift keeps the
+        decision; the reader judges its time limit.
+        """
+        until_ms = None if decision_evidence is None else decision_evidence.decision_valid_until_ms
+        if (
+            isinstance(exc, AccountReadingBehindExecutions)
+            and self._entry_reading is not None
+            and until_ms is not None
+        ):
+            return _AwaitReading(until_ms)
+        return rejected(
+            reason_code=exc.decision.reason_code or "ENTER_ADMISSION_BLOCKED",
+            explanation=exc.decision.why or "The Clerk refused new exposure.",
+        )
+
+    def _answer_from_active_exit(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+        purpose: EffectPurpose,
+        action_plan: ActionPlan,
+        quantity: int,
+        atomic_receipt: AtomicDecisionReceipt | None,
+    ) -> EffectOperationReceipt | None:
+        """The answer to an EXIT decided while another EXIT owns the bot's reduction, or ``None`` when none does.
+
+        FR-019/FR-023: this evaluation reached the custody seam and was
+        answered by an effect that already exists. It is still a decision
+        that happened, so it leaves durable evidence linked to the effect
+        that resolved it -- without that link the causal read (FR-030) cannot
+        later explain why this evaluation produced no effect of its own.
+        """
+        active_exit = self._repo.active_exit_for_strategy(strategy_instance_id)
+        if active_exit is None:
+            return None
+        if atomic_receipt is not None:
+            self._repo.capture_decision_against_active_exit(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                decision_receipt=atomic_receipt,
+            )
+        return _effect_receipt(
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            decision_id=decision_id,
+            purpose=purpose,
+            action_plan=action_plan,
+            quantity=quantity,
+            state=active_exit.state,
+            order_refs=tuple(
+                order.order_ref
+                for order in self._repo.orders_for_effect_operation(
+                    active_exit.effect_operation_id
+                )
+            ),
+            explanation=(
+                f"EXIT_IN_PROGRESS: existing EXIT {active_exit.effect_operation_id} "
+                "already owns this strategy's reduction custody."
+            ),
+            next_step="Await the existing EXIT custody outcome; do not submit another EXIT.",
+        )
+
+    async def _execute_option_effect_once(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+        purpose: EffectPurpose,
+        action_plan: ActionPlan,
+        quantity: int,
+        decision_evidence: EffectDecisionEvidence | None,
+        reading_outcome: EntryReadingOutcome | None,
+        option_entry: OptionEntryEvidence | None,
+        option_exit: OptionExitEvidence | None,
+    ) -> EffectOperationReceipt | _AwaitReading:
+        """One decision of a bot that trades option contracts (ADR 0076).
+
+        An ENTER is worked out by the Clerk from the contract and quotes the
+        caller hands over (``option_admission``), admitted on its entry
+        commitment, and sent as one option order. An EXIT closes the contract
+        the bot's own entry opened, read from the books and never from the
+        plan's rules, in one order sized from the position confirmed when it
+        is made. The fences are the ones an effect in shares passes, in the
+        same order.
+
+        Only a Dry Run's account takes either today. Every other plan and
+        every other account is refused here by name, before anything is
+        written but the refusal.
+        """
+
+        def receipt(state: str, order_refs: tuple[str, ...]) -> EffectOperationReceipt:
+            return _effect_receipt(
+                strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id, purpose=purpose,
+                action_plan=action_plan, quantity=quantity, state=state, order_refs=order_refs,
+            )
+
+        def rejected(*, reason_code: str, explanation: str, next_step: str | None = None) -> EffectOperationReceipt:
+            return self._rejected_effect(
+                strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id, purpose=purpose,
+                action_plan=action_plan, quantity=quantity, decision_evidence=decision_evidence,
+                reason_code=reason_code, explanation=explanation, next_step=next_step,
+            )
+
+        accepted_enter: EnterSubmission | None = None
+        accepted_exit: ExitSubmission | None = None
+        entry: OptionEntryFacts | None = None
+        async with self._intake:
+            dropped = self._entry_wait_dropped(
+                reading_outcome, strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id
+            )
+            if dropped is not None:
+                return rejected(
+                    reason_code=LIVE_ENVELOPE_UNOBSERVED, explanation=dropped, next_step=_ENTRY_NOT_RETRIED
+                )
+            not_this_account = self._option_plan_account_refusal()
+            if not_this_account is not None:
+                return rejected(
+                    reason_code=OptionEffectRefusal.ACCOUNT_NOT_SIMULATED.value,
+                    explanation=not_this_account,
+                    next_step="No order was sent.",
+                )
+            durable_decision_id = _durable_decision_id(decision_id)
+            atomic_receipt = _atomic_decision_receipt(decision_evidence)
+            if purpose is EffectPurpose.ENTER:
+                # A decision sent again is answered from its own entry, before
+                # anything is judged again: its quotes have aged since, and a
+                # refusal now would deny an entry the bot may already hold.
+                already = self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}")
+                if already is not None and already.effect_operation_id is not None:
+                    existing = self._repo.order_for_effect_operation(already.effect_operation_id)
+                    return receipt(already.state, () if existing is None else (existing.order_ref,))
+                worked_out = work_out_option_entry(
+                    action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock()
+                )
+                if isinstance(worked_out, OptionEntryRefused):
+                    logger.info(
+                        "an option entry was refused before custody",
+                        extra={
+                            "action": "option_entry_refused",
+                            "account_id": self._repo.account_id,
+                            "strategy_instance_id": strategy_instance_id,
+                            "decision_id": decision_id,
+                            "reason_code": worked_out.reason_code,
+                        },
+                    )
+                    return rejected(
+                        reason_code=worked_out.reason_code,
+                        explanation=worked_out.explanation,
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
+                entry = worked_out
+                underlying = the_one_bought_option_leg(action_plan).instrument.underlying
+                if stream_health_refusal(self._stream_health, symbol=underlying) is not None:
+                    return rejected(
+                        reason_code=STREAM_HEALTH_REASON_CODE,
+                        explanation="The required market-data or execution channel is unhealthy.",
+                        next_step="Restore both channels and let the Clerk observe fresh health evidence.",
+                    )
+                if not market_leg_sendable(self._repo.clock()):
+                    return rejected(
+                        reason_code=MARKET_CLOSED,
+                        explanation=_OPTION_ORDER_OUTSIDE_THE_SESSION,
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
+                try:
+                    accepted_enter = accept_option_enter(
+                        self._repo,
+                        account_id=self.account_id,
+                        strategy_instance_id=strategy_instance_id,
+                        decision_id=durable_decision_id,
+                        lifecycle_run_id=run_id,
+                        entry=entry,
+                        decision_receipt=atomic_receipt,
+                        envelope=self._live_envelope,
+                    )
+                except AdmissionBlockedError as exc:
+                    return self._entry_admission_blocked(exc, decision_evidence=decision_evidence, rejected=rejected)
+            else:
+                in_progress = self._answer_from_active_exit(
+                    strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id,
+                    purpose=purpose, action_plan=action_plan, quantity=quantity, atomic_receipt=atomic_receipt,
+                )
+                if in_progress is not None:
+                    return in_progress
+                # The contract to close is the one the bot's own entry opened:
+                # the one it holds, or with nothing held its newest entry's,
+                # whose EXIT then proves flat. The plan's rules are not asked.
+                opened = option_entry_contracts(self._repo, strategy_instance_id)
+                held = [
+                    symbol for symbol in opened
+                    if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
+                ]
+                if len(held) > 1:
+                    logger.warning(
+                        "an option bot holds several contracts; this EXIT closes the newest entry's",
+                        extra={
+                            "action": "option_exit_several_contracts_held",
+                            "account_id": self._repo.account_id,
+                            "strategy_instance_id": strategy_instance_id,
+                            "decision_id": decision_id,
+                            "held": held,
+                        },
+                    )
+                closing = held[0] if held else (opened[0] if opened else None)
+                target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
+                if target is None:
+                    return rejected(
+                        reason_code="EXIT_CUSTODY_UNPROVEN",
+                        explanation=(
+                            "No entry in an option contract is on this bot's books; the Clerk cannot prove "
+                            "what there is to close."
+                        ),
+                        next_step="Reconcile the instance custody before attempting another EXIT.",
+                    )
+                try:
+                    accepted_exit = accept_exit(
+                        self._repo,
+                        account_id=self.account_id,
+                        strategy_instance_id=strategy_instance_id,
+                        decision_id=durable_decision_id,
+                        lifecycle_run_id=run_id,
+                        entry_order_ref=target.order_ref,
+                        decision_receipt=atomic_receipt,
+                        option_exit=option_exit,
+                    )
+                except UnknownEntryOrderError:
+                    return rejected(
+                        reason_code="EXIT_CUSTODY_UNPROVEN",
+                        explanation="The Clerk could not prove that the selected entry still belongs to this EXIT.",
+                        next_step="Reconcile the instance custody before attempting another EXIT.",
+                    )
+
+        if accepted_enter is not None:
+            assert entry is not None
+            clock = self._repo.clock
+
+            def before_submit() -> EntrySubmissionRefusal | None:
+                if market_leg_sendable(clock()):
+                    return None
+                return EntrySubmissionRefusal(summary_code=MARKET_CLOSED, why=_OPTION_ORDER_OUTSIDE_THE_SESSION)
+
+            submitted_enter = await submit_accepted_enter(
+                self._repo,
+                accepted=accepted_enter,
+                leg=entry.order,
+                trade=_OptionQuoteBoundTradePort(
+                    self._trade, symbol=entry.contract_terms.symbol, quote=entry.the_leg.quote.held
+                ),
+                before_submit=before_submit,
+            )
+            return receipt(
+                submitted_enter.command.state,
+                (submitted_enter.order_ref,) if submitted_enter.order_ref is not None else (),
+            )
+
+        assert accepted_exit is not None
+        submitted_exit = await resolve_accepted_exit(
+            self._repo,
+            accepted=accepted_exit,
+            trade=self._trade,
+            pricing=self.recovery_pricing,
+            # A deciding program's EXIT is sent with no account check (#2839).
+            read=None,
+        )
+        return receipt(
+            submitted_exit.command.state,
+            tuple(
+                ref for ref in (submitted_exit.entry_order_ref, submitted_exit.reducing_order_ref) if ref is not None
+            ),
+        )
+
     async def _execute_effect_once(
         self,
         *,
@@ -1197,7 +1669,25 @@ class SqliteAlpacaClerkFacade:
         pricing_bar: RetainedSourceBar | None,
         decision_evidence: EffectDecisionEvidence | None,
         reading_outcome: EntryReadingOutcome | None,
+        option_entry: OptionEntryEvidence | None = None,
+        option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt | _AwaitReading:
+        if is_option_plan(action_plan):
+            # An entry in option contracts is worked out from quotes, not from
+            # a bar, and is its own path from here (ADR 0076).
+            return await self._execute_option_effect_once(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                decision_id=decision_id,
+                purpose=purpose,
+                action_plan=action_plan,
+                quantity=quantity,
+                decision_evidence=decision_evidence,
+                reading_outcome=reading_outcome,
+                option_entry=option_entry,
+                option_exit=option_exit,
+            )
+
         def rejected(
             *,
             reason_code: str,
@@ -1205,50 +1695,30 @@ class SqliteAlpacaClerkFacade:
             next_step: str | None = None,
             order_refs: tuple[str, ...] = (),
         ) -> EffectOperationReceipt:
-            if decision_evidence is not None:
-                _append_pre_custody_refusal(
-                    self._repo,
-                    strategy_instance_id=strategy_instance_id,
-                    run_id=run_id,
-                    evidence=decision_evidence,
-                    reason_code=reason_code,
-                    explanation=explanation,
-                )
-            return _effect_receipt(
+            return self._rejected_effect(
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
                 decision_id=decision_id,
                 purpose=purpose,
                 action_plan=action_plan,
                 quantity=quantity,
-                state="rejected",
-                order_refs=order_refs,
-                explanation=f"{reason_code}: {explanation}",
+                decision_evidence=decision_evidence,
+                reason_code=reason_code,
+                explanation=explanation,
                 next_step=next_step,
+                order_refs=order_refs,
             )
 
         async with self._intake:
             # The run is judged under the fence Stop commits under, so an
             # entry the run no longer owns is never admitted after its reading.
-            ending = (
-                None
-                if reading_outcome is None
-                else _entry_wait_ending(reading_outcome, run_active=self._run_active(strategy_instance_id, run_id))
+            dropped = self._entry_wait_dropped(
+                reading_outcome, strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id
             )
-            if ending is not None:
-                logger.warning(
-                    "an ENTER waiting for an account reading was dropped",
-                    extra={
-                        "action": "enter_account_reading_wait_ended",
-                        "account_id": self._repo.account_id,
-                        "strategy_instance_id": strategy_instance_id,
-                        "decision_id": decision_id,
-                        "why": ending,
-                    },
-                )
+            if dropped is not None:
                 return rejected(
                     reason_code=LIVE_ENVELOPE_UNOBSERVED,
-                    explanation=_ENTRY_WAIT_ENDINGS[ending],
+                    explanation=dropped,
                     next_step=_ENTRY_NOT_RETRIED,
                 )
             if self.binds_decision_bar and retained_source_bar is None:
@@ -1343,34 +1813,7 @@ class SqliteAlpacaClerkFacade:
                     },
                 )
             durable_decision_id = _durable_decision_id(decision_id)
-            atomic_receipt = (
-                None
-                if decision_evidence is None
-                else AtomicDecisionReceipt(
-                    outcome=decision_evidence.outcome,
-                    symbol=decision_evidence.symbol,
-                    decision_id=decision_evidence.evaluation_id,
-                    observed_at_ms=decision_evidence.observed_at_ms,
-                    facts_json=canonicalize(
-                        {
-                            "bar_ref": decision_evidence.bar_ref,
-                            "decision_id": decision_evidence.evaluation_id,
-                            "evaluation_id": decision_evidence.evaluation_id,
-                            "reason_code": decision_evidence.reason_code,
-                            "trace_digest": decision_evidence.trace_digest,
-                            "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
-                            # Omitted when on time, so an on-time receipt's
-                            # facts stay byte-identical to every earlier one.
-                            **(
-                                {}
-                                if decision_evidence.decision_lateness_ms is None
-                                else {"decision_lateness_ms": decision_evidence.decision_lateness_ms}
-                            ),
-                            **_explanation_facts(decision_evidence),
-                        }
-                    ),
-                )
-            )
+            atomic_receipt = _atomic_decision_receipt(decision_evidence)
             program_side = OrderSide.BUY if entry.position == "long" else OrderSide.SELL
             leg_side = program_side if purpose is EffectPurpose.ENTER else _REDUCING_SIDE[program_side]
             try:
@@ -1485,54 +1928,19 @@ class SqliteAlpacaClerkFacade:
                         reference_price=None if priced_by is None else priced_by.close,
                     )
                 except AdmissionBlockedError as exc:
-                    # #2623: the one refusal a newer account reading can lift
-                    # keeps the decision; the reader judges its time limit.
-                    until_ms = None if decision_evidence is None else decision_evidence.decision_valid_until_ms
-                    if (
-                        isinstance(exc, AccountReadingBehindExecutions)
-                        and self._entry_reading is not None
-                        and until_ms is not None
-                    ):
-                        return _AwaitReading(until_ms)
-                    return rejected(
-                        reason_code=exc.decision.reason_code or "ENTER_ADMISSION_BLOCKED",
-                        explanation=exc.decision.why or "The Clerk refused new exposure.",
-                    )
+                    return self._entry_admission_blocked(exc, decision_evidence=decision_evidence, rejected=rejected)
             else:
-                active_exit = self._repo.active_exit_for_strategy(strategy_instance_id)
-                if active_exit is not None:
-                    # FR-019/FR-023: this evaluation reached the custody seam
-                    # and was answered by an effect that already exists. It is
-                    # still a decision that happened, so it leaves durable
-                    # evidence linked to the effect that resolved it -- without
-                    # that link the causal read (FR-030) cannot later explain
-                    # why this evaluation produced no effect of its own.
-                    if atomic_receipt is not None:
-                        self._repo.capture_decision_against_active_exit(
-                            strategy_instance_id=strategy_instance_id,
-                            run_id=run_id,
-                            decision_receipt=atomic_receipt,
-                        )
-                    return _effect_receipt(
-                        strategy_instance_id=strategy_instance_id,
-                        run_id=run_id,
-                        decision_id=decision_id,
-                        purpose=purpose,
-                        action_plan=action_plan,
-                        quantity=quantity,
-                        state=active_exit.state,
-                        order_refs=tuple(
-                            order.order_ref
-                            for order in self._repo.orders_for_effect_operation(
-                                active_exit.effect_operation_id
-                            )
-                        ),
-                        explanation=(
-                            f"EXIT_IN_PROGRESS: existing EXIT {active_exit.effect_operation_id} "
-                            "already owns this strategy's reduction custody."
-                        ),
-                        next_step="Await the existing EXIT custody outcome; do not submit another EXIT.",
-                    )
+                in_progress = self._answer_from_active_exit(
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    decision_id=decision_id,
+                    purpose=purpose,
+                    action_plan=action_plan,
+                    quantity=quantity,
+                    atomic_receipt=atomic_receipt,
+                )
+                if in_progress is not None:
+                    return in_progress
                 # The strategy-wide check above already answered a symbol an
                 # EXIT owns, so the target's ``exit_owned`` is always false here.
                 target = newest_reducible_entry(self._repo, strategy_instance_id, entry.instrument.underlying)
@@ -2203,6 +2611,36 @@ def _append_pre_custody_refusal(
                 "trace_digest": evidence.trace_digest,
                 "decision_bar_close_ms": evidence.decision_bar_close_ms,
                 **_explanation_facts(evidence),
+            }
+        ),
+    )
+
+
+def _atomic_decision_receipt(decision_evidence: EffectDecisionEvidence | None) -> AtomicDecisionReceipt | None:
+    """The decision receipt an effect commits with its acceptance, or ``None`` for a caller that handed no evidence."""
+    if decision_evidence is None:
+        return None
+    return AtomicDecisionReceipt(
+        outcome=decision_evidence.outcome,
+        symbol=decision_evidence.symbol,
+        decision_id=decision_evidence.evaluation_id,
+        observed_at_ms=decision_evidence.observed_at_ms,
+        facts_json=canonicalize(
+            {
+                "bar_ref": decision_evidence.bar_ref,
+                "decision_id": decision_evidence.evaluation_id,
+                "evaluation_id": decision_evidence.evaluation_id,
+                "reason_code": decision_evidence.reason_code,
+                "trace_digest": decision_evidence.trace_digest,
+                "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
+                # Omitted when on time, so an on-time receipt's
+                # facts stay byte-identical to every earlier one.
+                **(
+                    {}
+                    if decision_evidence.decision_lateness_ms is None
+                    else {"decision_lateness_ms": decision_evidence.decision_lateness_ms}
+                ),
+                **_explanation_facts(decision_evidence),
             }
         ),
     )

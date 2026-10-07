@@ -100,6 +100,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, NamedTuple, TypedDict
 
+from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
     LegShape,
@@ -154,6 +155,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_inline,
 )
 from app.broker.alpaca.clerk.sqlite.open_replacement import OPEN_REPLACEMENT, replacement_due
+from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, option_exit_facts, order_contract
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     UNFILLED_TERMINAL_STATES,
     BrokerRefusal,
@@ -191,8 +193,10 @@ from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
+from app.broker.contract.options import SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
+from app.options.quotes import HeldQuote
 from app.schemas.market_liveness import MarketLivenessFact
 
 logger = logging.getLogger(__name__)
@@ -2172,16 +2176,29 @@ async def _submit_reducing_order(
     now_ms = repo.clock()
     liveness = pricing.read_liveness(created.symbol, now_ms)
 
-    def _prepare_submit() -> BrokerOrderLeg | None:
+    def _prepare_submit() -> BrokerOrderLeg | SingleOptionOrderRequest | None:
         facts = _reducing_order_facts(repo, reducing.order_ref)
-        leg = BrokerOrderLeg(
-            symbol=facts.symbol,
-            side=facts.side.lower(),
-            quantity=facts.quantity,
-            order_type=facts.order_type,
-            time_in_force=facts.time_in_force,
-            limit_price=facts.limit_price,
-            extended_hours=facts.extended_hours,
+        try:
+            option_close = _option_close(repo, effect_operation_id, reducing=reducing, created=facts)
+        except ValueError as exc:
+            # The books do not hold what one closing order can close: nothing is sent.
+            _fold_submit_refused(
+                repo, effect_operation_id=effect_operation_id, reducing=reducing,
+                refusal=BrokerRefusal(why=f"The Clerk could not make the order that closes this option position: {exc}"),
+            )
+            return None
+        leg: BrokerOrderLeg | SingleOptionOrderRequest = (
+            option_close.request
+            if option_close is not None
+            else BrokerOrderLeg(
+                symbol=facts.symbol,
+                side=facts.side.lower(),
+                quantity=facts.quantity,
+                order_type=facts.order_type,
+                time_in_force=facts.time_in_force,
+                limit_price=facts.limit_price,
+                extended_hours=facts.extended_hours,
+            )
         )
         # Sent before (#2845): the lookup that read it absent was made before
         # the account was read, so its absence is read again here, first --
@@ -2233,17 +2250,33 @@ async def _submit_reducing_order(
         # a no-submit world binds the price it fills at, or nothing goes out.
         # No order sent before to a real broker is refused here: a real port
         # binds every recovery, and refuses a run-end close on its first send.
-        match _exit_intent(_accepted_facts(repo, effect_operation_id)):
-            case "run_end_close":
-                bound = broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol)
-                why = "The simulation has no price its run saw to close this position at; no order was sent."
-            case "recovery":
-                bound = broker.bind_latest_recovery_bar(
-                    reducing.client_order_id, symbol=facts.symbol, side=leg.side,
-                )
-                why = "The simulation had no current price to fill this recovery at; no order was sent."
-            case "decision":
-                bound, why = True, ""
+        if option_close is not None:
+            # A close of an option contract is priced from a quote, never a
+            # bar, whatever made the EXIT: the newest kept for the contract.
+            bound = broker.bind_option_close_quotes(
+                reducing.client_order_id,
+                symbol=facts.symbol,
+                side=option_close.request.side.value,
+                quotes=option_close.quotes,
+                usable_generation=option_close.usable_generation,
+            )
+            why = (
+                f"{OptionEffectRefusal.EXIT_UNPRICED.value}: the simulation has no quote kept for "
+                f"{facts.symbol} to close it at; no order was sent."
+            )
+        else:
+            match _exit_intent(_accepted_facts(repo, effect_operation_id)):
+                case "run_end_close":
+                    bound = broker.bind_run_end_close_bar(reducing.client_order_id, symbol=facts.symbol)
+                    why = "The simulation has no price its run saw to close this position at; no order was sent."
+                case "recovery":
+                    assert isinstance(leg, BrokerOrderLeg)
+                    bound = broker.bind_latest_recovery_bar(
+                        reducing.client_order_id, symbol=facts.symbol, side=leg.side,
+                    )
+                    why = "The simulation had no current price to fill this recovery at; no order was sent."
+                case "decision":
+                    bound, why = True, ""
         if not bound:
             _fold_submit_refused(
                 repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=BrokerRefusal(why=why),
@@ -2295,6 +2328,59 @@ async def _submit_reducing_order(
             order=observed,
             trade=broker.trade,
         )
+    )
+
+
+class _OptionClose(NamedTuple):
+    """The close of a position in an option contract: its one order, and what it may be priced from."""
+
+    request: SingleOptionOrderRequest
+    # The quotes the Clerk itself holds for the contract: the exit decision's, then the entry's own.
+    quotes: tuple[HeldQuote, ...]
+    # The generation the exit decision read its quote in; None when it was handed none.
+    usable_generation: int | None
+
+
+def _option_close(
+    repo: ClerkSqliteRepository,
+    effect_operation_id: str,
+    *,
+    reducing: OrderResource,
+    created: ExitReducingOrderCreatedFacts,
+) -> _OptionClose | None:
+    """The closing order of a reduction in an option contract, or ``None`` for a reduction in shares (ADR 0076).
+
+    The contract is the one this EXIT's own entry opened, read from that
+    entry's acceptance: the plan's rules are never asked again. The order
+    closes exactly the contracts the reduction was created for, which is the
+    position confirmed at that moment. Raises ``ValueError`` when the books
+    hold something one closing order of that entry cannot close.
+    """
+    if order_contract(repo, reducing.order_ref) is None:
+        return None
+    entries = (
+        option_entry_of_order(repo, order.order_ref)
+        for order in reversed(repo.orders_for_effect_operation(effect_operation_id))
+        if order.role == "ENTRY"
+    )
+    entry = next(
+        (facts for facts in entries if facts is not None and facts.contract_terms.symbol == created.symbol.upper()),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"no entry of this EXIT's opened {created.symbol}")
+    request = entry.close_request(contracts=created.quantity)
+    if request.side.value != created.side.lower():
+        raise ValueError(
+            f"the books would {created.side.lower()} {created.symbol} to flatten it, but closing what the entry "
+            f"opened is a {request.side.value}"
+        )
+    decided = option_exit_facts(_accepted_facts(repo, effect_operation_id))
+    handed = None if decided is None else decided.quote_for(entry.the_leg.leg_id)
+    return _OptionClose(
+        request=request,
+        quotes=tuple(quote for quote in (handed, entry.the_leg.quote.held) if quote is not None),
+        usable_generation=None if handed is None or decided is None else decided.generation,
     )
 
 
@@ -2553,7 +2639,7 @@ def _fold_send_refused(
     *,
     effect_operation_id: str,
     reducing: OrderResource,
-    leg: BrokerOrderLeg,
+    leg: BrokerOrderLeg | SingleOptionOrderRequest,
     error: BrokerError,
 ) -> None:
     """Fold the broker's outright refusal of a reducing order's send, by whether it was sent before (#2845).

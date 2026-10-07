@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
+from app.broker.alpaca.clerk.option_effects import OptionExitEvidence
 from app.broker.alpaca.clerk.program_leg import ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryShape,
@@ -32,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionExitFacts, option_entry_of_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     entry_never_accepted_durably,
     entry_order_symbol,
@@ -163,6 +165,7 @@ def _accept_exit_capture(
     program_leg: ProgramLeg | None = None,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
     regular_session_only: bool = False,
+    option_exit: OptionExitEvidence | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
@@ -170,6 +173,13 @@ def _accept_exit_capture(
     session it was priced for) or an operator's ``confirmed_shape`` — never
     both — is durable with the acceptance, and so is ``regular_session_only``
     (``ExitAcceptedFacts.regular_session_only``).
+
+    An EXIT of a position in an option contract (ADR 0076) is known by its
+    target: an entry accepted as an option entry. Whoever makes it, it is
+    recorded as regular-session-only, because an option order is never sent
+    outside the regular session; it records no priced leg, because it closes
+    with a market order; and it keeps ``option_exit``, the quotes its
+    decision read, for whichever pass comes to send its close.
 
     The run identity is supplied by ``resolve_run_id``: a strategy decision
     binds to the currently ACTIVE run (``accept_exit``); a recovery EXIT binds
@@ -200,6 +210,9 @@ def _accept_exit_capture(
         )
         run_id = resolve_run_id(target)
         symbol = entry_order_symbol(repo, target.order_ref)
+        closes_an_option = option_entry_of_order(repo, target.order_ref) is not None
+        if closes_an_option and recorded is not None:
+            raise ValueError("a position in an option contract is closed by a market order; it takes no priced leg")
         entry_order_refs: list[str] = []
         for candidate in _exit_cancellable_entries(
             repo,
@@ -228,7 +241,10 @@ def _accept_exit_capture(
             decision_id=decision_id,
             entry_order_ref=entry_order_ref,
             entry_order_refs=entry_order_refs,
-            regular_session_only=regular_session_only,
+            regular_session_only=regular_session_only or closes_an_option,
+            option_exit=(
+                OptionExitFacts.of(option_exit).to_facts() if closes_an_option and option_exit is not None else None
+            ),
         ).with_reducing_shape(
             None if recorded is None else recorded.shape,
             valid_until_ms=None if recorded is None else recorded.valid_until_ms,
@@ -292,8 +308,12 @@ def accept_exit(
     entry_order_ref: str,
     decision_receipt: AtomicDecisionReceipt | None = None,
     program_leg: ProgramLeg | None = None,
+    option_exit: OptionExitEvidence | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
+
+    ``option_exit`` is the quotes the decision read for an option position
+    it closes (ADR 0076); it is kept only when the target is one.
 
     ``program_leg`` is the leg the deciding program shaped for this EXIT
     (ADR 0059 D5.3) — its shape, and the end of the session an extended-hours
@@ -320,6 +340,7 @@ def accept_exit(
         resolve_run_id=resolve_run_id,
         decision_receipt=decision_receipt,
         program_leg=program_leg,
+        option_exit=option_exit,
     )
 
 

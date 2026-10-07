@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
     OpenOrdersThenPositions,
     read_open_orders_then_positions,
 )
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
     OperationClaimError,
 )
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerEvidenceUnavailable, BrokerOptionsNotSupported
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
+from app.broker.contract.options import SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
+from app.options.quotes import HeldQuote
 
 
 @dataclass(frozen=True)
@@ -50,10 +54,17 @@ class ClaimedBrokerIO:
         except ExecutionLeaseLost as lost:
             raise ExecutionLeaseLostAfterBrokerIO(str(lost), account_id=lost.account_id) from lost
 
-    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+    async def submit(self, leg: BrokerOrderLeg | SingleOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
+        """Send one instruction once: a leg in shares, or one option order (ADR 0076).
+
+        Either answer comes back as the order evidence every fold takes.
+        """
         self._renew()
         try:
-            observed = await self.trade.submit(leg, client_order_id=client_order_id)
+            if isinstance(leg, SingleOptionOrderRequest):
+                observed = await self._submit_option_order(leg, client_order_id=client_order_id)
+            else:
+                observed = await self.trade.submit(leg, client_order_id=client_order_id)
         except asyncio.CancelledError:
             self._renew()
             fold_uncertain(
@@ -68,6 +79,56 @@ class ClaimedBrokerIO:
             raise
         self._renew_after_io()
         return observed
+
+    async def _submit_option_order(self, order: SingleOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
+        """Send one option order to a simulation and read back the fill it recorded.
+
+        Only a simulation is sent one for now: nothing about an option order
+        has been shown on a real account, so any other port is refused here
+        before it is contacted, whatever let the order get this far.
+
+        The simulation executes inside the call. Its own record of the order
+        is then read by the exact lookup every resolution uses, and that
+        record is what the Clerk folds: its symbol is the contract's, and its
+        fill carries the simulation's own execution identity. An answer with
+        no record behind it leaves the outcome unknown, to be settled by the
+        same lookup.
+        """
+        if not trade_port_folds_simulated_evidence(self.trade):
+            raise BrokerOptionsNotSupported(
+                "The account Clerk sends an option order only to a simulation for now.",
+                broker=self.trade.broker_id,
+                detail="Nothing was sent and no order exists.",
+            )
+        answer = await self.trade.submit_option_order(order, client_order_id=client_order_id)
+        recorded = await self.trade.get_order_by_client_order_id(client_order_id)
+        if recorded is None or recorded.order_id != answer.order_id:
+            raise BrokerEvidenceUnavailable(
+                "The simulation answered an option order it holds no record of.", broker=self.trade.broker_id
+            )
+        return recorded
+
+    def bind_option_close_quotes(
+        self,
+        client_order_id: str,
+        *,
+        symbol: str,
+        side: Literal["buy", "sell"],
+        quotes: Sequence[HeldQuote],
+        usable_generation: int | None,
+    ) -> bool:
+        """Bind a simulated option close to the newest quote kept for its contract, under the operation lease.
+
+        Only a simulation prices a close from a quote it was handed; any
+        other port refuses, so such a close never reaches a real broker.
+        """
+        self._renew()
+        bind = getattr(self.trade, "bind_option_close_quotes", None)
+        if not callable(bind):
+            return False
+        bound = bool(bind(client_order_id, symbol=symbol, side=side, quotes=quotes, usable_generation=usable_generation))
+        self._renew()
+        return bound
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
         """Bind optional no-submit recovery evidence under the operation lease."""

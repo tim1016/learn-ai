@@ -36,9 +36,11 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.options.contract import OptionContract
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
+    from typing import Literal
 
-    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
+    from app.options.quotes import HeldQuote
     from app.services.source_bar_ledger import RetainedSourceBar
 
 
@@ -264,6 +266,45 @@ class GuardedBrokerTradePort:
         if not callable(bind):
             return False
         return bool(bind(client_order_id, symbol=symbol))
+
+    def bind_option_entry_quote(self, client_order_id: str, *, symbol: str, quote: HeldQuote) -> None:
+        """Forward the simulation-only capability to bind the quote an option entry fills from (ADR 0076)."""
+        self._assert_unfenced("bind_option_entry_quote")
+        bind = getattr(self._inner, "bind_option_entry_quote", None)
+        if not callable(bind):
+            raise RuntimeError("This trade port cannot bind a quote to an option order; it is not a simulation.")
+        bind(client_order_id, symbol=symbol, quote=quote)
+
+    def bind_option_close_quotes(
+        self,
+        client_order_id: str,
+        *,
+        symbol: str,
+        side: Literal["buy", "sell"],
+        quotes: Sequence[HeldQuote],
+        usable_generation: int | None,
+    ) -> bool:
+        """Bind a simulated option close to the newest quote kept; a port that is not a simulation refuses."""
+        self._assert_unfenced("bind_option_close_quotes")
+        bind = getattr(self._inner, "bind_option_close_quotes", None)
+        if not callable(bind):
+            return False
+        return bool(bind(client_order_id, symbol=symbol, side=side, quotes=quotes, usable_generation=usable_generation))
+
+    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
+        """Hand a simulation the newest quotes held for its contracts. A vendor's port keeps none.
+
+        It reaches no broker: the simulation writes them beside its own
+        orders, so it is not fenced.
+        """
+        keep = getattr(self._inner, "keep_option_quotes", None)
+        if callable(keep):
+            keep(quotes)
+
+    def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
+        """How a simulation priced each option order it answered, by client order id. Not fenced: a ledger read."""
+        read = getattr(self._inner, "synthesized_option_fills", None)
+        return read() if callable(read) else {}
 
     def synthesized_fill_anchors(self) -> Mapping[str, SynthesizedAnchor]:
         """How a no-submit port priced each order it filled, by client order id (#2912).

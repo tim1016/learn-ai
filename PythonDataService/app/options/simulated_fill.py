@@ -110,14 +110,16 @@ def simulated_exit_fills(
     *,
     units: int,
     at_ms: int,
-    generation: int,
+    generation: int | None,
     max_age_ms: int,
 ) -> tuple[SimulatedLegFill, ...]:
     """Every leg of an exit, each closed at the natural price of the newest quote held for its contract.
 
     ``quotes`` holds the newest quote held for each leg's contract, whatever
     its age, or None. ``generation`` and ``max_age_ms`` say which of them a
-    decision could have used at ``at_ms``.
+    decision could have used at ``at_ms``. ``generation`` is None when no
+    decision read a quote for this exit: nothing held is then one a decision
+    could have used, and a priced leg is priced from an older quote.
     """
     fills = []
     for leg in structure.legs:
@@ -126,7 +128,7 @@ def simulated_exit_fills(
         buys = leg.position == "short"
         side = None if quote is None else (quote.ask if buys else quote.bid)
         priced = quote is not None and _a_price_to_close_at(side, buys=buys)
-        usable = priced and quote_fault(
+        usable = priced and generation is not None and quote_fault(
             quote, at_ms=at_ms, generation=generation, max_age_ms=max_age_ms, needs_a_bid=False
         ) is None
         fills.append(

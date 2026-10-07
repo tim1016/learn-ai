@@ -78,6 +78,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.broker.contract.options import SingleOptionOrderRequest
 from app.broker.contract.ports import (
     AuthoritativeSubmissionEvidencePort,
     BrokerActivityEvidencePort,
@@ -1245,7 +1246,7 @@ class BrokerRefusal:
 def broker_refusal(
     repo: ClerkSqliteRepository,
     *,
-    leg: BrokerOrderLeg,
+    leg: BrokerOrderLeg | SingleOptionOrderRequest,
     error: BrokerError,
 ) -> BrokerRefusal:
     """What the Clerk records when the broker definitively refuses ``leg``.
@@ -1261,7 +1262,9 @@ def broker_refusal(
     The refusal is definitive whatever this read finds, so an unreadable order
     record is logged and the refusal keeps only the broker's words.
     """
-    if not isinstance(error, BrokerOrderNotPermitted):
+    if not isinstance(error, BrokerOrderNotPermitted) or isinstance(leg, SingleOptionOrderRequest):
+        # An option order's refusal keeps the broker's words alone: what Alpaca's
+        # wash-trade protection does with option contracts has not been seen (#2913).
         return BrokerRefusal(why=str(error), code=error.code)
     try:
         opposite = repo.open_opposite_side_orders(symbol=leg.symbol, side=leg.side)

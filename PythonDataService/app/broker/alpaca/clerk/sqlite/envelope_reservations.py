@@ -53,6 +53,14 @@ earlier build wrote beside the transition carries a float price and no
 recorded provision (#2553). Its fills still price as above, but while it has
 an unfilled remainder its fee is unknown: reading that claim refuses with
 ``EntryFeeProvisionUnrecorded`` rather than pricing the fee at zero.
+
+An entry in an option contract (ADR 0076) reserves contracts at a premium a
+share. Its claim is counted with the contract's own multiplier, read through
+the order (``contract_terms``): contracts x premium x multiplier, for the
+unfilled remainder and for a fill the observation has not seen alike. An
+order in shares joins to no contract and is priced as it always was. A sold
+leg's requirement is not held here yet; only a bought option, whose
+requirement is zero, is reserved whole.
 """
 
 from __future__ import annotations
@@ -63,7 +71,12 @@ from decimal import Decimal
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED, EnvelopeReservation
-from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
+from app.broker.alpaca.clerk.money import ZERO, contract_multiplier, money_context, normalize_money
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ORDER_CONTRACT_JOINS_SQL,
+    ORDER_CONTRACT_MULTIPLIER_SQL,
+    keeps_option_contracts,
+)
 from app.broker.alpaca.clerk.sqlite.order_projection import ORDER_ENDED_SQL
 
 
@@ -148,6 +161,8 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
         EFFECTIVE_FILL_LINEAGE_CTE,
     )
 
+    # A custody file from before the contract tables holds no option order.
+    with_contracts = keeps_option_contracts(conn)
     rows = conn.execute(
         f"{EFFECTIVE_FILL_LINEAGE_CTE} "
         # A recorded row carries its exact price; an earlier build's float
@@ -156,10 +171,12 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
         "r.exact_reference_price IS NOT NULL AS provision_recorded, r.fee_provision_cents, "
         "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
         f"{ORDER_ENDED_SQL} AS ended, "
+        f"{ORDER_CONTRACT_MULTIPLIER_SQL if with_contracts else 'NULL'} AS multiplier, "
         "COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
         "FROM envelope_reservations r "
         "JOIN orders o ON o.effect_operation_id = r.effect_operation_id AND o.role = 'ENTRY' "
         "JOIN effect_operations e ON e.effect_operation_id = r.effect_operation_id "
+        f"{ORDER_CONTRACT_JOINS_SQL.format(order='o') if with_contracts else ''} "
         "LEFT JOIN fills f ON f.order_ref = o.order_ref "
         "  AND NOT EXISTS (SELECT 1 FROM fills s "
         "                  WHERE s.superseded_execution_ref = f.execution_id) "
@@ -173,6 +190,8 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     with money_context():
         for order_ref, fills in by_order.items():
             first = fills[0]
+            # Shares one unit of quantity stands for: the contract's multiplier, or one for shares.
+            per_unit = 1 if first["multiplier"] is None else contract_multiplier(first["multiplier"])
             filled = unseen_cost = ZERO
             for fill in fills:
                 if fill["fill_id"] is None:
@@ -181,7 +200,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 filled += qty
                 if fill["execution_recorded_at_ms"] >= seen_before_ms:
                     fee = ZERO if fill["fee"] is None else normalize_money(fill["fee"])
-                    unseen_cost += qty * normalize_money(fill["price"]) + fee
+                    unseen_cost += qty * normalize_money(fill["price"]) * per_unit + fee
             quantity = normalize_money(first["quantity"])
             remaining_quantity = ZERO if first["ended"] else max(ZERO, quantity - filled)
             fee: Decimal | None = ZERO
@@ -189,7 +208,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 fee = Decimal(first["fee_provision_cents"]) / 100 if first["provision_recorded"] else None
             claims.append(EntryCashClaim(
                 strategy_instance_id=first["strategy_instance_id"], order_ref=order_ref,
-                unfilled_cost=remaining_quantity * normalize_money(first["reference_price"]),
+                unfilled_cost=remaining_quantity * normalize_money(first["reference_price"]) * per_unit,
                 unseen_fill_cost=unseen_cost, _fee=fee,
             ))
     return tuple(claims)
