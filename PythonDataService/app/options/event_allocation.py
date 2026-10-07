@@ -279,6 +279,11 @@ def allocate_option_event(
     ``event_date_ms`` is any instant on the event's New York date; only the
     date is read, and a lot opened on a later date is passed over.
 
+    The rule chooses among the lots it is given and no others. A holding of
+    the contract that is on nobody's books here, such as one the owner
+    opened by hand, must be offered as a lot of its own, or an event that
+    took it is matched to a bot's lot.
+
     The lots taken hold exactly ``contracts``, or the event is refused with
     the reason and the count that found no lot: a contract nobody holds, lots
     on the wrong side only, or more contracts than the lots hold.

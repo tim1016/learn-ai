@@ -222,6 +222,27 @@ def _activity_page_oldest_ms(
     return dated[-1]
 
 
+# What places a row in a walk: its id, its code, its symbol and its date. None is a figure.
+_ACTIVITY_PLACEMENT_FIELDS = ("id", "activity_type", "symbol", "date", "transaction_time")
+
+
+def _placed_activities(payloads: list[Mapping[str, Any]]) -> list[BrokerActivity]:
+    """Map one page for a walk that reads the rows itself: each row's place, and none of its figures.
+
+    The adapter maps only the fields that say which row it is and when. A
+    quantity or an amount that will not parse is then the row's own fault,
+    found when that row is read, and cannot refuse the page. A row with no
+    id, no code or an unreadable date still does: it cannot be placed.
+    """
+    return _mapped_evidence(
+        "activity",
+        lambda: [
+            adapter.from_alpaca_activity({field: payload[field] for field in _ACTIVITY_PLACEMENT_FIELDS if field in payload})
+            for payload in payloads
+        ],
+    )
+
+
 def _why_unreadable(exc: Exception) -> str:
     """The adapter's refusal in plain words, without a validation library's framing."""
     if isinstance(exc, ValidationError):
@@ -234,9 +255,9 @@ def _read_option_activity(
 ) -> BrokerOptionEventActivity | BrokerOptionShareTradeActivity | BrokerOptionActivityUnreadable:
     """Read one option activity whole, or say that it could not be read and why.
 
-    ``row`` is the same payload as every activity read maps it, which has
-    already given it an id and a place in time. An unreadable row keeps
-    those and no figure: it is not a partial event.
+    ``row`` is the same payload placed for the walk, which has already given
+    it an id and a place in time. An unreadable row keeps those and no
+    figure: it is not a partial event.
     """
     try:
         return adapter.from_alpaca_option_activity(payload, observed_at_ms=row.observed_at_ms)
@@ -626,8 +647,9 @@ class AlpacaBroker:
         ``next_page_token``.
 
         Each option activity is read whole or listed under ``unreadable``
-        with the reason, never read in part. A row whose id or date cannot be
-        read at all refuses the whole read, as it does for every activity.
+        with the reason, never read in part. A row of any kind whose id, code
+        or date cannot be read refuses the whole read: it cannot be placed in
+        the walk. No other row's figures are read at all.
         """
         since = et_date_at_ms(after_ms)
         events: dict[str, BrokerOptionEventActivity] = {}
@@ -647,7 +669,7 @@ class AlpacaBroker:
         boundary_crossed_on_previous_page = False
         for _ in range(_ACTIVITY_MAX_PAGES):
             payloads = await self._client.list_non_trade_activities(limit=_ACTIVITY_PAGE_SIZE, page_token=page_token)
-            page = _mapped_activities(payloads)
+            page = _placed_activities(payloads)
             page_oldest_ms = _activity_page_oldest_ms(page, previous_page_oldest_ms=previous_page_oldest_ms)
             for payload, row in zip(payloads, page, strict=True):
                 if adapter.alpaca_option_activity_type(payload) is None:

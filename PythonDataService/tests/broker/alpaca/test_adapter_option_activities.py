@@ -541,6 +541,42 @@ async def test_a_row_that_cannot_be_read_whole_is_listed_as_unreadable_and_the_r
     assert evidence.read_whole is False
 
 
+@pytest.mark.parametrize(
+    ("damage", "reason"),
+    [
+        ({"qty": "two"}, "Alpaca field 'qty' is not a number: 'two'"),
+        ({"qty": ...}, "Alpaca field 'qty' must be a number, got None"),
+        ({"net_amount": "none"}, "Alpaca field 'net_amount' is not a number: 'none'"),
+        ({"symbol": "QS1240301P00000500"}, "is not an option contract symbol"),
+        ({"status": ...}, "Alpaca field 'status' must be a non-blank string, got None"),
+    ],
+    ids=["a count in words", "no count", "cash in words", "an adjusted contract", "no status"],
+)
+async def test_whatever_is_wrong_with_an_option_rows_figures_makes_that_row_unreadable_and_no_other(
+    damage: dict[str, Any], reason: str
+) -> None:
+    damaged = _row("broker_api", "put_expiration", **damage)
+    broker, _client = _broker({None: [_QS_ROWS[0], damaged]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[0]["id"]]
+    (unreadable,) = evidence.unreadable
+    assert unreadable.activity_id == damaged["id"]
+    assert reason in unreadable.reason
+
+
+async def test_a_figure_that_will_not_parse_on_some_other_activity_does_not_refuse_the_read() -> None:
+    """A fee row is only walked past. Its amount is not this read's to parse."""
+    odd_fee = {**_fee("2024-03-01", 7), "net_amount": "n/a", "qty": "?"}
+    broker, _client = _broker({None: [odd_fee, _QS_ROWS[2]]})
+
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
+    assert evidence.read_whole is True
+
+
 async def test_a_sign_the_kind_cannot_have_is_explained_in_plain_words() -> None:
     reversed_exercise = _row("broker_api", "exercising_call", qty="1", date="2024-03-01")
     broker, _client = _broker({None: [reversed_exercise]})
@@ -592,11 +628,22 @@ async def test_an_unreadable_row_with_no_date_is_kept_because_it_cannot_be_place
         _row("broker_api", "put_expiration", id=...),
         _row("broker_api", "put_expiration", id="   "),
         _row("broker_api", "put_expiration", date="not a date"),
+        {**_fee("2024-03-01", 9), "activity_type": None},
+        {**_fee("2024-03-01", 9), "id": None},
         "OPEXP",
+        None,
     ],
-    ids=["no id", "a blank id", "a date that cannot be read", "a row that is not an object"],
+    ids=[
+        "no id",
+        "a blank id",
+        "a date that cannot be read",
+        "another activity with no code",
+        "another activity with no id",
+        "a row that is not an object",
+        "no row at all",
+    ],
 )
-async def test_a_row_with_no_id_or_no_place_in_time_refuses_the_whole_read(row: Any) -> None:
+async def test_a_row_that_cannot_be_placed_in_the_walk_refuses_the_whole_read(row: Any) -> None:
     broker, _client = _broker({None: [_QS_ROWS[0], row]})
 
     with pytest.raises(BrokerEvidenceUnavailable, match="activity data this app could not read"):

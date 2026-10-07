@@ -95,6 +95,8 @@ No recording exists for any of this. Until one does, it is unverified.
   to fee and dividend rows of the same date.
 - **`OPCA` and `OPCSH`**, an option corporate action and a cash deliverable.
   The reference lists the codes and no Trading API page shows a row.
+- **An event with a net amount other than "0".** All nine event rows carry
+  "0". A row that states cash of its own is refused as unreadable.
 - **Fees on the share trade**: whether `net_amount` is ever net of a fee.
 - **An exercise or assignment the account could not settle**: the Options
   Trading page says a position the account cannot afford to exercise is sold

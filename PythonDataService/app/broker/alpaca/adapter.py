@@ -1156,8 +1156,9 @@ def from_alpaca_option_activity(
     Read whole or not at all, like ``from_alpaca_option_order``: a value that
     is missing or will not parse raises ``TypeError`` or ``ValueError``. So
     does a status outside the reference's three, a contract symbol that is
-    not one, a quantity that is not whole, and a quantity whose sign the kind
-    cannot have. A quantity that could not be read never becomes no contracts.
+    not one, a quantity that is not whole, a quantity whose sign the kind
+    cannot have, and an event that states cash of its own. A quantity that
+    could not be read never becomes no contracts.
 
     An event (``OPASN``, ``OPEXC`` or ``OPXRC``, ``OPEXP``) names its
     contract by OCC symbol and carries the change to the account's position
