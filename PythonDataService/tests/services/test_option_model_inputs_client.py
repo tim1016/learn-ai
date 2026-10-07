@@ -586,6 +586,9 @@ def test_what_the_coordinator_answered_is_kept_and_a_failure_is_asked_again_afte
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     coordinator = Coordinator(monkeypatch)
+    # A failure's half minute runs from when its ask ended, on this process's own clock. That clock stands
+    # still here, so an ask takes no time and the half minute ends at exactly thirty seconds, on any machine.
+    monkeypatch.setattr(option_model_inputs, "_monotonic", lambda: 500.0)
 
     for later in (0, 1_000, 59 * 60_000):
         _read(at_ms=NOW + later)

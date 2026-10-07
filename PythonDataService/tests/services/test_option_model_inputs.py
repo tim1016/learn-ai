@@ -216,7 +216,10 @@ def test_what_stands_in_for_unknown_dividends_says_in_its_source_that_it_is_not_
         known.unverified_model()
 
 
+@pytest.mark.usefixtures("own_clock")
 def test_what_was_learned_is_kept_for_an_hour_and_a_failure_is_asked_again_after_half_a_minute() -> None:
+    """The hour and the half minute run from when a lookup ended, on this process's own clock. That clock
+    stands still here: a lookup takes no time, and each ends at exactly its hour or half minute on any machine."""
     known, failing = Lookups([DeclaredDividend(_FRIDAY, 1.80)]), Lookups(DividendsUnknown("no answer"))
 
     for later in (0, 59 * 60_000, 60 * 60_000 - 1):
@@ -522,7 +525,9 @@ def test_only_so_many_answers_are_kept_and_the_oldest_go_first(monkeypatch: pyte
     assert len(option_model_inputs._dividends) <= 3
 
 
+@pytest.mark.usefixtures("own_clock")
 def test_what_is_no_longer_kept_is_dropped_when_something_newer_is_learned() -> None:
+    """Half a minute on, to the millisecond: this process's own clock stands still, so no lookup takes any time."""
     lookups = Lookups(DividendsUnknown("no answer"))
 
     lookups.read(underlying="AAPL")
