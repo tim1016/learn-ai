@@ -27,10 +27,12 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
+from app.broker.alpaca.clerk.budgets import account_budget, deployment_budget
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
+from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.market_liveness import set_market_liveness_consumer
 from app.broker.ibkr.config import reset_settings_for_testing
@@ -1441,10 +1443,9 @@ async def test_a_close_of_options_on_another_symbol_waits_for_no_bar_of_that_sym
 # ---- The bot's money view ----------------------------------------------------------------
 
 
-async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_the_underlying(floor: Floor) -> None:
-    """Running and flat, with SPY's own stock quote published at $585.12 and the 585 call offered at $4.12.
-    One contract would cost $412.00; a share of SPY is no price of it. The view gives no figure for the next
-    entry, and says neither that the budget covers one nor that it is short of one."""
+async def _money_view(floor: Floor) -> Any:
+    """The bot's money as its page reads it, with SPY's own stock quote published at $585.12: the figure a
+    bot in shares would be priced from."""
     await floor.account_is_read()
     now = floor.clock.value
     market_liveness.get_market_liveness_store().apply_status_snapshot(
@@ -1457,16 +1458,95 @@ async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_th
         ),
         now_ms=now,
     )
+    return budget_deploy._budget_view(floor.runtime, SID)
 
-    view = budget_deploy._budget_view(floor.runtime, SID)
+
+def _lines(view: Any) -> dict[str, str]:
+    return {line.label: line.amount_usd for line in view.statement}
+
+
+def _claims_no_money_is_enough(view: Any) -> None:
+    """The view judged no cost, so it says neither that the bot is ready, nor that its money covers an entry,
+    nor that it is short of one, and it gives no figure for one."""
+    words = f"{view.headline} {view.detail}"
+    assert "ready" not in words.lower() and "cover" not in words.lower() and "short" not in words.lower()
+    assert "585" not in words and "USD" not in words, "a share of SPY was priced as the next entry"
+    assert [label for label in _lines(view) if "next entry" in label.lower()] == []
+
+
+async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_the_underlying(floor: Floor) -> None:
+    """Running and flat with $1,000.00 free, and the 585 call offered at $4.12. One contract would cost
+    $412.00; a share of SPY is no price of it. The view gives no figure for the next entry and makes no
+    claim that the money is enough: it says the entry is priced when its contracts are picked."""
+    view = await _money_view(floor)
 
     assert (view.state, view.world, view.entry_eligible) == ("ready", "synthetic", True)
-    words = f"{view.headline} {view.detail}"
-    assert "585" not in words and "USD" not in words, "a share of SPY was priced as the next entry"
-    assert "cover" not in words.lower() and "short" not in words.lower()
-    assert "option" in view.detail.lower(), "the view does not say the cost is an option's, known at the entry"
-    assert [line.label for line in view.statement if "next entry" in line.label.lower()] == []
-    assert ("Free to trade", "1000.00") in [(line.label, line.amount_usd) for line in view.statement]
+    _claims_no_money_is_enough(view)
+    assert "picked" in view.headline and "option" in view.detail.lower()
+    assert _lines(view)["Free to trade"] == "1000.00"
+
+
+async def test_an_option_bot_with_a_budget_of_one_cent_is_never_said_to_be_ready(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    """A cent buys no contract, and the view has no price to know that by. So it says nothing about the
+    money being enough. The entry is then refused for its cost, with the true figure, and the view says no
+    more after that than before."""
+    floor = await on_the_floor(budget_cents=1).open()
+
+    before = await _money_view(floor)
+    ran = await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
+    after = await _money_view(floor)
+
+    for view in (before, after):
+        _claims_no_money_is_enough(view)
+        assert _lines(view)["Free to trade"] == "0.01"
+    assert (before.headline, before.detail) == (after.headline, after.detail)
+    [(reason_code, why)] = ran.blocked()
+    assert reason_code == "LIVE_ENVELOPE_CASH_EXCEEDED" and "412.06" in why
+    _nothing_was_sent(floor, ran)
+
+
+async def test_an_option_bot_whose_entry_took_its_whole_budget_reads_as_holding_with_nothing_free(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    """A budget of $412.06 is the call at $4.12 and the six cents set aside for its fees, to the cent. The bot
+    buys it and holds: nothing is free, and its next entry waits for this position to be sold."""
+    floor = await on_the_floor(budget_cents=41_206).open()
+
+    await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
+    view = await _money_view(floor)
+
+    assert floor.holds() == {CALL: 1.0}
+    assert (view.state, view.entry_eligible) == ("ready", False)
+    assert (view.headline, view.detail) == ("Holding its position", "Its next entry waits until this position is sold.")
+    assert _lines(view)["Free to trade"] == "0.00"
+
+
+async def test_an_option_bot_with_nothing_of_its_budget_free_waits_for_its_next_entry_and_says_why(
+    floor: Floor,
+) -> None:
+    """Flat and running, with every cent of its budget gone: on a real account fees charged above the ones set
+    aside can do that. No price is needed to know an entry cannot be made, since every entry costs
+    something. The view says it waits, and why, and never that an entry is still to be priced."""
+    await floor.account_is_read()
+    repo, sync = floor.repo, floor.runtime.envelope_sync
+    risk = current_risk_readiness(repo, envelope=sync.envelope, now_ms=repo.clock())
+
+    def read_with(fees: str) -> Any:
+        own = deployment_budget(
+            strategy_instance_id=SID, committed_cents=100_000, active=True, realized_gross=Decimal("-900"),
+            fees=Decimal(fees), position_cost=Decimal(0), pending_orders=Decimal(0),
+        )
+        money = account_budget(cash=Decimal("1000"), deployments=[own], order_claims=Decimal(0), fee_claims=Decimal(0))
+        return budget_deploy._next_entry(floor.runtime, repo, money, SID, risk)
+
+    nothing_free, over_its_budget, a_cent_free = read_with("100"), read_with("100.50"), read_with("99.99")
+
+    for waits in (nothing_free, over_its_budget):
+        assert (waits.eligible, waits.headline) == (False, "Its next entry waits")
+        assert "nothing of its budget is free" in waits.detail.lower() and waits.required is None
+    assert a_cent_free.eligible and "picked" in a_cent_free.headline
 
 
 # ---- With nothing handed in, the process's own -------------------------------------------

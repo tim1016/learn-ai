@@ -494,6 +494,10 @@ _OPTION_ENTRY_PRICED_AT_THE_ENTRY = (
     "Its next entry is in option contracts, and their cost is known only when they are picked at the entry. "
     "The budget and the account's cash are judged against that cost then."
 )
+# Said in place of "Ready": this view has judged no cost, so it says nothing about the money being enough.
+_OPTION_ENTRY_PRICED_WHEN_PICKED = "Its next entry is priced when its contracts are picked"
+# The one thing known of an option entry's cost before its contracts are picked: it is above zero.
+_OPTION_ENTRY_NOTHING_FREE = "Nothing of its budget is free to trade, and an option entry always costs something."
 
 
 def _next_entry(
@@ -516,8 +520,14 @@ def _next_entry(
         raise BudgetUnavailable("The immutable position sizing is unavailable. Resolve deployment configuration evidence.")
     terms = _EntryConfiguration.model_validate_json(config.config_json)
     if terms.trades_options:
-        # As its Deploy asked no minimum of the budget: each entry is admitted on its own commitment.
-        return _NextEntry(True, "Ready for its next entry", _OPTION_ENTRY_PRICED_AT_THE_ENTRY + _STILL_CHECKED_AT_THE_ORDER)
+        # No cost is judged here: each entry is admitted on its own commitment, when its contracts are
+        # picked. A budget with nothing free can still be said to wait, since every entry costs something.
+        own = next(item for item in projected.deployments if item.strategy_instance_id == sid)
+        if own.spendable_cents <= 0:
+            return _NextEntry(False, _WAITS, _OPTION_ENTRY_NOTHING_FREE)
+        return _NextEntry(
+            True, _OPTION_ENTRY_PRICED_WHEN_PICKED, _OPTION_ENTRY_PRICED_AT_THE_ENTRY + _STILL_CHECKED_AT_THE_ORDER
+        )
     quote = prepared_top_of_book(terms.order_symbol, repo.clock())
     if quote is None:
         return _NextEntry(False, _WAITS, "Wait for a fresh IBKR price to judge the next position's cost.")

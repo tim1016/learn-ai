@@ -294,6 +294,7 @@ class Floor:
         reach: int = 2,
         starts_at_ms: int = FIRST_GREEN_MS - MINUTE,
         watch: OptionWatchList | None = None,
+        budget_cents: int = 100_000,
     ) -> None:
         self.tmp_path = tmp_path
         self._monkeypatch = monkeypatch
@@ -344,7 +345,7 @@ class Floor:
         # False: the Signal stream ends in the very second of its last decision, before any pass.
         self.a_pass_before_the_stream_ends = True
 
-        self.binding = binding_for(plan or one_call(), listens_to=listens_to)
+        self.binding = binding_for(plan or one_call(), listens_to=listens_to, budget_cents=budget_cents)
         self.running = True
         self.authority = SyntheticBindingAuthority(
             binding=self.binding, artifacts_root=tmp_path,
