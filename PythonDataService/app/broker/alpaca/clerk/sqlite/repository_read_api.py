@@ -755,6 +755,11 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.market_data_symbols(self._conn)
 
+    def option_contracts_to_watch(self: ClerkSqliteRepository) -> tuple[str, ...]:
+        """The option contracts a bot holds or has an order working in, by OCC symbol."""
+        with self._write_lock:
+            return reads.option_contracts_to_watch(self._conn)
+
     def attributed_positions_for_strategy(
         self: ClerkSqliteRepository,
         strategy_instance_id: str,

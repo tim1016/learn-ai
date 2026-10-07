@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.account_authority import (
     AccountBoundBrokerPorts,
 )
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
+from app.broker.alpaca.clerk.held_option_quotes import FollowedBooks
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecordInvalid
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
@@ -218,6 +219,9 @@ class ActiveClerkRuntime:
     deadline_keeper: BackgroundSweep | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
+    # A Dry Run's books, followed for the option contracts its bots hold (ADR 0076). None for an
+    # authority whose held contracts nobody keeps quotes for.
+    option_books: FollowedBooks | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
     account_id: str | None = None
     account_authority_kind: AccountAuthorityKind | None = None
@@ -277,6 +281,11 @@ class ActiveClerkRuntime:
         self.sweep = None
         if isinstance(self.clerk, SqliteAlpacaClerkFacade):
             await self.clerk.drain_effects()
+        if self.option_books is not None:
+            # After the last effect has finished and before the books close: what a Dry Run holds
+            # now is what the process goes on keeping quotes for.
+            self.option_books.close()
+            self.option_books = None
         if self._sqlite_repository is not None:
             self._sqlite_repository.close()
             self._sqlite_repository = None

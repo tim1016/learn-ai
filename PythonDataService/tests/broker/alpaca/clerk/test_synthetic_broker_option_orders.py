@@ -5,13 +5,14 @@ The contract is one SPY call, bid $1.90 and offered at $1.94.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderRecord
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerOrderRejected, BrokerUnavailable
@@ -70,6 +71,14 @@ def _bind_entry(
     simulation.bind_option_entry_quote(
         client_order_id, symbol=symbol, quote=_quote("1.90", "1.94", age_ms=age_ms), multiplier=multiplier
     )
+
+
+@pytest.fixture
+def hand_over(tmp_path: Path) -> Callable[[HeldQuote], None]:
+    """State a quote as the newest held for the call at ``NOW``, as the Clerk's own keeping does: straight
+    into the account's kept quotes, which the simulation prices a close from."""
+    kept = KeptOptionQuotes.of_account(artifacts_root=tmp_path, account_id=ACCOUNT)
+    return lambda quote: kept.keep_all({SYMBOL: quote}, kept_at_ms=NOW)
 
 
 @pytest.fixture
@@ -206,10 +215,12 @@ async def test_what_is_left_of_a_position_is_still_in_dollars_after_a_sale_and_a
     assert opened_again == left
 
 
-async def test_an_opening_order_that_no_multiplier_came_with_is_not_filled(simulation: SyntheticBroker) -> None:
+async def test_an_opening_order_that_no_multiplier_came_with_is_not_filled(
+    simulation: SyntheticBroker, hand_over: Callable[[HeldQuote], None]
+) -> None:
     """Bound as a close is bound, with a quote and no multiplier. Filled, its position could only be counted as
     shares: a hundred times too small. The simulation fills no such order."""
-    simulation.keep_option_quotes({SYMBOL: _quote("1.90", "1.94")})
+    hand_over(_quote("1.90", "1.94"))
     assert simulation.bind_option_close_quotes("ref-1", symbol=SYMBOL, side="sell", quotes=[], usable_generation=None)
 
     with pytest.raises(BrokerOrderRejected) as refused:
@@ -320,7 +331,7 @@ async def test_a_close_with_no_usable_quote_is_sold_from_the_newest_kept_and_say
 
 
 async def test_a_newer_quote_with_no_bid_leaves_a_sale_unpriced_whatever_an_older_quote_had_bid(
-    simulation: SyntheticBroker,
+    simulation: SyntheticBroker, hand_over: Callable[[HeldQuote], None]
 ) -> None:
     """Bought with $1.90 bid a minute ago. The newest quote kept has an ask and no bid.
 
@@ -329,7 +340,7 @@ async def test_a_newer_quote_with_no_bid_leaves_a_sale_unpriced_whatever_an_olde
     with a bid sells it, at that bid.
     """
     await _holding_one(simulation)
-    simulation.keep_option_quotes({SYMBOL: _quote(None, "2.60", age_ms=100)})
+    hand_over(_quote(None, "2.60", age_ms=100))
 
     bound = simulation.bind_option_close_quotes("ref-2", symbol=SYMBOL, side="sell", quotes=[], usable_generation=None)
     with pytest.raises(BrokerOrderRejected, match="invents no fill"):
@@ -339,7 +350,7 @@ async def test_a_newer_quote_with_no_bid_leaves_a_sale_unpriced_whatever_an_olde
     assert [position.quantity for position in await simulation.list_positions()] == [1.0]
     assert "ref-2" not in simulation.synthesized_option_fills()
 
-    simulation.keep_option_quotes({SYMBOL: _quote("0.80", "0.86", age_ms=50)})
+    hand_over(_quote("0.80", "0.86", age_ms=50))
     assert simulation.bind_option_close_quotes("ref-3", symbol=SYMBOL, side="sell", quotes=[], usable_generation=None)
     await simulation.submit_option_order(_sell_to_close(), client_order_id="ref-3")
 
@@ -415,9 +426,9 @@ async def test_a_second_close_of_a_position_already_sold_is_refused_under_any_or
 
 
 async def test_a_sale_to_close_a_contract_that_is_not_held_is_refused_even_with_a_quote_to_fill_it_from(
-    simulation: SyntheticBroker,
+    simulation: SyntheticBroker, hand_over: Callable[[HeldQuote], None]
 ) -> None:
-    simulation.keep_option_quotes({SYMBOL: _quote("2.40", "2.46")})
+    hand_over(_quote("2.40", "2.46"))
     assert simulation.bind_option_close_quotes("ref-2", symbol=SYMBOL, side="sell", quotes=[], usable_generation=None)
 
     with pytest.raises(BrokerOrderRejected):
@@ -442,10 +453,12 @@ async def test_a_close_that_sells_exactly_what_is_held_is_filled(simulation: Syn
 # ── a quote from the future, and a contract past its last session ────────
 
 
-async def test_a_quote_stamped_later_than_the_simulations_clock_prices_no_close(simulation: SyntheticBroker) -> None:
+async def test_a_quote_stamped_later_than_the_simulations_clock_prices_no_close(
+    simulation: SyntheticBroker, hand_over: Callable[[HeldQuote], None]
+) -> None:
     """It is not a price the close could have met. The newest quote received by now is the one used."""
     await _holding_one(simulation)
-    simulation.keep_option_quotes({SYMBOL: _quote("9.00", "9.06", age_ms=-60_000)})
+    hand_over(_quote("9.00", "9.06", age_ms=-60_000))
     simulation.bind_option_close_quotes("ref-2", symbol=SYMBOL, side="sell", quotes=[], usable_generation=None)
 
     await simulation.submit_option_order(_sell_to_close(), client_order_id="ref-2")
@@ -541,22 +554,22 @@ def simulation_with_no_stock_feed(tmp_path: Path, moving_clock: list[int]) -> It
 
 
 def test_a_contract_can_be_sold_now_only_when_the_newest_quote_kept_for_it_has_something_bid(
-    simulation_with_no_stock_feed: SyntheticBroker, moving_clock: list[int]
+    simulation_with_no_stock_feed: SyntheticBroker, moving_clock: list[int], hand_over: Callable[[HeldQuote], None]
 ) -> None:
     simulation = simulation_with_no_stock_feed
 
     assert not simulation.recovery_price_available(SYMBOL), "nothing was ever kept for it"
 
-    simulation.keep_option_quotes({SYMBOL: _quote("2.00", "2.06", age_ms=9_000)})
+    hand_over(_quote("2.00", "2.06", age_ms=9_000))
     assert simulation.recovery_price_available(SYMBOL)
 
     # The newest quote has an ask and no bid at all. The older bid of $2.00 prices no sale.
-    simulation.keep_option_quotes({SYMBOL: _quote(None, "2.06", age_ms=600)})
+    hand_over(_quote(None, "2.06", age_ms=600))
     assert not simulation.recovery_price_available(SYMBOL)
     assert simulation.recovery_price_available(SYMBOL, side="buy")
 
     # The newest quote says nothing is bid. The older bid of $2.00 no longer prices a sale.
-    simulation.keep_option_quotes({SYMBOL: _quote("0", "0.05", age_ms=300)})
+    hand_over(_quote("0", "0.05", age_ms=300))
     assert not simulation.recovery_price_available(SYMBOL)
     # It is still offered, so a purchase to close could be priced.
     assert simulation.recovery_price_available(SYMBOL, side="buy")
@@ -566,7 +579,7 @@ def test_a_contract_can_be_sold_now_only_when_the_newest_quote_kept_for_it_has_s
         bid=QuoteSide(Decimal("0.80"), NOW + 59_000), ask=QuoteSide(Decimal("0.86"), NOW + 59_000),
         data_type=QuoteDataType.LIVE, generation=GENERATION,
     )
-    simulation.keep_option_quotes({SYMBOL: in_a_minute})
+    hand_over(in_a_minute)
     assert not simulation.recovery_price_available(SYMBOL)
     moving_clock[0] = NOW + 60_000
     assert simulation.recovery_price_available(SYMBOL)
@@ -576,9 +589,9 @@ def test_a_contract_can_be_sold_now_only_when_the_newest_quote_kept_for_it_has_s
 
 
 def test_a_recovery_of_a_contract_is_never_bound_to_a_stock_quote(
-    simulation_with_no_stock_feed: SyntheticBroker,
+    simulation_with_no_stock_feed: SyntheticBroker, hand_over: Callable[[HeldQuote], None]
 ) -> None:
-    simulation_with_no_stock_feed.keep_option_quotes({SYMBOL: _quote("2.00", "2.06")})
+    hand_over(_quote("2.00", "2.06"))
 
     assert not simulation_with_no_stock_feed.bind_latest_recovery_bar("ref-2", symbol=SYMBOL, side="sell")
 

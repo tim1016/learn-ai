@@ -33,6 +33,7 @@ from app.services.market_liveness import MarketLivenessStore, get_market_livenes
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.held_option_quotes import HeldOptionQuotes
     from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
     from app.services.option_watch import OptionWatchList
 
@@ -385,6 +386,7 @@ class AlpacaMarketLivenessConsumer:
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
         option_watch: OptionWatchList | None = None,
+        held_option_quotes: HeldOptionQuotes | None = None,
     ) -> AlpacaMarketLivenessConsumer:
         """Use IBKR data locally or through an authenticated IBKR status owner.
 
@@ -392,6 +394,16 @@ class AlpacaMarketLivenessConsumer:
         the source keeps using the binding it was started for. A consumer that
         re-read configuration on reconnect could silently switch accounts or
         status topology without a controlled restart.
+
+        ``option_watch`` is what this process's option bots and pages ask to
+        have watched. ``held_option_quotes`` is what its Dry Run Clerks' books
+        say their bots hold: those contracts are asked for too. Each pass of
+        the local source begins a round of their keeping and does not wait
+        for it (ADR 0076).
+
+        With a shared status source the local source makes no pass. No option
+        contract is then quoted here, the consumer offers no option quote
+        source, and no round of the keeping is ever begun.
         """
         resolved = settings or resolved_alpaca_settings()
         store = store or get_market_liveness_store()
@@ -402,10 +414,19 @@ class AlpacaMarketLivenessConsumer:
             raise RuntimeError("Direct Alpaca market-data subscriptions are disabled.")
             yield ""  # pragma: no cover
 
+        from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
         from app.broker.ibkr.config import get_settings as ibkr_settings
         from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
-        from app.broker.ibkr.option_quotes import OptionQuoteLines
+        from app.broker.ibkr.option_quotes import OptionQuoteLines, WatchRequest
         from app.services.option_watch import get_option_watch_list
+
+        watch = option_watch or get_option_watch_list()
+        held = held_option_quotes or get_held_option_quotes()
+
+        def option_requests() -> tuple[WatchRequest, ...]:
+            # What bots and pages ask for, and what the Clerks' own books say is held. A held
+            # contract's request does not depend on any runner being alive to make it.
+            return (*watch.requests(), *held.requests())
 
         cached_demand: tuple[str, ...] = ()
         cached_revision: tuple[object, int] | None = None
@@ -444,14 +465,28 @@ class AlpacaMarketLivenessConsumer:
             # Option contracts are quoted on this Clerk's own IBKR connection, for whatever its bots ask
             # to have watched, inside the line budget it is configured with (zero until set).
             options=OptionQuoteLines(
-                requests=(option_watch or get_option_watch_list()).requests,
+                requests=option_requests,
                 budget=ibkr_settings().option_line_budget,
                 strikes_each_side=ibkr_settings().option_window_strikes_each_side,
             ),
         )
-        status_source = local_source
+
+        async def local_status() -> MarketStatusSnapshot:
+            snapshot = await local_source()
+            # The Clerk's own keeping, begun by the pass and never waited for: the books of each Dry
+            # Run here are read for what its bots hold, and the mark of each contract kept, so a
+            # close, a Flatten and a mark have a quote with no runner alive (ADR 0076).
+            held.drive(local_source)
+            return snapshot
+
+        async def close_local() -> None:
+            await held.stop()
+            await local_source.close()
+
+        status_source = local_status
         # What quotes option contracts is this supervisor's own pass. A process that reads its market status
-        # from a shared source never makes that pass, so it has no option quotes and says so (#2913).
+        # from a shared source never makes that pass, so it has no option quotes and says so. Nothing drives
+        # the keeping there either: it begins no round and keeps no mark (#2913).
         option_quotes: IbkrMarketStatusSource | None = local_source
         if resolved.market_status_upstream_url is not None:
             option_quotes = None
@@ -476,7 +511,7 @@ class AlpacaMarketLivenessConsumer:
             store=store,
             journal=journal,
             status_snapshot_source=status_source,
-            status_source_close=local_source.close,
+            status_source_close=close_local,
             option_quotes=option_quotes,
         )
 
@@ -523,6 +558,18 @@ def get_option_quotes() -> IbkrMarketStatusSource | None:
     """Where this process's option bots read their quotes: the Clerk's own IBKR supervisor. None when no
     Clerk with an IBKR source of its own runs here."""
     return None if _consumer is None else _consumer.option_quotes
+
+
+def option_quotes_are_read_elsewhere() -> bool:
+    """Whether this process's Clerk is up and has no option quotes of its own.
+
+    A Clerk that reads its market status from a shared source makes no IBKR
+    pass, and that pass is what quotes option contracts. So none is quoted
+    here for as long as this Clerk runs: an option bot cannot trade on it,
+    and the keeping of held quotes is never begun (ADR 0076). False before
+    any Clerk is up, which says nothing of what one will have.
+    """
+    return _consumer is not None and _consumer.option_quotes is None
 
 
 def set_market_liveness_consumer(consumer: AlpacaMarketLivenessConsumer | None) -> None:

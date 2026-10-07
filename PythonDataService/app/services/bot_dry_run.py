@@ -16,8 +16,19 @@ DRY_RUN_ACTIVITY_FILENAME = "dry_run_activity.jsonl"
 MAX_DRY_RUN_TAIL = 500
 
 
+# What only a fill in an option contract carries. Each is left out of a row that has none.
+_OPTION_FILL_FIELDS = ("underlying", "multiplier", "fill_model", "quote_age_ms", "contract_reference")
+
+
 class DryRunActivity(BaseModel):
-    """One simulated fill with its selected synthetic custody authority."""
+    """One simulated fill with its selected synthetic custody authority.
+
+    A fill in shares: ``symbol`` is the stock, ``quantity`` shares and
+    ``fill_price`` dollars a share. A fill in an option contract (ADR 0076):
+    ``symbol`` is the contract's OCC symbol, as on the Clerk's own fill rows,
+    ``quantity`` is contracts, ``fill_price`` is the premium, dollars a share,
+    and the fill's cash is contracts x premium x ``multiplier``.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -37,18 +48,28 @@ class DryRunActivity(BaseModel):
     # Set only when the fill was priced from a bar that closed before it was
     # decided: that bar's close, so the price's age is on the row (#2912).
     price_bar_end_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # Set only for a fill in an option contract (ADR 0076). The symbol the contract is on.
+    underlying: str | None = None
+    # The shares one contract's premium stands for, as the Clerk's books record the contract.
+    multiplier: int | None = Field(default=None, ge=1)
+    # How the simulation priced the fill, and how old the quote side it used was then.
+    fill_model: str | None = None
+    quote_age_ms: int | None = Field(default=None, ge=0)
+    # On an entry: where the contract's listing was read. A simulation has no broker reference to ask.
+    contract_reference: Literal["ibkr_listing"] | None = None
     simulated: Literal[True] = True
 
     @model_serializer(mode="wrap")
-    def _omit_an_absent_price_bar(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A fill priced at its own minute writes the row it always wrote.
+    def _omit_what_is_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A fill in shares, priced at its own minute, writes the row it always wrote.
 
         The journal refuses a field it does not know, so a row carrying a
         null one could not be read by the code before the field existed.
         """
         row = handler(self)
-        if row.get("price_bar_end_ms") is None:
-            row.pop("price_bar_end_ms", None)
+        for name in ("price_bar_end_ms", *_OPTION_FILL_FIELDS):
+            if row.get(name) is None:
+                row.pop(name, None)
         return row
 
     @model_validator(mode="before")
@@ -72,6 +93,17 @@ class DryRunActivity(BaseModel):
         expected = synthetic_account_id_for_strategy(self.strategy_instance_id)
         if self.authority_account_id != expected:
             raise ValueError("Dry Run activity authority does not match strategy instance")
+        return self
+
+    @model_validator(mode="after")
+    def _an_option_fill_says_what_it_multiplies_by(self) -> DryRunActivity:
+        """A row is a fill in shares or a fill in a contract, never half of each: a premium with no
+        multiplier would be read as a share price."""
+        if (self.underlying is None) != (self.multiplier is None):
+            raise ValueError("an option fill names both its underlying and its contract's multiplier")
+        of_an_option_only = (self.fill_model, self.quote_age_ms, self.contract_reference)
+        if self.multiplier is None and any(value is not None for value in of_an_option_only):
+            raise ValueError("only a fill in an option contract says how its quote priced it")
         return self
 
 

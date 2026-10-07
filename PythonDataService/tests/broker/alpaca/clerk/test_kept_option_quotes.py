@@ -462,6 +462,50 @@ def test_putting_a_quote_back_never_cuts_the_file(tmp_path: Path) -> None:
     assert _rows(tmp_path) < COMPACT_ABOVE_ROWS
 
 
+def test_a_quote_put_back_by_a_caller_that_says_what_time_it_is_cuts_a_file_that_has_grown(tmp_path: Path) -> None:
+    """The Clerk's keeping puts back what a line shows while one of its sides has still to arrive, and can do
+    so all day with no hand-over between. It knows the time, and that the quote was received by then, so the
+    file is cut as of that time and does not grow without end. The newest quote is still the one put back."""
+    store = _store(tmp_path)
+    last = _hand_overs(store, (SYMBOL,), first_ms=TUESDAY_OPEN, count=COMPACT_ABOVE_ROWS)
+    assert _rows(tmp_path) == COMPACT_ABOVE_ROWS
+    now = last + 5_000
+
+    store.restore(SYMBOL, _quote(None, "2.04", ask_at=now - 200), now_ms=now)
+
+    assert _rows(tmp_path) < COMPACT_ABOVE_ROWS, "the file was never cut"
+    newest = store.newest(SYMBOL, at_or_before_ms=now)
+    assert newest is not None and (newest.quote.bid, newest.quote.ask, newest.kept_at_ms) == (None, Decimal("2.04"), now - 200)
+    assert not store.prices_a_close(SYMBOL, side="sell", at_ms=now)
+
+
+@pytest.mark.parametrize(
+    ("bid", "ask"),
+    [pytest.param(None, "2.04", id="only an ask"), pytest.param("2.00", None, id="only a bid")],
+)
+def test_a_bought_contract_is_marked_from_a_whole_statement_and_never_from_one_side_put_back(
+    tmp_path: Path, bid: str | None, ask: str | None
+) -> None:
+    """A mark is a bid, stated with its ask. A line's quote put back while a side was still to arrive is the
+    newest quote by receipt, and prices a close alone, but it is no mark: not even its own bid, however
+    lately it ticked. It states nothing, so the whole quote stated before it is the mark still."""
+    store = _store(tmp_path)
+    store.keep(SYMBOL, _quote("1.90", "1.94", bid_at=9_000, ask_at=9_000), kept_at_ms=10_000)
+
+    store.restore(SYMBOL, _quote(bid, ask, bid_at=12_000, ask_at=12_000), now_ms=12_500)
+
+    mark = store.stated_mark(SYMBOL, at_or_before_ms=12_500)
+    assert mark is not None and (mark.quote.bid, mark.quote.ask, mark.kept_at_ms) == (Decimal("1.90"), Decimal("1.94"), 10_000)
+    assert store.stated_mark(SYMBOL, at_or_before_ms=9_999) is None, "nothing was stated before the hand-over"
+    newest = store.newest(SYMBOL, at_or_before_ms=12_500)
+    assert newest is not None and newest.kept_at_ms == 12_000
+    # A whole quote stated after it is the mark again.
+    store.keep(SYMBOL, _quote("2.00", "2.04", bid_at=13_000, ask_at=13_000), kept_at_ms=13_500)
+    again = store.stated_mark(SYMBOL, at_or_before_ms=13_500)
+    assert again is not None and (again.quote.bid, again.kept_at_ms) == (Decimal("2.00"), 13_500)
+    assert store.stated_mark("SPY260918C00590000", at_or_before_ms=13_500) is None
+
+
 def test_after_a_cut_the_writer_holds_in_memory_what_the_file_holds(tmp_path: Path) -> None:
     store = _store(tmp_path)
 

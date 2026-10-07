@@ -66,6 +66,12 @@ class OptionEffectRefusal(StrEnum):
     SEVERAL_CONTRACTS_HELD = "OPTION_EXIT_SEVERAL_CONTRACTS_HELD"
     # An EXIT came with a quote of a contract the bot does not hold.
     EXIT_QUOTES_FOR_ANOTHER_CONTRACT = "OPTION_EXIT_QUOTES_NOT_THE_HELD_CONTRACT"
+    # The plan's watched window can need more quote lines than this Clerk may open, so its
+    # contracts could never all be quoted. Refused when the run starts, not at every entry.
+    WINDOW_OVER_LINE_BUDGET = "OPTION_WINDOW_OVER_LINE_BUDGET"
+    # This Clerk reads its market status from a shared source and makes no IBKR pass of its own,
+    # so no option contract is ever quoted on it. Refused when the run starts, not at every entry.
+    NO_OPTION_QUOTES_HERE = "OPTION_CLERK_HAS_NO_OPTION_QUOTES"
 
 
 # Shares one standard contract's price stands for. A listing with any other
@@ -156,7 +162,7 @@ class OptionExitEvidence:
     """The quotes read at an exit decision for the contracts the bot holds. A contract with none is left out.
 
     Each quote is named by its contract's OCC symbol, as the quotes kept are
-    (``keep_option_quotes``). A leg id would say which rule of the plan the
+    (``kept_option_quotes``). A leg id would say which rule of the plan the
     quote was read for, never which contract it is of; the Clerk closes a
     contract, and takes a quote only for the one it closes.
     """

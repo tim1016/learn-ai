@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut
+from app.broker.alpaca.clerk.option_effects import OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON, ScheduledEnd
 from app.broker.v2panel.action_policy import (
@@ -2330,6 +2331,19 @@ class BotTaskRegistry:
                     else "FEED_DEATH"
                 ),
             )
+        except OptionPlanRefused as exc:
+            # A run that cannot trade its option plan is refused by name before it streams a bar
+            # (ADR 0076): its recorded reason is the refusal's own code, not an exception's name.
+            logger.error(
+                "Bot run refused: its option plan cannot be traded here",
+                extra={
+                    "action": "bot_option_run_refused",
+                    "strategy_instance_id": sid,
+                    "reason_code": exc.reason.value,
+                    "error": exc.detail,
+                },
+            )
+            await self._terminal.finalize_crash(binding, exc, reason_code=exc.reason.value)
         except Exception as exc:
             # Supervision boundary: every crash becomes typed durable evidence
             # plus a logged traceback — deliberately not re-raised, so the
