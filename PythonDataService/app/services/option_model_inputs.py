@@ -602,6 +602,10 @@ def read_option_model_inputs(
         if learned_rate is None:
             looking_rate, begun = _rates.look_up(rate_asked, at_ms, partial(sources.rate, days, today), sources.rate_bound_s)
             joined |= not begun
+            if joined and not wait:
+                # Said before the dividends are asked for. The caller whose lookup this is may be between its
+                # two, and beginning the second one here would ask twice for one answer.
+                raise ModelInputsBeingRead(f"the rate and the dividends for {symbol} are being looked up")
         if learned_dividends is None and not nothing_to_look_up:
             looking_dividends, begun = _dividends.look_up(
                 dividends_asked,
