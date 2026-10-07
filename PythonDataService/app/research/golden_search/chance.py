@@ -30,7 +30,8 @@ Canonical implementation: app/engine/results/statistics.py for one path's
   would take seconds a reading to score.
 Validated against: tests/research/golden_search/test_chance.py (the engine's
   ``_daily_returns``, ``_sharpe`` and ``_max_drawdown``, ``atol=1e-12``; and
-  hand-computed paths).
+  hand-computed paths). Fixture SB-001 holds ``path_sharpe`` on resampled
+  paths to arch (tests/research/monte_carlo/test_stationary.py).
 
 Two differences from the engine's own figures:
   * its worst fall reads every bar and starts its peak at the first bar, not
@@ -110,6 +111,9 @@ class SessionSeries:
     exits: np.ndarray
     capital: float
 
+    def __post_init__(self) -> None:
+        self.returns.flags.writeable = self.exits.flags.writeable = False
+
 
 def session_series(detail: Mapping[str, Any] | None) -> SessionSeries | str:
     """A detail run's sessions, or why they cannot be resampled.
@@ -141,9 +145,7 @@ def session_series(detail: Mapping[str, Any] | None) -> SessionSeries | str:
         if index is None:
             return UNPLACED_EXIT
         exits[index] += 1
-    returns = equity[1:] / equity[:-1] - 1.0
-    returns.flags.writeable = exits.flags.writeable = False
-    return SessionSeries(session_ms=tuple(ms for ms, _ in daily), returns=returns, exits=exits, capital=capital)
+    return SessionSeries(session_ms=tuple(ms for ms, _ in daily), returns=equity[1:] / equity[:-1] - 1.0, exits=exits, capital=capital)
 
 
 def _defined(values: np.ndarray) -> np.ndarray:
