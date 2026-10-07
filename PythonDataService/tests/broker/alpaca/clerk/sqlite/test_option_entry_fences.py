@@ -45,6 +45,7 @@ from app.broker.contract.errors import BrokerOptionsNotSupported, BrokerUnavaila
 from app.broker.contract.models import BrokerOrderLeg
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
+from app.options.resolver import ResolverRefusal
 from app.services import market_liveness
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.session_authority import et_minute_of_day_ms
@@ -132,6 +133,20 @@ async def test_a_decision_sent_again_for_more_contracts_is_a_conflict_and_the_bo
 
     assert first.state is EffectOperationState.SUBMITTED
     assert dry_run.orders() == 1 and dry_run.held() == {SYMBOL: 1.0}
+
+
+async def test_a_decision_sent_again_for_fewer_contracts_is_a_conflict_and_the_books_keep_the_first(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """Three contracts were bought under this decision. Asking it for one is no retry of that entry either."""
+    first = await dry_run.enter(dry_run.evidence(), decision="enter-once", units=3)
+    dry_run.wait(1_000)
+
+    with pytest.raises(DurableConflictError):
+        await dry_run.enter(dry_run.evidence(), decision="enter-once", units=1)
+
+    assert first.state is EffectOperationState.SUBMITTED
+    assert dry_run.orders() == 1 and dry_run.held() == {SYMBOL: 3.0}
 
 
 async def test_a_decision_sent_again_for_another_contract_is_a_conflict(dry_run: _DryRun) -> None:  # noqa: F811
@@ -417,17 +432,122 @@ def test_each_side_of_a_quote_is_aged_on_its_own_receipt_time(
         assert isinstance(answer, OptionEntryRefused) and answer.reason_code == refused_as
 
 
-def test_a_contract_is_bought_on_its_expiry_day_while_its_session_is_open_and_never_after_it_closes() -> None:
+def test_a_contract_is_bought_on_its_expiry_day_at_noon_and_never_after_its_session_closes() -> None:
     on_the_day = work_out_option_entry(BUYS_ONE_CALL, evidence=_evidence_at(EXPIRY_NOON), units=1, now_ms=EXPIRY_NOON)
-    a_millisecond_before = work_out_option_entry(
-        BUYS_ONE_CALL, evidence=_evidence_at(EXPIRY_CLOSE - 1), units=1, now_ms=EXPIRY_CLOSE - 1
-    )
 
-    assert isinstance(on_the_day, OptionEntryFacts) and isinstance(a_millisecond_before, OptionEntryFacts)
+    assert isinstance(on_the_day, OptionEntryFacts)
+    # A millisecond before the close the contract still trades, but an entry could not be closed again.
+    assert _refusal_at(EXPIRY_CLOSE - 1).reason_code == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
     # From the close of its last session on. The quote is fresh: it is the contract that is refused.
     at_the_close = _refusal_at(EXPIRY_CLOSE)
     assert at_the_close.reason_code == "OPTION_CONTRACT_EXPIRED" and SYMBOL in at_the_close.explanation
     assert _refusal_at(EXPIRY_CLOSE + 68 * 3_600_000).reason_code == "OPTION_CONTRACT_EXPIRED"
+
+
+# ── the entry cutoff, asked at the Clerk's own clock ─────────────────────
+
+# With the starting terms a position is closed 45 minutes before the session's close on its contract's
+# expiry day, and an entry needs 80 seconds before that: 20 to wait for its fill, 30 to prove a cancel,
+# 30 of margin. So no entry from 15:13:40 on a full day, and from 12:13:40 on a half day.
+EXPIRY_CUTOFF = et_minute_of_day_ms(EXPIRY, 15 * 60 + 13) + 40_000
+# The day after Thanksgiving: the session closes at 13:00 New York time.
+HALF_DAY = date(2026, 11, 27)
+HALF_DAY_CALL = OptionContract.of(root="SPY", expiry_date=HALF_DAY, right="call", strike=585)
+HALF_DAY_CUTOFF = et_minute_of_day_ms(HALF_DAY, 12 * 60 + 13) + 40_000
+
+
+@pytest.mark.parametrize(
+    ("contract", "cutoff_ms"),
+    [
+        pytest.param(CALL, EXPIRY_CUTOFF, id="a full day: until 15:13:40"),
+        pytest.param(HALF_DAY_CALL, HALF_DAY_CUTOFF, id="a half day: until 12:13:40"),
+    ],
+)
+def test_an_entry_on_its_contracts_expiry_day_is_taken_until_the_cutoff_and_refused_by_name_from_it(
+    contract: OptionContract, cutoff_ms: int
+) -> None:
+    """Opened later, it could not be seen through before its position must be closed. The contract still trades."""
+    just_before = work_out_option_entry(
+        BUYS_ONE_CALL, evidence=_evidence_at(cutoff_ms - 1, picked={LEG: contract}), units=1, now_ms=cutoff_ms - 1
+    )
+
+    assert isinstance(just_before, OptionEntryFacts), just_before
+    at_the_cutoff = _refusal_at(cutoff_ms, picked={LEG: contract})
+    assert at_the_cutoff.reason_code == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
+    assert contract.occ_symbol in at_the_cutoff.explanation
+    # The same code the runner's own recheck refuses under, so one reason is told one way.
+    assert at_the_cutoff.reason_code == ResolverRefusal.PAST_ENTRY_CUTOFF.value
+
+
+def test_a_contract_that_expires_another_day_has_no_cutoff_today() -> None:
+    """The day before it expires, a minute before that day's close: nothing of its position is due today."""
+    thursday_late = et_minute_of_day_ms(date(2026, 9, 17), 15 * 60 + 59)
+
+    taken = work_out_option_entry(BUYS_ONE_CALL, evidence=_evidence_at(thursday_late), units=1, now_ms=thursday_late)
+
+    assert isinstance(taken, OptionEntryFacts), taken
+
+
+async def _on_the_expiry_day(account: _DryRun, at_ms: int) -> None:
+    """Days pass. The Clerk takes its account up again where it left it, and reads it afresh."""
+    account.clock.value = at_ms
+    account.repo.revive_execution_lease()
+    await account.read_account()
+
+
+async def test_an_entry_a_second_before_its_cutoff_is_bought_at_the_clerk(dry_run: _DryRun) -> None:  # noqa: F811
+    await _on_the_expiry_day(dry_run, EXPIRY_CUTOFF - 1_000)
+
+    bought = await dry_run.enter(dry_run.evidence())
+
+    assert bought.state is EffectOperationState.SUBMITTED, bought.explanation
+    assert dry_run.held() == {SYMBOL: 1.0}
+
+
+async def test_an_entry_at_its_cutoff_is_refused_by_name_at_the_clerk_and_nothing_is_set_aside(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The runner's own recheck let it through, or was never asked. The Clerk asks at its own clock."""
+    await _on_the_expiry_day(dry_run, EXPIRY_CUTOFF)
+
+    refused = await dry_run.enter(dry_run.evidence())
+
+    _refused(refused, "OPTION_CONTRACT_PAST_ENTRY_CUTOFF")
+    assert SYMBOL in refused.explanation
+    assert dry_run.held() == {} and dry_run.fills() == [] and dry_run.orders() == 0
+    assert dry_run.reservations() == []
+    budget = dry_run.repo.account_budget(cash=1000, seen_before_ms=dry_run.clock() + 1)
+    assert (budget.deployments[0].pending_orders, budget.deployments[0].free) == (Decimal("0"), Decimal("1000"))
+
+
+async def test_an_entry_taken_before_its_cutoff_and_reached_for_sending_after_it_is_not_sent(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The cutoff is asked once as the entry is taken and again as it is sent, at the clock then.
+
+    The entry is taken two seconds before the cutoff. By the time its order
+    is reached for sending the cutoff has come: it is not sent, and nothing
+    stays set aside for it.
+    """
+    await _on_the_expiry_day(dry_run, EXPIRY_CUTOFF - 2_000)
+    take = clerk_runtime.accept_option_enter
+
+    def take_and_two_seconds_pass(*args: Any, **kwargs: Any) -> Any:
+        taken = take(*args, **kwargs)
+        dry_run.clock.advance(2_000)
+        return taken
+
+    monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_two_seconds_pass)
+
+    refused = await dry_run.enter(dry_run.evidence())
+
+    assert refused.state is EffectOperationState.REJECTED, refused.explanation
+    assert dry_run.held() == {} and dry_run.fills() == []
+    [order_ref] = refused.child_order_refs
+    failed = dry_run.repo.last_order_transition(order_ref=order_ref, transition_kind="ENTER_SUBMISSION_REFUSED")
+    assert failed is not None and failed["summary_code"] == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
+    budget = dry_run.repo.account_budget(cash=1000, seen_before_ms=dry_run.clock() + 1)
+    assert (budget.deployments[0].pending_orders, budget.deployments[0].free) == (Decimal("0"), Decimal("1000"))
 
 
 @pytest.mark.parametrize(

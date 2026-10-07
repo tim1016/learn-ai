@@ -1092,6 +1092,12 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     stranding episode means the broker agreed with it, so the position is real
     and the cure is a flatten, not a discharge. An older one says nothing about
     the residue and does not hide the action.
+
+    A Dry Run holding an expired option contract is never offered it (ADR
+    0076): its simulation is the account's broker and holds the contract
+    too, so the executor would refuse. Nothing can be done about that
+    position until a simulation settles an expired contract, and the step
+    says so.
     """
     positions = _relevant_positions(ctx)
     relevant = _relevant_uncertainties(ctx)
@@ -1110,10 +1116,26 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     reason_code: str | None = None
     reason: str | None = None
     next_step = "Confirm at the broker that the symbol is flat, then discharge the residue."
+    # A Dry Run's expired option contract (ADR 0076). The simulation is the
+    # account's broker and holds the contract too, so there is no residue,
+    # whatever a reconciliation has or has not yet seen: asked before
+    # everything else, so the write-off is never offered and then refused.
+    simulated_expired = (
+        expired_option_close(positions[0].symbol, ctx.now_ms)
+        if len(positions) == 1 and is_synthetic_account_id(ctx.account_id)
+        else None
+    )
     if ctx.strategy_instance_id is None or len(positions) != 1:
         reason_code = "RECOVERY_SCOPE_UNSUPPORTED"
         reason = "Discharge a residue from the single bot that holds one attributed symbol."
         next_step = "Open the bot that holds the residue."
+    elif simulated_expired is not None:
+        reason_code = "BROKER_AGREES_WITH_CUSTODY"
+        reason = (
+            f"{positions[0].symbol.upper()} has expired, and this Dry Run's simulation, which is the account's "
+            "broker, still holds it. A write-off removes only what the broker does not hold."
+        )
+        next_step = simulated_expired.next_step
     elif not episodes:
         reason_code = "NO_STRANDED_EXIT_EPISODE"
         reason = "No open EXIT_NOT_FLAT or EXIT_STUCK episode names this bot's exposure."

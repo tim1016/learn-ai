@@ -1657,6 +1657,16 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option fees** — the five fees Alpaca passes through on a stock or ETF option trade: the SEC fee and the TAF on sales; the ORF, the OCC clearing fee and the CAT fee on both sides. Alpaca charges no commission on these.
   _Avoid_: commission.
 - **Option fee provision** — what an option entry sets aside for its own fees, in whole cents: its fills settled as a day of their own. An estimate; the fee activities Alpaca posts are the truth.
+- **Option event** — an assignment, an exercise or an expiry: something that ends an option position without an order. The broker reports it against the account, with a date and no time, as a signed change to the account's position: negative ends a bought position, positive a sold one. For an expiry of a sold option the sign is an inference: every published expiry is negative.
+  _Avoid_: corporate action (a different thing, not read), option trade (Alpaca's name for the share trade below).
+- **Assigned** — a sold option's holder exercised it, and the bot must deliver: sell the shares if it sold a call, buy them if it sold a put. **Exercised** — a bought option was turned into its shares, by the owner or by the broker at expiry. **Expired** — the option ended with nothing exercised.
+- **Share trade (of an option event)** — the trade in the underlying's shares an exercise or an assignment creates, at the strike. Alpaca reports it as an activity of its own, on the underlying's symbol.
+  _Avoid_: reading it as the option's fill.
+- **Event allocation** — which open lots an option event took, and how many contracts from each: the oldest first for an assignment or an exercise, the newest first for an expiry. It is recorded as an allocation, because the broker names no lot.
+- **Held on both sides** — one contract that one bot has bought and another has sold on the same account. The broker is taken to hold only the net (no published example shows such a contract expiring), so an expiry of it cannot be matched to lots and is refused.
+- **Unreadable activity** — an option activity the broker reported that could not be read whole. It is listed with its id and the reason and is never booked in part.
+- **Whole read (of option events)** — a read that reached the start of its window, with no unreadable activity and none the broker does not report as executed. Only a whole read's silence means nothing happened.
+- **Activity date** — the date an activity carries, held as 00:00 New York time on it. No time of day is known.
 - **Option entry evidence** — what a runner hands the Clerk with an option ENTER: for each leg the contract picked, its listed multiplier and the quote read just before; the quotes' generation; the bot's two limits. Facts, never a price or a commitment.
 - **Leg gap limit** — the widest bid-ask gap the owner allows any one leg at an entry, as a percent of that leg's mid. Starts at 8.
 - **Order line** — an option order as the books write it beside a stock leg: the contract's symbol, the side, contracts, the limit a share. The exact order is kept with it.

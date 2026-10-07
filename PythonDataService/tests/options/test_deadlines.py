@@ -14,6 +14,7 @@ from app.options.deadlines import (
     close_deadline_ms,
     close_due_on,
     entry_cutoff_ms,
+    entry_cutoff_on,
     last_session_close_ms,
     past_last_session,
     sold_leg_close_ms,
@@ -170,3 +171,39 @@ def test_when_the_sold_leg_close_is_set_earlier_than_the_expiry_days_it_is_the_o
     expiring_today = _structure(("bought", "long", _FRIDAY), ("sold", "short", _FRIDAY))
 
     assert close_due_on(expiring_today, _FRIDAY, terms) == DueClose(CloseKind.SOLD_LEG, scenes._at(_FRIDAY, 15, 0))
+
+
+# ---- From when no entry is opened on a structure ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("legs", "session", "no_entry_from"),
+    [
+        pytest.param([("bought", "long", _NEXT_FRIDAY)], _FRIDAY, None, id="expiring another day: no cutoff today"),
+        pytest.param(
+            [("bought", "long", _FRIDAY)], _FRIDAY, (_FRIDAY, 15, 13, 40), id="expiring today: 80 seconds before 15:15"
+        ),
+        pytest.param(
+            [("bought", "long", _HALF_DAY)], _HALF_DAY, (_HALF_DAY, 12, 13, 40), id="expiring on a half day: before 12:15"
+        ),
+        pytest.param(
+            [("bought", "long", _NEXT_FRIDAY), ("sold", "short", _NEXT_FRIDAY)],
+            _FRIDAY,
+            (_FRIDAY, 15, 48, 40),
+            id="a sold leg: 80 seconds before the sold-leg close at 15:50",
+        ),
+    ],
+)
+def test_no_entry_is_opened_from_the_close_its_structure_would_owe_less_the_entrys_own_life(
+    legs: list[tuple[str, str, date]], session: date, no_entry_from: tuple[date, int, int, int] | None
+) -> None:
+    cutoff = entry_cutoff_on(_structure(*legs), session, _TERMS)
+
+    assert cutoff == (None if no_entry_from is None else scenes._at(*no_entry_from))
+
+
+def test_a_bought_contracts_cutoff_on_its_expiry_day_is_the_one_the_resolver_is_given() -> None:
+    """One instant, asked two ways: of the contract's expiry, and of the structure on that session."""
+    assert entry_cutoff_on(_structure(("bought", "long", _FRIDAY)), _FRIDAY, _TERMS) == entry_cutoff_ms(_FRIDAY, _TERMS)
+    longer_wait = replace(_TERMS, entry_wait_ms=60_000)
+    assert entry_cutoff_on(_structure(("bought", "long", _FRIDAY)), _FRIDAY, longer_wait) == scenes._at(_FRIDAY, 15, 13, 0)

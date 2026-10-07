@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -150,10 +151,24 @@ def _hand_over(store: KeptOptionQuotes, symbols: tuple[str, ...], *, at_ms: int,
     store.keep_all(dict.fromkeys(symbols, quote), kept_at_ms=at_ms)
 
 
+def _held_in_memory(store: KeptOptionQuotes) -> int:
+    """How many rows this process holds in memory of the store's file."""
+    return kept_option_quotes._HELD[str(store.path)].rows
+
+
 def _hand_overs(store: KeptOptionQuotes, symbols: tuple[str, ...], *, first_ms: int, count: int) -> int:
-    """``count`` hand-overs three seconds apart; returns when the last was made."""
+    """``count`` hand-overs three seconds apart; returns when the last was made.
+
+    After each, the writer holds in memory no more than the file may hold. A
+    writer that kept the rows a cut took out of the file would cut again at
+    every hand-over, over a list that only grows: each of these tests would
+    then run for many minutes, so the loop stops at the first such hand-over.
+    """
     for step in range(count):
         _hand_over(store, symbols, at_ms=first_ms + step * EVERY_MS)
+        assert _held_in_memory(store) <= COMPACT_ABOVE_ROWS + len(symbols), (
+            "the writer still holds rows that a cut took out of the file"
+        )
     return first_ms + (count - 1) * EVERY_MS
 
 
@@ -293,7 +308,7 @@ def test_what_is_kept_through_a_cut_is_what_a_later_reader_can_ask_for_and_no_mo
         _row(8, kept_at=noon - 5_000, received=noon - 5_000),
     ]
 
-    still = rows_still_answerable(rows)
+    still = rows_still_answerable(rows, as_of_ms=noon + 13_000)
 
     # Row 1 is behind in both; row 3 is neither the newest received nor the last handed over.
     assert [row.seq for row in still] == [2, 4, 5, 6, 7, 8]
@@ -310,9 +325,109 @@ def test_a_cut_keeps_one_mark_for_each_sessions_close_and_the_last_one_made_befo
         _row(5, kept_at=monday_close + 60_000, received=monday_close + 59_800),
     ]
 
-    still = rows_still_answerable(rows)
+    still = rows_still_answerable(rows, as_of_ms=monday_close + 60_000)
 
     assert [row.seq for row in still] == [2, 4, 5]
+
+
+def test_a_cut_is_made_as_of_the_writers_clock_and_never_as_of_a_stamp_ahead_of_it() -> None:
+    """A quote put back as of its own receipt can be stamped ahead of the clock.
+
+    Row 2 is: its receipt and its stamp are a minute after now. The newest
+    quote received by now is row 1, and the last handed over by now is row
+    3. A cut made as of row 2's stamp would keep row 2 for both and drop
+    them. A reader asking about now is answered from rows 1 and 3.
+    """
+    now = et_minute_of_day_ms(TUESDAY, 12 * 60)
+    rows = [
+        _row(1, kept_at=now - 9_000, received=now - 500, bid="2.20"),
+        _row(2, kept_at=now + 60_000, received=now + 60_000, bid="9.00"),
+        _row(3, kept_at=now - 3_000, received=now - 8_000, bid="2.10"),
+        _row(4, kept_at=now - 1_000, received=now - 1_200, symbol=FIFTY[0]),
+    ]
+
+    still = rows_still_answerable(rows, as_of_ms=now)
+
+    assert [row.seq for row in still] == [1, 2, 3, 4]
+
+
+def test_the_newest_bid_by_now_is_the_same_after_a_cut_as_before_it_when_a_quote_was_put_back_ahead_of_the_clock(
+    tmp_path: Path,
+) -> None:
+    """The entry's own quote is put back stamped a minute ahead of the Clerk's clock. Then the file is cut.
+
+    Before the cut the newest bid received by now is $2.20. It is $2.20
+    after it. And once the clock has passed the quote put back, that one is
+    the newest: nothing stamped ahead was lost either.
+    """
+    store = _store(tmp_path)
+    now = TUESDAY_OPEN + 600 * EVERY_MS
+    ahead = _quote("9.00", "9.06", bid_at=now + 60_000, ask_at=now + 60_000)
+    store.restore(SYMBOL, ahead)
+    _hand_overs(store, (SYMBOL, FIFTY[0]), first_ms=TUESDAY_OPEN, count=250)
+    # The last hand-over before the file is cut. The other contract's row is written after this one's.
+    in_time = _quote("2.20", "2.26", bid_at=now - 500, ask_at=now - 500)
+    store.keep_all({SYMBOL: in_time, FIFTY[0]: in_time}, kept_at_ms=now - 3_000)
+    before = store.newest(SYMBOL, at_or_before_ms=now, with_side="bid")
+    rows_before = _rows(tmp_path)
+
+    _hand_overs(store, (FIFTY[0],), first_ms=now - 2_000, count=40)
+
+    assert _rows(tmp_path) < rows_before, "the file was never cut"
+    for handle in (store, _store(tmp_path)):
+        after = handle.newest(SYMBOL, at_or_before_ms=now, with_side="bid")
+        assert before is not None and after is not None
+        assert after.quote.bid == before.quote.bid == Decimal("2.20")
+        stated = handle.last_stated(SYMBOL, at_or_before_ms=now, with_side="bid")
+        assert stated is not None and (stated.kept_at_ms, stated.quote.bid) == (now - 3_000, Decimal("2.20"))
+        later = handle.newest(SYMBOL, at_or_before_ms=now + 60_000, with_side="bid")
+        assert later is not None and later.quote.bid == Decimal("9.00")
+
+
+def test_putting_a_quote_back_never_cuts_the_file(tmp_path: Path) -> None:
+    """Its stamp is its own receipt, which says nothing of what time it is. The next hand-over cuts, by its clock."""
+    store = _store(tmp_path)
+    _hand_overs(store, (SYMBOL,), first_ms=TUESDAY_OPEN, count=COMPACT_ABOVE_ROWS)
+    assert _rows(tmp_path) == COMPACT_ABOVE_ROWS
+
+    store.restore(SYMBOL, _quote("9.00", "9.06", bid_at=WEDNESDAY_OPEN, ask_at=WEDNESDAY_OPEN))
+
+    assert _rows(tmp_path) == COMPACT_ABOVE_ROWS + 1
+    _hand_over(store, (SYMBOL,), at_ms=TUESDAY_OPEN + COMPACT_ABOVE_ROWS * EVERY_MS)
+    assert _rows(tmp_path) < COMPACT_ABOVE_ROWS
+
+
+def test_after_a_cut_the_writer_holds_in_memory_what_the_file_holds(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    _hand_overs(store, (SYMBOL,), first_ms=TUESDAY_OPEN, count=COMPACT_ABOVE_ROWS + 1)
+
+    assert _rows(tmp_path) < COMPACT_ABOVE_ROWS, "the file was never cut"
+    assert _held_in_memory(store) == _rows(tmp_path)
+
+
+def test_a_file_swapped_for_another_as_long_and_stamped_the_same_instant_is_read_again(tmp_path: Path) -> None:
+    """Put back from a copy, or rewritten by another process: the same length, the same time, another file.
+
+    What is held in memory is of the file that was there. The bid in the
+    file now is $2.90, and that is the one read.
+    """
+    store = _store(tmp_path)
+    _hand_over(store, (SYMBOL,), at_ms=TUESDAY_OPEN, bid="1.90")
+    held = store.newest(SYMBOL)
+    assert held is not None and held.quote.bid == Decimal("1.90")
+    path = _path(tmp_path)
+    was = path.stat()
+    another = path.with_name("put-back.jsonl")
+    another.write_text(path.read_text().replace('"1.90"', '"2.90"'))
+    os.utime(another, ns=(was.st_atime_ns, was.st_mtime_ns))
+    os.replace(another, path)
+    now = path.stat()
+    assert (now.st_size, now.st_mtime_ns) == (was.st_size, was.st_mtime_ns) and now.st_ino != was.st_ino
+
+    read = store.newest(SYMBOL)
+
+    assert read is not None and read.quote.bid == Decimal("2.90")
 
 
 # ── a file that cannot be read, and one a crash left torn ────────────────

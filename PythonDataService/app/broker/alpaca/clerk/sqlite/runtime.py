@@ -154,7 +154,11 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ManualOrderTicketResource,
     OrderResource,
 )
-from app.broker.alpaca.clerk.sqlite.option_admission import OptionEntryRefused, work_out_option_entry
+from app.broker.alpaca.clerk.sqlite.option_admission import (
+    OptionEntryRefused,
+    entry_past_cutoff,
+    work_out_option_entry,
+)
 from app.broker.alpaca.clerk.sqlite.option_entry import (
     OptionEntryFacts,
     option_entry_contracts,
@@ -1095,7 +1099,7 @@ class SqliteAlpacaClerkFacade:
         if len(plan.legs) != 1:
             return None
         (leg,) = plan.legs
-        if is_option_contract_symbol(leg.symbol):
+        if is_option_contract_symbol(leg.symbol.upper()):
             # Never priced from the stock quote source, which is not asked about a contract (ADR 0076).
             return self._option_flatten_refusal(leg, confirmed_limit=None) or RegularSessionReduction()
         if not self._trade.recovery_price_available(leg.symbol):
@@ -1162,7 +1166,7 @@ class SqliteAlpacaClerkFacade:
                 )
             return None
         (leg,) = plan.legs
-        if is_option_contract_symbol(leg.symbol):
+        if is_option_contract_symbol(leg.symbol.upper()):
             option_refusal = self._option_flatten_refusal(leg, confirmed_limit=confirmed_limit)
             if option_refusal is not None:
                 logger.info(
@@ -1764,11 +1768,18 @@ class SqliteAlpacaClerkFacade:
         if accepted_enter is not None:
             assert entry is not None
             clock = self._repo.clock
+            opened = entry.structure
 
             def before_submit() -> EntrySubmissionRefusal | None:
-                if market_leg_sendable(clock()):
-                    return None
-                return EntrySubmissionRefusal(summary_code=MARKET_CLOSED, why=_OPTION_ORDER_OUTSIDE_THE_SESSION)
+                now_ms = clock()
+                if not market_leg_sendable(now_ms):
+                    return EntrySubmissionRefusal(summary_code=MARKET_CLOSED, why=_OPTION_ORDER_OUTSIDE_THE_SESSION)
+                # Asked again at the clock the order is sent at: the entry was worked out under
+                # the intake lock, and the cutoff may have passed since (ADR 0076).
+                too_late = entry_past_cutoff(opened, now_ms=now_ms)
+                if too_late is not None:
+                    return EntrySubmissionRefusal(summary_code=too_late.reason_code, why=too_late.explanation)
+                return None
 
             submitted_enter = await submit_accepted_enter(
                 self._repo,

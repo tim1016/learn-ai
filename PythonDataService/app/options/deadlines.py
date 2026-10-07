@@ -5,6 +5,7 @@ Formula: with ``S(D)`` the session close on the New York date ``D``:
     entry cutoff(E)    = close deadline(E) - entry wait - cancel allowance - margin
     sold-leg close(D)  = S(D) - sold-leg close lead         on each session D a sold leg is held
     the close a held structure owes on D = the earlier of the two that apply to it
+    entry cutoff on D for a structure = the close it would owe on D - entry wait - cancel allowance - margin
     last session close(E) = S(E), or S of the session before E when E has none
     past its last session at t  <=>  t >= last session close(E)
 Reference: ADR 0076 (#2913: the deadlines an option position is held to). Every
@@ -132,3 +133,18 @@ def close_due_on(structure: ResolvedStructure, session: date, terms: CloseTerms)
     if structure.has_sold_leg:
         owed.append(DueClose(CloseKind.SOLD_LEG, sold_leg_close_ms(session, terms)))
     return min(owed, key=lambda close: close.due_ms, default=None)
+
+
+def entry_cutoff_on(structure: ResolvedStructure, session: date, terms: CloseTerms) -> int | None:
+    """From when no entry on ``structure`` is opened on ``session``, or None when it would owe no close that day.
+
+    An entry is opened only when its whole life ends before the close its
+    structure would owe that day: the wait for its fill, the time to prove
+    a cancel, and a margin. For one bought contract expiring on ``session``
+    this is ``entry_cutoff_ms``. Raises ``LookupError`` when a contract
+    expires on ``session`` and the calendar has no session that day.
+    """
+    due = close_due_on(structure, session, terms)
+    if due is None:
+        return None
+    return due.due_ms - terms.entry_wait_ms - terms.cancel_allowance_ms - terms.entry_margin_ms

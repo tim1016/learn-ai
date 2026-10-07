@@ -132,29 +132,32 @@ def _session_closes(first_ms: int, last_ms: int) -> list[int]:
     return closes
 
 
-def rows_still_answerable(rows: Sequence[KeptOptionQuote]) -> list[KeptOptionQuote]:
-    """The rows a later reader can still be answered from, in the order they were written.
+def rows_still_answerable(rows: Sequence[KeptOptionQuote], *, as_of_ms: int) -> list[KeptOptionQuote]:
+    """The rows a reader at ``as_of_ms`` or later can still be answered from, in the order they were written.
 
     A reader asks one of three things, each for one contract and, when it
     names one, for a side that had arrived:
 
     - the newest quote by receipt, as of now or later. Kept: for each side,
-      the one received last by the latest hand-over, and every one stamped
-      later than that, any of which may yet become the newest;
+      the one received last by ``as_of_ms``, and every one stamped later
+      than that, any of which may yet become the newest;
     - the quote last handed over, as of now or later. Kept: for each side,
-      the last one handed over;
+      the last one handed over by ``as_of_ms``, and every one stamped later;
     - the quote last handed over at or before a session's close: the mark
       the next day starts from. Kept: for each side and each close, the last
       one handed over between the close before it and that close.
 
-    "Now" is no earlier than the latest hand-over in the file, since each is
-    stamped when it is written. The last row written is always kept, so the
-    sequence never runs back over a number already given out.
+    ``as_of_ms`` is the writer's own clock as it cuts, and no reader asks
+    about an earlier now. It is never read off the rows: a quote put back
+    as of its own receipt (``restore``) can be stamped ahead of the clock,
+    and a cut made as of that stamp would drop the very rows a reader
+    asking about now is answered from. A clock behind the truth only keeps
+    more. The last row written is always kept, so the sequence never runs
+    back over a number already given out.
     """
     if not rows:
         return []
-    as_of_ms = max(row.kept_at_ms for row in rows)
-    closes = _session_closes(min(row.kept_at_ms for row in rows), as_of_ms)
+    closes = _session_closes(min(as_of_ms, *(row.kept_at_ms for row in rows)), as_of_ms)
     kept = {rows[-1].seq}
     newest: dict[tuple[str, _Side], KeptOptionQuote] = {}
     stated: dict[tuple[str, _Side, int], KeptOptionQuote] = {}
@@ -171,6 +174,10 @@ def rows_still_answerable(rows: Sequence[KeptOptionQuote]) -> list[KeptOptionQuo
                 best = newest.get((row.symbol, side))
                 if best is None or (received_ms, row.seq) > (best.received_ms, best.seq):
                     newest[row.symbol, side] = row
+            if row.kept_at_ms > as_of_ms:
+                # Stamped ahead of the clock: it is nobody's statement about now, and may yet be the last.
+                kept.add(row.seq)
+                continue
             last = stated.get((row.symbol, side, before_close))
             if last is None or (row.kept_at_ms, row.seq) > (last.kept_at_ms, last.seq):
                 stated[row.symbol, side, before_close] = row
@@ -183,8 +190,8 @@ def rows_still_answerable(rows: Sequence[KeptOptionQuote]) -> list[KeptOptionQuo
 class _Held:
     """What one file of kept quotes holds, as it was last read, shared by every handle on it in this process."""
 
-    # The file's last write and size when it was read; ``None`` when it did not exist.
-    stamp: tuple[int, int] | None = None
+    # Which file it was, its last write and its size when it was read; ``None`` when it did not exist.
+    stamp: tuple[int, int, int] | None = None
     read: bool = False
     by_symbol: dict[str, list[KeptOptionQuote]] = field(default_factory=dict)
     last_seq: int = 0
@@ -194,7 +201,7 @@ class _Held:
     # How many rows were parsed from the file since this process first read it.
     rows_parsed: int = 0
 
-    def hold(self, rows: Sequence[KeptOptionQuote], *, stamp: tuple[int, int] | None) -> None:
+    def hold(self, rows: Sequence[KeptOptionQuote], *, stamp: tuple[int, int, int] | None) -> None:
         self.by_symbol = {}
         for row in rows:
             self.by_symbol.setdefault(row.symbol, []).append(row)
@@ -209,13 +216,19 @@ class _Held:
 _HELD: dict[str, _Held] = {}
 
 
-def _stamp(path: Path) -> tuple[int, int] | None:
-    """The file's last write and size, which every append and every cut changes; ``None`` before its first."""
+def _stamp(path: Path) -> tuple[int, int, int] | None:
+    """Which file is at ``path``, its last write and its size; ``None`` before its first write.
+
+    Every append changes the last two. A cut puts a new file in the old
+    one's place, and so does anything else that swaps the file: that
+    changes the first, even when the new file is as long and stamped the
+    same instant.
+    """
     try:
         stat = os.stat(path)
     except FileNotFoundError:
         return None
-    return stat.st_mtime_ns, stat.st_size
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
 
 
 class KeptOptionQuotes:
@@ -296,16 +309,23 @@ class KeptOptionQuotes:
         """One hand-over: the newest quote held for each contract at ``kept_at_ms``, by OCC symbol.
 
         Written as one append with one sync, however many contracts it names.
+        ``kept_at_ms`` is the caller's clock now, and the file is cut back as
+        of it when it has grown.
         """
-        self._append([(symbol, quote, kept_at_ms) for symbol, quote in quotes.items()])
+        self._append([(symbol, quote, kept_at_ms) for symbol, quote in quotes.items()], now_ms=kept_at_ms)
 
     def restore(self, symbol: str, quote: HeldQuote) -> None:
-        """Put back a quote the caller holds durably, if it is not kept: as of its own receipt, never as of now."""
+        """Put back a quote the caller holds durably, if it is not kept: as of its own receipt, never as of now.
+
+        Its receipt says nothing of what time it is, and may be ahead of
+        the clock. So putting one back never cuts the file: the next
+        hand-over does, as of its own clock.
+        """
         times = receipt_times(quote)
         if times:
-            self._append([(symbol, quote, max(times))])
+            self._append([(symbol, quote, max(times))], now_ms=None)
 
-    def _append(self, statements: Sequence[tuple[str, HeldQuote, int]]) -> None:
+    def _append(self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None) -> None:
         said = [(symbol, RecordedQuote.of(quote), kept_at_ms) for symbol, quote, kept_at_ms in statements if receipt_times(quote)]
         if not said:
             return
@@ -330,12 +350,12 @@ class KeptOptionQuotes:
                 held.by_symbol.setdefault(row.symbol, []).append(row)
             held.last_seq, held.rows = rows[-1].seq, held.rows + len(rows)
             held.stamp = _stamp(self._wal.path)
-            if held.rows > max(COMPACT_ABOVE_ROWS, 2 * held.rows_after_cut):
-                self._cut_back(held)
+            if now_ms is not None and held.rows > max(COMPACT_ABOVE_ROWS, 2 * held.rows_after_cut):
+                self._cut_back(held, as_of_ms=now_ms)
 
-    def _cut_back(self, held: _Held) -> None:
-        """Rewrite the file to the rows a later reader can still be answered from. Under both locks."""
-        still = rows_still_answerable(held.all_rows())
+    def _cut_back(self, held: _Held, *, as_of_ms: int) -> None:
+        """Rewrite the file to the rows a reader at ``as_of_ms`` or later can still be answered from. Under both locks."""
+        still = rows_still_answerable(held.all_rows(), as_of_ms=as_of_ms)
         if len(still) < held.rows:
             self._wal.replace_all(still)
             held.hold(still, stamp=_stamp(self._wal.path))
