@@ -430,26 +430,30 @@ async def test_a_clerk_that_counts_no_quote_line_free_refuses_and_says_the_count
 
 
 async def test_the_lines_other_option_bots_can_need_count_against_the_clerks_budget(deploy_app, floor: _Floor) -> None:
-    """One call's window can need five lines at this reach. A budget of nine has four left beside a running
-    bot's five, so the second bot is refused; a budget of ten takes both."""
+    """A running bot's spread can need ten lines at this reach, and one call's window five. A budget of
+    fourteen has four left, so the call's bot is refused; a budget of fifteen takes it. The hold on quote
+    lines a Deploy's own preview has is a page's, and is not counted against it."""
     app, registry = deploy_app
-    running = await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL)
     floor.desk.watch.watch(
         "bot:already-running",
         bot_option_run.WatchRequest(
-            underlying="SPY", line_class=bot_option_run.LineClass.CANDIDATE, plan=registry.deploy_calls[0]["action_plan"]
+            underlying="SPY", line_class=bot_option_run.LineClass.CANDIDATE,
+            plan=plan_of(TradesOptions.model_validate(_SPREAD)),
         ),
     )
-    floor.line_budget = 9
+    floor.line_budget = 14
 
-    refusal = _refusal(await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL, submission_key="submission-0002"))
-    floor.line_budget = 10
-    fits = await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL, submission_key="submission-0003")
+    refusal = _refusal(await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL))
+    floor.line_budget = 15
+    fits = await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL, submission_key="submission-0002")
+    again = await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL, submission_key="submission-0003")
 
-    assert running.status_code == 201
     assert refusal["reason_code"] == "OPTION_WINDOW_OVER_LINE_BUDGET"
     assert "counts 4 IBKR quote lines free" in refusal["message"] and "can need 5" in refusal["message"]
+    assert "can need 10" in refusal["message"], "what the running bots can need is said"
     assert fits.status_code == 201, fits.text
+    assert again.status_code == 201, "the first Deploy's own preview holds a page's lines, which count against nobody"
+    assert len(registry.deploy_calls) == 2
 
 
 async def test_a_clerk_with_no_option_quotes_of_its_own_refuses_before_anything_is_asked(deploy_app, floor: _Floor) -> None:
