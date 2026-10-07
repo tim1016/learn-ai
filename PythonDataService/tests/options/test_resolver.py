@@ -522,6 +522,8 @@ def test_a_delta_farther_from_its_target_than_the_tolerance_is_no_pick(monkeypat
     refused = _scene().refusal(_one("call", rule))
 
     assert (refused.reason, refused.fault) == (ResolverRefusal.NOTHING_CLOSE_ENOUGH, None)
+    # Nothing was picked, so no usable contract is told another was nearer: the nearest is among them.
+    assert {c.passed_over for c in refused.evidence.legs[0].candidates} == {PassedOver.LEG_REFUSED}
     assert _scene().resolve(_one("call", rule | {"tolerance_delta": 0.0625})).picked["only"] == _contract("call", 585)
 
 
@@ -862,6 +864,40 @@ def test_a_delta_rule_keeps_its_pick_when_nothing_unknown_lies_past_the_faulty_q
     assert (passed[Decimal(593)], passed[Decimal(594)]) == (None, PassedOver.QUOTE_FAULT)
 
 
+def test_a_delta_rule_does_not_end_its_walk_at_a_usable_contract_still_short_of_the_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Far from the money a cent of quote puts deltas out of order: the 594 call reads 0.26, above the 593's
+    0.25. A target of 0.20 still lies past both, so the 594 is not where the search ends, and the 595, at
+    0.16 the nearest, is the pick only while its quote is held."""
+    _deltas(monkeypatch, {592.0: 0.30, 593.0: 0.25, 594.0: 0.26, 595.0: 0.16, 596.0: 0.10})
+    rule = {"selector": "delta", "target": 0.20, "tolerance_delta": 0.05}
+    scene = _scene()
+    just_added = _contract("call", 595)
+
+    refused = scene.holding(just_added, None).refusal(_one("call", rule))
+
+    assert scene.resolve(_one("call", rule)).picked["only"] == just_added
+    assert (refused.reason, refused.contract) == (ResolverRefusal.SEARCH_INCOMPLETE, just_added)
+    assert "SPY261009C00593000 has 0.2500" in str(refused)
+
+
+def test_a_delta_rule_that_passed_over_several_names_the_first_toward_its_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """From the 593 call at 0.25 toward 0.20: the 594 is stale and the 595 crossed, then the 596 lies beyond."""
+    _deltas(monkeypatch, {592.0: 0.30, 593.0: 0.25, 596.0: 0.10})
+    scene = _scene()
+    scene = scene.holding(_contract("call", 594), _quote("0.40", "0.42", scene.selection_ms - 5_001))
+    scene = scene.holding(_contract("call", 595), _quote("0.50", "0.30", scene.selection_ms - 400))
+
+    refused = scene.refusal(_one("call", {"selector": "delta", "target": 0.20, "tolerance_delta": 0.01}))
+
+    assert (refused.reason, refused.fault, refused.contract) == (
+        ResolverRefusal.NO_USABLE_QUOTE,
+        QuoteFault.STALE,
+        _contract("call", 594),
+    )
+
+
 def test_a_put_delta_rule_looks_past_a_faulty_quote_down_the_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
     """A put's delta shrinks as the strike falls: from the 577 put at 0.25 a target of 0.20 lies below it."""
     _deltas(monkeypatch, {578.0: -0.30, 577.0: -0.25})
@@ -952,7 +988,9 @@ def test_a_contract_the_model_cannot_solve_is_unusable_for_a_delta_rule_and_usab
     assert picked.priced.status is AmericanIvStatus.BELOW_EXERCISE_VALUE
 
 
-def test_a_delta_rule_with_no_usable_quote_at_all_names_the_fault_nearest_the_money() -> None:
+def test_a_delta_rule_whose_every_watched_quote_arrived_faulty_names_the_one_nearest_the_money() -> None:
+    """Every watched call's quote has arrived, and is a minute old. The twenty listed strikes nobody watches do
+    not make this a search to wait on: what is wrong is the quotes held."""
     scene = _scene()
     stale = scene
     for strike in range(570, 601):
@@ -961,8 +999,46 @@ def test_a_delta_rule_with_no_usable_quote_at_all_names_the_fault_nearest_the_mo
 
     refused = stale.refusal(_one("call", {"selector": "delta", "target": 0.3}))
 
-    assert (refused.reason, refused.fault) == (ResolverRefusal.NO_USABLE_QUOTE, QuoteFault.STALE)
+    assert (refused.reason, refused.fault, refused.contract) == (
+        ResolverRefusal.NO_USABLE_QUOTE,
+        QuoteFault.STALE,
+        _contract("call", 585),
+    )
     assert "SPY261009C00585000" in str(refused)
+
+
+@pytest.mark.parametrize(
+    ("arrived_at", "wrong_with_it"),
+    [
+        pytest.param(572, "crossed", id="the one arrival is crossed"),
+        pytest.param(570, "unsolved", id="the one arrival is under its exercise value"),
+    ],
+)
+def test_a_delta_rule_with_one_faulty_arrival_and_the_rest_not_arrived_is_search_incomplete(
+    monkeypatch: pytest.MonkeyPatch, arrived_at: int, wrong_with_it: str
+) -> None:
+    """Just after a reconnect one call's quote has arrived, and cannot be used. Thirty that could be the pick
+    are still unknown, so the reason is theirs: the one nearest the money is named, not the faulty arrival."""
+    _deltas(monkeypatch, {float(arrived_at): AmericanIvStatus.BELOW_EXERCISE_VALUE})
+    scene = _scene()
+    reconnecting = scene
+    for strike in range(570, 601):
+        contract = _contract("call", strike)
+        quote = scene.quote_of(contract)
+        if strike != arrived_at:
+            quote = replace(quote, generation=_GENERATION - 1)
+        elif wrong_with_it == "crossed":
+            quote = replace(quote, bid=QuoteSide(Decimal("99"), scene.selection_ms - 400))
+        reconnecting = reconnecting.holding(contract, quote)
+
+    refused = reconnecting.refusal(_one("call", {"selector": "delta", "target": 0.3}))
+
+    assert (refused.reason, refused.fault, refused.contract) == (
+        ResolverRefusal.SEARCH_INCOMPLETE,
+        QuoteFault.OLD_GENERATION,
+        _contract("call", 585),
+    )
+    assert "SPY261009C00585000 has not been quoted since the last reconnect" in str(refused)
 
 
 # ---- Non-standard contracts -----------------------------------------------
@@ -1205,7 +1281,6 @@ def _recheck(scene: _Scene, resolution: resolver.Resolution, later_ms: int) -> r
         watched=scene.chain.watched,
         underlying=scene.underlying,
         feed=scene.feed,
-        limits=scene.limits,
         recheck_ms=scene.selection_ms + later_ms,
     )
 
@@ -1216,7 +1291,7 @@ def test_a_recheck_passes_while_the_picked_quotes_still_stand_and_keeps_what_it_
 
     seen = _recheck(scene, resolution, 1_500)
 
-    assert seen.recheck_ms == scene.selection_ms + 1_500
+    assert (seen.recheck_ms, seen.generation) == (scene.selection_ms + 1_500, _GENERATION)
     assert dict(seen.quotes) == {
         "long_call": scene.quote_of(_contract("call", 585)),
         "short_call": scene.quote_of(_contract("call", 590)),
@@ -1314,8 +1389,35 @@ def test_a_recheck_refuses_a_reconnect_since_the_selection_though_every_quote_ha
         _recheck(reconnected, resolution, 1_500)
 
     assert (refused.value.reason, refused.value.fault, refused.value.leg_ids) == (ResolverRefusal.FEED_RECONNECTED, None, ())
+    assert refused.value.recheck.generation == _GENERATION + 1
     # The same quotes on the generation the picks were made in pass.
     assert _recheck(_ticked_again(scene, scene.selection_ms + 1_400), resolution, 1_500).recheck_ms == scene.selection_ms + 1_500
+
+
+@pytest.mark.parametrize(
+    ("unhealthy", "reason"),
+    [
+        pytest.param(None, ResolverRefusal.FEED_RECONNECTED, id="a reconnect is named before the quotes it emptied"),
+        pytest.param("data farm down", ResolverRefusal.FEED_UNHEALTHY, id="an unhealthy feed is named before its reconnect"),
+    ],
+)
+def test_a_recheck_names_the_feed_before_the_quotes_a_reconnect_left_behind(
+    unhealthy: str | None, reason: ResolverRefusal
+) -> None:
+    """Just after a reconnect nothing has arrived again: the underlying has no quote and every option's is of
+    the generation gone. The reason is the reconnect, not any one of the quotes it left behind."""
+    scene = _scene()
+    resolution = scene.resolve(_spread())
+    reconnected = replace(
+        scene,
+        underlying=replace(scene.underlying, quote=None),
+        feed=FeedState(generation=_GENERATION + 1, unhealthy=unhealthy),
+    )
+
+    with pytest.raises(ContractsNotResolved) as refused:
+        _recheck(reconnected, resolution, 1_500)
+
+    assert (refused.value.reason, refused.value.fault, refused.value.leg_ids) == (reason, None, ())
 
 
 @pytest.mark.parametrize(

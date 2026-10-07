@@ -34,11 +34,18 @@ A rule by strike knows every listed strike, so its search is incomplete only
 when a listed strike within its tolerance, nearer than the pick would be, has
 a quote that has not arrived. A rule by delta cannot know the delta of a
 contract with no quote. From the usable contract nearest its target it walks
-toward the target, past the contracts passed over, until it meets a usable
-contract (which lies beyond the target) or the last listed strike. A contract
-on the way whose quote has not arrived makes the search incomplete, even
-with a pick inside the tolerance. This takes delta to fall as a call's
-strike rises and to grow as a put's does.
+toward the target until it meets a usable contract beyond the target, or the
+last listed strike. It walks past the contracts passed over, and past a
+usable one still short of the target. A contract on the way whose quote has
+not arrived makes the search incomplete, even with a pick inside the
+tolerance. The way to walk takes delta to fall as a call's strike rises and
+to grow as a put's does; where the walk ends does not.
+
+With no usable contract a rule by delta has nothing to walk from, and the
+watched window is all it can judge by. While any watched contract's quote
+has not arrived the search is incomplete, whatever has arrived faulty. Once
+every watched one has arrived and been passed over it is "no usable quote",
+though strikes nobody watches are listed beyond.
 
 "The money" is the close of the decision minute's pricing bar. Delta and
 implied volatility come from ``app.options.american``, solved from each
@@ -52,8 +59,10 @@ A product that trades past the session close on its last day is counted as
 stopping with the session.
 
 A refusal is a fact about the market. An input that could not describe one (a
-bar close that is no price above zero, moments out of their order) is the
-caller's mistake and raises ``ValueError``.
+bar close that is no price above zero, a selection before its bar's close, a
+recheck before its selection) is the caller's mistake and raises
+``ValueError``. A quote side received after the moment it is used at is not
+that: it fails as stale, and the contract is passed over.
 """
 
 from __future__ import annotations
@@ -65,7 +74,7 @@ from decimal import Decimal
 from enum import StrEnum
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Literal, assert_never
+from typing import Literal, NoReturn, assert_never
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.options.american import (
@@ -214,6 +223,8 @@ class PassedOver(StrEnum):
     NOT_SOLVED = "not_solved"
     # Usable, but another was nearer the target or won the tie.
     NOT_THE_NEAREST = "not_the_nearest"
+    # Usable, and the leg was refused: nothing was picked for it.
+    LEG_REFUSED = "leg_refused"
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +300,8 @@ class Recheck:
     """The picked legs' quotes as they stood just before the order was sent."""
 
     recheck_ms: int
+    # The feed's generation at the recheck. The selection's is in the evidence.
+    generation: int
     underlying_quote: HeldQuote | None
     quotes: Mapping[str, HeldQuote | None]
 
@@ -651,6 +664,47 @@ def _nearest_strike(
     return _first_usable(search, within)
 
 
+def _refuse_nothing_to_walk_from(search: _Search, strikes: Sequence[Listing]) -> NoReturn:
+    """A rule by delta with no usable contract has no delta to walk from, so the watched window is all it can
+    judge by: incomplete while any of it has not arrived, whatever has arrived faulty."""
+    leg, market = search.leg, search.market
+
+    def nearest_the_money(among: Sequence[Listing]) -> Listing:
+        return min(among, key=lambda listing: (market.from_the_money(listing), _strike(listing)))
+
+    awaited = [
+        listing for listing in strikes if _symbol(listing) in market.chain.watched and search.of(listing).not_arrived
+    ]
+    if awaited:
+        nearest = nearest_the_money(awaited)
+        stood = search.of(nearest)
+        raise _NoPick(
+            ResolverRefusal.SEARCH_INCOMPLETE,
+            f"leg {leg.leg_id!r} picks by delta, and no {leg.right} of its expiry has a usable quote yet: "
+            f"{_awaited(nearest, stood)}",
+            leg_ids=(leg.leg_id,),
+            fault=stood.fault,
+            contract=nearest.contract,
+        )
+    arrived = [listing for listing in strikes if not search.of(listing).not_arrived]
+    if not arrived:
+        raise _NoPick(
+            ResolverRefusal.SEARCH_INCOMPLETE,
+            f"leg {leg.leg_id!r} picks by delta, and no {leg.right} of its expiry is being watched",
+            leg_ids=(leg.leg_id,),
+        )
+    nearest = nearest_the_money(arrived)
+    fault = search.of(nearest).failed_as
+    raise _NoPick(
+        ResolverRefusal.NO_USABLE_QUOTE,
+        f"leg {leg.leg_id!r} picks by delta, and every watched {leg.right} of its expiry has a quote the model "
+        f"cannot turn into one; {_symbol(nearest)}, the one nearest the money, fails as {fault}",
+        leg_ids=(leg.leg_id,),
+        fault=fault,
+        contract=nearest.contract,
+    )
+
+
 def _strike_by_delta(search: _Search, rule: DeltaStrike, strikes: Sequence[Listing]) -> Listing:
     leg, market = search.leg, search.market
     sizes: dict[int, float] = {}
@@ -660,45 +714,35 @@ def _strike_by_delta(search: _Search, rule: DeltaStrike, strikes: Sequence[Listi
             assert stood.priced is not None and stood.priced.delta is not None
             sizes[at] = abs(stood.priced.delta)
     if not sizes:
-        arrived = [listing for listing in strikes if not search.of(listing).not_arrived]
-        if not arrived:
-            raise _NoPick(
-                ResolverRefusal.SEARCH_INCOMPLETE,
-                f"leg {leg.leg_id!r} picks by delta, and no quote has arrived for any {leg.right} of its expiry",
-                leg_ids=(leg.leg_id,),
-            )
-        nearest = min(arrived, key=lambda listing: (market.from_the_money(listing), _strike(listing)))
-        fault = search.of(nearest).failed_as
-        raise _NoPick(
-            ResolverRefusal.NO_USABLE_QUOTE,
-            f"leg {leg.leg_id!r} picks by delta, and no {leg.right} of its expiry has a quote the model can turn "
-            f"into one; {_symbol(nearest)}, nearest the money, fails as {fault}",
-            leg_ids=(leg.leg_id,),
-            fault=fault,
-            contract=nearest.contract,
-        )
+        _refuse_nothing_to_walk_from(search, strikes)
     best = min(
         sizes, key=lambda at: (abs(sizes[at] - rule.target), market.from_the_money(strikes[at]), _strike(strikes[at]))
     )
     # A call's delta falls as the strike rises and a put's grows, so the target lies one way along the ladder.
     wants_more = rule.target > sizes[best]
     step = 0 if rule.target == sizes[best] else (-1 if wants_more == (leg.right == "call") else 1)
-    # From the best toward the target. A usable contract ends the walk: it lies beyond the target, or it would
-    # have been the best. One passed over is walked past. One whose quote has not arrived could be the pick.
+    # From the best toward the target, to the first usable contract beyond it or the ladder's end: nothing past
+    # a usable contract beyond the target could be nearer. One passed over is walked past. So is a usable one
+    # still short of the target, which far from the money a cent of quote can put out of its order. One whose
+    # quote has not arrived could be the pick.
     passed: list[Listing] = []
     at = best + step
-    while step and 0 <= at < len(strikes) and at not in sizes:
-        stood = search.of(strikes[at])
-        if stood.not_arrived:
-            raise _NoPick(
-                ResolverRefusal.SEARCH_INCOMPLETE,
-                f"leg {leg.leg_id!r} asks for a delta of {rule.target}; {_symbol(strikes[best])} has "
-                f"{sizes[best]:.4f}, and toward the target {_awaited(strikes[at], stood)}",
-                leg_ids=(leg.leg_id,),
-                fault=stood.fault,
-                contract=strikes[at].contract,
-            )
-        passed.append(strikes[at])
+    while step and 0 <= at < len(strikes):
+        if at in sizes:
+            if (rule.target > sizes[at]) != wants_more:
+                break
+        else:
+            stood = search.of(strikes[at])
+            if stood.not_arrived:
+                raise _NoPick(
+                    ResolverRefusal.SEARCH_INCOMPLETE,
+                    f"leg {leg.leg_id!r} asks for a delta of {rule.target}; {_symbol(strikes[best])} has "
+                    f"{sizes[best]:.4f}, and toward the target {_awaited(strikes[at], stood)}",
+                    leg_ids=(leg.leg_id,),
+                    fault=stood.fault,
+                    contract=strikes[at].contract,
+                )
+            passed.append(strikes[at])
         at += step
     if abs(sizes[best] - rule.target) <= rule.tolerance_delta:
         return strikes[best]
@@ -707,8 +751,8 @@ def _strike_by_delta(search: _Search, rule: DeltaStrike, strikes: Sequence[Listi
         raise _NoPick(
             ResolverRefusal.NO_USABLE_QUOTE,
             f"leg {leg.leg_id!r} asks for a delta within {rule.tolerance_delta} of {rule.target}; "
-            f"{_symbol(strikes[best])} has {sizes[best]:.4f}, and {_symbol(passed[0])}, the next strike toward "
-            f"the target, fails as {fault}",
+            f"{_symbol(strikes[best])} has {sizes[best]:.4f}, and {_symbol(passed[0])}, toward the target, "
+            f"fails as {fault}",
             leg_ids=(leg.leg_id,),
             fault=fault,
             contract=passed[0].contract,
@@ -766,6 +810,7 @@ def _candidates(
     """Every watched contract of the leg's right and expiry, as the search left it standing."""
     market = search.market
     seen = []
+    not_picked = PassedOver.LEG_REFUSED if pick is None else PassedOver.NOT_THE_NEAREST
     for listing in sorted(of_its_right, key=_strike):
         watched = market.chain.watched.get(_symbol(listing))
         if watched is None or listing.contract.expiry_date != expiry:
@@ -779,7 +824,7 @@ def _candidates(
                 fault=stood.fault,
                 # The pick is priced by whatever rule picked it.
                 priced=market.priced.get(_symbol(listing)) if listing is pick else stood.priced,
-                passed_over=None if listing is pick else stood.unusable or PassedOver.NOT_THE_NEAREST,
+                passed_over=None if listing is pick else stood.unusable or not_picked,
             )
         )
     return tuple(seen)
@@ -950,7 +995,6 @@ def recheck(
     watched: Mapping[str, WatchedContract],
     underlying: UnderlyingObservation,
     feed: FeedState,
-    limits: ResolverLimits,
     recheck_ms: int,
 ) -> Recheck:
     """Whether the picked contracts' quotes still stand, just before the order is sent.
@@ -959,17 +1003,24 @@ def recheck(
     unhealthy or has reconnected since the selection (ADR 0067: a new
     generation is refused even when it is healthy), a picked leg's quote or
     the underlying's is no longer usable, or the quotes are now too far
-    apart; nothing is sent then. What the structure now costs, and how wide
-    its legs' markets are, is not asked here.
+    apart; nothing is sent then. The limits are the ones the selection was
+    made under. What the structure now costs, and how wide its legs' markets
+    are, is not asked here.
     """
     selected = resolution.evidence
+    limits = selected.limits
     if recheck_ms < selected.selection_ms:
         raise ValueError(f"the recheck ({recheck_ms}) is before the selection it rechecks ({selected.selection_ms})")
     held = {
         leg_id: None if (now := watched.get(contract.occ_symbol)) is None else now.quote
         for leg_id, contract in resolution.picked.items()
     }
-    seen = Recheck(recheck_ms=recheck_ms, underlying_quote=underlying.quote, quotes=MappingProxyType(held))
+    seen = Recheck(
+        recheck_ms=recheck_ms,
+        generation=feed.generation,
+        underlying_quote=underlying.quote,
+        quotes=MappingProxyType(held),
+    )
     try:
         _require_healthy(feed)
         if feed.generation != selected.generation:
