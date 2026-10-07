@@ -15,11 +15,13 @@ global Decimal precision cannot decide who gets a cent.
 Missing population, linkage or overlap evidence is an unresolved account charge,
 never a guessed deployment debit. Simulations never consume broker activities.
 
-A simulated account's option fills are charged by the option fee model
-(``attribute_simulated_option_fees``, ADR 0076): each of its five fee types
-summed over the day's option fills, rounded up to the cent, and shared among
-the bots by this file's one rule. A real account's option fills are not
-attributed here: none of Alpaca's own option fee activities has been seen.
+Option fills are charged by the option fee model (ADR 0076): each of its
+five fee types summed over the day's option fills, rounded up to the cent,
+and shared among the bots by this file's one rule. On a simulated account
+that is the whole of it (``attribute_simulated_option_fees``). On a real
+account it is an estimate and stays one (``estimate_option_fees``): none of
+Alpaca's own option fee activities has been seen, so no fee row is matched
+to an option fill, and no option fill is ever priced by the stock model.
 """
 
 from __future__ import annotations
@@ -181,7 +183,31 @@ class FeeAttribution:
         )
 
 
-@money_context()
+def estimate_option_fees(
+    *,
+    trade_date: date,
+    fills: Sequence[FeeFill],
+    population_complete: bool,
+    settlement_at_ms: int,
+) -> FeeAttribution:
+    """One day's option fills of a real account, charged by the option fee model as an estimate.
+
+    Formula, reference and canonical implementation: those of
+      :func:`attribute_simulated_option_fees`, whose arithmetic this is.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_option_custody.py
+      and tests/broker/alpaca/clerk/sqlite/test_paper_option_fees.py.
+
+    Every share is ``estimated``, on the day and on every day after: the
+    model's figure is not settled by the session ending, because the truth
+    is Alpaca's own fee activity (ADR 0059 decision 6) and the shape of one
+    for an option has not been seen. Nothing here reads a fee row.
+    """
+    return _option_fees_by_the_model(
+        trade_date=trade_date, fills=fills, population_complete=population_complete,
+        state="estimated", settlement_at_ms=settlement_at_ms,
+    )
+
+
 def attribute_simulated_option_fees(
     *,
     trade_date: date,
@@ -207,6 +233,22 @@ def attribute_simulated_option_fees(
     which is never less than rounding them together. Every amount is the
     model's: nothing is observed in a simulation.
     """
+    return _option_fees_by_the_model(
+        trade_date=trade_date, fills=fills, population_complete=population_complete,
+        state="modelled_settled" if session_ended else "estimated", settlement_at_ms=settlement_at_ms,
+    )
+
+
+@money_context()
+def _option_fees_by_the_model(
+    *,
+    trade_date: date,
+    fills: Sequence[FeeFill],
+    population_complete: bool,
+    state: FeeState,
+    settlement_at_ms: int,
+) -> FeeAttribution:
+    """The option fee model's charge for one day's option fills, shared among their bots, each share in ``state``."""
     if not fills:
         return FeeAttribution((), ZERO, (), None, ZERO)
     unresolved: list[str] = []
@@ -232,7 +274,6 @@ def attribute_simulated_option_fees(
         return FeeAttribution((), ZERO, tuple(unresolved), None, None)
     shares: list[FeeShare] = []
     if population_complete:
-        state: FeeState = "modelled_settled" if session_ended else "estimated"
         for component in OPTION_COMPONENTS:
             amount = getattr(settled, component)
             if not amount:
