@@ -126,9 +126,10 @@ def watched_window(
         return ()
     root = legs[0].instrument.underlying.upper()
     price = Fraction(money) * _THOUSANDTHS_PER_DOLLAR
+    named = chain.expiry_dates
     listed = (
-        chain.expiries
-        if chain.expiries is not None
+        named
+        if named is not None
         else sorted({listing.contract.expiry_date for listing in chain.listings if listing.is_standard})
     )
     # The strike each leg aims at, in thousandths: what a leg measured from it starts from.

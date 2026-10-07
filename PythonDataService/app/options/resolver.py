@@ -50,7 +50,7 @@ of three ways for a leg:
     tolerance.
 
 A chain may name its expiries before the contracts of each are known
-(``Chain.expiries``). An expiry rule chooses among every date named, and a
+(``Chain.expiries_ms``). An expiry rule chooses among every date named, and a
 leg that comes to an expiry whose contracts are not known yet is incomplete
 as well.
 
@@ -111,7 +111,7 @@ from app.options.american import (
     years_from_ms,
 )
 from app.options.contract import OptionContract, strike_thousandths
-from app.options.expiry import option_expiry_anchor_ms, option_expiry_date
+from app.options.expiry import OptionExpiryMs, option_expiry_anchor_ms, option_expiry_date
 from app.options.quotes import NOT_YET_ARRIVED, HeldQuote, QuoteFault, quote_fault, receipt_times
 from app.schemas.action_plan import (
     AbsoluteExpiry,
@@ -169,10 +169,15 @@ class Chain:
 
     listings: tuple[Listing, ...]
     watched: Mapping[str, WatchedContract]
-    # Every date the underlying lists standard contracts for, when ``listings`` holds the contracts of only
-    # some of them: a provider names a chain's expiries at once and its contracts one expiry at a time.
-    # None: the listings are the whole chain, and its expiries are theirs.
-    expiries: tuple[date, ...] | None = None
+    # Every date the underlying lists standard contracts for, each as its expiry anchor (ADR 0022), when
+    # ``listings`` holds the contracts of only some of them: a provider names a chain's expiries at once and
+    # its contracts one expiry at a time. None: the listings are the whole chain, and its expiries are theirs.
+    expiries_ms: tuple[OptionExpiryMs, ...] | None = None
+
+    @property
+    def expiry_dates(self) -> tuple[date, ...] | None:
+        """The dates ``expiries_ms`` names, for the calendar arithmetic a rule does."""
+        return None if self.expiries_ms is None else tuple(option_expiry_date(anchor) for anchor in self.expiries_ms)
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,7 +586,8 @@ def _awaited(listing: Listing, stood: _Stood) -> str:
 
 def _listed_expiries(chain: Chain, standard: Sequence[Listing], today: date) -> list[date]:
     """The expiries listed from ``today`` on, soonest first."""
-    listed = chain.expiries if chain.expiries is not None else {listing.contract.expiry_date for listing in standard}
+    named = chain.expiry_dates
+    listed = named if named is not None else {listing.contract.expiry_date for listing in standard}
     return sorted({day for day in listed if day >= today})
 
 

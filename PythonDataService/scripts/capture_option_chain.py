@@ -38,7 +38,6 @@ from app.broker.ibkr.config import get_settings
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import OptionQuoteLines, WatchRequest
-from app.options.expiry import option_expiry_anchor_ms
 from app.options.named_structures import NamedStructure
 from app.options.quotes import NOT_YET_ARRIVED, HeldQuote, quote_fault
 from app.options.resolver import Chain, WatchedContract
@@ -51,28 +50,35 @@ logger = logging.getLogger(__name__)
 USABLE, NOT_ARRIVED = "usable", "not_arrived"
 
 
-def how_it_stands(watched: WatchedContract, *, now: int, generation: int, max_age_ms: int) -> str:
-    """How one watched contract's quote stands for a bought leg at ``now``: usable, not arrived, or its fault."""
+def how_it_stands(
+    watched: WatchedContract, *, now: int, generation: int, max_age_ms: int, to_sell: bool = False
+) -> str:
+    """How one watched contract's quote stands at ``now``: usable, not arrived, or its fault. For a bought
+    leg unless ``to_sell``: a sold leg also needs something bid."""
     if watched.quote is None:
         return NOT_ARRIVED
-    fault = quote_fault(watched.quote, at_ms=now, generation=generation, max_age_ms=max_age_ms, needs_a_bid=False)
+    fault = quote_fault(watched.quote, at_ms=now, generation=generation, max_age_ms=max_age_ms, needs_a_bid=to_sell)
     if fault is None:
         return USABLE
     return NOT_ARRIVED if fault in NOT_YET_ARRIVED else str(fault)
 
 
 class Usability:
-    """A count, for each watched contract, of the samples at which its quote stood each way."""
+    """A count, for each watched contract, of the samples at which its quote stood each way for a bought leg,
+    and of those at which a sold leg could have used it too."""
 
     def __init__(self) -> None:
         self.samples = 0
         self.by_contract: dict[str, Counter[str]] = {}
+        self.usable_to_sell: Counter[str] = Counter()
 
     def sample(self, chain: Chain | None, *, now: int, generation: int, max_age_ms: int) -> None:
         self.samples += 1
         for symbol, watched in (chain.watched if chain is not None else {}).items():
             stood = how_it_stands(watched, now=now, generation=generation, max_age_ms=max_age_ms)
             self.by_contract.setdefault(symbol, Counter())[stood] += 1
+            to_sell = how_it_stands(watched, now=now, generation=generation, max_age_ms=max_age_ms, to_sell=True)
+            self.usable_to_sell[symbol] += to_sell == USABLE
 
     def as_json(self, *, max_age_ms: int) -> dict[str, Any]:
         seen = sum(sum(counts.values()) for counts in self.by_contract.values())
@@ -81,6 +87,11 @@ class Usability:
             "samples": self.samples,
             "max_quote_age_ms": max_age_ms,
             "usable_share_of_contract_samples": None if not seen else round(usable / seen, 4),
+            # A sold leg needs something bid as well, so a contract with no bid counts above and not here.
+            "usable_to_sell_share_of_contract_samples": (
+                None if not seen else round(sum(self.usable_to_sell.values()) / seen, 4)
+            ),
+            "usable_to_sell": dict(sorted(self.usable_to_sell.items())),
             "contracts": {symbol: dict(sorted(counts.items())) for symbol, counts in sorted(self.by_contract.items())},
         }
 
@@ -102,12 +113,12 @@ def frozen_chain(
     symbol: str, chain: Chain, *, underlying: HeldQuote | None, generation: int, captured_at_ms: int
 ) -> dict[str, Any]:
     """The chain as it is held at one moment, in a form a fixture can keep. Prices are exact decimals as text."""
-    assert chain.expiries is not None
+    assert chain.expiries_ms is not None
     return {
         "symbol": symbol,
         "captured_at_ms": captured_at_ms,
         "generation": generation,
-        "expiries_ms": [option_expiry_anchor_ms(day) for day in chain.expiries],
+        "expiries_ms": list(chain.expiries_ms),
         "listings": [
             {
                 "occ_symbol": listing.contract.occ_symbol,
