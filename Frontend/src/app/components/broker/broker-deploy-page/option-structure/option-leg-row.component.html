@@ -94,8 +94,8 @@
   <span role="cell" data-label="Expiry date" class="leg-row__date">
     <label class="sr-only" [for]="dateId">{{ name() }} expiry date</label>
     <app-date-field
-      #date [inputId]="dateId" appearance="filled" calendar="inline" [pickFrom]="today" [hostProblem]="dateProblem()"
-      [value]="row().expiry.date" (valueChange)="setDate($event)" (keydown.escape)="keepEscape($event, date)"
+      [inputId]="dateId" appearance="filled" calendar="inline" [pickFrom]="today" [hostProblem]="dateProblem()"
+      [value]="row().expiry.date" (valueChange)="setDate($event)"
     />
   </span>
 }

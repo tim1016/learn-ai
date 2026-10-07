@@ -172,12 +172,16 @@ describe('DateFieldComponent', () => {
     const calendar = screen.getByRole('group', { name: 'Calendar' });
     expect(view.container.querySelector('app-date-field')?.contains(calendar)).toBe(true);
     expect(open.getAttribute('aria-expanded')).toBe('true');
+    // A host that closes on a key the calendar should take first can ask whether it is open.
+    const dateField: DateFieldComponent = view.fixture.debugElement.query(By.directive(DateFieldComponent)).componentInstance;
+    expect(dateField.calendarOpen()).toBe(true);
 
     await userEvent.click(day(calendar, '2022-11-15'));
     await view.fixture.whenStable();
 
     expect(host.value()).toBe('2022-11-15');
     expect(screen.queryByRole('group', { name: 'Calendar' })).toBeNull();
+    expect(dateField.calendarOpen()).toBe(false);
     // The keyboard goes back to the button that opened it, not to the page.
     expect(document.activeElement).toBe(open);
   });

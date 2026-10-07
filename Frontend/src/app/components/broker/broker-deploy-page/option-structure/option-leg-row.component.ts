@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, output, viewChild } from '@angular/core';
 
 import { DateFieldComponent } from '../../../../shared/date-picker';
 import { etIsoDate } from '../../../../shared/date/et-midnight';
@@ -51,6 +52,10 @@ export class OptionLegRowComponent {
   readonly rowChange = output<LegRow>();
   readonly remove = output();
 
+  private readonly page = inject(DOCUMENT);
+  private readonly dateField = viewChild(DateFieldComponent);
+  private readonly dateElement = viewChild(DateFieldComponent, { read: ElementRef<HTMLElement> });
+
   private readonly id = nextDateId++;
   protected readonly dateId = `option-leg-date-${this.id}`;
   protected readonly problemsId = `option-leg-problems-${this.id}`;
@@ -79,6 +84,28 @@ export class OptionLegRowComponent {
       .map((row, index) => ({ leg_id: row.leg_id, number: index + 1 }))
       .filter((other) => other.leg_id !== this.row().leg_id),
   );
+
+  constructor() {
+    // The drawer around the builder closes on any Escape that reaches the
+    // page, wherever the keyboard is. While this leg's calendar is open the
+    // key is the calendar's: it is taken on its way down, before anything
+    // else hears it, so the builder stays open with its edits. With no
+    // calendar open nothing listens here, and the key is the builder's.
+    effect((onCleanup) => {
+      const field = this.dateField();
+      if (field === undefined || !field.calendarOpen()) return;
+      const takeEscape = (event: KeyboardEvent): void => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        const keyboardInField = this.dateElement()?.nativeElement.contains(this.page.activeElement) ?? false;
+        field.closeCalendar();
+        // The calendar goes, and the keyboard with it if it was on a day: it stays with the field.
+        if (keyboardInField) field.focus();
+      };
+      this.page.addEventListener('keydown', takeEscape, true);
+      onCleanup(() => this.page.removeEventListener('keydown', takeEscape, true));
+    });
+  }
 
   protected setPosition(event: Event): void {
     const position = chosen(event);
@@ -127,18 +154,6 @@ export class OptionLegRowComponent {
     if (date !== this.row().expiry.date) this.rowChange.emit({ ...this.row(), expiry: { ...this.row().expiry, date } });
   }
 
-  /**
-   * Escape with this leg's calendar open puts the calendar away and goes no
-   * further, so the builder around it stays open with its edits. With no
-   * calendar open the key is the builder's. The field's own button says
-   * whether its calendar is open.
-   */
-  protected keepEscape(event: Event, field: DateFieldComponent): void {
-    const within = event.currentTarget;
-    if (!(within instanceof HTMLElement) || within.querySelector('button[aria-expanded="true"]') === null) return;
-    event.stopPropagation();
-    field.closeCalendar();
-  }
 
   private setStrike(change: Partial<LegRow['strike']>): void {
     this.rowChange.emit({ ...this.row(), strike: { ...this.row().strike, ...change } });

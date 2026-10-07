@@ -67,6 +67,8 @@ export class DateFieldComponent implements FormValueControl<string> {
   protected readonly text = fieldText(this.value, () => this.emitted);
   /** Whether the in-place calendar is open. A field that is disabled, or enabled again, starts with it closed. */
   protected readonly open = linkedSignal({ source: this.disabled, computation: () => false });
+  /** Whether the in-place calendar is open, for a host that closes on a key the calendar should take first. */
+  readonly calendarOpen = this.open.asReadonly();
   protected readonly entry = computed(() => checkDate(this.text(), { bounds: UNBOUNDED, sessions: null }));
   protected readonly calendarBounds = computed<DateBounds>(() => ({ ...UNBOUNDED, min: this.pickFrom() }));
   protected readonly problem = computed(() => (this.disabled() ? null : (this.entry().problem ?? this.hostProblem())));

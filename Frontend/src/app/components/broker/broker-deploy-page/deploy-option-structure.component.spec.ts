@@ -266,11 +266,27 @@ describe('DeployOptionStructureComponent', () => {
     escapeFrom(open);
     await stillBuilding();
 
-    // And from a day inside the calendar.
+    // From a day inside the calendar: the keyboard stays with the date field, not lost with the calendar.
     await userEvent.click(open);
-    const day = calendar()?.querySelector('span[data-date]');
+    const day = calendar()?.querySelector<HTMLElement>('span[data-date]');
     if (!day) throw new Error('The calendar shows no day.');
+    day.tabIndex = 0;
+    day.focus();
     escapeFrom(day);
+    await stillBuilding();
+    expect(document.activeElement).toBe(screen.getByLabelText('Leg 1 expiry date'));
+
+    // With the keyboard gone to another box of the builder, where it stays.
+    await userEvent.click(open);
+    const elsewhere = screen.getByLabelText<HTMLInputElement>('Leg 2 quantity');
+    elsewhere.focus();
+    escapeFrom(elsewhere);
+    await stillBuilding();
+    expect(document.activeElement).toBe(elsewhere);
+
+    // And with the keyboard on nothing at all, after a click on the page.
+    await userEvent.click(open);
+    escapeFrom(document.body);
     await stillBuilding();
 
     // No calendar is open now: Escape is the builder's, from the same field.
