@@ -136,6 +136,31 @@ def test_a_break_even_is_exact_where_no_cent_is() -> None:
     assert (figures.gain_cents, figures.gain_holds) == (100_000, (_between("590", None),))
 
 
+def test_two_bought_calls_break_even_above_the_higher_strike_where_they_gain_two_for_one() -> None:
+    """Calls bought at 580 and at 590 for $12.00 together. At 590 they are worth $10.00, still $2.00 short. From
+    there they gain $2 for each $1 the stock rises, so they are even $1 higher, at 591, and keep gaining."""
+    two_calls = _of(_leg("lower", "long", "call", 580), _leg("upper", "long", "call", 590))
+
+    figures = at_expiry(two_calls, _ONE, net_price=Decimal("12.00"))
+
+    assert figures.break_evens == (Fraction(591),)
+    assert (figures.gain_cents, figures.gain_holds) == (None, ())
+    assert figures.loss_holds == (_between("0", "580"),)
+
+
+def test_a_contract_of_ten_shares_gains_and_loses_a_tenth_of_what_one_of_a_hundred_does() -> None:
+    """The $1.94 spread gains $3.06 a share and loses $1.94: $30.60 and $19.40 on ten shares a contract. Its
+    break-even is a price of the stock, and the same."""
+    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
+    of_ten_shares = EntrySize(multiplier=10, units=1)
+
+    money = entry_money(spread, of_ten_shares, net_price=Decimal("1.94"), fee_provision_cents=0)
+    figures = at_expiry(spread, of_ten_shares, net_price=Decimal("1.94"))
+
+    assert (money.loss_at_expiry_cents, figures.gain_cents) == (1_940, 3_060)
+    assert figures.break_evens == (Fraction("586.94"),)
+
+
 def test_a_put_structure_can_be_at_its_lowest_only_with_the_stock_at_zero() -> None:
     """A 450 put bought against two 440 puts sold. At zero it is worth 450 - 2 x 440 = -$430.00; at 440 it is
     worth $10.00, its most. The lowest holds at zero alone, which checking the strikes would never find."""

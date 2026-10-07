@@ -74,6 +74,17 @@ def test_a_legs_ratio_and_the_number_of_structures_both_count() -> None:
     assert leaning.direction is LeanDirection.ABOUT_FLAT
 
 
+def test_the_shares_a_structure_moves_like_are_counted_at_its_own_contracts_size() -> None:
+    """A net delta of 0.25 on a contract of ten shares moves like 2.5 shares, not 25; four of them like 10."""
+    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
+
+    leaning = lean(spread, EntrySize(multiplier=10, units=4), {"bought": 0.5, "sold": 0.25})
+
+    _close(leaning.net_delta, 0.25)
+    _close(leaning.shares_per_structure, 2.5)
+    _close(leaning.shares, 10.0)
+
+
 @pytest.mark.parametrize(
     ("call_delta", "put_delta", "direction"),
     [

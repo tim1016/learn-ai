@@ -180,3 +180,82 @@ def test_leases_are_listed_soonest_to_end_first_and_a_plain_request_under_a_leas
     assert watch.requests() == (page,)
     with pytest.raises(ValueError):
         watch.watch_on_lease("late", page, lease_ms=0)
+
+
+# ---- Pages held to a number of leases ------------------------------------------------
+
+
+def _three_pages_held_to_two() -> tuple[OptionWatchList, list[int], WatchRequest]:
+    """Two pages hold the two leases there may be, asked a second apart. A third asks a second later still."""
+    now = [1_000_000]
+    watch = OptionWatchList(clock=lambda: now[0])
+    page = _page_wants({"selector": "atm"})
+    for key in ("first", "second"):
+        watch.watch_on_lease(key, page, lease_ms=60_000, at_most=2)
+        now[0] += 1_000
+    return watch, now, page
+
+
+def test_a_page_past_the_most_leases_takes_the_one_asked_for_longest_ago() -> None:
+    watch, now, page = _three_pages_held_to_two()
+
+    since = watch.watch_on_lease("third", page, lease_ms=60_000, at_most=2)
+
+    assert since == now[0]
+    assert watch.on_lease() == ("second", "third")
+    assert watch.requests() == (page, page)
+
+
+def test_the_page_that_gave_way_is_told_so_and_takes_no_lease_while_all_are_taken() -> None:
+    """All three keep asking, a second apart, for a minute and more. The same two hold their leases throughout."""
+    watch, now, page = _three_pages_held_to_two()
+    watch.watch_on_lease("third", page, lease_ms=60_000, at_most=2)
+    since = {key: watch.watch_on_lease(key, page, lease_ms=60_000, at_most=2) for key in ("second", "third")}
+
+    for _ in range(90):
+        now[0] += 1_000
+        told = {key: watch.watch_on_lease(key, page, lease_ms=60_000, at_most=2) for key in ("first", "second", "third")}
+
+        assert told == {"first": None, **since}
+        assert sorted(watch.on_lease()) == ["second", "third"]
+
+
+def test_the_page_that_gave_way_is_let_in_when_a_lease_ends() -> None:
+    watch, now, page = _three_pages_held_to_two()
+    watch.watch_on_lease("third", page, lease_ms=60_000, at_most=2)
+
+    # The second page stops asking. The other two ask on.
+    for _ in range(6):
+        now[0] += 10_000
+        told = watch.watch_on_lease("first", page, lease_ms=60_000, at_most=2)
+        watch.watch_on_lease("third", page, lease_ms=60_000, at_most=2)
+
+    assert told is not None
+    assert sorted(watch.on_lease()) == ["first", "third"]
+
+
+def test_a_page_that_gave_way_and_went_quiet_is_a_new_page_when_it_comes_back() -> None:
+    """Its giving way is remembered only while it keeps asking. A minute on it asks as any new page does."""
+    watch, now, page = _three_pages_held_to_two()
+    watch.watch_on_lease("third", page, lease_ms=60_000, at_most=2)
+
+    for _ in range(6):
+        now[0] += 10_000
+        for key in ("second", "third"):
+            watch.watch_on_lease(key, page, lease_ms=60_000, at_most=2)
+    back = watch.watch_on_lease("first", page, lease_ms=60_000, at_most=2)
+
+    assert back == now[0]
+    assert sorted(watch.on_lease()) == ["first", "third"]
+
+
+def test_a_page_that_takes_its_request_away_is_not_remembered_as_having_given_way() -> None:
+    watch, now, page = _three_pages_held_to_two()
+    watch.watch_on_lease("third", page, lease_ms=60_000, at_most=2)
+
+    watch.unwatch("first")
+    back = watch.watch_on_lease("first", page, lease_ms=60_000, at_most=2)
+
+    assert back == now[0] and "first" in watch.on_lease()
+    with pytest.raises(ValueError):
+        watch.watch_on_lease("first", page, lease_ms=60_000, at_most=0)

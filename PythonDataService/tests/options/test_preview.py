@@ -12,6 +12,7 @@ from fractions import Fraction
 import pytest
 
 from app.options.american import AmericanIvStatus
+from app.options.entry import prepare_entry
 from app.options.lean import LeanDirection
 from app.options.named_structures import NamedStructure
 from app.options.preview import (
@@ -21,7 +22,7 @@ from app.options.preview import (
     percent_of,
     structure_figures,
 )
-from app.options.requirement import StructureMoneyRefusal
+from app.options.requirement import StructureMoneyRefusal, StructureMoneyRefused
 from app.options.structure_check import StructureRefusal
 from app.schemas.action_plan import ActionPlan
 
@@ -42,16 +43,28 @@ def _spread(*, sold_from_bought: float = 5.0, name: NamedStructure | None = None
     return plan.model_copy(update={"structure": name})
 
 
-def _figures(plan: ActionPlan, *, fees: int | None = 0, units: int = 1, model_is_known: bool = True, **markets: tuple[str, str]) -> StructureFigures:
+def _resolved(plan: ActionPlan, **markets: tuple[str, str]) -> scenes.resolver.Resolution:
     """``plan`` resolved in the scene with a call's bid and ask set by its strike: ``c585=("4.08", "4.12")``."""
     scene = scenes._scene()
     for named, (bid, ask) in markets.items():
         scene = scene.holding(scenes._contract("call", int(named[1:])), scenes._quote(bid, ask, scene.selection_ms - 400))
+    return scene.resolve(plan)
+
+
+def _figures(
+    plan: ActionPlan,
+    *,
+    fees: int | None = 0,
+    units: int = 1,
+    model_is_known: bool = True,
+    cost_limit: str = "10",
+    **markets: tuple[str, str],
+) -> StructureFigures:
     return structure_figures(
         plan,
-        scene.resolve(plan),
+        _resolved(plan, **markets),
         units=units,
-        cost_limit_percent=Decimal(10),
+        cost_limit_percent=Decimal(cost_limit),
         fee_provision=lambda _structure, _markets, _size: fees,
         model_is_known=model_is_known,
     )
@@ -111,6 +124,52 @@ def test_a_cost_over_the_limit_is_said_and_stops_nothing() -> None:
     assert (shown.money.entry_commitment_cents, shown.round_trip_cost_cents) == (1_400, 800)
     assert (shown.round_trip_cost_percent, shown.over_cost_limit) == (Fraction(400, 7), True)
     assert shown.at_expiry.gain_cents == 48_600
+
+
+@pytest.mark.parametrize(
+    ("cost_limit", "over"),
+    [
+        pytest.param("4.11", True, id="a limit a hair under the cost"),
+        pytest.param("4.12", False, id="a limit a hair over it"),
+        pytest.param("50", False, id="a loose limit"),
+        pytest.param("0", True, id="no cost allowed at all"),
+    ],
+)
+def test_a_preview_judges_the_cost_by_the_owners_own_limit_and_shows_what_an_entry_would_prepare(
+    cost_limit: str, over: bool
+) -> None:
+    """Two structures: $16.00 to cross both markets, of the $388.37 set aside, which is 4.1198%. The entry's own
+    preparation is asked the same question of the same picks. Where it refuses, the preview says over; where it
+    prepares, their figures agree."""
+    plan = _spread(name=NamedStructure.BULL_CALL_SPREAD)
+    markets = {"c585": ("4.08", "4.12"), "c590": ("2.18", "2.22")}
+    resolution = _resolved(plan, **markets)
+
+    shown = _figures(plan, fees=37, units=2, cost_limit=cost_limit, **markets)
+
+    def prepared():
+        return prepare_entry(
+            plan,
+            picked=resolution.picked,
+            multipliers=resolution.multipliers,
+            quotes=resolution.quotes,
+            units=2,
+            fee_provision_cents=37,
+            cost_limit_percent=Decimal(cost_limit),
+        )
+
+    assert shown.over_cost_limit is over
+    if over:
+        with pytest.raises(StructureMoneyRefused) as refused:
+            prepared()
+        assert refused.value.reason is StructureMoneyRefusal.COST_OVER_LIMIT
+    else:
+        entry = prepared()
+        assert (shown.size, shown.net_price, shown.money, shown.round_trip_cost_cents) == (
+            entry.size, entry.net_limit_price, entry.money, entry.round_trip_cost_cents,
+        )
+    # Whatever the limit, what it would cost is shown.
+    assert (shown.round_trip_cost_cents, shown.money.entry_commitment_cents) == (1_600, 38_837)
 
 
 def test_picks_that_are_not_the_shape_named_keep_their_figures_and_name_the_rule() -> None:

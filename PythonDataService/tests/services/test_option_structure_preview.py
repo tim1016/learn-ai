@@ -7,7 +7,9 @@ its callbacks, as they would from the Gateway.
 
 from __future__ import annotations
 
+import asyncio
 import threading
+from collections.abc import Awaitable
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -23,12 +25,16 @@ from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open
 from app.options.american import CashDividend, american_implied_volatility, years_from_ms
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA
+from app.options.named_structures import NamedStructure
 from app.options.resolver import DividendOn
+from app.options.structure_catalogue import starting_plan
 from app.options.watch import LineClass
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
 from app.services import option_structure_preview
 from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
+from app.services.option_preview_views import usd
+from app.services.option_search import OptionSearchLane, PreviewSearches
 from app.services.option_structure_preview import (
     ARRIVAL_GRACE_MS,
     MAX_PREVIEW_WINDOWS,
@@ -44,8 +50,9 @@ from tests.options import test_resolver as scenes
 # The stand-in coordinator a fleet Clerk asks for the rate and the dividends.
 from tests.services import test_option_model_inputs_client as fleet
 
-# A preview lane that searches in this process, through the pickling a worker process's pipe does.
-from tests.services.test_option_search import searches_in_this_process
+# A preview lane that searches in this process, through the pickling a worker process's pipe does; and
+# stand-in workers whose searches a test holds back, or loses.
+from tests.services.test_option_search import Workers, _Dies, searches_in_this_process
 
 NOW = feed.NOW
 FRIDAY = scenes._FRIDAY
@@ -119,14 +126,19 @@ class Desk:
             clock=lambda: self.ibkr.now,
         )
 
-    async def settle(self) -> None:
-        await feed._settle(self.status)
+    async def settle(self, passes: int = 4) -> None:
+        await feed._settle(self.status, passes)
 
     def spy(self) -> None:
         self.ibkr.tick("SPY", bid=585.10, ask=585.12)
 
-    def quote(self, right: str, strike: int, bid: str, ask: str, expiry: date = FRIDAY) -> None:
-        self.ibkr.tick(scenes._contract(right, strike, expiry).occ_symbol, bid=float(bid), ask=float(ask))
+    def quote(self, right: str, strike: int, bid: str | None, ask: str | None, expiry: date = FRIDAY) -> None:
+        """A tick of each side given. One side alone leaves the other as it was received."""
+        self.ibkr.tick(
+            scenes._contract(right, strike, expiry).occ_symbol,
+            bid=None if bid is None else float(bid),
+            ask=None if ask is None else float(ask),
+        )
 
     def quote_every_line(self) -> None:
         """A two-cent market around the model's own price for every open line, as the resolver's scenes have it."""
@@ -152,6 +164,15 @@ class Desk:
         self.spy()
         self.ibkr.now += 400
         return await self.preview(request)
+
+
+def _as_the_builder_starts(name: NamedStructure, **request: Any) -> OptionStructurePreviewRequest:
+    """A named structure with the legs the catalogue gives it, as the builder posts them back."""
+    legs = [
+        _leg(leg.leg_id, leg.position, leg.right, leg.strike.model_dump(), leg.expiry.model_dump(), ratio=leg.qty_ratio)
+        for leg in starting_plan(name, "SPY").on_enter
+    ]
+    return _asking(*legs, structure=name.value, **request)
 
 
 def _our_delta(
@@ -230,6 +251,15 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
     assert [(held.from_price, held.to_price) for held in at_expiry.loss_holds] == [(Decimal(0), Decimal(585))]
     assert [(held.from_price, held.to_price) for held in at_expiry.gain_holds] == [(Decimal(590), None)]
     assert at_expiry.break_even_prices == [Decimal("586.94")]
+    # Each sentence states its own figure, and where it holds: the loss at 585 or below, the gain at 590 or above.
+    assert usd(19_400) in at_expiry.loss_sentence and usd(30_600) not in at_expiry.loss_sentence
+    assert "585" in at_expiry.loss_sentence and "below" in at_expiry.loss_sentence and "above" not in at_expiry.loss_sentence
+    assert usd(30_600) in at_expiry.gain_sentence and usd(19_400) not in at_expiry.gain_sentence
+    assert "590" in at_expiry.gain_sentence and "above" in at_expiry.gain_sentence and "below" not in at_expiry.gain_sentence
+    assert "586.94" in at_expiry.break_even_sentence
+    # The cost is said as a part of what is set aside, which is not the premium, against the owner's limit.
+    assert all(said in money.cost_sentence for said in (usd(800), "4.12%", usd(19_410), "10%"))
+    assert usd(19_400) not in money.cost_sentence
 
     ours = [_our_delta("call", 585, "4.08", "4.12", at_ms=NOW + 400), _our_delta("call", 590, "2.18", "2.22", at_ms=NOW + 400)]
     assert [leg.delta for leg in seen.legs] == ours
@@ -238,10 +268,13 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
     _close(seen.lean.shares_per_structure, 100 * (ours[0] - ours[1]))
     _close(seen.lean.shares, 100 * (ours[0] - ours[1]))
     assert (seen.lean.direction, seen.lean.gains_when_underlying_falls, seen.lean.warning_sentence) == ("up", False, None)
+    assert "up" in seen.lean.sentence.split(".")[0] and "down" not in seen.lean.sentence
+    assert f"{seen.lean.shares:,.0f} SPY shares" in seen.lean.sentence and "short" not in seen.lean.sentence
     _close(seen.lean.about_flat_below_shares_per_structure, 100 * ABOUT_FLAT_BELOW_DELTA)
 
     verdict = seen.verdict
     assert (verdict.can_be_deployed, verdict.resolves_as_built, verdict.red, verdict.leg_ids) == (True, True, False, [])
+    assert "a bull call spread" in verdict.resolves_sentence
     # Two strikes either side of 585 for the bought call and of 590 for the sold one: 583 to 592, ten lines.
     (calls,) = seen.watched.ranges
     assert (calls.right, calls.expiry_ms, calls.lowest_strike, calls.highest_strike, calls.contracts) == (
@@ -272,9 +305,18 @@ async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as
     assert (money.broker_requirement_cents, money.fee_estimate_cents, money.entry_commitment_cents) == (50_000, 11, 19_311)
     assert (seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (19_300, 30_700)
     assert seen.at_expiry.break_even_prices == [Decimal("588.07")]
+    # The other way round from a spread that is bought: it keeps what it received at 585 or below.
+    assert usd(19_300) in seen.at_expiry.loss_sentence and "590" in seen.at_expiry.loss_sentence
+    assert "above" in seen.at_expiry.loss_sentence and "below" not in seen.at_expiry.loss_sentence
+    assert usd(30_700) in seen.at_expiry.gain_sentence and "585" in seen.at_expiry.gain_sentence
+    assert "below" in seen.at_expiry.gain_sentence and "above" not in seen.at_expiry.gain_sentence
+    # What is set aside is the $193.11, and the sentence says the cost as a part of that.
+    assert usd(19_311) in money.cost_sentence and usd(30_700) not in money.cost_sentence
     assert (seen.verdict.resolves_as_built, seen.verdict.red) == (True, False)
     # It sells the call nearer the money, so it gains as SPY falls.
     assert (seen.lean.direction, seen.lean.gains_when_underlying_falls) == ("down", True)
+    assert "down" in seen.lean.sentence.split(".")[0] and "short" in seen.lean.sentence
+    assert f"{-seen.lean.shares:,.0f} SPY shares" in seen.lean.sentence
 
 
 async def test_the_fee_estimate_is_worked_out_on_the_price_each_leg_is_entered_at(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -321,6 +363,49 @@ async def test_a_structure_that_costs_most_of_itself_to_trade_is_shown_with_its_
     assert seen.money.over_cost_limit is True
     # Over the limit is not a structure that cannot be deployed: an entry is skipped, and the verdict holds.
     assert seen.verdict.red is False
+
+
+async def test_the_cost_is_held_to_the_limit_the_owner_set_and_not_to_the_one_they_start_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """$8.00 of the $194.10 set aside is 4.12%: inside the 10% an owner starts from, and over a limit of 4%."""
+    desk = Desk(monkeypatch)
+    strict = _BULL_CALL_SPREAD.model_copy(update={"cost_limit_percent": Decimal(4)})
+
+    seen = await desk.quoted(strict, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert (seen.money.cost_limit_percent, seen.money.over_cost_limit) == (Decimal(4), True)
+    assert "4%" in seen.money.cost_sentence and "10%" not in seen.money.cost_sentence
+
+
+async def test_each_side_of_each_quote_is_shown_with_its_own_age_and_the_oldest_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Six sides received at six moments, read 2,000 ms after the first of them."""
+    desk = Desk(monkeypatch)
+    await desk.watching(_BULL_CALL_SPREAD)
+    desk.quote_every_line()
+    received = iter(range(0, 1_800, 300))
+
+    def after(tick) -> None:
+        desk.ibkr.now = NOW + next(received)
+        tick()
+
+    after(lambda: desk.quote("call", 585, "4.08", None))
+    after(lambda: desk.quote("call", 585, None, "4.12"))
+    after(lambda: desk.quote("call", 590, "2.18", None))
+    after(lambda: desk.quote("call", 590, None, "2.22"))
+    after(lambda: desk.ibkr.tick("SPY", bid=585.10))
+    after(lambda: desk.ibkr.tick("SPY", ask=585.12))
+    desk.ibkr.now = NOW + 2_000
+
+    seen = await desk.preview(_BULL_CALL_SPREAD)
+
+    bought, sold = seen.legs
+    assert (bought.quote.bid_age_ms, bought.quote.ask_age_ms) == (2_000, 1_700)
+    assert (sold.quote.bid_age_ms, sold.quote.ask_age_ms) == (1_400, 1_100)
+    assert (seen.underlying_quote.bid_age_ms, seen.underlying_quote.ask_age_ms) == (800, 500)
+    assert (seen.oldest_quote_age_ms, seen.quotes_read_ms) == (2_000, NOW + 2_000)
 
 
 async def test_a_structure_that_gains_when_the_underlying_falls_carries_the_warning(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -395,8 +480,9 @@ async def test_a_structure_the_plans_rules_refuse_is_a_verdict_and_asks_for_no_q
 
     seen = await desk.preview(nothing_covers_it)
 
-    assert (seen.state, seen.reason_code) == ("plan_refused", "OPTION_PREVIEW_PLAN_REFUSED")
+    assert (seen.state, seen.reason_code, seen.ask_again_in_ms) == ("plan_refused", "OPTION_PREVIEW_PLAN_REFUSED", None)
     assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (False, None, True)
+    assert seen.verdict.deploy_reason_code == seen.reason_code and seen.notice in seen.verdict.deploy_sentence
     assert (seen.legs, seen.money, seen.at_expiry, seen.lean, seen.watched) == ([], None, None, None, None)
     assert desk.watch.requests() == ()
 
@@ -576,6 +662,9 @@ async def test_an_underlying_with_no_quote_is_arriving_at_first_and_then_named_a
     )
     assert (went_stale.state, went_stale.fault) == ("underlying_quote_unusable", "QUOTE_STALE")
     assert _shows_no_figure(never_came) and _shows_no_figure(went_stale)
+    # A quote may yet come, or come fresh: the page asks again. The two are told apart in words too.
+    assert never_came.ask_again_in_ms is not None and went_stale.ask_again_in_ms is not None
+    assert "QUOTE_STALE" in went_stale.notice and "QUOTE_STALE" not in never_came.notice
 
 
 async def test_a_faulty_quote_is_the_resolvers_refusal_with_its_fault(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -661,8 +750,10 @@ async def test_with_dividends_unknown_a_rule_by_delta_picks_nothing(monkeypatch:
     seen = await desk.quoted(_CALL_NEAR_30_DELTA)
 
     assert (seen.state, seen.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_DIVIDENDS_UNKNOWN")
-    assert _shows_no_figure(seen)
+    # Asking again a second later would learn nothing new: the lookup failed, and is tried again in its own time.
+    assert _shows_no_figure(seen) and seen.ask_again_in_ms is None
     assert (seen.pricing_inputs.dividends_known, seen.pricing_inputs.dividends) == (False, [])
+    assert _UNKNOWN.dividends_source in seen.notice
 
 
 async def test_with_dividends_unknown_other_rules_still_pick_and_no_delta_or_lean_is_shown(
@@ -797,12 +888,316 @@ async def test_each_ask_renews_the_lease(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(desk.ibkr.open_option_lines()) == 10
 
 
-async def test_one_more_page_than_may_hold_a_window_gives_up_the_one_asked_for_longest_ago(
+async def test_one_more_page_than_may_hold_a_window_takes_the_one_asked_for_longest_ago(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A page that was closed stops asking, and cannot say so. The one asked for longest ago is likeliest gone."""
     desk = Desk(monkeypatch)
     for page in range(MAX_PREVIEW_WINDOWS + 1):
         desk.ibkr.now += 1_000
-        await desk.preview(_BULL_CALL_SPREAD.model_copy(update={"preview_key": f"page-{page:04d}"}))
+        newest = await desk.preview(_BULL_CALL_SPREAD.model_copy(update={"preview_key": f"page-{page:04d}"}))
 
     assert desk.watch.on_lease() == tuple(f"preview:page-{page:04d}" for page in range(1, MAX_PREVIEW_WINDOWS + 1))
+    assert newest.reason_code != "OPTION_PREVIEW_TOO_MANY_OPEN"
+
+
+async def test_a_fifth_page_that_keeps_asking_is_told_too_many_are_open_and_turns_nobody_else_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five builders open, each asking every second. One gives way once. It is told so each time it asks, the
+    other four keep the windows they had, and their quotes stop being called "arriving" when ten seconds are up."""
+    desk = Desk(monkeypatch)
+    pages = [_BULL_CALL_SPREAD.model_copy(update={"preview_key": f"page-{page:04d}"}) for page in range(5)]
+    for page in pages:
+        desk.ibkr.now += 100
+        await desk.preview(page)
+    holding = desk.watch.on_lease()
+
+    answers: list[OptionStructurePreview] = []
+    for _ in range(ARRIVAL_GRACE_MS // 1_000 + 2):
+        desk.ibkr.now += 1_000
+        await desk.settle(passes=1)
+        answers = [await desk.preview(page) for page in pages]
+        assert sorted(desk.watch.on_lease()) == sorted(holding)
+
+    gave_way, *held = answers
+    assert holding == tuple(f"preview:page-{page:04d}" for page in range(1, 5))
+    assert (gave_way.state, gave_way.reason_code) == ("no_quote_line", "OPTION_PREVIEW_TOO_MANY_OPEN")
+    assert _shows_no_figure(gave_way) and gave_way.ask_again_in_ms is None
+    assert str(MAX_PREVIEW_WINDOWS) in gave_way.notice
+    # No quote ever came for SPY here. After ten seconds the four are told that, not that quotes are arriving.
+    assert {seen.state for seen in held} == {"underlying_quote_unusable"}
+
+
+async def test_the_page_that_gave_way_is_let_in_again_when_another_stops_asking(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    pages = [_BULL_CALL_SPREAD.model_copy(update={"preview_key": f"page-{page:04d}"}) for page in range(5)]
+    for page in pages:
+        desk.ibkr.now += 100
+        await desk.preview(page)
+
+    # The second page goes away. The others ask on for a minute.
+    for _ in range(PREVIEW_LEASE_MS // 10_000):
+        desk.ibkr.now += 10_000
+        told = [await desk.preview(page) for page in (pages[0], *pages[2:])]
+
+    assert told[0].state != "no_quote_line"
+    assert desk.watch.on_lease().count("preview:page-0000") == 1 and "preview:page-0001" not in desk.watch.on_lease()
+
+
+# ---- No line spare for a page -------------------------------------------------------------
+
+
+def _on_qqq(*legs: dict, **request: Any) -> OptionStructurePreviewRequest:
+    return _asking(*legs, underlying="QQQ", **request)
+
+
+async def test_a_preview_asks_ibkr_for_nothing_while_every_line_is_taken_by_a_bot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A budget of five, all of it a bot's window on SPY. A page asks about QQQ: no QQQ quote is asked for and
+    no QQQ chain is read, and the page is told there is no line. The bot's own lines are as they were."""
+    bot = WatchRequest("SPY", LineClass.CANDIDATE, scenes._one("call", _AT_THE_MONEY), feed.MONEY)
+    desk = Desk(monkeypatch, bot, budget=5)
+    await desk.settle()
+    desk.spy()
+    await desk.settle()
+    bots_lines = desk.ibkr.open_option_lines()
+    asked_before = list(desk.ibkr.asked)
+    listings_read = desk.ibkr.client.ib.reqSecDefOptParamsAsync.await_count
+    puts = _on_qqq(_leg("long_put", "long", "put", _AT_THE_MONEY), structure="long_put")
+
+    first = await desk.preview(puts)
+    await desk.settle()
+    seen = await desk.preview(puts)
+    await desk.settle()
+
+    for answer in (first, seen):
+        assert (answer.state, answer.reason_code) == ("no_quote_line", "OPTION_LINE_OVER_BUDGET")
+        assert _shows_no_figure(answer) and answer.ask_again_in_ms is None
+    assert desk.ibkr.asked == asked_before and "QQQ" not in desk.ibkr.lines
+    assert desk.ibkr.client.ib.reqSecDefOptParamsAsync.await_count == listings_read
+    assert len(bots_lines) == 5 and desk.ibkr.open_option_lines() == bots_lines and desk.ibkr.cancelled == []
+
+
+async def test_a_preview_is_served_again_once_a_line_is_spare(monkeypatch: pytest.MonkeyPatch) -> None:
+    bot = WatchRequest("SPY", LineClass.CANDIDATE, scenes._one("call", _AT_THE_MONEY), feed.MONEY)
+    desk = Desk(monkeypatch, bot, budget=5)
+    await desk.settle()
+    desk.spy()
+    await desk.settle()
+    puts = _on_qqq(_leg("long_put", "long", "put", _AT_THE_MONEY), structure="long_put")
+    while_full = await desk.preview(puts)
+
+    desk.watch.unwatch("bot-0")
+    await desk.settle()
+    await desk.preview(puts)
+    await desk.settle()
+
+    assert while_full.state == "no_quote_line"
+    assert "QQQ" in desk.ibkr.lines
+
+
+async def test_a_bots_claim_on_its_own_underlying_stands_whatever_pages_ask(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bot and the page are both on SPY, and no line is spare. SPY stays quoted: it is the bot's."""
+    bot = WatchRequest("SPY", LineClass.CANDIDATE, scenes._one("call", _AT_THE_MONEY), feed.MONEY)
+    desk = Desk(monkeypatch, bot, budget=5)
+    puts = _asking(_leg("long_put", "long", "put", _AT_THE_MONEY), structure="long_put")
+
+    await desk.watching(puts)
+    await desk.preview(puts)
+    await desk.settle()
+
+    assert "SPY" in desk.ibkr.lines and "SPY" not in desk.ibkr.cancelled
+    assert desk.ibkr.open_option_lines() == feed._symbols(583, 584, 585, 586, 587)
+
+
+# ---- Where the search runs ------------------------------------------------------------------
+
+
+def _held_back(desk: Desk, *, wait_s: float = 5.0) -> Workers:
+    """Give ``desk`` a search lane whose worker answers only when the test lets it."""
+    workers = Workers()
+    desk.searches = PreviewSearches(OptionSearchLane("preview", executor=workers), wait_s=wait_s)
+    return workers
+
+
+async def _quoted_and_ready(desk: Desk, request: OptionStructurePreviewRequest) -> None:
+    await desk.watching(request)
+    desk.quote_every_line()
+    desk.spy()
+    desk.ibkr.now += 400
+
+
+async def _turns(times: int = 10) -> None:
+    for _ in range(times):
+        await asyncio.sleep(0)
+
+
+async def test_a_second_ask_while_the_search_runs_starts_no_second_search_and_is_told_to_ask_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    workers = _held_back(desk)
+    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
+
+    first = asyncio.ensure_future(desk.preview(_BULL_CALL_SPREAD))
+    await asyncio.sleep(0.05)
+    second = await desk.preview(_BULL_CALL_SPREAD)
+    (worker,) = workers.made
+    begun = len(worker.searches)
+    worker.let_go()
+    answered = await first
+
+    assert (second.state, second.reason_code) == ("search_not_done", "OPTION_SEARCH_ALREADY_RUNNING")
+    assert _shows_no_figure(second) and second.ask_again_in_ms is not None
+    # Not a refusal of the structure: the verdict's second half is not known, and nothing is red.
+    assert (second.verdict.can_be_deployed, second.verdict.resolves_as_built, second.verdict.red) == (True, None, False)
+    assert second.watched.lines_held == 10
+    assert begun == 1 == len(worker.searches)
+    assert answered.state == "resolved"
+
+
+async def test_a_search_that_outlives_its_ask_is_shown_at_the_next_ask_as_of_the_quotes_it_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    workers = _held_back(desk, wait_s=0.05)
+    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
+    read_at = desk.ibkr.now
+
+    told = await desk.preview(_BULL_CALL_SPREAD)
+    workers.made[0].let_go()
+    await _turns()
+    desk.ibkr.now += 1_000
+    seen = await desk.preview(_BULL_CALL_SPREAD)
+
+    assert (told.state, told.reason_code) == ("search_not_done", "OPTION_SEARCH_NOT_DONE_IN_TIME")
+    assert told.ask_again_in_ms is not None
+    # The one search answered: its figures are stamped with the moment its quotes were read, a second ago.
+    assert (seen.state, seen.quotes_read_ms, seen.oldest_quote_age_ms) == ("resolved", read_at, 400)
+    assert len(workers.made[0].searches) == 1
+
+
+async def test_a_search_kept_for_a_structure_the_page_has_since_changed_is_not_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    workers = _held_back(desk, wait_s=0.05)
+    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
+    three = _BULL_CALL_SPREAD.model_copy(update={"structures": 3})
+
+    await desk.preview(_BULL_CALL_SPREAD)
+    workers.made[0].let_go(0)
+    await _turns()
+    asking = asyncio.ensure_future(desk.preview(three))
+    await asyncio.sleep(0.01)
+    workers.made[0].let_go(1)
+    seen = await asking
+    if seen.state == "search_not_done":
+        seen = await desk.preview(three)
+
+    assert (seen.state, seen.money.structures) == ("resolved", 3)
+    assert len(workers.made[0].searches) == 2
+
+
+async def test_a_search_kept_from_before_a_reconnect_is_not_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its picks stand on quotes of a generation that is gone."""
+    desk = Desk(monkeypatch)
+    workers = _held_back(desk, wait_s=0.05)
+    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
+
+    await desk.preview(_BULL_CALL_SPREAD)
+    workers.made[0].let_go(0)
+    await _turns()
+    desk.ibkr.reconnect()
+    await desk.settle()
+    desk.spy()
+    await desk.settle()
+    desk.quote_every_line()
+    desk.spy()
+    after = asyncio.ensure_future(desk.preview(_BULL_CALL_SPREAD))
+    await asyncio.sleep(0.01)
+
+    assert len(workers.made[0].searches) == 2
+    workers.made[0].let_go(1)
+    await after
+
+
+async def test_a_search_that_could_not_be_run_is_said_plainly_and_is_no_refusal_of_the_structure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    desk.searches = PreviewSearches(OptionSearchLane("preview", executor=_Dies))
+    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
+
+    seen = await desk.preview(_BULL_CALL_SPREAD)
+
+    assert (seen.state, seen.reason_code) == ("search_not_done", "OPTION_SEARCH_WORKER_FAILED")
+    # Nothing is running that asking again in a second would find.
+    assert _shows_no_figure(seen) and seen.ask_again_in_ms is None
+    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (True, None, False)
+    assert seen.verdict.resolves_reason_code is None
+
+
+async def _largest_gap_while[T](asking: Awaitable[T]) -> tuple[T, float, float]:
+    """Run ``asking`` with a ticker beside it on the same event loop. Returns its answer, the longest the loop
+    went between two runs of the ticker, and how long the ask took, both in seconds."""
+    loop = asyncio.get_running_loop()
+    gaps: list[float] = []
+
+    async def tick() -> None:
+        last = loop.time()
+        while True:
+            await asyncio.sleep(0.001)
+            now = loop.time()
+            gaps.append(now - last)
+            last = now
+
+    ticking = asyncio.ensure_future(tick())
+    await asyncio.sleep(0.02)
+    gaps.clear()
+    began = loop.time()
+    try:
+        answer = await asking
+    finally:
+        took = loop.time() - began
+        ticking.cancel()
+    return answer, max(gaps), took
+
+
+async def test_the_event_loop_keeps_running_while_a_real_worker_process_searches_for_an_iron_condor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loop that stamps quote receipts, runs the supervisor and sends orders is not stopped by a preview.
+
+    An iron condor picks two legs by delta: forty-two contracts priced on the full tree, with ten strikes
+    watched either side. Measured on macOS, CPython 3.12.13, 2026-10-07:
+
+    - searched in a worker process, as here: the ask took 923 to 946 ms and the loop's longest gap was 2.5
+      to 3.4 ms;
+    - the same search handed to a thread of this process, as it was first built: the ask took 935 to 962 ms
+      and the loop did not run at all for 932 to 959 ms of it.
+
+    The pricer lets go of the interpreter lock for under a microsecond at a time, and a thread waiting for it
+    never gets in. A search in this process therefore fails this test, in a thread or not.
+    """
+    desk = Desk(monkeypatch, reach=10)
+    desk.searches = PreviewSearches(OptionSearchLane("preview"))
+    iron_condor = _as_the_builder_starts(NamedStructure.IRON_CONDOR)
+    try:
+        await _quoted_and_ready(desk, iron_condor)
+        # The first answer starts the worker and loads it. The ask that is measured finds it up.
+        for _ in range(100):
+            if (await desk.preview(iron_condor)).state == "resolved":
+                break
+            await asyncio.sleep(0.2)
+        desk.quote_every_line()
+        desk.spy()
+        desk.ibkr.now += 400
+
+        seen, largest_gap_s, took_s = await _largest_gap_while(desk.preview(iron_condor))
+    finally:
+        desk.searches.close()
+
+    assert seen.state == "resolved", (seen.state, seen.reason_code, seen.notice)
+    assert sorted(leg.leg_id for leg in seen.legs) == ["long_call", "long_put", "short_call", "short_put"]
+    # A search long enough to tell a loop that ran through it from one that waited for it.
+    assert took_s >= 0.2, took_s
+    assert largest_gap_s < took_s / 4, (largest_gap_s, took_s)
