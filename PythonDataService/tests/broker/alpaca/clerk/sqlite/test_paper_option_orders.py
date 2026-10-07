@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import (
     entry_outcome,
 )
 from app.broker.alpaca.clerk.sqlite.facts import EntrySettledFacts
+from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.option_admission import MAX_ENTRY_WAIT_MS, MAX_ORDER_TERM_MS, MIN_ENTRY_WAIT_MS
 from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
@@ -790,6 +791,53 @@ async def test_an_entry_wait_at_either_bound_is_taken_and_kept_as_the_entrys_dea
 
     [order_ref] = sent.child_order_refs
     assert paper.outcome(order_ref).cancel_at_ms == admitted_at + wait_ms
+
+
+# An owner who lets an entry wait five minutes: its cutoff on the expiry day is that much earlier than the default's.
+FIVE_MINUTE_WAIT = CloseTerms(entry_wait_ms=MAX_ENTRY_WAIT_MS)
+ITS_OWN_CUTOFF = EXPIRY_CLOSE - FIVE_MINUTE_WAIT.entry_cutoff_lead_ms
+
+
+async def _on_the_expiry_day(paper: PaperOptions, at_ms: int) -> None:  # noqa: F811
+    """Days pass, and the Clerk reads its account and its fees afresh, as its cadences would have."""
+    _days_pass(paper, at_ms)
+    paper.account.account_observed_at_ms = at_ms
+    record_fee_evidence(paper.repo, [], checked_at_ms=at_ms, history_complete=True)
+    assert await paper.sync.tick() == "observed"
+
+
+async def test_an_entry_is_held_to_the_cutoff_its_own_terms_make_and_not_to_the_defaults(paper: PaperOptions) -> None:  # noqa: F811
+    assert EXPIRY_CLOSE - CloseTerms().entry_cutoff_lead_ms > ITS_OWN_CUTOFF
+    await _on_the_expiry_day(paper, ITS_OWN_CUTOFF)
+
+    refused = await paper.enter("a", evidence=paper.evidence(terms=FIVE_MINUTE_WAIT))
+    taken = await paper.enter("b")
+
+    # Too late for a five-minute wait to be seen through; an entry left at the default wait still fits.
+    _refused(refused, "OPTION_CONTRACT_PAST_ENTRY_CUTOFF")
+    assert taken.state is EffectOperationState.SUBMITTED, taken.explanation
+
+
+async def test_an_entry_reached_for_sending_after_the_cutoff_of_its_own_terms_is_not_sent(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _on_the_expiry_day(paper, ITS_OWN_CUTOFF - 2_000)
+    take = clerk_runtime.accept_option_enter
+
+    def take_and_two_seconds_pass(*args: object, **kwargs: object) -> object:
+        taken = take(*args, **kwargs)
+        paper.clock.advance(2_000)
+        return taken
+
+    monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_two_seconds_pass)
+
+    refused = await paper.enter(evidence=paper.evidence(terms=FIVE_MINUTE_WAIT))
+
+    assert refused.state is EffectOperationState.REJECTED, refused.explanation
+    [order_ref] = refused.child_order_refs
+    not_sent = paper.repo.last_order_transition(order_ref=order_ref, transition_kind="ENTER_SUBMISSION_REFUSED")
+    assert not_sent is not None and not_sent["summary_code"] == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
+    assert paper.venue.option_submit_calls == [] and paper.set_aside_cents() == 0
 
 
 @pytest.mark.parametrize(
