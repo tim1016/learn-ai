@@ -1,5 +1,7 @@
 <span class="option-contract__head">
-  <span class="option-contract__name">{{ name() }}</span>
+  <span class="option-contract__name">
+    <app-asset-identity [symbol]="contract().underlying" size="xs" [logo]="false" [showTitle]="false" />&ngsp;<span>{{ terms() }}</span>
+  </span>
   <button
     type="button"
     class="option-contract__reveal"

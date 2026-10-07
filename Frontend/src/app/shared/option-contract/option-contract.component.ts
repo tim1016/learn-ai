@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 
+import { AssetIdentityComponent } from '../asset-identity/asset-identity.component';
 import { formatTimestampDisplay } from '../timestamp/timestamp-display';
 
 /** The facts that name one option contract, as the server sends them (#2913). */
@@ -27,25 +28,36 @@ function strikeText(strike: string | number): string {
 }
 
 /**
- * A contract's name as a trader says it: `SPY Oct 9 '26 585 Call`. The year
- * is always there, and the expiry is read as a date in New York, so it is
- * the same date in every viewer's zone.
+ * A contract's name after its underlying: `Oct 9 '26 585 Call`. The year is
+ * always there, and the expiry is read as a date in New York, so it is the
+ * same date in every viewer's zone.
+ */
+function contractTerms(contract: OptionContract): string {
+  const expiry = formatTimestampDisplay(contract.expiry_ms, { mode: 'date-et', granularity: 'short-date' });
+  return `${expiry} ${strikeText(contract.strike)} ${RIGHT_IN_WORDS[contract.right]}`;
+}
+
+/**
+ * A contract's name as a trader says it: `SPY Oct 9 '26 585 Call`. For an
+ * accessible name, or a place no component can sit; on screen a contract is
+ * shown by {@link OptionContractComponent}.
  */
 export function optionContractName(contract: OptionContract): string {
-  const expiry = formatTimestampDisplay(contract.expiry_ms, { mode: 'date-et', granularity: 'short-date' });
-  return `${contract.underlying} ${expiry} ${strikeText(contract.strike)} ${RIGHT_IN_WORDS[contract.right]}`;
+  return `${contract.underlying} ${contractTerms(contract)}`;
 }
 
 let nextCodeId = 0;
 
 /**
  * The one renderer for an option contract's name (#2915). Every page that
- * shows a contract uses it; none formats one itself. The raw contract code
- * is one click away, for matching a contract at the broker.
+ * shows a contract uses it; none formats one itself. The underlying is a
+ * tradeable symbol, so the shared symbol renderer draws it. The raw contract
+ * code is one click away, for matching a contract at the broker.
  */
 @Component({
   selector: 'app-option-contract',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AssetIdentityComponent],
   templateUrl: './option-contract.component.html',
   styleUrl: './option-contract.component.scss',
 })
@@ -54,8 +66,8 @@ export class OptionContractComponent {
 
   protected readonly codeShown = signal(false);
   protected readonly codeId = `option-contract-code-${nextCodeId++}`;
-  protected readonly name = computed(() => optionContractName(this.contract()));
+  protected readonly terms = computed(() => contractTerms(this.contract()));
   protected readonly revealLabel = computed(
-    () => `${this.codeShown() ? 'Hide' : 'Show'} contract code for ${this.name()}`,
+    () => `${this.codeShown() ? 'Hide' : 'Show'} contract code for ${optionContractName(this.contract())}`,
   );
 }

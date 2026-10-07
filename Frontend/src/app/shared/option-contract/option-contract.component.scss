@@ -15,6 +15,13 @@
   white-space: nowrap;
 }
 
+// The underlying and the rest of the name read as one name.
+.option-contract__name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+}
+
 .option-contract__reveal {
   padding: 0 0.15em;
   border: 0;

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { OptionContractComponent, type OptionContract } from './option-contract.component';
+import { OptionContractComponent, optionContractName, type OptionContract } from './option-contract.component';
 
 // 2026-10-09 16:00 America/New_York = 2026-10-09 20:00 UTC.
 const OCT_9_2026_MS = Date.UTC(2026, 9, 9, 20, 0, 0);
@@ -15,19 +15,28 @@ const CALL: OptionContract = {
   strike: '585',
 };
 
+/** The contract's name as it reads on screen: the underlying, then the rest. */
+async function nameShownFor(contract: OptionContract): Promise<string> {
+  const { container } = await render(OptionContractComponent, { inputs: { contract } });
+  return (container.querySelector('.option-contract__name')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 describe('OptionContractComponent', () => {
   it('names a contract as a trader says it, with the year', async () => {
-    await render(OptionContractComponent, { inputs: { contract: CALL } });
+    expect(await nameShownFor(CALL)).toBe("SPY Oct 9 '26 585 Call");
+  });
 
-    expect(screen.getByText("SPY Oct 9 '26 585 Call")).toBeTruthy();
+  it('draws the underlying with the shared symbol renderer, and no logo', async () => {
+    const { container } = await render(OptionContractComponent, { inputs: { contract: CALL } });
+
+    const underlying = container.querySelector('app-asset-identity');
+    expect(underlying?.textContent?.trim()).toBe('SPY');
+    expect(underlying?.querySelector('img')).toBeNull();
+    expect(screen.getByText("Oct 9 '26 585 Call")).toBeTruthy();
   });
 
   it('says a put as a word', async () => {
-    await render(OptionContractComponent, {
-      inputs: { contract: { ...CALL, occ_symbol: 'SPY261009P00585000', right: 'put' } },
-    });
-
-    expect(screen.getByText("SPY Oct 9 '26 585 Put")).toBeTruthy();
+    expect(await nameShownFor({ ...CALL, occ_symbol: 'SPY261009P00585000', right: 'put' })).toBe("SPY Oct 9 '26 585 Put");
   });
 
   it.each([
@@ -37,9 +46,7 @@ describe('OptionContractComponent', () => {
     ['600', "SPY Oct 9 '26 600 Call"],
     [587.5, "SPY Oct 9 '26 587.5 Call"],
   ])('writes a strike of %s with no zeros it does not need', async (strike, name) => {
-    await render(OptionContractComponent, { inputs: { contract: { ...CALL, strike } } });
-
-    expect(screen.getByText(name)).toBeTruthy();
+    expect(await nameShownFor({ ...CALL, strike })).toBe(name);
   });
 
   // A real expiry is 16:00 New York time. The two ends of the New York day
@@ -50,9 +57,11 @@ describe('OptionContractComponent', () => {
     ['the first minute of the New York day', Date.UTC(2026, 9, 9, 4, 0, 0)],
     ['the last minute of the New York day', Date.UTC(2026, 9, 10, 3, 59, 0)],
   ])('reads the expiry date in New York, never in the viewer zone: %s', async (_when, expiryMs) => {
-    await render(OptionContractComponent, { inputs: { contract: { ...CALL, expiry_ms: expiryMs } } });
+    expect(await nameShownFor({ ...CALL, expiry_ms: expiryMs })).toBe("SPY Oct 9 '26 585 Call");
+  });
 
-    expect(screen.getByText("SPY Oct 9 '26 585 Call")).toBeTruthy();
+  it('says the same name in words where no component can sit', () => {
+    expect(optionContractName(CALL)).toBe("SPY Oct 9 '26 585 Call");
   });
 
   it('keeps the raw contract code one click away, behind a named control', async () => {
