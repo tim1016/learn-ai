@@ -196,6 +196,21 @@ async def test_a_residue_no_exit_episode_names_refuses(clocked_repo) -> None:  #
     assert _discharges(repo) == []
 
 
+async def test_a_write_off_refused_for_want_of_a_notice_names_every_notice_that_would_allow_it(clocked_repo) -> None:  # noqa: F811
+    """Three notices let a residue be written off. A refusal that named two of them would send the owner wrong."""
+    from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
+
+    repo, _clock = clocked_repo
+    await _held_position(repo)
+    _stop_run(repo)
+
+    with pytest.raises(ResidueDischargeRefused) as refused:
+        await _discharge(repo, _FakeRead(positions=[]))
+
+    allowing = [code for code, policy in _REASON_POLICIES.items() if policy.residue_discharge == "strands"]
+    assert len(allowing) == 3 and all(code in str(refused.value) for code in allowing)
+
+
 async def test_a_netted_account_discharges_only_the_residue(clocked_repo) -> None:  # noqa: F811
     """A's stale +10 beside B's real -10: the broker shows -10, and discharging
     A's residue is exactly what restores broker = attribution."""
@@ -364,6 +379,8 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
     assert {code for code, role in roles.items() if role == "strands"} == {
         "EXIT_NOT_FLAT",
         "EXIT_STUCK",
+        # #2913: an expired contract the broker has taken off its books is a residue no order can close.
+        "SCHEDULED_CLOSE_MISSED",
     }
     assert {code for code, role in roles.items() if role == "admits"} == {
         "POSITION_DRIFT",
@@ -372,6 +389,8 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
         # #2460: doubts the cost of fills whose quantity both sides agree on,
         # so it cannot move a residue.
         "EXECUTION_PRICE_CONFLICT",
+        # #2913: doubts what an entry cost at the broker, never a quantity the bot holds.
+        "OPTION_BUYING_POWER_UNDER_RESERVED",
     }
     assert residue_discharge_role("NOT_A_REGISTERED_CODE") == "refuses"
 

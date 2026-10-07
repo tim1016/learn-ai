@@ -15,7 +15,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 )
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.exit_resolution import resolve_exit
-from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts
+from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
@@ -191,13 +191,16 @@ def _accept_exit_capture(
     confirmed_shape: ConfirmedRecoveryShape | None = None,
     regular_session_only: bool = False,
     option_exit: OptionExitEvidence | None = None,
+    scheduled_close: ScheduledCloseFacts | None = None,
 ) -> ExitSubmission:
     """Capture one EXIT and every same-strategy/symbol entry before contact.
 
     A deciding program's ``program_leg`` (its shape with the end of the
     session it was priced for) or an operator's ``confirmed_shape`` — never
     both — is durable with the acceptance, and so is ``regular_session_only``
-    (``ExitAcceptedFacts.regular_session_only``).
+    (``ExitAcceptedFacts.regular_session_only``). So is ``scheduled_close``,
+    for the Clerk's own scheduled close of an option position and each
+    re-drive of it (ADR 0076): which close it is and when it was due.
 
     An EXIT of a position in an option contract (ADR 0076) is known by its
     target: an entry accepted as an option entry. Whoever makes it, it is
@@ -274,6 +277,7 @@ def _accept_exit_capture(
                 if option_entry is None or option_exit is None
                 else OptionExitFacts.of(option_exit, closing=option_entry.contract_terms.symbol).to_facts()
             ),
+            scheduled_close=None if scheduled_close is None else scheduled_close.to_mapping(),
         ).with_reducing_shape(
             None if recorded is None else recorded.shape,
             valid_until_ms=None if recorded is None else recorded.valid_until_ms,
@@ -399,6 +403,7 @@ def accept_recovery_exit(
     forbid_active_run: bool = False,
     confirmed_shape: ConfirmedRecoveryShape | None = None,
     regular_session_only: bool = False,
+    scheduled_close: ScheduledCloseFacts | None = None,
 ) -> ExitSubmission:
     """Capture one reduction-only recovery EXIT without the active-run fence.
 
@@ -425,7 +430,9 @@ def accept_recovery_exit(
     Decision-id namespaces: ``recovery-flatten-<hex16>``,
     ``exit-redrive-<episode-hex12>-<n>``, ``dry-run-close-<hex16>`` (a Dry
     Run's run-end close, ``dry_run_close``), ``scheduled-end-<hex16>`` (the
-    sale at a bot's owner-scheduled end, ``scheduled_end``) (all colon-free; the idempotency
+    sale at a bot's owner-scheduled end, ``scheduled_end``),
+    ``scheduled-close-<yyyymmdd>-<hex16>`` (the scheduled close of an option
+    position, ``scheduled_close``) (all colon-free; the idempotency
     key is ``(strategy_instance_id, decision_id)`` only — see
     ``_exit_identity`` — so each namespace must be unique per intent).
 
@@ -440,6 +447,13 @@ def accept_recovery_exit(
     ``regular_session_only`` (the sale at a bot's scheduled end and its
     re-drives, #2607) holds the market leg for the next regular open wherever
     another EXIT would be re-priced for an extended session.
+
+    ``scheduled_close`` is recorded on the acceptance of the Clerk's own
+    scheduled close of an option position, and of each re-drive of it made
+    in the session it was due in (ADR 0076). It is the one EXIT of the
+    Clerk's own that is accepted while the bot's run is ACTIVE without an
+    ``EXIT_NOT_FLAT`` episode to carry on: a close is owed by what is held,
+    whatever the run is doing.
     """
 
     def resolve_run_id(target: OrderResource) -> str:
@@ -460,6 +474,7 @@ def accept_recovery_exit(
         decision_receipt=None,
         confirmed_shape=confirmed_shape,
         regular_session_only=regular_session_only,
+        scheduled_close=scheduled_close,
     )
 
 

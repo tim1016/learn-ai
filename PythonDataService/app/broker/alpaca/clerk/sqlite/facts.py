@@ -484,6 +484,7 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
     "regular_session_only": False,
     "option_contract": None,
     "option_exit": None,
+    "scheduled_close": None,
 }
 
 
@@ -496,6 +497,37 @@ def _omit_defaults(payload: dict[str, Any], defaults: Mapping[str, Any]) -> dict
     JSON of a row that does not use it.
     """
     return {name: value for name, value in payload.items() if defaults.get(name, object()) != value}
+
+
+@dataclass(frozen=True)
+class ScheduledCloseFacts:
+    """What a scheduled close of an option position was accepted for (ADR 0076).
+
+    Which close it is, when it was due, and the session it was due in.
+    ``kind`` is ``app.options.deadlines.CloseKind``'s value.
+    ``session_open_ms`` names the session as a trading date is kept: by its
+    open. How late the close was taken is its acceptance's own recorded time
+    less ``due_ms``. That is read, never stored.
+    """
+
+    kind: str
+    due_ms: int
+    session_open_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"kind": self.kind, "due_ms": self.due_ms, "session_open_ms": self.session_open_ms}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ScheduledCloseFacts:
+        """Read back exactly what ``to_mapping`` wrote; anything else is refused, never guessed at."""
+        if not isinstance(value, dict) or set(value) != {"kind", "due_ms", "session_open_ms"}:
+            raise ValueError("a scheduled close keeps exactly its kind, when it was due and its session's open")
+        kind, times = value["kind"], (value["due_ms"], value["session_open_ms"])
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("a scheduled close's kind is a name")
+        if any(isinstance(time, bool) or not isinstance(time, int) or time < 0 for time in times):
+            raise ValueError("a scheduled close's times are int64 ms UTC")
+        return cls(kind=kind, due_ms=times[0], session_open_ms=times[1])
 
 
 @dataclass(frozen=True)
@@ -573,6 +605,16 @@ class ExitAcceptedFacts:
     # close is priced from when whichever pass sends it comes to send it.
     # Absent for an EXIT that was handed none, and for every EXIT in shares.
     option_exit: dict[str, Any] | None = None
+    # The scheduled close this EXIT is (``ScheduledCloseFacts``, ADR 0076): the
+    # Clerk's own close of an option position on its expiry day, or of a
+    # structure with a sold leg before a session's close, and each re-drive of
+    # it made inside that session. Absent for every other EXIT.
+    scheduled_close: dict[str, Any] | None = None
+
+    @property
+    def the_scheduled_close(self) -> ScheduledCloseFacts | None:
+        """The scheduled close this EXIT was accepted as, or ``None`` for any other EXIT."""
+        return None if self.scheduled_close is None else ScheduledCloseFacts.from_mapping(self.scheduled_close)
 
     @property
     def operator_priced(self) -> bool:

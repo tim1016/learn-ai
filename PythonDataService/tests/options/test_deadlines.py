@@ -11,8 +11,11 @@ from app.options.deadlines import (
     CloseKind,
     CloseTerms,
     DueClose,
+    ScheduledClose,
     close_deadline_ms,
     close_due_on,
+    close_missed_at,
+    close_owed_at,
     entry_cutoff_ms,
     entry_cutoff_on,
     last_session_close_ms,
@@ -207,3 +210,174 @@ def test_a_bought_contracts_cutoff_on_its_expiry_day_is_the_one_the_resolver_is_
     assert entry_cutoff_on(_structure(("bought", "long", _FRIDAY)), _FRIDAY, _TERMS) == entry_cutoff_ms(_FRIDAY, _TERMS)
     longer_wait = replace(_TERMS, entry_wait_ms=60_000)
     assert entry_cutoff_on(_structure(("bought", "long", _FRIDAY)), _FRIDAY, longer_wait) == scenes._at(_FRIDAY, 15, 13, 0)
+
+
+# ---- The close owed at an instant ---------------------------------------------
+
+_MONDAY = date(2026, 10, 5)
+_THURSDAY = date(2026, 10, 8)
+_SATURDAY = date(2026, 10, 10)
+_NEXT_MONDAY = date(2026, 10, 12)
+_FAR = date(2026, 12, 18)
+_WITH_A_SOLD_LEG = [("bought", "long", _FAR), ("sold", "short", _FAR)]
+
+
+@pytest.mark.parametrize(
+    ("day", "closes_at"),
+    [pytest.param(_FRIDAY, 16, id="a full day"), pytest.param(_HALF_DAY, 13, id="a half day")],
+)
+def test_a_contract_expiring_today_owes_its_close_from_45_minutes_before_the_sessions_close_until_that_close(
+    day: date, closes_at: int
+) -> None:
+    structure = _structure(("bought", "long", day))
+    due, session_close = scenes._at(day, closes_at - 1, 15), scenes._at(day, closes_at, 0)
+
+    owed = close_owed_at(structure, _TERMS, at_ms=due - 1)
+
+    # 15:15 on a full day and 12:15 on a half day, in the session that opened at 9:30.
+    assert owed == ScheduledClose(CloseKind.EXPIRY_DAY, due, scenes._at(day, 9, 30), session_close)
+    assert not owed.due(due - 1) and owed.due(due) and owed.due(session_close - 1)
+    assert not owed.due(session_close)
+    # Before the open it is the close of the session to come. From the session's close on, none is owed.
+    assert close_owed_at(structure, _TERMS, at_ms=scenes._at(day, 8, 0)) == owed
+    assert close_owed_at(structure, _TERMS, at_ms=session_close) is None
+
+
+@pytest.mark.parametrize("day", [pytest.param(_THANKSGIVING, id="a holiday"), pytest.param(_SATURDAY, id="a weekend")])
+def test_no_close_is_owed_on_a_day_with_no_session(day: date) -> None:
+    assert close_owed_at(_structure(*_WITH_A_SOLD_LEG), _TERMS, at_ms=scenes._at(day, 12, 0)) is None
+
+
+def test_the_day_a_close_is_owed_on_is_new_yorks_and_not_the_day_it_already_is_in_utc() -> None:
+    """Between eight in the evening and midnight in New York the UTC date is already the next day's."""
+    expiring_friday = _structure(("bought", "long", _FRIDAY))
+    thursday_at_nine_in_the_evening = scenes._at(_THURSDAY, 21, 0)
+    friday_half_past_midnight = scenes._at(_FRIDAY, 0, 30)
+
+    # Thursday evening it is still Thursday: that session has ended and Friday's close is not owed yet.
+    assert close_owed_at(expiring_friday, _TERMS, at_ms=thursday_at_nine_in_the_evening) is None
+    assert close_owed_at(_structure(*_WITH_A_SOLD_LEG), _TERMS, at_ms=thursday_at_nine_in_the_evening) is None
+    # From midnight in New York it is Friday, and the close of the session to come is the one owed.
+    owed = close_owed_at(expiring_friday, _TERMS, at_ms=friday_half_past_midnight)
+    assert owed is not None and owed.due_ms == scenes._at(_FRIDAY, 15, 15)
+    # Friday evening the session has ended, though in UTC it is already Saturday.
+    assert close_owed_at(expiring_friday, _TERMS, at_ms=scenes._at(_FRIDAY, 20, 30)) is None
+
+
+def test_a_bought_contract_expiring_another_day_owes_no_close_today() -> None:
+    assert close_owed_at(_structure(("bought", "long", _NEXT_FRIDAY)), _TERMS, at_ms=scenes._at(_FRIDAY, 15, 30)) is None
+
+
+@pytest.mark.parametrize(
+    ("day", "closes_at"),
+    [
+        pytest.param(_MONDAY, 16, id="Monday"),
+        pytest.param(_THURSDAY, 16, id="Thursday"),
+        pytest.param(_FRIDAY, 16, id="Friday"),
+        pytest.param(_HALF_DAY, 13, id="a half day"),
+    ],
+)
+def test_a_structure_with_a_sold_leg_owes_a_close_10_minutes_before_every_sessions_close(
+    day: date, closes_at: int
+) -> None:
+    owed = close_owed_at(_structure(*_WITH_A_SOLD_LEG), _TERMS, at_ms=scenes._at(day, 10, 0))
+
+    assert owed == ScheduledClose(
+        CloseKind.SOLD_LEG, scenes._at(day, closes_at - 1, 50), scenes._at(day, 9, 30), scenes._at(day, closes_at, 0)
+    )
+
+
+# ---- The close a session ended on ---------------------------------------------
+
+
+def test_a_contract_still_held_after_its_last_session_missed_its_close_however_long_ago() -> None:
+    structure = _structure(("bought", "long", _FRIDAY))
+    held_since = scenes._at(_MONDAY, 12, 0)
+    last_close = scenes._at(_FRIDAY, 16, 0)
+    missed = ScheduledClose(CloseKind.EXPIRY_DAY, scenes._at(_FRIDAY, 15, 15), scenes._at(_FRIDAY, 9, 30), last_close)
+
+    assert close_missed_at(structure, _TERMS, held_since_ms=held_since, at_ms=last_close - 1) is None
+    assert close_missed_at(structure, _TERMS, held_since_ms=held_since, at_ms=last_close) == missed
+    # The weekend after, and ten days on: it is the same close that was missed.
+    assert close_missed_at(structure, _TERMS, held_since_ms=held_since, at_ms=scenes._at(_SATURDAY, 12, 0)) == missed
+    assert close_missed_at(structure, _TERMS, held_since_ms=held_since, at_ms=scenes._at(date(2026, 10, 19), 11, 0)) == missed
+
+
+def test_a_contract_that_has_not_expired_and_has_no_sold_leg_missed_nothing() -> None:
+    structure = _structure(("bought", "long", _NEXT_FRIDAY))
+
+    assert close_missed_at(
+        structure, _TERMS, held_since_ms=scenes._at(_MONDAY, 12, 0), at_ms=scenes._at(_NEXT_MONDAY, 11, 0)
+    ) is None
+
+
+def test_a_sold_leg_still_held_after_a_sessions_close_missed_the_close_of_the_last_session_that_ended() -> None:
+    structure = _structure(*_WITH_A_SOLD_LEG)
+    held_since = scenes._at(_THURSDAY, 12, 0)
+    fridays = ScheduledClose(
+        CloseKind.SOLD_LEG, scenes._at(_FRIDAY, 15, 50), scenes._at(_FRIDAY, 9, 30), scenes._at(_FRIDAY, 16, 0)
+    )
+
+    def missed(at_ms: int) -> ScheduledClose | None:
+        return close_missed_at(structure, _TERMS, held_since_ms=held_since, at_ms=at_ms)
+
+    # Thursday's close passed with it held: that is the one missed until Friday's has passed too.
+    assert missed(scenes._at(_FRIDAY, 15, 59)) == ScheduledClose(
+        CloseKind.SOLD_LEG, scenes._at(_THURSDAY, 15, 50), scenes._at(_THURSDAY, 9, 30), scenes._at(_THURSDAY, 16, 0)
+    )
+    assert missed(scenes._at(_FRIDAY, 16, 0)) == fridays
+    # Over the weekend, and through Monday's session, the last session that ended is still Friday's.
+    assert missed(scenes._at(_SATURDAY, 12, 0)) == fridays
+    assert missed(scenes._at(_NEXT_MONDAY, 11, 0)) == fridays
+    assert missed(scenes._at(_NEXT_MONDAY, 16, 0)) == ScheduledClose(
+        CloseKind.SOLD_LEG, scenes._at(_NEXT_MONDAY, 15, 50), scenes._at(_NEXT_MONDAY, 9, 30), scenes._at(_NEXT_MONDAY, 16, 0)
+    )
+
+
+@pytest.mark.parametrize(
+    ("held_since", "at"),
+    [
+        pytest.param((_FRIDAY, 15, 50), (_FRIDAY, 16, 0), id="taken at the instant the close was due"),
+        pytest.param((_NEXT_MONDAY, 10, 0), (_NEXT_MONDAY, 11, 0), id="taken the morning after"),
+    ],
+)
+def test_a_structure_taken_once_a_sessions_close_was_due_missed_nothing_that_session(
+    held_since: tuple[date, int, int], at: tuple[date, int, int]
+) -> None:
+    structure = _structure(*_WITH_A_SOLD_LEG)
+
+    assert close_missed_at(structure, _TERMS, held_since_ms=scenes._at(*held_since), at_ms=scenes._at(*at)) is None
+    # Held one millisecond sooner than Friday's close was due, it missed that close.
+    if held_since[0] == _FRIDAY:
+        assert close_missed_at(
+            structure, _TERMS, held_since_ms=scenes._at(*held_since) - 1, at_ms=scenes._at(*at)
+        ) is not None
+
+
+def test_when_a_leg_expired_and_a_sold_leg_was_held_past_a_later_close_the_earlier_close_is_the_one_told() -> None:
+    structure = _structure(("bought", "long", _NEXT_FRIDAY), ("sold", "short", _FRIDAY))
+
+    missed = close_missed_at(
+        structure, _TERMS, held_since_ms=scenes._at(_MONDAY, 12, 0), at_ms=scenes._at(_NEXT_MONDAY, 16, 30)
+    )
+
+    assert missed == ScheduledClose(
+        CloseKind.EXPIRY_DAY, scenes._at(_FRIDAY, 15, 15), scenes._at(_FRIDAY, 9, 30), scenes._at(_FRIDAY, 16, 0)
+    )
+
+
+def test_a_contract_whose_expiry_date_has_no_session_missed_its_close_in_the_session_before() -> None:
+    """Its last session is the one before the date. No session's own close is owed on the date itself
+    (``close_due_on`` asks for a contract expiring on the session), so such a contract is only ever told as
+    missed."""
+    structure = _structure(("bought", "long", _THANKSGIVING))
+    wednesday = date(2026, 11, 25)
+
+    missed = close_missed_at(
+        structure, _TERMS, held_since_ms=scenes._at(wednesday, 10, 0), at_ms=scenes._at(wednesday, 16, 0)
+    )
+
+    assert close_owed_at(structure, _TERMS, at_ms=scenes._at(wednesday, 15, 30)) is None
+    assert missed == ScheduledClose(
+        CloseKind.EXPIRY_DAY, scenes._at(wednesday, 15, 15), scenes._at(wednesday, 9, 30), scenes._at(wednesday, 16, 0)
+    )

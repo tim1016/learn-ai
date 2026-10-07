@@ -33,6 +33,10 @@ OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE = "OPTION_BUYING_POWER_UNDER_RESE
 # multi-leg parent whose ``side`` is null. Contained to that order: recorded
 # and surfaced, never folded, never allowed to wedge the execution stream.
 UNFOLDABLE_BROKER_ORDER_REASON_CODE = "UNFOLDABLE_BROKER_ORDER"
+# A session ended with an option contract still held that the Clerk owed a
+# close of (ADR 0076): the expiry-day close, or a sold leg's close. It doubts
+# no quantity. It says a deadline passed and the position is still open.
+SCHEDULED_CLOSE_MISSED_REASON_CODE = "SCHEDULED_CLOSE_MISSED"
 # The two former ``holds`` causes, folded into this registry by the v12
 # migration (ADR 0048 Decision 2). Both are stored under the wire spelling the
 # panel already publishes, so ``HOLD_REASON_BY_STORED_CODE``'s translation row
@@ -341,6 +345,80 @@ class FailedEnterFilledCause:
         if refs != sorted(set(refs)):
             raise ValueError("failed-ENTER-filled orders must have unique sorted order_refs")
         return cls(orders=orders)
+
+
+@dataclass(frozen=True)
+class MissedScheduledClose:
+    """One option contract a bot still held when the session its close was due in ended (ADR 0076).
+
+    ``kind`` is ``app.options.deadlines.CloseKind``'s value. ``due_ms`` is
+    when the close was owed, and ``session_open_ms`` names the session it
+    was owed in, as a trading date is kept: by its open.
+    """
+
+    symbol: str
+    attributed_qty: float
+    kind: str
+    due_ms: int
+    session_open_ms: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "attributed_qty": self.attributed_qty,
+            "kind": self.kind,
+            "due_ms": self.due_ms,
+            "session_open_ms": self.session_open_ms,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> MissedScheduledClose:
+        if not isinstance(value, dict):
+            raise ValueError("missed scheduled close must be an object")
+        _require_exact_keys(value, {"symbol", "attributed_qty", "kind", "due_ms", "session_open_ms"})
+        symbol, kind = value["symbol"], value["kind"]
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
+            raise ValueError("missed scheduled close symbol must be a non-empty uppercase string")
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("missed scheduled close kind must be a non-empty string")
+        for name in ("due_ms", "session_open_ms"):
+            if isinstance(value[name], bool) or not isinstance(value[name], int) or value[name] < 0:
+                raise ValueError(f"missed scheduled close {name} must be int64 ms UTC")
+        return cls(
+            symbol=symbol,
+            attributed_qty=_finite_number(value["attributed_qty"], field_name="attributed_qty"),
+            kind=kind,
+            due_ms=value["due_ms"],
+            session_open_ms=value["session_open_ms"],
+        )
+
+
+@dataclass(frozen=True)
+class ScheduledCloseMissedCause:
+    """Every contract one bot still holds past a close the Clerk owed for it (ADR 0076).
+
+    One notice a bot, naming each contract once, in symbol order. It is
+    written again when what it names changes, and ended when none is left.
+    """
+
+    closes: tuple[MissedScheduledClose, ...]
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"closes": [close.to_mapping() for close in self.closes]}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ScheduledCloseMissedCause:
+        if not isinstance(value, dict):
+            raise ValueError("scheduled-close-missed cause must be an object")
+        _require_exact_keys(value, {"closes"})
+        raw_closes = value["closes"]
+        if not isinstance(raw_closes, list) or not raw_closes:
+            raise ValueError("scheduled-close-missed cause must name at least one contract")
+        closes = tuple(MissedScheduledClose.from_mapping(item) for item in raw_closes)
+        symbols = [close.symbol for close in closes]
+        if symbols != sorted(set(symbols)):
+            raise ValueError("scheduled-close-missed contracts must have unique sorted symbols")
+        return cls(closes=closes)
 
 
 @dataclass(frozen=True)

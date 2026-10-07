@@ -26,7 +26,7 @@ from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite import deadline_keeper
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper, Nudge
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline, to_thread
@@ -64,7 +64,7 @@ def _the_clerk(
 ) -> ActiveClerkRuntime:
     """The account's Clerk as ``main.py`` holds it: its facade, its account reading, its keeper, its books."""
     if off_loop is not run_inline:
-        paper.keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=off_loop)
+        paper.keeper = paper.another_keeper(off_loop=off_loop)
     return ActiveClerkRuntime(
         authority_kind=authority_kind,  # type: ignore[arg-type]
         clerk=paper.clerk, envelope_sync=paper.sync, deadline_keeper=paper.keeper,
@@ -451,13 +451,15 @@ async def test_a_stock_only_accounts_clerk_asks_alpaca_nothing_and_writes_nothin
     # The scenario is not an empty one: a stock entry is working at the broker, under a run still going.
     assert working is not None and working.broker_state == "accepted" and repo.active_run("spy-bot") is not None
     written, asked = log(repo), _asks(venue)
-    keeper = DeadlineKeeper(repo=repo, trade=venue, off_loop=run_inline)
+    nudge = Nudge()
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo, read=_FakeReadPort(), trade=venue, account_mode="paper", entry_deadline_nudge=nudge
+    )
+    keeper = DeadlineKeeper(
+        repo=repo, trade=venue, intake=facade.intake, pricing=facade.recovery_pricing, nudge=nudge, off_loop=run_inline
+    )
     clerk = ActiveClerkRuntime(
-        authority_kind="sqlite",
-        clerk=SqliteAlpacaClerkFacade(
-            repo=repo, read=_FakeReadPort(), trade=venue, account_mode="paper", entry_deadline_nudge=keeper.nudge
-        ),
-        deadline_keeper=keeper, _sqlite_repository=repo, account_id="PA-STOCK",
+        authority_kind="sqlite", clerk=facade, deadline_keeper=keeper, _sqlite_repository=repo, account_id="PA-STOCK",
     )
 
     await clerk.close()

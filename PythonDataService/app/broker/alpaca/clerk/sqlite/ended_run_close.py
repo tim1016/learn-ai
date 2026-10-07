@@ -28,6 +28,7 @@ from typing import Literal
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import (
     RecoveryRunActiveError,
+    ReducibleEntry,
     accept_recovery_exit,
     exit_effect_operation_id,
     newest_reducible_entry,
@@ -81,18 +82,32 @@ def bot_holdings(repo: ClerkSqliteRepository, strategy_instance_id: str, *, deci
         target = newest_reducible_entry(repo, strategy_instance_id, symbol)
         if target is None:
             continue
-        decision_id = f"{decision_prefix}{hashlib.sha256(target.order_ref.encode('utf-8')).hexdigest()[:16]}"
-        close = OwedClose(strategy_instance_id, symbol, target.order_ref, decision_id)
-        accepted = repo.effect_operation(
-            exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
-        )
-        if accepted is not None:
-            holdings.append(Holding(close, "failed" if accepted.state in FAILED_EFFECT_STATES else "closing"))
-        elif target.exit_owned:
-            holdings.append(Holding(close, "other_exit"))
-        else:
-            holdings.append(Holding(close, "owed"))
+        holdings.append(holding_of_entry(repo, strategy_instance_id, symbol, target, decision_prefix=decision_prefix))
     return holdings
+
+
+def decision_id_under(decision_prefix: str, entry_order_ref: str) -> str:
+    """The decision a close of what one entry opened is accepted under, in one Clerk-owned namespace."""
+    return f"{decision_prefix}{hashlib.sha256(entry_order_ref.encode('utf-8')).hexdigest()[:16]}"
+
+
+def holding_of_entry(
+    repo: ClerkSqliteRepository,
+    strategy_instance_id: str,
+    symbol: str,
+    target: ReducibleEntry,
+    *,
+    decision_prefix: str,
+) -> Holding:
+    """One held symbol's close under ``decision_prefix``, keyed on the entry ``target`` names, and where it stands."""
+    decision_id = decision_id_under(decision_prefix, target.order_ref)
+    close = OwedClose(strategy_instance_id, symbol, target.order_ref, decision_id)
+    accepted = repo.effect_operation(
+        exit_effect_operation_id(strategy_instance_id=strategy_instance_id, decision_id=decision_id)
+    )
+    if accepted is not None:
+        return Holding(close, "failed" if accepted.state in FAILED_EFFECT_STATES else "closing")
+    return Holding(close, "other_exit" if target.exit_owned else "owed")
 
 
 def closes_owed_under(
@@ -156,5 +171,7 @@ __all__ = [
     "OwedClose",
     "bot_holdings",
     "closes_owed_under",
+    "decision_id_under",
     "drive_close",
+    "holding_of_entry",
 ]
