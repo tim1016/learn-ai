@@ -23,6 +23,7 @@ from app.broker.alpaca.config import AlpacaSettings
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.errors import (
     BrokerEvidenceUnavailable,
+    BrokerOptionsNotSupported,
     BrokerOrderAnswerUnreadable,
     BrokerOrderNotPermitted,
     BrokerRateLimited,
@@ -113,6 +114,20 @@ def broker(tmp_path: Path) -> AlpacaBroker:
     return AlpacaBroker(client=client, settings=settings)
 
 
+@pytest.fixture
+def live_broker(tmp_path: Path) -> AlpacaBroker:
+    settings = AlpacaSettings(
+        api_key_id="k", api_secret_key="s", mode="live",
+        # Every live envelope value is required configuration (ADR 0059 D4).
+        live_loss_fraction=0.02, live_loss_usd=500.0, live_xh_entry_bps=10.0, live_xh_exit_bps=10.0,
+    )
+    client = AlpacaTradingClient(
+        settings=settings,
+        journal=CaptureJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS),
+    )
+    return AlpacaBroker(client=client, settings=settings)
+
+
 def _sent(call_index: int = 0) -> dict[str, Any]:
     return json.loads(responses.calls[call_index].request.body)
 
@@ -126,6 +141,26 @@ async def _no_sleep(_seconds: float) -> None:
 
 
 # ── Submitting ──────────────────────────────────────────────────────────────
+
+
+def _closes_the_long_call() -> SingleOptionOrderRequest:
+    return SingleOptionOrderRequest(
+        contract=OptionContract.from_occ_symbol("AAPL250620C00100000"), side=OrderSide.SELL,
+        intent=OptionPositionIntent.CLOSE, quantity=2, order_type=OrderType.MARKET,
+    )
+
+
+@responses.activate
+@pytest.mark.parametrize("order", [_long_call, _closes_the_long_call, _ratio_spread], ids=["open", "close", "several legs"])
+async def test_a_live_account_is_sent_no_option_order_and_the_refusal_says_nothing_was_sent(
+    live_broker: AlpacaBroker, order: Any
+) -> None:
+    with pytest.raises(BrokerOptionsNotSupported) as refused:
+        await live_broker.submit_option_order(order(), client_order_id=_REF)
+
+    # Definitive, and before any request: nothing reached Alpaca's live endpoint.
+    assert not isinstance(refused.value, BrokerUnavailable | BrokerEvidenceUnavailable)
+    assert len(responses.calls) == 0
 
 
 @responses.activate

@@ -51,6 +51,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
+from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
+    asked_of_a_real_option_order,
+    look_up_by_client_order_id,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
     fold_order_evidence,
@@ -778,7 +782,9 @@ async def _recover_fills_on_failed_operations(
 
     for order_ref, lookup_failed in await to_thread(_worklist):
         try:
-            observed = await trade.get_order_by_client_order_id(order_ref)
+            # An order in an option contract is read by the option port's strict reader (ADR 0076).
+            asked = await to_thread(lambda ref=order_ref: asked_of_a_real_option_order(repo, trade, ref))
+            observed = await look_up_by_client_order_id(trade, order_ref, asked=asked)
         except BrokerError as exc:
             logger.warning(
                 lookup_failed.message,

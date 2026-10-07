@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -29,11 +31,14 @@ from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     option_order_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.session_authority import et_minute_of_day_ms
+from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
     BUYS_ONE_CALL,
@@ -52,6 +57,9 @@ from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import (
 from tests.broker.alpaca.documented_examples import documented
 
 ONE_CONTRACT_SET_ASIDE = 19_406
+# The close of the contract's last session, and the Monday after it once the market has opened.
+EXPIRY_CLOSE = et_minute_of_day_ms(CALL.expiry_date, 16 * 60)
+MONDAY_AFTER_THE_OPEN = et_minute_of_day_ms(date(2026, 9, 21), 10 * 60)
 
 
 def _refused(receipt: EffectOperationReceipt, code: str) -> None:
@@ -187,8 +195,51 @@ async def test_a_lookup_that_fails_leaves_the_outcome_unknown_and_the_whole_comm
     assert len(paper.venue.option_submit_calls) == 1
 
 
-@pytest.mark.parametrize("changed", [{"symbol": "SPY260918C00590000"}, {"qty": "5"}, {"side": "sell"}])
-async def test_an_answer_about_another_order_states_no_outcome(paper: PaperOptions, changed: dict[str, str]) -> None:  # noqa: F811
+_ANOTHER_ORDER = [
+    {"symbol": "SPY260918C00590000"}, {"qty": "5"}, {"side": "sell"},
+    # The same contracts at another limit, or at no limit at all, are another order too.
+    {"limit_price": "1.95"}, {"type": "market", "order_type": "market", "limit_price": None},
+]
+
+
+@pytest.mark.parametrize("changed", _ANOTHER_ORDER)
+async def test_the_sends_own_answer_about_another_order_states_no_outcome(
+    paper: PaperOptions, changed: dict[str, str | None], monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """Alpaca answers the send itself with an order that is not the one sent: nothing of it is taken."""
+    real_send = paper.venue.submit_option_order
+
+    async def send_answered_with_another_order(order: SingleOptionOrderRequest, *, client_order_id: str) -> object:
+        await real_send(order, client_order_id=client_order_id)
+        paper.venue.option_orders[client_order_id].update(
+            changed, filled_qty="1", filled_avg_price="1.94", status="filled"
+        )
+        return alpaca_adapter.from_alpaca_option_order(paper.venue.option_orders[client_order_id])
+
+    monkeypatch.setattr(paper.venue, "submit_option_order", send_answered_with_another_order)
+
+    sent = await paper.enter()
+
+    [order_ref] = sent.child_order_refs
+    # Not a refusal, and not a fill: the outcome is unknown, and the whole commitment stays set aside.
+    assert sent.state is not EffectOperationState.REJECTED, sent.explanation
+    assert paper.held() == {} and paper.order_state(order_ref) is None
+    assert paper.outcome(order_ref).standing is EntryStanding.OUTCOME_UNKNOWN
+    assert paper.set_aside_cents() == ONE_CONTRACT_SET_ASIDE
+
+
+async def test_an_answer_that_writes_the_same_limit_another_way_is_the_order_asked_for(paper: PaperOptions) -> None:  # noqa: F811
+    order_ref = await paper.resting()
+    paper.venue.option_orders[order_ref].update(limit_price="1.940")
+    paper.wait(WAIT_MS)
+
+    await paper.round()
+
+    assert paper.outcome(order_ref).standing is EntryStanding.UNFILLED
+
+
+@pytest.mark.parametrize("changed", _ANOTHER_ORDER)
+async def test_an_answer_about_another_order_states_no_outcome(paper: PaperOptions, changed: dict[str, str | None]) -> None:  # noqa: F811
     order_ref = await paper.resting()
     # Alpaca answers the lookup with an order that is not the one the books asked for.
     paper.venue.option_orders[order_ref].update(changed, filled_qty="1", filled_avg_price="1.94", status="filled")
@@ -219,9 +270,14 @@ def test_one_option_orders_answer_becomes_the_order_evidence_the_books_take() ->
     )
     assert (evidence.submitted_at_ms, evidence.updated_at_ms) == (answer.submitted_at_ms, answer.updated_at_ms)
     assert evidence.events == []
-    assert evidence_of_the_order_asked(answer, asked=AskedOptionOrder("AAPL250620C00100000", "buy", 2)) == evidence
-    with pytest.raises(BrokerEvidenceUnavailable):
-        evidence_of_the_order_asked(answer, asked=AskedOptionOrder("AAPL250620C00100000", "buy", 3))
+    asked = AskedOptionOrder("AAPL250620C00100000", "buy", 2, "limit", Decimal("10.00"))
+    assert evidence_of_the_order_asked(answer, asked=asked) == evidence
+    for another in (
+        replace(asked, contracts=3), replace(asked, limit_price=Decimal("10.01")),
+        replace(asked, order_type="market", limit_price=None),
+    ):
+        with pytest.raises(BrokerEvidenceUnavailable):
+            evidence_of_the_order_asked(answer, asked=another)
 
 
 def test_a_multi_leg_answer_is_not_yet_evidence_of_anything() -> None:
@@ -236,7 +292,7 @@ def test_a_multi_leg_answer_is_not_yet_evidence_of_anything() -> None:
 async def test_what_the_books_asked_for_is_read_from_the_order_and_a_stock_order_has_none(paper: PaperOptions) -> None:  # noqa: F811
     order_ref = await paper.resting(units=2)
 
-    assert asked_option_order(paper.repo, order_ref) == AskedOptionOrder(SYMBOL, "buy", 2)
+    assert asked_option_order(paper.repo, order_ref) == AskedOptionOrder(SYMBOL, "buy", 2, "limit", Decimal("1.94"))
     assert asked_option_order(paper.repo, "no-such-order") is None
 
 
@@ -254,7 +310,7 @@ async def test_a_paper_exit_is_a_market_order_sent_with_no_quote_and_it_closes_w
     assert paper.venue.submitted_option_orders[-1] == SingleOptionOrderRequest(
         contract=CALL, side=OrderSide.SELL, intent=OptionPositionIntent.CLOSE, quantity=1, order_type=OrderType.MARKET,
     )
-    assert asked_option_order(paper.repo, closing_ref) == AskedOptionOrder(SYMBOL, "sell", 1)
+    assert asked_option_order(paper.repo, closing_ref) == AskedOptionOrder(SYMBOL, "sell", 1, "market", None)
 
     await paper.stream_fill(closing_ref, contracts=1, filled_in_all=1, price="1.90", execution_id="x-2")
     await paper.pass_()
@@ -290,6 +346,105 @@ async def test_an_exit_while_the_entry_still_rests_cancels_it_first_and_closes_o
     assert paper.order_state(order_ref) == "canceled"
     closing = paper.venue.submitted_option_orders[-1]
     assert (closing.side, closing.intent, closing.quantity) == (OrderSide.SELL, OptionPositionIntent.CLOSE, 1)
+
+
+def _days_pass(paper: PaperOptions, until_ms: int) -> None:  # noqa: F811
+    """Days pass. The Clerk's hold on its account is taken up again where it left it, and SPY still trades."""
+    assert until_ms >= paper.clock()
+    paper.clock.value = until_ms
+    paper.repo.revive_execution_lease()
+    publish_quotes(until_ms, SPY=585.0)
+
+
+async def test_a_paper_close_whose_send_got_no_answer_keeps_custody_when_tried_again_after_the_contract_expired(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The close is sent a minute before the contract's last close and Alpaca never answers.
+
+    On Monday the order is still nowhere to be found. It may have traded all
+    the same, so its exit is not ended as "the contract expired": it stays
+    an unknown outcome, the bot is still counted as holding the contract,
+    and nothing is sent a second time.
+    """
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    _days_pass(paper, EXPIRY_CLOSE - 60_000)
+    paper.venue.option_submit_error = BrokerUnavailable("no answer", broker="alpaca")
+
+    sold = await paper.exit()
+
+    [closing_ref] = [order.order_ref for order in paper.repo.orders_for_strategy("a") if order.role == "REDUCING"]
+    sends = list(paper.venue.option_submit_calls)
+    assert sends[-1] == closing_ref and paper.enter_state(closing_ref) == "unknown", sold.explanation
+
+    paper.venue.option_submit_error = None
+    _days_pass(paper, MONDAY_AFTER_THE_OPEN)
+    await paper.pass_()
+
+    still_exiting = paper.repo.active_exit_for_strategy("a")
+    assert still_exiting is not None and still_exiting.state == "unknown"
+    assert paper.held() == {SYMBOL: 1.0}
+    assert paper.venue.option_submit_calls == sends
+    assert paper.repo.last_strategy_transition(strategy_instance_id="a", transition_kind="EXIT_NOT_FLAT") is None
+
+
+async def test_the_operators_check_of_a_paper_option_close_alpaca_never_took_asks_the_option_reader(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.venue.option_submit_error = BrokerUnavailable("no answer", broker="alpaca")
+    await paper.exit()
+    paper.venue.option_submit_error = None
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+    paper.wait(60_000)
+    (unknown,) = paper.repo.unknown_exit_orders("a")
+    asked_before = len(paper.venue.option_lookup_calls)
+
+    findings = await paper.clerk.check_unknown_exit_order(
+        strategy_instance_id="a", presented=unknown, attestation=OrderOutcomeAttestation(kind="absent")
+    )
+
+    # Alpaca was asked about the order as an option order, never as a stock order, and has none.
+    assert paper.venue.option_lookup_calls[asked_before:] == [unknown.order_ref]
+    assert paper.venue.lookup_calls == []
+    assert findings.would_settle is True
+
+
+async def test_an_operator_settles_a_paper_option_close_that_traded_unseen_by_naming_its_alpaca_order(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    order_ref = await paper.resting()
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    real_send = paper.venue.submit_option_order
+
+    async def send_that_alpaca_takes_and_then_goes_quiet(order: SingleOptionOrderRequest, *, client_order_id: str) -> object:
+        paper.venue.option_answer_lost = True
+        paper.venue.option_lookup_error = BrokerUnavailable("no answer", broker="alpaca")
+        return await real_send(order, client_order_id=client_order_id)
+
+    paper.venue.submit_option_order = send_that_alpaca_takes_and_then_goes_quiet  # type: ignore[method-assign]
+    await paper.exit()
+    (unknown,) = paper.repo.unknown_exit_orders("a")
+    closing_ref = unknown.order_ref
+    paper.venue.option_order_fills(closing_ref, contracts=1, average_price="1.90")
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+    paper.venue.option_lookup_error = None
+    # Naming the entry's order instead is refused as another order, in the attestation's own words.
+    another = OrderOutcomeAttestation(kind="exists", broker_order_id=paper.venue.option_orders[order_ref]["id"])
+    wrong = await paper.clerk.check_unknown_exit_order(strategy_instance_id="a", presented=unknown, attestation=another)
+    assert (wrong.would_settle, wrong.refusal_reason_code) == (False, "NOT_THIS_ORDER")
+
+    shown = OrderOutcomeAttestation(kind="exists", broker_order_id=paper.venue.option_orders[closing_ref]["id"])
+    findings = await paper.clerk.check_unknown_exit_order(strategy_instance_id="a", presented=unknown, attestation=shown)
+    assert findings.would_settle is True
+    await paper.clerk.settle_unknown_exit_order(
+        strategy_instance_id="a", presented=unknown, attestation=shown, operator="owner", reason=None
+    )
+
+    # The sale is counted from Alpaca's own record of it, read as an option order: the bot is flat.
+    assert paper.venue.lookup_calls == []
+    assert paper.order_state(closing_ref) == "filled" and paper.held() == {}
 
 
 # ── the outcome the runner asks for ──────────────────────────────────────

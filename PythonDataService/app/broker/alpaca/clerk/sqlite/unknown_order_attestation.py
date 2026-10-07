@@ -141,6 +141,12 @@ from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
 from app.broker.alpaca.clerk.sqlite.off_loop import run_drained, to_thread
+from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
+    AskedOptionOrder,
+    asked_of_a_real_option_order,
+    look_up_by_broker_order_id,
+    look_up_by_client_order_id,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedUnknownExitOrder,
@@ -333,6 +339,9 @@ class _AlpacaReads:
     read: BrokerReadPort
     trade: BrokerTradePort
     around_each_read: Callable[[], None]
+    # What the books asked a real broker for under the order being settled, when it is an
+    # order in an option contract: its lookups are then the option port's (ADR 0076).
+    asked: AskedOptionOrder | None = None
 
     async def _answer[T](self, ask: Callable[[], Awaitable[T]]) -> T:
         self.around_each_read()
@@ -349,7 +358,7 @@ class _AlpacaReads:
         Asked for the client order id this order was sent under, and for the
         other one Alpaca answered its send under, when it did.
         """
-        observed = await self._answer(lambda: self.trade.get_order_by_client_order_id(client_order_id))
+        observed = await self._answer(lambda: look_up_by_client_order_id(self.trade, client_order_id, asked=self.asked))
         if observed is not None and observed.client_order_id != client_order_id:
             raise _broker_unreadable(
                 BrokerError(
@@ -363,7 +372,10 @@ class _AlpacaReads:
         """The order Alpaca has under ``broker_order_id``; ``None`` for an id it has no order under."""
         self.around_each_read()
         try:
-            observed = await self.trade.get_order_by_broker_order_id(broker_order_id)
+            # The id is the operator's: whether it names this order is said below, in words about it.
+            observed = await look_up_by_broker_order_id(
+                self.trade, broker_order_id, asked=self.asked, held_to_it=False
+            )
         except BrokerRequestInvalid:
             # An id Alpaca could not take as an order id names no order it has.
             return None
@@ -477,8 +489,9 @@ async def settle_unknown_exit_order(
             )
 
     try:
+        asked = await to_thread(lambda: asked_of_a_real_option_order(repo, trade, presented.order_ref))
         alpaca_read = await _read_alpaca(
-            _AlpacaReads(read=read, trade=trade, around_each_read=renew_the_claim),
+            _AlpacaReads(read=read, trade=trade, around_each_read=renew_the_claim, asked=asked),
             presented,
             attestation,
             clock=repo.clock,
@@ -531,8 +544,9 @@ async def check_unknown_exit_order(
                 repo, strategy_instance_id=strategy_instance_id, presented=presented, kind=attestation.kind
             )
         )
+        asked = await to_thread(lambda: asked_of_a_real_option_order(repo, trade, presented.order_ref))
         alpaca_read = await _read_alpaca(
-            _AlpacaReads(read=read, trade=trade, around_each_read=_no_claim_to_renew),
+            _AlpacaReads(read=read, trade=trade, around_each_read=_no_claim_to_renew, asked=asked),
             presented,
             attestation,
             clock=repo.clock,

@@ -14,25 +14,36 @@ is held to the order the books asked for.
 - ``asked_option_order`` reads what the books asked for under an order
   reference: the contract, the side and the contracts.
 - ``evidence_of_the_order_asked`` is both: the answer's evidence, once it
-  names that contract, that side and that many contracts. An answer that
-  differs is about something the books did not ask for, so it states no
-  outcome: the order's outcome stays unknown, to be asked again.
+  names that contract, that side, that many contracts, that kind of order
+  and that limit price. An answer that differs is about something the books
+  did not ask for, so it states no outcome: the order's outcome stays
+  unknown, to be asked again.
+- ``look_up_by_client_order_id`` and ``look_up_by_broker_order_id`` are the
+  one place that chooses which reader reads a Clerk-owned order: the option
+  port's strict reader for an order the books bind to a contract on a real
+  account, the stock reader otherwise. Every exact lookup of the Clerk's own
+  order goes through them: a resolution's, the pass's, and the operator's
+  attestation.
 
 Nothing here is rounded. A count of contracts is a whole number in both
 shapes. A price is the broker's exact decimal, written as the float the
-books keep every price as.
+books keep every price as; a limit price is compared as the exact decimal.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import order_contract_terms
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts, ExitReducingOrderCreatedFacts
+from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_facts
+from app.broker.alpaca.clerk.sqlite.order_evidence import trade_port_folds_simulated_evidence
 from app.broker.contract.errors import BrokerEvidenceUnavailable
 from app.broker.contract.models import BrokerOrder
 from app.broker.contract.options import BrokerOptionOrder, SingleOptionOrderRequest
+from app.broker.contract.ports import BrokerTradePort
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -49,10 +60,20 @@ class AskedOptionOrder:
     # ``buy`` or ``sell``.
     side: str
     contracts: int
+    # ``limit`` or ``market``, and the limit as the exact decimal it was asked at; ``None`` for a market order.
+    order_type: str
+    limit_price: Decimal | None
 
     @classmethod
     def of_request(cls, order: SingleOptionOrderRequest) -> AskedOptionOrder:
-        return cls(symbol=order.contract.occ_symbol, side=order.side.value, contracts=order.quantity)
+        return cls(
+            symbol=order.contract.occ_symbol, side=order.side.value, contracts=order.quantity,
+            order_type=order.order_type.value, limit_price=order.limit_price,
+        )
+
+    def words(self) -> str:
+        price = "at market" if self.limit_price is None else f"at a limit of {self.limit_price}"
+        return f"{self.side} {self.contracts} of {self.symbol}, a {self.order_type} order {price}"
 
 
 def asked_option_order(repo: ClerkSqliteRepository, order_ref: str) -> AskedOptionOrder | None:
@@ -68,14 +89,67 @@ def asked_option_order(repo: ClerkSqliteRepository, order_ref: str) -> AskedOpti
         accepted = repo.first_order_transition(order_ref=order_ref, transition_kind="ENTER_ACCEPTED")
         created = repo.first_order_transition(order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED")
     if accepted is not None:
-        leg = EnterAcceptedFacts.from_facts_json(accepted["facts_json"]).leg
-        return AskedOptionOrder(symbol=leg["symbol"].upper(), side=leg["side"].lower(), contracts=int(leg["quantity"]))
+        entry = option_entry_facts(EnterAcceptedFacts.from_facts_json(accepted["facts_json"]))
+        assert entry is not None, f"entry {order_ref!r} is bound to a contract and was not accepted as an option entry"
+        return AskedOptionOrder.of_request(entry.order)
     if created is not None:
         reducing = ExitReducingOrderCreatedFacts.from_facts_json(created["facts_json"])
         return AskedOptionOrder(
-            symbol=reducing.symbol.upper(), side=reducing.side.lower(), contracts=int(reducing.quantity)
+            symbol=reducing.symbol.upper(), side=reducing.side.lower(), contracts=int(reducing.quantity),
+            order_type=reducing.order_type.lower(),
+            # The books keep a reducing order's limit as a float of whole cents: its shortest
+            # written form is the decimal it was asked at.
+            limit_price=None if reducing.limit_price is None else Decimal(str(reducing.limit_price)),
         )
     raise AssertionError(f"order {order_ref!r} is bound to a contract and no record says what it asked for")
+
+
+def asked_of_a_real_option_order(
+    repo: ClerkSqliteRepository, trade: BrokerTradePort, order_ref: str
+) -> AskedOptionOrder | None:
+    """What the books asked a real broker for under ``order_ref``, when it is an order in an option contract.
+
+    ``None`` for an order in shares, and for every order of a simulation,
+    whose ledger is read by the one lookup it has.
+    """
+    if trade_port_folds_simulated_evidence(trade):
+        return None
+    return asked_option_order(repo, order_ref)
+
+
+async def look_up_by_client_order_id(
+    trade: BrokerTradePort, client_order_id: str, *, asked: AskedOptionOrder | None
+) -> BrokerOrder | None:
+    """The broker's record of the order sent under ``client_order_id``, or ``None`` when it has none.
+
+    ``asked`` is :func:`asked_of_a_real_option_order` for the Clerk's own
+    order the lookup is about. With one, the option port's strict reader
+    answers and the answer is held to it: one it cannot read whole, or one
+    about another order, raises and leaves the outcome unknown. Without
+    one the stock reader answers.
+    """
+    if asked is None:
+        return await trade.get_order_by_client_order_id(client_order_id)
+    answer = await trade.get_option_order_by_client_order_id(client_order_id)
+    return None if answer is None else evidence_of_the_order_asked(answer, asked=asked)
+
+
+async def look_up_by_broker_order_id(
+    trade: BrokerTradePort, broker_order_id: str, *, asked: AskedOptionOrder | None, held_to_it: bool = True
+) -> BrokerOrder | None:
+    """The broker's record of the order it holds under ``broker_order_id``: :func:`look_up_by_client_order_id`'s twin.
+
+    ``held_to_it=False`` is for an id a person typed (the operator's
+    attestation): the option reader still reads it, but an order that is not
+    the one asked for comes back as what it is, for the caller to refuse in
+    its own words, instead of raising as an answer nothing can be made of.
+    """
+    if asked is None:
+        return await trade.get_order_by_broker_order_id(broker_order_id)
+    answer = await trade.get_option_order_by_broker_order_id(broker_order_id)
+    if answer is None:
+        return None
+    return evidence_of_the_order_asked(answer, asked=asked) if held_to_it else option_order_evidence(answer)[0]
 
 
 def option_order_evidence(order: BrokerOptionOrder) -> tuple[BrokerOrder, ...]:
@@ -121,26 +195,31 @@ def evidence_of_the_order_asked(answer: BrokerOptionOrder, *, asked: AskedOption
     """``answer`` as order evidence, once it is about the order the books asked for.
 
     Raises ``BrokerEvidenceUnavailable``, an unknown outcome, when the answer
-    names another contract, another side or another number of contracts: a
-    fill counted from it would be counted against the wrong order.
+    names another contract, another side, another number of contracts,
+    another kind of order or another limit price: a fill counted from it
+    would be counted against the wrong order. The limit is compared as the
+    exact decimal, so ``1.9`` and ``1.90`` are one price.
     """
     (evidence,) = option_order_evidence(answer)
-    answered = AskedOptionOrder(symbol=evidence.symbol.upper(), side=evidence.side.lower(), contracts=answer.quantity)
+    answered = AskedOptionOrder(
+        symbol=evidence.symbol.upper(), side=evidence.side.lower(), contracts=answer.quantity,
+        order_type=answer.order_type.lower(), limit_price=answer.limit_price,
+    )
     if answered != asked:
         raise BrokerEvidenceUnavailable(
             "The broker answered about a different option order from the one the account Clerk asked for.",
             broker=answer.broker,
-            detail=(
-                f"Asked to {asked.side} {asked.contracts} of {asked.symbol}; the answer is to "
-                f"{answered.side} {answered.contracts} of {answered.symbol}."
-            ),
+            detail=f"Asked to {asked.words()}; the answer is to {answered.words()}.",
         )
     return evidence
 
 
 __all__ = [
     "AskedOptionOrder",
+    "asked_of_a_real_option_order",
     "asked_option_order",
     "evidence_of_the_order_asked",
+    "look_up_by_broker_order_id",
+    "look_up_by_client_order_id",
     "option_order_evidence",
 ]

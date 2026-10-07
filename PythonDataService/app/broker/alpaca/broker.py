@@ -33,6 +33,7 @@ from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
 from app.broker.contract.errors import (
     BrokerEvidenceUnavailable,
+    BrokerOptionsNotSupported,
     BrokerOrderAnswerUnreadable,
     BrokerRequestInvalid,
 )
@@ -951,7 +952,25 @@ class AlpacaBroker:
         An order that cannot be written as one, or a client order id Alpaca
         could not keep as given, is ``BrokerRequestInvalid``: nothing was
         sent.
+
+        **A live binding sends none** (ADR 0076 decision 19). It raises
+        ``BrokerOptionsNotSupported`` before anything is built: definitive,
+        nothing was sent, so the Clerk records the order as not sent. The
+        Clerk already refuses an option plan on a Live account, at
+        registration and at every effect; this is the second fence, on the
+        port that knows its own endpoint, so that one mistake above it
+        cannot put an option order on real money. An opening order and a
+        closing one are refused alike: a Live account's books can hold no
+        option position to close. Alpaca itself takes option orders on a
+        live account, which is why the capabilities still say so. Opening
+        Live to option bots removes this refusal on purpose (#2913).
         """
+        if self._resolved_settings().is_live:
+            raise BrokerOptionsNotSupported(
+                "This app sends no option order to a Live Alpaca account yet.",
+                broker=BROKER_ID,
+                detail="Option bots run on a Dry Run and on a Paper account. Nothing was sent.",
+            )
         body = _option_order_body(order, client_order_id=client_order_id)
         payload = await self._client.submit_order(body)
         try:

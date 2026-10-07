@@ -23,8 +23,10 @@ from app.broker.alpaca.clerk.sqlite.account_open_work import (
 )
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     AskedOptionOrder,
-    asked_option_order,
+    asked_of_a_real_option_order,
     evidence_of_the_order_asked,
+    look_up_by_broker_order_id,
+    look_up_by_client_order_id,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -122,16 +124,6 @@ class ClaimedBrokerIO:
             )
         return recorded
 
-    def _asked_of_a_real_option_order(self, order_ref: str) -> AskedOptionOrder | None:
-        """What the books asked a real broker for under ``order_ref``, when it is an order in an option contract.
-
-        ``None`` for an order in shares, and for every order of a simulation,
-        whose ledger is read by the one lookup it has.
-        """
-        if trade_port_folds_simulated_evidence(self.trade):
-            return None
-        return asked_option_order(self.repo, order_ref)
-
     def bind_option_close_quotes(
         self,
         client_order_id: str,
@@ -208,12 +200,8 @@ class ClaimedBrokerIO:
         """
         self._renew()
         try:
-            asked = self._asked_of_a_real_option_order(client_order_id)
-            if asked is None:
-                observed = await self.trade.get_order_by_client_order_id(client_order_id)
-            else:
-                answer = await self.trade.get_option_order_by_client_order_id(client_order_id)
-                observed = None if answer is None else evidence_of_the_order_asked(answer, asked=asked)
+            asked = asked_of_a_real_option_order(self.repo, self.trade, client_order_id)
+            observed = await look_up_by_client_order_id(self.trade, client_order_id, asked=asked)
         except BrokerError:
             self._renew()
             raise
@@ -237,12 +225,8 @@ class ClaimedBrokerIO:
         """
         self._renew()
         try:
-            asked = None if order_ref is None else self._asked_of_a_real_option_order(order_ref)
-            if asked is None:
-                observed = await self.trade.get_order_by_broker_order_id(broker_order_id)
-            else:
-                answer = await self.trade.get_option_order_by_broker_order_id(broker_order_id)
-                observed = None if answer is None else evidence_of_the_order_asked(answer, asked=asked)
+            asked = None if order_ref is None else asked_of_a_real_option_order(self.repo, self.trade, order_ref)
+            observed = await look_up_by_broker_order_id(self.trade, broker_order_id, asked=asked)
         except BrokerError as exc:
             self._renew()
             return exc

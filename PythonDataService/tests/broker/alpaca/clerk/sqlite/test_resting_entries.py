@@ -471,6 +471,28 @@ async def _the_flatten_offered(paper: PaperOptions) -> RecoveryCapability:  # no
     return next(item for item in build_recovery_catalog(context) if item.action_id == "execute_safe_flatten")
 
 
+async def test_a_voided_entry_that_filled_where_no_stream_showed_it_is_found_by_the_pass_as_an_option_order(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The abandoned send landed and filled while the stream was down: Alpaca's open orders no longer list it.
+
+    The pass sees a contract the books do not hold, looks the voided
+    entry's order up by its own id, and reads it as the option order it is.
+    """
+    order_ref = await _an_entry_voided_as_never_sent(paper)
+    asked = next(order for order in paper.venue.submitted_option_orders if order is not None)
+    paper.venue.option_orders[order_ref] = documented_option_order_payload(
+        asked, client_order_id=order_ref, at=paper.venue._venue_stamp()
+    )
+    paper.venue.option_order_fills(order_ref, contracts=1, average_price="1.94")
+
+    await paper.pass_()
+
+    assert paper.venue.lookup_calls == [] and paper.venue.option_lookup_calls[-1] == order_ref
+    assert paper.held() == {SYMBOL: 1.0} and paper.order_state(order_ref) == "filled"
+    assert FAILED_ENTER_FILLED_REASON_CODE in {raised["reason_code"] for raised in paper.repo.active_uncertainties()}
+
+
 # ── a clock that is set back ─────────────────────────────────────────────
 
 
