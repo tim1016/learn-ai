@@ -1,7 +1,7 @@
 """Walk-Forward Study HTTP boundary (PRD #1925 "HTTP contract").
 
 ``router`` — ``/api/research/walk-forward-studies``: preflight, history,
-detail (folds and verdict), delete. ``jobs_router`` —
+detail (folds and verdict), the folds' test-window curves, delete. ``jobs_router`` —
 ``POST /api/jobs-internal/walk-forward-study``, dispatched by the .NET jobs
 boundary with a minted ``job_id`` (a new study, or Finish of an incomplete
 one via ``resume_study_id``). Per-fold sweeps are read through the Grid
@@ -11,6 +11,7 @@ Search surface by their search ids.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
@@ -19,18 +20,22 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
+from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search.engine_adapter import default_execute_cell
-from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal
+from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal, window_dates
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
+from app.research.session_curves import curves_read
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study import service
-from app.research.walk_forward_study.models import StudyRow
+from app.research.walk_forward_study.models import FoldRecord, StudyRow, StudySpec
 from app.routers import research_records as records
 from app.schemas.walk_forward_study import (
     FoldPlanResponse,
     FoldResponse,
     VerdictResponse,
+    WalkForwardFoldCurvesResponse,
     WalkForwardStudyDetailResponse,
     WalkForwardStudyJobRequest,
     WalkForwardStudyPreflightResponse,
@@ -151,6 +156,43 @@ async def get_walk_forward_study(study_id: str) -> WalkForwardStudyDetailRespons
         folds=[FoldResponse(**fold.as_dict()) for fold in row.folds],
         resumable=refusal is None,
         resume_refusal=refusal,
+    )
+
+
+def _test_window_closes(folds: Sequence[FoldRecord]) -> list[int]:
+    """Every scheduled session close inside a fold's test window, from the canonical calendar."""
+    if not folds:
+        return []
+    first, last = window_dates(min(fold.test_start_ms for fold in folds), max(fold.test_end_ms for fold in folds))
+    closes = (window.close_ms_utc for window in session_windows_ms_utc(first, last))
+    return [close for close in closes if any(fold.test_start_ms <= close < fold.test_end_ms for fold in folds)]
+
+
+@router.get("/{study_id}/fold-curves", response_model=WalkForwardFoldCurvesResponse)
+async def get_walk_forward_fold_curves(study_id: str) -> WalkForwardFoldCurvesResponse:
+    """Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).
+
+    Every fold's test run starts from the study's starting capital, so each
+    curve starts flat. The sessions are those of every fold's test window, so
+    a fold with no curve — failed, not yet run, or recorded without one —
+    stands on the axis as a gap and nothing is drawn across it.
+    """
+    row = await _load(study_id)
+    # A completed fold's evidence is its winner's cell in the fold's test sweep.
+    tested = {
+        fold.fold_index: (fold.test_search_id, fold.winner_params_hash)
+        for fold in row.folds
+        if fold.status == "completed" and fold.test_search_id is not None and fold.winner_params_hash is not None
+    }
+    kept = await with_connection(sweep_repo.curves_of, list(tested.values()))
+    return WalkForwardFoldCurvesResponse.model_validate(
+        curves_read(
+            list(tested),
+            {index: kept[cell] for index, cell in tested.items() if cell in kept},
+            StudySpec.from_request_dict(row.request).grid.initial_cash,
+            key="fold_index",
+            also=_test_window_closes(row.folds),
+        )
     )
 
 

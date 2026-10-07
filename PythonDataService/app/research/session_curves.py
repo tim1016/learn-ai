@@ -8,9 +8,11 @@ its starting capital ``C``:
   * deepest fall ``min_t d_t``, at a session close: the engine's
     ``max_drawdown_pct`` reads every bar and can be deeper.
 ``sessions_ms`` is every session close any of the read's runs scored, in
-order. A curve's values run from ``first_session``, an index into that
-list, to the run's last session; a session inside that span the run did
-not score is null, never a carried value.
+order, with any further closes the caller names: a window no run covered
+then stands on the axis as a gap. A curve's values run from
+``first_session``, an index into that list, to the run's last session; a
+session inside that span the run did not score is null, never a carried
+value.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2930 "Every run
   keeps a daily equity curve"; https://github.com/tim1016/learn-ai/issues/2943
   for the sessions sent once.
@@ -21,7 +23,7 @@ Validated against: tests/research/test_session_curves.py.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from app.research.sweep.daily_equity import cumulative_return_series, drawdown_series
@@ -38,15 +40,16 @@ def _along(at: Sequence[int], values: Sequence[float]) -> list[float | None]:
     return line
 
 
-def session_curves(stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> tuple[list[int], dict[str, dict[str, Any]]]:
+def session_curves[K](stored: Mapping[K, Sequence[tuple[int, float]]], capital: float, *, also: Iterable[int] = ()) -> tuple[list[int], dict[K, dict[str, Any]]]:
     """The runs' curves against one list of session closes: the list, and each run's curve by its key.
 
     A curve is the run's cumulative return and its fall from peak from its
     first session to its last, null at a session between them it did not score.
+    ``also`` names session closes the list holds whether or not a run scored them.
     """
-    sessions = sorted({ms for daily in stored.values() for ms, _ in daily})
+    sessions = sorted({ms for daily in stored.values() for ms, _ in daily} | set(also))
     position = {ms: index for index, ms in enumerate(sessions)}
-    curves: dict[str, dict[str, Any]] = {}
+    curves: dict[K, dict[str, Any]] = {}
     for key, daily in stored.items():
         try:
             falls: list[float] | None = [value for _, value in drawdown_series(daily)]
@@ -63,9 +66,12 @@ def session_curves(stored: Mapping[str, Sequence[tuple[int, float]]], capital: f
     return sessions, curves
 
 
-def curves_read(asked: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float, *, key: str) -> dict[str, Any]:
-    """The curves of the runs asked for, in the order asked and each named under ``key``, and the runs among them that kept none."""
-    sessions, curves = session_curves({name: stored[name] for name in asked if name in stored}, capital)
+def curves_read[K](asked: Sequence[K], stored: Mapping[K, Sequence[tuple[int, float]]], capital: float, *, key: str, also: Iterable[int] = ()) -> dict[str, Any]:
+    """The curves of the runs asked for, in the order asked and each named under ``key``, and the runs among them that kept none.
+
+    ``also`` names session closes the read's list holds whether or not a run scored them.
+    """
+    sessions, curves = session_curves({name: stored[name] for name in asked if name in stored}, capital, also=also)
     return {
         "sessions_ms": sessions,
         "curves": [{key: name, **curves[name]} for name in asked if name in curves],

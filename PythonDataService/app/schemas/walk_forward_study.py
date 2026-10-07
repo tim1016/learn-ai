@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.research.walk_forward_study.models import StudySpec
 from app.schemas.grid_search import GridSearchSpecRequest, to_grid_spec
+from app.schemas.session_curves import SessionCurve, SessionsMs
 
 
 class WalkForwardStudySpecRequest(GridSearchSpecRequest):
@@ -111,3 +112,15 @@ class WalkForwardStudyDetailResponse(WalkForwardStudySummaryResponse):
     folds: list[FoldResponse]
     resumable: bool
     resume_refusal: str | None
+
+
+class FoldTestCurve(SessionCurve):
+    fold_index: int
+
+
+class WalkForwardFoldCurvesResponse(BaseModel):
+    """Each completed fold's winner over its test window, from the study's starting capital afresh (#2936)."""
+
+    sessions_ms: SessionsMs = Field(description="Every session close of every fold's test window, in order, sent once.")
+    curves: list[FoldTestCurve] = Field(description="In fold order. A fold that did not complete has none: its sessions stand empty.")
+    not_recorded: list[int] = Field(description="The completed folds whose winner's test run kept no daily equity; never drawn as a flat line.")
