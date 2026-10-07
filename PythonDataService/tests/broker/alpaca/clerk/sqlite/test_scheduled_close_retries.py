@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
     _accept_while_still_owed,
     close_being_retried,
+    drive_scheduled_closes,
     held_contracts,
     scheduled_close_state,
 )
@@ -140,6 +141,31 @@ async def test_while_the_bots_own_exit_is_working_after_the_close_failed_the_clo
     # While that order works, a minute of passes and rounds sends nothing more.
     await _passes(paper, 4)
     assert len(paper.venue.option_submit_calls) == asked and len(paper.venue.option_orders) == 2
+
+
+async def test_on_a_real_account_a_failed_close_is_sent_again_by_the_passs_watchdog_and_by_nothing_else(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The step takes a failed close again only where no pass will. Its own retry asks none of the questions
+    a re-drive is asked: does Alpaca's account agree, and is nothing else working on the contract?"""
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    paper.venue.option_submit_error = REFUSED
+    await paper.round()
+    taken = len(_exits_taken(paper))
+
+    # A minute of the keeper's rounds with no pass, and then the step as the pass itself calls it.
+    for _ in range(12):
+        paper.wait(5_000)
+        assert (await paper.round()).closes.taken == ()
+    stepped = await drive_scheduled_closes(
+        paper.repo, trade=paper.venue, intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing
+    )
+
+    assert stepped.taken == () and len(_exits_taken(paper)) == taken and _sent_at(paper) == [DUE]
+    # The pass's watchdog is what sends it again.
+    await paper.pass_()
+    assert _sent_at(paper) == [DUE, DUE + 60_000]
 
 
 async def test_the_retry_rule_is_read_from_the_books_for_one_bots_holding_and_its_own_session(

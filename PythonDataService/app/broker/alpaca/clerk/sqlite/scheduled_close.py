@@ -191,15 +191,14 @@ class HeldContract:
         return (self.last_exit_taken_at_ms or self.owed.due_ms) + SCHEDULED_CLOSE_RETRY_AFTER_MS
 
     def to_be_taken_again(self, now_ms: int) -> bool:
-        """Whether the close owed today failed, is still due, and is ready to be taken again.
+        """Whether the close owed today failed and is ready to be taken again.
 
         Asked only where nothing else retries a failed close: on an account
-        with no reconciliation pass on a timer.
+        with no reconciliation pass on a timer. A close is owed only until
+        its session's close, so none is taken again after it.
         """
         return (
             self.again_at_ms is not None
-            and self.owed is not None
-            and self.owed.due(now_ms)
             and self.again_at_ms <= now_ms
             and self.unfinished is None
             and not self.left_to_owner
