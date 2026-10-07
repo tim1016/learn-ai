@@ -1,4 +1,4 @@
-"""Golden parity for the American option pricer against QuantLib (AM-001, AM-002, AM-003)."""
+"""Golden parity for the American option pricer against QuantLib (AM-001 to AM-005)."""
 
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ from golden_support.registry import default as registry  # noqa: E402
 
 from app.options.american import (  # noqa: E402
     DEFAULT_TREE_STEPS,
+    AmericanDailyDecay,
     AmericanIvStatus,
     AmericanValue,
     CashDividend,
+    american_daily_decay,
     american_implied_volatility,
     american_value,
 )
@@ -192,3 +194,82 @@ def test_a_price_the_second_engine_computed_with_dividends_is_solved_back_to_its
         equal_nan=False,
         err_msg="delta",
     )
+
+
+def _assert_decay_close(decays: list[AmericanDailyDecay | None], expected: list[dict[str, Any]], *, atol: float) -> None:
+    """The decay, and the two prices it was worked from, against the reference engine's."""
+    assert all(decay is not None for decay in decays)
+    # Every contract here has over a day and a minute left, so both prices are the model's.
+    assert not any(decay.later_price_is_exercise_value for decay in decays)
+    for field in ("decay", "price_now", "price_a_day_later"):
+        np.testing.assert_allclose(
+            [getattr(decay, field) for decay in decays],
+            [case[field] for case in expected],
+            atol=atol,
+            rtol=0,
+            equal_nan=False,
+            err_msg=field,
+        )
+
+
+def test_a_days_decay_without_dividends_matches_the_difference_of_two_quantlib_tree_prices() -> None:
+    """AM-004: QuantLib's price of the same contract 24 hours on, less its price now.
+
+    Each price is the same tree as QuantLib's, step for step, so the difference
+    holds the strict default: the largest gap measured is 4.7e-10, at a day
+    and fifteen minutes to expiry, and 8.9e-11 with a day and two hours or
+    more. The cases whose later price is a day or less from expiry are the
+    sensitive ones, for the reason AM-001's test gives.
+    """
+    tolerance = registry.get("AM-004").tolerance
+    assert (tolerance.atol, tolerance.rtol) == (1e-9, 0)
+    cases = _cases("AM-004")
+    decays = [american_daily_decay(**_without_dividends(case["input"])) for case, _ in cases]
+
+    _assert_decay_close(decays, [expected for _, expected in cases], atol=tolerance.atol)
+    assert {decay.cash_gone_ex for decay in decays} == {0.0}
+
+
+# AM-005 is the second engine's decay: its price of the same contract a day on, less its price now,
+# with cash dividends. As with AM-002 the gap is this tree's own discretization error, not rounding,
+# and no engine pinned here builds this tree with cash dividends. A difference of two prices is held
+# to twice what AM-002 holds one price to. Largest gap in the decay over the 84 cases, as the
+# tree's steps rise:
+#     401 steps: 5.0e-3      1,009: 7.9e-4      2,003: 9.4e-4      4,001: 2.2e-4
+# The 5.0e-3 is one case: a call deep in the money, at volatility 0.4, whose stock goes ex $1.75 a
+# day out. At 401 steps the tree prices it 5.0e-3 under the second engine: it can exercise only on
+# a step, and the last one before the ex-date falls up to a step early. Over the other 83 cases the
+# largest gap at 401 steps is 1.3e-3, and half of all the cases are within 1e-5. On the 20 cases
+# with no dividend the largest is 1.3e-4 at 401 steps and 2.0e-6 at 2,003.
+# What these tolerances tell apart: holding the quoted price across an ex-date moves the 32 cases
+# that go ex inside the day by 6.4e-2 to 1.75, and leaving the other dividends where they were, not
+# a day nearer, moves 25 of 44 cases by over 2e-3, up to 6.2e-2. What they do not: taking off the
+# dividend's present value in place of the cash in full moves the later price by at most 2.2e-4.
+# tests/options/test_american_daily_decay.py pins that choice directly.
+# The step counts are prime. An ex-date exactly on a tree step is counted before or after that step
+# by the last bit of the two times, and at AM-002's 2,001 steps, 69 to the day over 29 days, every
+# whole day of a 29-day span is on one. A prime count over the days to expiry has no whole day on a step.
+_FINE_DECAY_TREE_STEPS = 2003
+_FINE_TREE_DECAY_ATOL = 2e-3
+_DEFAULT_STEPS_DECAY_ATOL = 1e-2
+
+
+def _decays_with_dividends(steps: int) -> tuple[list[AmericanDailyDecay | None], list[dict[str, Any]]]:
+    cases = _cases("AM-005")
+    decays = [american_daily_decay(**_with_its_dividends(case["input"]), steps=steps) for case, _ in cases]
+    return decays, [expected for _, expected in cases]
+
+
+def test_a_days_decay_with_cash_dividends_matches_the_second_engines_difference() -> None:
+    """AM-005 at 2,003 steps, with the dividend that goes ex inside the day taken off the stock price."""
+    decays, expected = _decays_with_dividends(_FINE_DECAY_TREE_STEPS)
+
+    _assert_decay_close(decays, expected, atol=_FINE_TREE_DECAY_ATOL)
+    assert [decay.cash_gone_ex for decay in decays] == [case["cash_gone_ex"] for case in expected]
+
+
+def test_a_days_decay_at_the_default_step_count_stays_within_a_cent_of_the_second_engine() -> None:
+    """AM-005 at the step count a bot prices with."""
+    decays, expected = _decays_with_dividends(DEFAULT_TREE_STEPS)
+
+    _assert_decay_close(decays, expected, atol=_DEFAULT_STEPS_DECAY_ATOL)
