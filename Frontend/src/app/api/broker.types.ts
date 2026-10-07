@@ -23383,6 +23383,7 @@ export interface components {
              * @enum {string}
              */
             mode: "log_only" | "dry_run" | "trade";
+            option_order_terms?: components["schemas"]["SealedOptionOrderTerms"] | null;
             /** Quantity */
             quantity: number;
             /**
@@ -23402,6 +23403,20 @@ export interface components {
             validation_event_id: string;
             /** Validation Snapshot Sha256 */
             validation_snapshot_sha256: string;
+        };
+        /**
+         * SealedOptionOrderTerms
+         * @description An option bot's four order terms. Every one is said; none is filled in.
+         */
+        SealedOptionOrderTerms: {
+            /** Cost Limit Percent */
+            cost_limit_percent: string;
+            /** Entry Wait Seconds */
+            entry_wait_seconds: number;
+            /** Expiry Close Lead Minutes */
+            expiry_close_lead_minutes: number;
+            /** Gap Limit Percent */
+            gap_limit_percent: string;
         };
         /** SearchOwnerResponse */
         SearchOwnerResponse: {

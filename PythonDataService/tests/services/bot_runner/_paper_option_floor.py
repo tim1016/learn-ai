@@ -63,7 +63,7 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeTradePort, documented_option_listing
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import PaperAccountRead
 
-from ._option_floor import CALL_585, Floor, Ran, ScriptedFeed, Step, one_call
+from ._option_floor import CALL_585, STARTING_TERMS, Floor, Ran, ScriptedFeed, Step, one_call
 
 PAPER_ACCOUNT = "PAPER-OPTIONS"
 PAPER_SID = "paper-buys-a-call"
@@ -78,7 +78,7 @@ def paper_binding_for(
     return BrokerBotBinding(
         strategy_instance_id=PAPER_SID, strategy_key="deployment_validation", broker="alpaca", symbol=listens_to,
         mode="trade", quantity=contracts, action_plan=plan, run_id=run_id, created_at_ms=0,
-        sealed_account_id=PAPER_ACCOUNT, exit_terms=DEPLOY_EXIT_TERMS,
+        sealed_account_id=PAPER_ACCOUNT, exit_terms=DEPLOY_EXIT_TERMS, option_order_terms=STARTING_TERMS,
         budget_consent=DeployBudgetConsent(
             committed_cents=budget_cents, risk_revision=1, actor="owner", request_fingerprint="reviewed",
             world="real_paper",

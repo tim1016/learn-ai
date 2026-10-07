@@ -43410,6 +43410,16 @@
             "title": "Mode",
             "type": "string"
           },
+          "option_order_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SealedOptionOrderTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quantity": {
             "exclusiveMinimum": 0.0,
             "title": "Quantity",
@@ -43470,6 +43480,40 @@
           "bot_configuration_hash"
         ],
         "title": "SealedBotProgram",
+        "type": "object"
+      },
+      "SealedOptionOrderTerms": {
+        "additionalProperties": false,
+        "description": "An option bot's four order terms. Every one is said; none is filled in.",
+        "properties": {
+          "cost_limit_percent": {
+            "title": "Cost Limit Percent",
+            "type": "string"
+          },
+          "entry_wait_seconds": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Entry Wait Seconds",
+            "type": "integer"
+          },
+          "expiry_close_lead_minutes": {
+            "maximum": 390.0,
+            "minimum": 0.0,
+            "title": "Expiry Close Lead Minutes",
+            "type": "integer"
+          },
+          "gap_limit_percent": {
+            "title": "Gap Limit Percent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gap_limit_percent",
+          "entry_wait_seconds",
+          "cost_limit_percent",
+          "expiry_close_lead_minutes"
+        ],
+        "title": "SealedOptionOrderTerms",
         "type": "object"
       },
       "SearchOwnerResponse": {

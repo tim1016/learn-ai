@@ -76,6 +76,9 @@ class OptionEffectRefusal(StrEnum):
     # waits for what an entry came to. No entry could be cancelled and proven ended in time. Refused
     # when the run starts, not at every entry.
     ENTRY_WAIT_OVER_OUTCOME_WAIT = "OPTION_ENTRY_WAIT_OVER_OUTCOME_WAIT"
+    # The bot was started with no order terms sealed with it. They are fixed at Deploy for the bot's
+    # life, and nothing a decision says supplies them. Refused when the run starts.
+    ORDER_TERMS_NOT_SEALED = "OPTION_ORDER_TERMS_NOT_SEALED"
 
 
 # Shares one standard contract's price stands for. A listing with any other

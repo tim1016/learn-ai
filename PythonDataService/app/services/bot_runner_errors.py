@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Literal, NoReturn
 
-from app.schemas.action_plan import ActionPlan, traded_instrument
+from app.schemas.action_plan import ActionPlan, OptionEntryLeg, traded_instrument
+from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.traded_asset_acknowledgement import (
     UntestedTradedAssetAcknowledgement,
@@ -69,6 +70,12 @@ class CarryoverPolicyRefusedError(BotRunnerError):
 
 class TradedAssetAcknowledgementRefusedError(BotRunnerError):
     """A bot may not start with this acknowledgement of an untested traded asset, or without one (#2912)."""
+
+    http_status = 409
+
+
+class OptionStartRefusedError(BotRunnerError):
+    """A bot that trades option contracts may not start as it was asked to (ADR 0076 decision 24)."""
 
     http_status = 409
 
@@ -195,4 +202,50 @@ def require_start_configuration(
                 "Deploy creates a fresh identity. Resolve the previous deployment’s exposure "
                 "through Flatten; a new deployment never adopts it."
             ),
+        )
+
+
+OPTION_BOT_REGULAR_HOURS_ONLY = "OPTION_BOT_REGULAR_HOURS_ONLY"
+OPTION_ORDER_TERMS_REQUIRED = "OPTION_ORDER_TERMS_REQUIRED"
+OPTION_ORDER_TERMS_NOT_APPLICABLE = "OPTION_ORDER_TERMS_NOT_APPLICABLE"
+
+
+def require_option_start_configuration(
+    *,
+    action_plan: ActionPlan,
+    use_rth: bool,
+    option_order_terms: SealedOptionOrderTerms | None,
+) -> None:
+    """Refuse to start a bot whose option settings and plan do not go together (ADR 0076 decision 24).
+
+    A bot that trades option contracts runs in regular hours only, and
+    starts with its four order terms: they are sealed with it and fixed for
+    its life, so nothing later could supply them. A bot in shares carries
+    none. The runner is where every bot starts, so the rule is held here
+    whatever route asked.
+    """
+    trades_options = any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
+    if not trades_options:
+        if option_order_terms is None:
+            return
+        raise OptionStartRefusedError(
+            "This bot trades shares, so it has no option order terms.",
+            detail="Option order terms are sealed only with a bot that trades option contracts.",
+            reason_code=OPTION_ORDER_TERMS_NOT_APPLICABLE,
+        )
+    if not use_rth:
+        raise OptionStartRefusedError(
+            "Options trade in regular hours only.",
+            detail="A bot that trades option contracts cannot be started for extended hours.",
+            reason_code=OPTION_BOT_REGULAR_HOURS_ONLY,
+        )
+    if option_order_terms is None:
+        raise OptionStartRefusedError(
+            "This option bot has no order terms.",
+            detail=(
+                "A bot that trades option contracts starts with its four order terms: the widest gap a leg, "
+                "the entry wait, the whole-structure cost limit and the expiry-day close. They are sealed with "
+                "the bot and fixed for its life."
+            ),
+            reason_code=OPTION_ORDER_TERMS_REQUIRED,
         )

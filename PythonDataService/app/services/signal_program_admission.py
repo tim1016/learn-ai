@@ -263,6 +263,7 @@ def build_start_program_seal(
         validation_snapshot_sha256=validation.evidence_snapshot_sha256,
         sealed_at_ms=binding.created_at_ms,
         traded_asset_acknowledgement=binding.traded_asset_acknowledgement,
+        option_order_terms=binding.option_order_terms,
     )
 
 

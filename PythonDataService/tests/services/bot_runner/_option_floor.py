@@ -57,10 +57,14 @@ from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import OrderSide
 from app.config import settings as service_settings
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
+from app.options import order_terms
 from app.options.contract import OptionContract
+from app.options.deadlines import CloseTerms
+from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_PERCENT
 from app.options.resolver import Resolution
 from app.schemas.action_plan import ActionPlan
 from app.schemas.deployment_budget import DeployBudgetConsent
+from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.services import option_search
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -123,11 +127,26 @@ def one_call(strike: dict[str, Any] | None = None, *, underlying: str = "SPY") -
     return scenes._plan(leg)
 
 
-def binding_for(plan: ActionPlan, *, listens_to: str = "SPY", budget_cents: int = 100_000) -> BrokerBotBinding:
+# The four order terms a Deploy starts from, sealed with every bot these floors run unless a test says others.
+STARTING_TERMS = SealedOptionOrderTerms(
+    gap_limit_percent=DEFAULT_LEG_GAP_LIMIT_PERCENT,
+    entry_wait_seconds=order_terms.entry_wait_seconds(CloseTerms()),
+    cost_limit_percent=DEFAULT_COST_LIMIT_PERCENT,
+    expiry_close_lead_minutes=order_terms.expiry_close_lead_minutes(CloseTerms()),
+)
+
+
+def binding_for(
+    plan: ActionPlan,
+    *,
+    listens_to: str = "SPY",
+    budget_cents: int = 100_000,
+    terms: SealedOptionOrderTerms | None = STARTING_TERMS,
+) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=SID, strategy_key="deployment_validation", broker="alpaca", symbol=listens_to,
         mode="dry_run", quantity=1, action_plan=plan, run_id=RUN, created_at_ms=0, sealed_account_id=ACCOUNT,
-        exit_terms=DEPLOY_EXIT_TERMS,
+        exit_terms=DEPLOY_EXIT_TERMS, option_order_terms=terms,
         budget_consent=DeployBudgetConsent(
             committed_cents=budget_cents, risk_revision=0, actor="owner", request_fingerprint="reviewed",
             world="synthetic",
