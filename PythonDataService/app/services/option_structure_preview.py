@@ -21,6 +21,21 @@ source in this process, the feed not up, no quote line, the listing not read
 yet, quotes still arriving, no usable quote for the underlying, pricing
 inputs not known, the search not done. Only a resolution carries figures.
 
+**Its money is the entry's own.** The figures and every reason an entry
+would be refused come from the one function an entry is prepared by
+(``app.options.entry.entry_figures``), held to the owner's own gap limit and
+cost limit. The contracts are picked under the entry cutoff the owner's own
+entry wait and expiry-day close make.
+
+**Its figures are good for a minute.** They are a reading of one moment.
+Past ``FIGURES_GOOD_FOR_MS`` a page shows when the quotes were read in their
+place, or asks again.
+
+**A leg is named by its place.** Every sentence here that came from the
+plan's rules, the resolver or the structure check names a leg by its id;
+each is turned into the builder's "leg 2" on its way out
+(``app.services.option_preview_words.legs_by_number``).
+
 The supervisor is read on the event loop, where its callbacks write, and
 nothing here holds the loop for long. The lookups of the rate and the
 dividends block, and run in threads kept for them. The search for the
@@ -46,7 +61,8 @@ from app.broker.alpaca.option_fees import OptionRateNotPinnedError, entry_fee_pr
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import LineUse, WatchRequest
 from app.options.contract import OptionContract
-from app.options.deadlines import CloseTerms
+from app.options.decay import goes_ex_soon
+from app.options.order_terms import close_terms_with
 from app.options.preview import StructureFigures, structure_figures
 from app.options.quotes import HeldQuote, quote_fault, receipt_times
 from app.options.requirement import EntrySize, LegQuote
@@ -59,15 +75,18 @@ from app.options.resolver import (
     UnderlyingObservation,
 )
 from app.options.structure import ResolvedStructure
-from app.options.structure_catalogue import label, with_its_article
+from app.options.structure_catalogue import expiry_close_sentence, in_a_sentence, label, with_its_article
 from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, NoLine, WindowContract, expiries_wanted, watched_window
 from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg
 from app.schemas.option_preview import (
     OptionPreviewAtExpiry,
+    OptionPreviewDecay,
+    OptionPreviewEntryRefusal,
     OptionPreviewLean,
     OptionPreviewLeg,
     OptionPreviewMoney,
+    OptionPreviewOrderTerms,
     OptionPreviewVerdict,
     OptionPreviewWatched,
     OptionPreviewWatchedRange,
@@ -76,16 +95,21 @@ from app.schemas.option_preview import (
     PreviewState,
 )
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead, off_the_loop
+from app.services.option_preview_out_of_range import OutOfRange
 from app.services.option_preview_views import (
     at_expiry_view,
     contract_view,
+    decay_view,
+    entry_refusal_views,
+    entry_sentence,
     lean_view,
     leg_view,
+    legs_asked_view,
     money_view,
     pricing_inputs_view,
     quote_view,
-    sentence,
 )
+from app.services.option_preview_words import age_in_words, expiry_in_words, leg_names, legs_by_number, plural, sentence
 from app.services.option_search import PreviewSearches, ResolutionWithDecay, SearchAsk, SearchNotRun
 from app.services.option_watch import OptionWatchList
 from app.utils.session_anchors import et_date_at_ms
@@ -96,6 +120,9 @@ if TYPE_CHECKING:
 
 # How long a page's request for quotes stands after its last ask.
 PREVIEW_LEASE_MS = 60_000
+# How long a preview's figures may be shown as they are. As long as the page's request for quotes stands
+# after one ask: past that nothing is holding the quotes the figures were read from.
+FIGURES_GOOD_FOR_MS = PREVIEW_LEASE_MS
 # How long after a window is first asked for its quotes are said to be arriving. After that, a quote that
 # has not come is reported as what it is.
 ARRIVAL_GRACE_MS = 10_000
@@ -135,6 +162,10 @@ class PreviewReason(StrEnum):
     PRICING_INPUTS_NOT_READ = "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ"
     # Too many pages hold windows, and this one's was given up to a newer one.
     TOO_MANY_OPEN = "OPTION_PREVIEW_TOO_MANY_OPEN"
+    # A number in the request is outside the range the catalogue gives for it.
+    VALUE_OUT_OF_RANGE = "OPTION_PREVIEW_VALUE_OUT_OF_RANGE"
+    # Two legs were given one id, so nothing said of either could tell them apart.
+    LEGS_SHARE_AN_ID = "OPTION_PREVIEW_LEGS_SHARE_AN_ID"
 
 
 def plan_of(request: OptionStructurePreviewRequest) -> ActionPlan:
@@ -258,18 +289,35 @@ def _watched_view(reading: _Reading) -> OptionPreviewWatched:
     kinds = sorted({(seen.contract.right, seen.contract.expiry_ms) for seen in reading.window})
     ranges = []
     for right, expiry_ms in kinds:
-        strikes = sorted(contract.strike for contract in watched if (contract.right, contract.expiry_ms) == (right, expiry_ms))
-        if strikes:
+        of_its_kind = sorted(
+            (contract for contract in watched if (contract.right, contract.expiry_ms) == (right, expiry_ms)),
+            key=lambda contract: contract.strike_thousandths,
+        )
+        if of_its_kind:
+            lowest, highest = of_its_kind[0].strike, of_its_kind[-1].strike
             ranges.append(
                 OptionPreviewWatchedRange(
-                    right=right, expiry_ms=expiry_ms, lowest_strike=strikes[0], highest_strike=strikes[-1], contracts=len(strikes)
+                    right=right,
+                    expiry_ms=expiry_ms,
+                    lowest_strike=lowest,
+                    highest_strike=highest,
+                    contracts=len(of_its_kind),
+                    sentence=(
+                        f"{'Calls' if right == 'call' else 'Puts'} expiring {expiry_in_words(of_its_kind[0].expiry_date)}: "
+                        f"strikes {lowest:f} to {highest:f}."
+                    ),
                 )
             )
+    wanted, held, refused = len(reading.wanted), len(reading.wanted & reading.chain.watched.keys()), len(reading.refused)
+    said = f"{held:,} of the {plural(wanted, 'contract')} these rules can pick from {'holds' if held == 1 else 'hold'} a quote line."
+    if refused:
+        said += f" {refused:,} could not have one."
     return OptionPreviewWatched(
         ranges=ranges,
-        lines_wanted=len(reading.wanted),
-        lines_held=len(reading.wanted & reading.chain.watched.keys()),
-        lines_refused=len(reading.refused),
+        sentence=said,
+        lines_wanted=wanted,
+        lines_held=held,
+        lines_refused=refused,
         line_budget=reading.use.budget,
         lines_open=reading.use.open,
     )
@@ -474,6 +522,9 @@ class _Found:
     at_expiry: OptionPreviewAtExpiry | None = None
     lean: OptionPreviewLean | None = None
     lean_unknown_sentence: str | None = None
+    decay: OptionPreviewDecay | None = None
+    entry_refusals: tuple[OptionPreviewEntryRefusal, ...] = ()
+    entry_sentence: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,9 +534,23 @@ class _Asked:
     request: OptionStructurePreviewRequest
     # When the ask was taken up: what an answer with no reading of the supervisor is stamped with.
     now: int
+    # False for a request with a number outside its range: its legs and its terms are not said back as asked.
+    in_range: bool = True
+
+    @property
+    def order(self) -> list[str]:
+        """The legs' ids in the request's order: a leg's place in it is the number every sentence names it by."""
+        return [leg.leg_id for leg in self.request.legs]
+
+    def said(self, text: str) -> str:
+        """A sentence that came from the plan's rules, the resolver or the structure check, with its legs
+        named by their places."""
+        return legs_by_number(text, self.order)
 
     def _answer(self, found: _Found) -> OptionStructurePreview:
         request, reading = self.request, found.reading
+        read_ms = self.now if reading is None else reading.now
+        with_figures = found.state == "resolved"
         return OptionStructurePreview(
             state=found.state,
             reason_code=found.reason_code,
@@ -496,13 +561,39 @@ class _Asked:
             ask_again_in_ms=found.ask_again_in_ms,
             underlying=request.underlying,
             structure=request.structure,
-            structure_label="Custom" if request.structure is None else label(request.structure),
+            structure_label=label(request.structure),
+            structure_in_a_sentence=in_a_sentence(request.structure),
             structures=request.structures,
             gap_limit_percent=request.gap_limit_percent,
             cost_limit_percent=request.cost_limit_percent,
-            quotes_read_ms=self.now if reading is None else reading.now,
+            order_terms=(
+                OptionPreviewOrderTerms(
+                    gap_limit_percent=request.gap_limit_percent,
+                    entry_wait_seconds=request.entry_wait_seconds,
+                    cost_limit_percent=request.cost_limit_percent,
+                    expiry_close_lead_minutes=request.expiry_close_lead_minutes,
+                    expiry_close_sentence=expiry_close_sentence(request.expiry_close_lead_minutes),
+                )
+                if self.in_range
+                else None
+            ),
+            legs_asked=legs_asked_view(request) if self.in_range else [],
+            quotes_read_ms=read_ms,
             feed_generation=None if reading is None else reading.feed.generation,
             oldest_quote_age_ms=found.oldest_quote_age_ms,
+            quotes_read_sentence=(
+                None
+                if found.oldest_quote_age_ms is None
+                else f"IBKR live quotes. The oldest of them was {age_in_words(found.oldest_quote_age_ms)} old when they were read."
+            ),
+            figures_good_until_ms=read_ms + FIGURES_GOOD_FOR_MS if with_figures else None,
+            figures_good_for_ms=FIGURES_GOOD_FOR_MS if with_figures else None,
+            figures_stale_sentence=(
+                f"These figures are from quotes read more than {age_in_words(FIGURES_GOOD_FOR_MS)} ago. "
+                "Refresh to read them again."
+                if with_figures
+                else None
+            ),
             underlying_quote=None if reading is None else quote_view(reading.underlying_quote, reading.now),
             the_money=None if reading is None else reading.money,
             the_money_sentence=(
@@ -517,6 +608,9 @@ class _Asked:
             at_expiry=found.at_expiry,
             lean=found.lean,
             lean_unknown_sentence=found.lean_unknown_sentence,
+            decay=found.decay,
+            entry_refusals=list(found.entry_refusals),
+            entry_sentence=found.entry_sentence,
             watched=None if reading is None else _watched_view(reading),
             pricing_inputs=None if found.inputs is None else pricing_inputs_view(found.inputs),
             preview_sentence="A preview. The bot picks again at every entry.",
@@ -551,20 +645,28 @@ class _Asked:
             red=resolves_as_built is False,
         )
 
-    def plan_refused(self, reason: PreviewReason, why: str) -> OptionStructurePreview:
+    def plan_refused(
+        self,
+        reason: PreviewReason,
+        why: str,
+        *,
+        leg_ids: tuple[str, ...] = (),
+        cannot: str = "This structure cannot be deployed.",
+    ) -> OptionStructurePreview:
         return self._answer(
             _Found(
                 state="plan_refused",
                 reason_code=str(reason),
                 notice=why,
+                leg_ids=leg_ids,
                 verdict=OptionPreviewVerdict(
                     can_be_deployed=False,
-                    deploy_sentence=f"This structure cannot be deployed. {why}",
+                    deploy_sentence=f"{cannot} {why}",
                     deploy_reason_code=str(reason),
                     resolves_as_built=None,
                     resolves_sentence="Nothing is resolved for a structure that cannot be deployed.",
                     resolves_reason_code=None,
-                    leg_ids=[],
+                    leg_ids=list(leg_ids),
                     red=True,
                 ),
             )
@@ -577,7 +679,7 @@ class _Asked:
             _Found(
                 state=why.state,
                 reason_code=str(why.reason_code),
-                notice=why.notice,
+                notice=self.said(why.notice),
                 fault=why.fault,
                 leg_ids=why.leg_ids,
                 contract=why.contract,
@@ -608,17 +710,21 @@ class _Asked:
                 else f"Right now it resolves to {with_its_article(name)}."
             )
         elif name is not None and broken.reason in _SHAPE_REFUSALS:
-            resolves = sentence(f"Right now this is not {with_its_article(name)}: {broken.detail}")
+            resolves = sentence(f"Right now this is not {with_its_article(name)}: {self.said(broken.detail)}")
         else:
-            resolves = sentence(f"Right now this cannot be entered as built: {broken.detail}")
+            resolves = sentence(f"Right now this cannot be entered as built: {self.said(broken.detail)}")
         lean_unknown = None
         if figures.lean is None and figures.size is not None:
-            lean_unknown = (
-                f"No lean is shown: the dividends for {request.underlying} are not known, so no delta is worked out."
-                if inputs.dividends is None
-                else f"No lean is shown: no delta could be worked out for leg {figures.lean_unknown_leg_id} from its quote."
-            )
+            if inputs.dividends is None:
+                lean_unknown = (
+                    f"No lean is shown: the dividends for {request.underlying} are not known, so no delta is worked out."
+                )
+            else:
+                assert figures.lean_unknown_leg_id is not None
+                without = leg_names([figures.lean_unknown_leg_id], self.order).lower()
+                lean_unknown = f"No lean is shown: no delta could be worked out for {without} from its quote."
         stood_on = (reading.underlying_quote, *(leg.quote for leg in figures.legs))
+        money = money_view(figures, request.cost_limit_percent)
         return self._answer(
             _Found(
                 state="resolved",
@@ -632,13 +738,45 @@ class _Asked:
                 reading=reading,
                 inputs=inputs,
                 oldest_quote_age_ms=reading.now - min(when for quote in stood_on for when in receipt_times(quote)),
-                legs=tuple(leg_view(leg, reading.now) for leg in figures.legs),
-                money=money_view(figures, request.cost_limit_percent),
+                legs=tuple(
+                    leg_view(leg, reading.now, number=number, gap_limit_percent=request.gap_limit_percent)
+                    for number, leg in enumerate(figures.legs, start=1)
+                ),
+                money=money,
                 at_expiry=at_expiry_view(figures, request.underlying),
                 lean=lean_view(figures, request.underlying, request.listens_to),
                 lean_unknown_sentence=lean_unknown,
+                decay=decay_view(
+                    figures,
+                    request.underlying,
+                    self.order,
+                    goes_ex_soon=goes_ex_soon((paid.ex_ms for paid in inputs.dividends or ()), reading.now),
+                ),
+                entry_refusals=tuple(
+                    entry_refusal_views(
+                        figures,
+                        self.order,
+                        gap_limit_percent=request.gap_limit_percent,
+                        cost_sentence=None if money is None else money.cost_sentence,
+                    )
+                ),
+                entry_sentence=entry_sentence(figures.entry_refusals),
             )
         )
+
+
+def preview_of_numbers_out_of_range(
+    refused: OutOfRange, *, watch: OptionWatchList, clock: Clock = now_ms_utc
+) -> OptionStructurePreview:
+    """The answer to a request whose numbers are outside their ranges: what cannot be deployed, and why, box
+    by box. Nothing is resolved for it, and whatever quote lines its page held are given back."""
+    watch.unwatch(_KEY_PREFIX + refused.request.preview_key)
+    return _Asked(refused.request, clock(), in_range=False).plan_refused(
+        PreviewReason.VALUE_OUT_OF_RANGE,
+        " ".join(refused.sentences),
+        leg_ids=refused.leg_ids,
+        cannot="This cannot be deployed as it is.",
+    )
 
 
 async def preview_option_structure(
@@ -672,12 +810,22 @@ async def preview_option_structure(
             PreviewReason.SHARE_CLASS_UNDERLYING,
             f"Options on a ticker with a share class, such as {request.underlying}, are not handled yet.",
         )
+    twice = sorted({number for number, leg_id in enumerate(asked.order, start=1) if asked.order.count(leg_id) > 1})
+    if twice:
+        watch.unwatch(key)
+        shared = [leg.leg_id for leg in request.legs if asked.order.count(leg.leg_id) > 1]
+        return asked.plan_refused(
+            PreviewReason.LEGS_SHARE_AN_ID,
+            f"Legs {', '.join(str(number) for number in twice[:-1])} and {twice[-1]} were given one id. "
+            "Each leg has an id of its own.",
+            leg_ids=tuple(dict.fromkeys(shared)),
+        )
     try:
         plan = plan_of(request)
     except ValidationError as refused:
         # A structure that cannot be deployed has nothing worth a quote line.
         watch.unwatch(key)
-        return asked.plan_refused(PreviewReason.PLAN_REFUSED, _the_plans_own_words(refused))
+        return asked.plan_refused(PreviewReason.PLAN_REFUSED, asked.said(_the_plans_own_words(refused)))
     if quotes is None:
         return asked.without_figures(
             plan,
@@ -754,8 +902,13 @@ async def preview_option_structure(
             underlying=UnderlyingObservation(pricing_bar_close=reading.money, quote=reading.underlying_quote),
             feed=reading.feed,
             model=model,
+            # The entry cutoff a bot deployed with these two times would be held to.
             limits=ResolverLimits(
-                max_quote_age_ms=DECISION_DATA_MAX_AGE_MS, entry_cutoff_lead_ms=CloseTerms().entry_cutoff_lead_ms
+                max_quote_age_ms=DECISION_DATA_MAX_AGE_MS,
+                entry_cutoff_lead_ms=close_terms_with(
+                    entry_wait_seconds=request.entry_wait_seconds,
+                    expiry_close_lead_minutes=request.expiry_close_lead_minutes,
+                ).entry_cutoff_lead_ms,
             ),
             decision_bar_close_ms=reading.now,
             selection_ms=reading.now,

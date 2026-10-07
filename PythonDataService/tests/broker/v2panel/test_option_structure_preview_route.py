@@ -7,14 +7,18 @@ here it is the request and the answer on the wire.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 from httpx import ASGITransport
 from pydantic import TypeAdapter
 
+from app.options import order_terms
+from app.options.bounds import Bounds
 from app.options.deadlines import CloseTerms
 from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_PERCENT
 from app.options.expiry import option_expiry_anchor_ms
@@ -207,7 +211,7 @@ async def test_the_catalogue_gives_the_order_terms_a_deploy_starts_from_each_whe
     terms = (await _get(app, f"{_BOTS}/option-structures")).json()["order_terms"]
 
     assert set(terms) == {"gap_limit_percent", "entry_wait_seconds", "cost_limit_percent", "expiry_close_lead_minutes"}
-    assert all(term["label"] and term["unit_label"] for term in terms.values())
+    assert all(term["label"] and term["unit_label"] and term["help"] for term in terms.values())
     assert Decimal(terms["gap_limit_percent"]["default"]) == DEFAULT_LEG_GAP_LIMIT_PERCENT
     assert Decimal(terms["cost_limit_percent"]["default"]) == DEFAULT_COST_LIMIT_PERCENT
     # The cost limit a preview is held to when the page says none is the one the catalogue shows.
@@ -350,26 +354,27 @@ async def test_a_structure_the_plan_refuses_is_an_answer_and_not_an_error(deploy
     assert (response.json()["state"], response.json()["verdict"]["can_be_deployed"]) == ("plan_refused", False)
 
 
+_BY_DELTA = _SPREAD["legs"][0] | {"strike": {"selector": "delta", "target": 0.30}}
+_OUT_OF_RANGE = "OPTION_PREVIEW_VALUE_OUT_OF_RANGE"
+
+
 @pytest.mark.parametrize(
     "broken",
     [
         pytest.param({"preview_key": None}, id="no key to hold its quotes under"),
         pytest.param({"underlying": "not a ticker"}, id="an underlying that is no ticker"),
-        pytest.param({"structures": 0}, id="no structures"),
-        pytest.param({"cost_limit_percent": "-1"}, id="a limit below zero"),
-        pytest.param({"cost_limit_percent": "3.3333333"}, id="a cost limit finer than it can be compared in"),
-        pytest.param({"cost_limit_percent": "1e-7"}, id="a cost limit finer than that, written with an exponent"),
         pytest.param({"cost_limit_percent": "NaN"}, id="a cost limit that is no number"),
-        # Refused by the bound on its value, before anything writes it out.
-        pytest.param({"cost_limit_percent": "1e999999999"}, id="a cost limit too large to write out"),
-        pytest.param({"gap_limit_percent": "1e999000"}, id="a gap limit that would write out to a megabyte"),
-        pytest.param({"gap_limit_percent": "7.1234567"}, id="a gap limit as fine"),
-        pytest.param({"gap_limit_percent": "0"}, id="a gap limit of nothing"),
+        pytest.param({"cost_limit_percent": "ten"}, id="a cost limit that is a word"),
+        pytest.param({"structures": [3]}, id="a list where a count belongs"),
         pytest.param({"structure": "short_straddle"}, id="a name that is no named structure"),
-        pytest.param(
-            {"legs": [_SPREAD["legs"][0] | {"strike": {"selector": "delta", "target": 1.5}}]}, id="a delta above one"
-        ),
         pytest.param({"what_else": 1}, id="a field nobody defined"),
+        pytest.param({"legs": [_SPREAD["legs"][0] | {"strike": {"selector": "by_feel"}}]}, id="a strike rule nobody defined"),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "absolute", "expiration_ms": 1_791_302_400_001}}]},
+            id="a fixed date that is inside its range and is no expiry",
+        ),
+        # One fault that is a range's and one that is not: the request is malformed, and stays so.
+        pytest.param({"structures": 0, "what_else": 1}, id="a number out of range beside a field nobody defined"),
     ],
 )
 async def test_a_request_that_is_not_a_preview_request_is_refused_as_malformed(deploy_app, broken: dict) -> None:
@@ -378,6 +383,303 @@ async def test_a_request_that_is_not_a_preview_request_is_refused_as_malformed(d
     response = await _post(app, {**_SPREAD, **broken})
 
     assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize(
+    ("typed", "said_of", "legs_named"),
+    [
+        pytest.param({"structures": 0}, ["0", "1 to 100"], [], id="no structures"),
+        pytest.param({"cost_limit_percent": "-1"}, ["-1", "0 to 100"], [], id="a cost limit below zero"),
+        pytest.param({"cost_limit_percent": "3.3333333"}, ["3.3333333", "0.000001"], [], id="a cost limit finer than it can be compared in"),
+        pytest.param({"cost_limit_percent": "1e-7"}, ["1e-7", "0.000001"], [], id="a cost limit finer than that, written with an exponent"),
+        # Refused by the bound on its value, before anything writes it out.
+        pytest.param({"cost_limit_percent": "1e999999999"}, ["1e999999999", "0 to 100"], [], id="a cost limit too large to write out"),
+        pytest.param({"gap_limit_percent": "1e999000"}, ["1e999000", "100"], [], id="a gap limit that would write out to a megabyte"),
+        pytest.param({"gap_limit_percent": "7.1234567"}, ["7.1234567", "0.000001"], [], id="a gap limit as fine"),
+        pytest.param({"gap_limit_percent": "0"}, ["above 0"], [], id="a gap limit of nothing"),
+        pytest.param({"entry_wait_seconds": 0}, ["1 to 300"], [], id="an entry that waits for nothing"),
+        pytest.param({"entry_wait_seconds": 2.5}, ["2.5", "whole number"], [], id="an entry wait that is no whole number"),
+        pytest.param({"expiry_close_lead_minutes": 391}, ["391", "0 to 390"], [], id="a close before the session opens"),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"strike": {"selector": "delta", "target": 1.5}}]},
+            ["Leg 1", "1.5", "below 1"], ["long_call"], id="a delta above one",
+        ),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0], _SPREAD["legs"][1] | {"qty_ratio": 0}]},
+            ["Leg 2", "1 to 1,000"], ["short_call"], id="a second leg of no contracts",
+        ),
+        pytest.param({"legs": [_BY_DELTA] * 9}, ["9", "1 to 4"], [], id="nine legs"),
+        pytest.param(
+            {"structures": 101, "legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "min_dte", "days": 0}}]},
+            ["Leg 1", "101", "1 or more"], ["long_call"], id="two numbers out of range at once",
+        ),
+    ],
+)
+async def test_a_number_outside_its_range_is_answered_in_words_as_what_cannot_be_deployed(
+    deploy_app, typed: dict, said_of: list[str], legs_named: list[str]
+) -> None:
+    """It was a 422 with nothing an owner could read. Now the page is told which box, what was typed and what the
+    box takes, in the shape of every other answer."""
+    app, _registry = deploy_app
+
+    response = await _post(app, {**_SPREAD, **typed})
+
+    assert response.status_code == 200, response.text
+    seen = response.json()
+    assert set(seen) == set(OptionStructurePreview.model_fields)
+    assert OptionStructurePreview.model_validate(seen).state == "plan_refused"
+    assert (seen["reason_code"], seen["verdict"]["deploy_reason_code"]) == (_OUT_OF_RANGE, _OUT_OF_RANGE)
+    assert (seen["verdict"]["can_be_deployed"], seen["verdict"]["red"], seen["ask_again_in_ms"]) == (False, True, None)
+    assert all(part in seen["notice"] for part in said_of), seen["notice"]
+    assert seen["notice"] in seen["verdict"]["deploy_sentence"]
+    assert (seen["leg_ids"], seen["verdict"]["leg_ids"]) == (legs_named, legs_named)
+    assert not any(f"'{leg_id}'" in seen["notice"] for leg_id in ("long_call", "short_call"))
+    # Nothing is resolved, and the rules and terms it was asked with are not said back as if they stood.
+    assert (seen["legs"], seen["money"], seen["legs_asked"], seen["order_terms"]) == ([], None, [], None)
+
+
+async def test_a_refused_number_is_said_back_as_the_default_and_every_other_part_as_it_was_asked(deploy_app) -> None:
+    app, _registry = deploy_app
+
+    seen = (await _post(app, {**_SPREAD, "structures": 3, "cost_limit_percent": "150", "gap_limit_percent": "2.50"})).json()
+
+    assert (seen["state"], seen["structures"], seen["gap_limit_percent"]) == ("plan_refused", 3, "2.5")
+    assert seen["cost_limit_percent"] == str(DEFAULT_COST_LIMIT_PERCENT) and "150" in seen["notice"]
+    assert (seen["structure"], seen["structure_label"], seen["underlying"]) == ("bull_call_spread", "Bull call spread", "SPY")
+
+
+async def test_a_number_out_of_range_gives_back_the_quote_lines_its_page_held(
+    deploy_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _registry = deploy_app
+    desk = Desk(monkeypatch)
+    _on(desk, monkeypatch)
+    await _resolved(app, desk, _SPREAD)
+    held = desk.ibkr.open_option_lines()
+
+    refused = await _post(app, {**_SPREAD, "structures": 0})
+    await desk.settle()
+
+    assert refused.json()["reason_code"] == _OUT_OF_RANGE
+    assert len(held) == 10 and desk.ibkr.open_option_lines() == set()
+
+
+async def test_a_number_out_of_range_on_someone_elses_account_is_not_answered(deploy_app) -> None:
+    app, _registry = deploy_app
+
+    elsewhere = await _post(
+        app, {**_SPREAD, "structures": 0}, "/api/brokers/alpaca/accounts/someone-else/bots/option-structure-preview"
+    )
+    another_broker = await _post(app, {**_SPREAD, "structures": 0}, f"/api/brokers/ibkr/accounts/{ACCT}/bots/option-structure-preview")
+
+    assert (elsewhere.status_code, another_broker.status_code) == (404, 422)
+
+
+# ---- every range the catalogue serves is the one the server holds ---------------------------------
+
+_A_HAIR = Decimal("0.000000001")
+
+
+def _either_side(bounds: dict[str, Any]) -> tuple[list[Decimal], list[Decimal]]:
+    """Numbers just inside a served range and just outside it, at each end it has: by one step where the range
+    has a step, and by a hair where it has none. One finer than the step is outside too."""
+    step = None if bounds["step"] is None else Decimal(bounds["step"])
+    by = step or _A_HAIR
+    inside, outside = [], []
+    for edge, included, outward in ((bounds["min"], bounds["min_included"], -1), (bounds["max"], bounds["max_included"], 1)):
+        if edge is None:
+            continue
+        end = Decimal(edge)
+        inside.append(end if included else end - outward * by)
+        outside.append(end + outward * by if included else end)
+    if step is not None and inside:
+        outside.append(inside[0] + step / 10)
+    return inside, outside
+
+
+def _as_json(number: Decimal, *, text: bool) -> Any:
+    """A percent an owner sets travels as text. Every other number travels as a number."""
+    if text:
+        return str(number)
+    return int(number) if number == number.to_integral_value() and abs(number) < 10**15 else float(number)
+
+
+def _leg_with(strike: dict[str, Any], expiry: dict[str, Any], *, leg_id: str = "this_leg", qty: Any = 1) -> dict[str, Any]:
+    return {"leg_id": leg_id, "position": "long", "qty_ratio": qty, "right": "call", "strike": strike, "expiry": expiry}
+
+
+async def _boxes(app) -> list[tuple[str, dict[str, Any], Any]]:
+    """Every number the catalogue gives a range for: what to call it, its range, and how to ask with it typed in."""
+    catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
+    weekly = {"selector": "nearest_weekly"}
+    by_delta = {"selector": "delta", "target": 0.30}
+    stands_alone = _leg_with(by_delta, weekly, leg_id=_TYPED["leg"])
+
+    def asking(**parts: Any) -> dict[str, Any]:
+        return {"preview_key": "page-0001", "underlying": "SPY", "legs": [stands_alone], **parts}
+
+    boxes: list[tuple[str, dict[str, Any], Any]] = []
+    for rule in catalogue["strike_rules"]:
+        for box in ("value", "tolerance"):
+            if rule[box] is None:
+                continue
+
+            def typed(number: Decimal, rule=rule, box=box) -> dict[str, Any]:
+                strike = _from_the_catalogue_alone(rule) | {rule[box]["field"]: _as_json(number, text=False)}
+                return asking(legs=[stands_alone, _leg_with(strike, weekly)])
+
+            boxes.append((f"{rule['selector']} {box}", rule[box]["bounds"], typed))
+    for rule in catalogue["expiry_rules"]:
+        if rule["value"] is None or rule["value"]["unit"] == "date":
+            continue
+
+        def typed(number: Decimal, rule=rule) -> dict[str, Any]:
+            expiry = {"selector": rule["selector"], rule["value"]["field"]: _as_json(number, text=False)}
+            return asking(legs=[stands_alone, _leg_with(by_delta, expiry)])
+
+        boxes.append((f"{rule['selector']} value", rule["value"]["bounds"], typed))
+    boxes.append(
+        (
+            "leg quantity",
+            catalogue["leg_quantity_bounds"],
+            # Beside a leg of one contract, so that the two are in their lowest terms whatever the number.
+            lambda number: asking(legs=[stands_alone, _leg_with(by_delta, weekly, qty=_as_json(number, text=False))]),
+        )
+    )
+    boxes.append(("structures", catalogue["structures_bounds"], lambda number: asking(structures=_as_json(number, text=False))))
+    for name, term in catalogue["order_terms"].items():
+        boxes.append((name, term["bounds"], lambda number, name=name: asking(**{name: _as_json(number, text="percent" in name)})))
+    return boxes
+
+
+async def test_a_number_just_inside_each_range_the_catalogue_serves_is_taken_and_one_just_outside_is_refused_in_words(
+    deploy_app,
+) -> None:
+    """The catalogue says what each number may be so that a form can refuse one before asking. What it says is
+    held to what the server does, at each end of every range: a number a step inside is a structure the plan
+    takes, and one a step outside, or finer than the step, is refused as out of range, by name. Neither is ever
+    an error, and neither is a refusal with nothing to read."""
+    app, _registry = deploy_app
+    boxes = await _boxes(app)
+    tried = {"inside": 0, "outside": 0}
+
+    for what, bounds, typed in boxes:
+        inside, outside = _either_side(bounds)
+        for number in inside:
+            response = await _post(app, typed(number))
+            assert response.status_code == 200, (what, number, response.text)
+            seen = response.json()
+            # A structure the plan takes, on a Clerk with no quote source to resolve it against.
+            assert (seen["state"], seen["verdict"]["can_be_deployed"]) == ("no_quote_source", True), (what, number, seen["notice"])
+            tried["inside"] += 1
+        for number in outside:
+            response = await _post(app, typed(number))
+            assert response.status_code == 200, (what, number, response.text)
+            seen = response.json()
+            assert (seen["state"], seen["reason_code"]) == ("plan_refused", _OUT_OF_RANGE), (what, number, seen["notice"])
+            assert seen["notice"] and seen["verdict"]["red"], (what, number)
+            tried["outside"] += 1
+
+    # Fourteen boxes: seven of the strike rules', one of the expiry rules', a leg's quantity, the structures, four terms.
+    assert len(boxes) == 14
+    assert tried["inside"] >= 20 and tried["outside"] >= 25
+
+
+async def test_a_fixed_date_is_taken_from_the_first_to_the_last_a_contract_symbol_can_carry(deploy_app) -> None:
+    app, _registry = deploy_app
+    catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
+    (fixed,) = [rule for rule in catalogue["expiry_rules"] if rule["value"] is not None and rule["value"]["unit"] == "date"]
+    bounds = fixed["value"]["bounds"]
+
+    async def asked(day: date) -> dict[str, Any]:
+        expiry = {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(day)}
+        body = {"preview_key": "page-0001", "underlying": "SPY", "legs": [_leg_with({"selector": "atm"}, expiry)]}
+        response = await _post(app, body)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    # What the catalogue serves is the two anchors, and they are the ends of what is taken.
+    assert (int(bounds["min"]), int(bounds["max"])) == (
+        option_expiry_anchor_ms(date(2000, 1, 1)), option_expiry_anchor_ms(date(2099, 12, 31)),
+    )
+    assert bounds["min_included"] and bounds["max_included"] and bounds["step"] is None
+    assert [(await asked(day))["state"] for day in (date(2000, 1, 1), date(2099, 12, 31))] == ["no_quote_source"] * 2
+    for day in (date(1999, 12, 31), date(2100, 1, 1)):
+        seen = await asked(day)
+        assert (seen["state"], seen["reason_code"], seen["leg_ids"]) == ("plan_refused", _OUT_OF_RANGE, ["this_leg"])
+        assert "Leg 1" in seen["notice"] and "'00" in seen["notice"] and "'99" in seen["notice"]
+
+
+async def test_the_range_of_each_order_term_is_the_one_the_terms_own_module_states(deploy_app) -> None:
+    app, _registry = deploy_app
+
+    terms = (await _get(app, f"{_BOTS}/option-structures")).json()["order_terms"]
+
+    stated: dict[str, Bounds] = {
+        "gap_limit_percent": order_terms.GAP_LIMIT_PERCENT,
+        "entry_wait_seconds": order_terms.ENTRY_WAIT_SECONDS,
+        "cost_limit_percent": order_terms.COST_LIMIT_PERCENT,
+        "expiry_close_lead_minutes": order_terms.EXPIRY_CLOSE_LEAD_MINUTES,
+    }
+    for name, bounds in stated.items():
+        served = terms[name]["bounds"]
+        assert (Decimal(served["min"]), served["min_included"]) == (bounds.lowest, bounds.lowest_included), name
+        assert (Decimal(served["max"]), served["max_included"]) == (bounds.highest, bounds.highest_included), name
+        assert Decimal(served["step"]) == bounds.step and served["sentence"], name
+        # Where a term starts is inside what it may be.
+        assert bounds.fault(Decimal(str(terms[name]["default"]))) is None, name
+
+
+async def test_a_rule_with_no_bound_on_a_side_says_so_and_takes_a_number_of_any_size_there(
+    deploy_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Steps from the money and days out have no top the plan holds them to, and steps no bottom. A number far
+    past any chain is a structure the plan takes, and what it comes to is the resolver's to say: never an error."""
+    app, _registry = deploy_app
+    catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
+    steps = next(rule for rule in catalogue["strike_rules"] if rule["selector"] == "atm_offset")["value"]["bounds"]
+    days = next(rule for rule in catalogue["expiry_rules"] if rule["selector"] == "min_dte")["value"]["bounds"]
+    weekly = {"selector": "nearest_weekly"}
+
+    assert (steps["min"], steps["max"], steps["step"]) == (None, None, "1")
+    assert (days["min"], days["max"], days["step"]) == ("1", None, "1")
+    for strike, expiry in (
+        ({"selector": "atm_offset", "offset": 10**12}, weekly),
+        ({"selector": "atm_offset", "offset": -(10**12)}, weekly),
+        ({"selector": "atm"}, {"selector": "min_dte", "days": 10**12}),
+    ):
+        desk = Desk(monkeypatch)
+        _on(desk, monkeypatch)
+        body = {"preview_key": "page-0001", "underlying": "SPY", "legs": [_leg_with(strike, expiry)]}
+        # Asked until the chain is listed, SPY is quoted and every line the window opened has a quote.
+        await _post(app, body)
+        await desk.settle()
+        desk.spy()
+        await desk.settle()
+        desk.quote_every_line()
+        desk.ibkr.now += 400
+        response = await _post(app, body)
+
+        assert response.status_code == 200, (strike, expiry, response.text)
+        seen = response.json()
+        assert seen["verdict"]["can_be_deployed"] is True and seen["state"] != "resolved", (strike, expiry)
+        assert seen["notice"]
+
+
+async def test_the_catalogue_names_each_structure_two_ways_and_says_what_how_tells_every_option_bot(deploy_app) -> None:
+    app, _registry = deploy_app
+
+    catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
+
+    starts = [start for group in catalogue["groups"] for start in group["structures"]]
+    assert all(start["in_a_sentence"].endswith(" on") and start["label"][0].isupper() for start in starts)
+    assert {start["in_a_sentence"].split()[0] for start in starts} == {"a", "an"}
+    assert len({start["in_a_sentence"] for start in starts} | {catalogue["custom_in_a_sentence"]}) == len(starts) + 1
+    notes = catalogue["order_term_notes"]
+    assert set(notes) == {"entries_sentence", "exits_sentence", "hours_sentence", "alpaca_sentence"}
+    assert all(notes.values()) and len(set(notes.values())) == 4
+    # An exit has no price limit, and the owner is told so in as many words.
+    assert "no price limit" in notes["exits_sentence"] and "limit" in notes["entries_sentence"]
 
 
 def test_a_pages_search_goes_to_this_processs_preview_lane_and_never_to_the_lane_a_bots_entry_uses() -> None:

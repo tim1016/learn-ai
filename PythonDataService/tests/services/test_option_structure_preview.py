@@ -23,7 +23,8 @@ from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import CEILING_PROBE_MS, OptionQuoteLines, WatchRequest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
-from app.options.american import CashDividend, american_implied_volatility, years_from_ms
+from app.options.american import CashDividend, american_daily_decay, american_implied_volatility, years_from_ms
+from app.options.decay import DecayNotEstimated
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA
 from app.options.named_structures import NamedStructure
@@ -38,6 +39,7 @@ from app.services.option_preview_views import usd
 from app.services.option_search import PREVIEW_SEARCH_WAIT_S, OptionSearchLane, PreviewSearches
 from app.services.option_structure_preview import (
     ARRIVAL_GRACE_MS,
+    FIGURES_GOOD_FOR_MS,
     MAX_PREVIEW_WINDOWS,
     PREVIEW_LEASE_MS,
     preview_option_structure,
@@ -470,6 +472,520 @@ async def test_legs_that_do_not_share_an_expiry_have_nothing_estimated_at_expiry
     assert (seen.at_expiry.estimated, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (False, None, None)
     assert (seen.at_expiry.loss_holds, seen.at_expiry.break_even_prices) == ([], [])
     assert len(seen.watched.ranges) == 2
+
+
+# ---- The entry's own limits, judged as an entry judges them -------------------------
+
+
+_GAP_OVER, _COST_OVER = "OPTION_STRUCTURE_LEG_GAP_OVER_LIMIT", "OPTION_STRUCTURE_COST_OVER_LIMIT"
+
+
+async def test_a_leg_quoted_wider_than_the_owners_gap_limit_is_named_and_the_verdict_is_not_red(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 585 call at 3.90 by 4.30: forty cents on a mid of 4.10 is 9.76%, over the 8% an owner starts from.
+    The 590 at 2.18 by 2.22 is 1.82%. Bought for $2.12, crossing both markets costs $44.00 of the $212.10 set
+    aside, which is over 10% too."""
+    desk = Desk(monkeypatch)
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("3.90", "4.30"), c590=("2.18", "2.22"))
+
+    bought, sold = seen.legs
+    assert (bought.number, sold.number) == (1, 2)
+    assert (bought.gap_percent_of_mid, bought.over_gap_limit, sold.over_gap_limit) == (Decimal("9.76"), True, False)
+    assert seen.gap_limit_percent == Decimal(8)
+    assert "9.76%" in bought.gap_sentence and "8%" in bought.gap_sentence
+    assert "1.82%" in sold.gap_sentence and bought.gap_sentence != sold.gap_sentence
+    # Every reason an entry would be refused, in the order an entry asks: the wide leg, then the cost.
+    assert [(refused.reason_code, refused.leg_ids) for refused in seen.entry_refusals] == [
+        (_GAP_OVER, ["long_call"]), (_COST_OVER, []),
+    ]
+    by_gap, by_cost = seen.entry_refusals
+    assert "Leg 1" in by_gap.sentence and "9.76%" in by_gap.sentence and "long_call" not in by_gap.sentence
+    assert by_cost.sentence == seen.money.cost_sentence
+    # A wide market passes. It is not a structure that cannot be deployed, and its figures are all shown.
+    assert (seen.verdict.resolves_as_built, seen.verdict.red, seen.money.over_cost_limit) == (True, False, True)
+    assert seen.money.net_entry_premium_cents == 21_200
+
+
+async def test_the_gap_is_held_to_the_limit_the_owner_set_and_not_to_the_one_they_start_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Four cents on a mid of 2.20 is 1.82%: inside 8%, and over a limit of 1.5%. On 4.10 it is 0.98%: inside both."""
+    desk = Desk(monkeypatch)
+    strict = _BULL_CALL_SPREAD.model_copy(update={"gap_limit_percent": Decimal("1.5")})
+
+    seen = await desk.quoted(strict, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert [leg.over_gap_limit for leg in seen.legs] == [False, True]
+    assert (seen.gap_limit_percent, seen.order_terms.gap_limit_percent) == (Decimal("1.5"), Decimal("1.5"))
+    assert [(refused.reason_code, refused.leg_ids) for refused in seen.entry_refusals] == [(_GAP_OVER, ["short_call"])]
+    assert "1.5%" in seen.legs[1].gap_sentence and "8%" not in seen.legs[1].gap_sentence
+
+
+async def test_an_entry_that_nothing_here_would_refuse_is_said_apart_from_one_that_would_be_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+
+    fine = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    costly = await Desk(monkeypatch).quoted(_BULL_CALL_SPREAD, c585=("4.98", "5.02"), c590=("4.88", "4.92"))
+
+    assert fine.entry_refusals == [] and [refused.reason_code for refused in costly.entry_refusals] == [_COST_OVER]
+    assert fine.entry_sentence and costly.entry_sentence and fine.entry_sentence != costly.entry_sentence
+    # The budget, the account and the quotes of an entry's own moment are not asked here, and that is said.
+    assert "budget" in fine.entry_sentence
+
+
+async def test_picks_that_are_not_the_structure_built_are_an_entrys_refusal_too_under_the_verdicts_own_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    upside_down = _asking(
+        _leg("long_call", "long", "call", _AT_THE_MONEY),
+        _leg("short_call", "short", "call", _from("long_call", -5.0)),
+        structure="bull_call_spread",
+    )
+
+    seen = await desk.quoted(upside_down)
+
+    assert seen.verdict.red and seen.entry_refusals[0].reason_code == seen.verdict.resolves_reason_code
+    assert sorted(seen.entry_refusals[0].leg_ids) == ["long_call", "short_call"]
+
+
+async def test_an_answer_with_no_figures_names_no_entry_refusal_and_says_nothing_of_an_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = await Desk(monkeypatch).preview(_BULL_CALL_SPREAD)
+
+    assert seen.state != "resolved"
+    assert (seen.entry_refusals, seen.entry_sentence, seen.decay) == ([], None, None)
+
+
+# ---- What a day takes ---------------------------------------------------------------
+
+
+def _decay_apart(leg: Any, *, at_ms: int, dividends: tuple[DividendOn, ...] = ()) -> float:
+    """The pricer's own daily decay for one served leg, with every input written out again here: SPY's mid of
+    585.11, the leg's own solved volatility, and the time from the read to the expiry day's close."""
+    worked = american_daily_decay(
+        spot=585.11,
+        strike=float(leg.contract.strike),
+        years_to_expiry=years_from_ms(session_close_ms_utc(FRIDAY) - at_ms),
+        rate=0.045,
+        volatility=leg.implied_volatility,
+        right=leg.contract.right,
+        dividends=tuple(CashDividend(years_from_ms(paid.ex_ms - at_ms), paid.cash) for paid in dividends),
+    )
+    assert worked is not None
+    return worked.decay
+
+
+def _to_the_cent(dollars: float) -> int:
+    return int((Decimal(dollars) * 100).quantize(Decimal(1), rounding="ROUND_HALF_EVEN"))
+
+
+async def test_a_bought_spread_shows_what_24_hours_take_from_it_bought_leg_less_sold_for_every_structure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    three = _BULL_CALL_SPREAD.model_copy(update={"structures": 3})
+
+    seen = await desk.quoted(three, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    bought, sold = seen.legs
+    # Each leg's figure is its own contract's, whichever side the leg takes: both calls lose value with a day.
+    _close(bought.daily_decay, _decay_apart(bought, at_ms=NOW + 400))
+    _close(sold.daily_decay, _decay_apart(sold, at_ms=NOW + 400))
+    assert bought.daily_decay < sold.daily_decay < 0
+    # Bought one and sold the other, a hundred shares, three structures.
+    cents = _to_the_cent(3 * 100 * (bought.daily_decay - sold.daily_decay))
+    decay = seen.decay
+    assert (decay.estimated, decay.reason_code, decay.leg_ids) == (True, None, [])
+    assert (decay.per_24h_cents, decay.direction, decay.per_24h_usd) == (cents, "loses", usd(-cents))
+    assert cents < 0 and usd(-cents) in decay.sentence and "3 structures" in decay.sentence
+    # It is per 24 hours by the clock, and a weekend is three of them. Both are said.
+    assert "24 hours" in decay.sentence and "24 hours" in decay.assumptions_sentence
+    assert "weekend" in decay.assumptions_sentence and "three" in decay.assumptions_sentence
+    assert (decay.warning_sentence, decay.near_ex_date_sentence) == (None, None)
+
+
+async def test_a_spread_that_was_sold_gains_with_a_day_and_is_said_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 585 call sold and the 590 bought: the sold call, nearer the money, loses more in a day than the bought."""
+    desk = Desk(monkeypatch)
+    received = _asking(
+        _leg("short_call", "short", "call", _AT_THE_MONEY),
+        _leg("long_call", "long", "call", _from("short_call", 5.0)),
+        structure="bear_call_spread",
+    )
+
+    seen = await desk.quoted(received, c585=("5.00", "5.04"), c590=("1.89", "1.93"))
+
+    sold, bought = seen.legs
+    cents = _to_the_cent(100 * (bought.daily_decay - sold.daily_decay))
+    assert cents > 0
+    assert (seen.decay.per_24h_cents, seen.decay.direction, seen.decay.per_24h_usd) == (cents, "gains", usd(cents))
+    assert usd(cents) in seen.decay.sentence and "-" not in seen.decay.per_24h_usd
+
+
+async def test_with_dividends_unknown_no_decay_is_estimated_for_the_structure_or_shown_for_any_leg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    desk.inputs = _UNKNOWN
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    decay = seen.decay
+    assert (seen.state, decay.estimated, decay.reason_code) == ("resolved", False, DecayNotEstimated.INPUTS_NOT_KNOWN)
+    assert (decay.per_24h_cents, decay.per_24h_usd, decay.direction) == (None, None, None)
+    assert decay.leg_ids == ["long_call", "short_call"] and [leg.daily_decay for leg in seen.legs] == [None, None]
+    assert "SPY" in decay.sentence
+
+
+async def test_one_leg_the_model_has_no_volatility_for_leaves_the_whole_decay_not_estimated_and_is_named_by_its_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 590 call quoted far above anything a volatility explains. A rule by strike still picks it."""
+    desk = Desk(monkeypatch)
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
+
+    decay = seen.decay
+    assert (decay.estimated, decay.reason_code, decay.leg_ids) == (False, DecayNotEstimated.NO_VOLATILITY, ["short_call"])
+    assert decay.per_24h_cents is None
+    assert "leg 2" in decay.sentence and "short_call" not in decay.sentence
+    # The other leg's own figure is still its own. No sum of one leg is shown as the structure's.
+    assert seen.legs[0].daily_decay < 0 and seen.legs[1].daily_decay is None
+    assert seen.legs[1].delta_status_sentence != seen.legs[0].delta_status_sentence
+
+
+_GOING_EX_TOMORROW = DividendOn(ex_ms=session_open_ms_utc(date(2026, 10, 7)), cash=1.75)
+
+
+async def test_a_sold_call_whose_figure_counts_tomorrows_dividend_carries_a_warning_that_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SPY goes ex $1.75 at tomorrow's open, inside the 24 hours. The sold 590 call falls by about that, which
+    the figure counts as a gain. A sold call in the money is often assigned first."""
+    desk = Desk(monkeypatch)
+    desk.inputs = replace(_KNOWN, dividends=(_GOING_EX_TOMORROW,))
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert seen.decay.estimated
+    _close(seen.legs[1].daily_decay, _decay_apart(seen.legs[1], at_ms=NOW + 400, dividends=(_GOING_EX_TOMORROW,)))
+    assert "Leg 2" in seen.decay.warning_sentence and "short_call" not in seen.decay.warning_sentence
+    assert "Leg 1" not in seen.decay.warning_sentence
+    assert seen.decay.near_ex_date_sentence and "SPY" in seen.decay.near_ex_date_sentence
+
+
+async def test_a_bought_call_ahead_of_that_dividend_is_told_the_figure_is_rough_and_has_no_sold_call_to_warn_of(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    desk.inputs = replace(_KNOWN, dividends=(_GOING_EX_TOMORROW,))
+    bought_call = _asking(_leg("long_call", "long", "call", _AT_THE_MONEY), structure="long_call")
+
+    seen = await desk.quoted(bought_call)
+
+    assert (seen.decay.estimated, seen.decay.warning_sentence) == (True, None)
+    assert seen.decay.near_ex_date_sentence is not None
+
+
+async def test_a_dividend_more_than_three_days_off_brings_neither_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    in_ten_days = DividendOn(ex_ms=session_open_ms_utc(date(2026, 10, 16)), cash=1.75)
+    desk.inputs = replace(_KNOWN, dividends=(in_ten_days,))
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert (seen.decay.estimated, seen.decay.warning_sentence, seen.decay.near_ex_date_sentence) == (True, None, None)
+
+
+# ---- Money a screen shows as it is, and the line to draw ---------------------------------
+
+
+async def test_every_amount_of_cents_comes_with_the_same_amount_written_out_in_dollars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    money = seen.money
+    assert (money.net_price_usd, money.premium_usd, money.premium_per_structure_usd) == ("$1.94", "$194.00", "$194.00")
+    assert (money.premium_is, money.premium_is_label) == ("paid", "paid")
+    assert money.premium_usd in money.premium_sentence and money.net_price_usd in money.premium_sentence
+    assert (money.broker_requirement_usd, money.fee_estimate_usd) == (usd(0), usd(money.fee_estimate_cents))
+    assert (money.entry_commitment_usd, money.round_trip_cost_usd) == (usd(19_410), usd(800))
+    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (usd(19_400), usd(30_600))
+    # Level at the $194.00 lost up to 585, up to the $306.00 gained at 590, and level again: drawn from 583 to 592.
+    assert [(point.price, point.result_cents) for point in seen.at_expiry.sketch] == [
+        (Decimal(583), -19_400), (Decimal(585), -19_400), (Decimal(590), 30_600), (Decimal(592), 30_600),
+    ]
+
+
+async def test_a_premium_received_is_written_without_a_sign_and_said_to_be_received(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    received = _asking(
+        _leg("short_call", "short", "call", _AT_THE_MONEY),
+        _leg("long_call", "long", "call", _from("short_call", 5.0)),
+        structure="bear_call_spread",
+    )
+
+    seen = await desk.quoted(received.model_copy(update={"structures": 2}), c585=("5.00", "5.04"), c590=("1.89", "1.93"))
+
+    money = seen.money
+    assert (money.net_entry_premium_cents, money.premium_usd, money.premium_per_structure_usd) == (-61_400, "$614.00", "$307.00")
+    assert (money.net_price_usd, money.premium_is, money.premium_is_label) == ("$3.07", "received", "received")
+    assert "received" in money.premium_sentence and "paid" not in money.premium_sentence
+    assert all(said in money.premium_sentence for said in ("$614.00", "$307.00", "$3.07", "2 structures"))
+    assert money.broker_requirement_usd == "$1,000.00"
+
+
+async def test_legs_with_two_expiries_have_no_line_to_draw_and_no_amounts_at_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    next_friday = {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(scenes._NEXT_FRIDAY)}
+    two_expiries = _asking(
+        _leg("near", "long", "call", _AT_THE_MONEY), _leg("far", "long", "call", _AT_THE_MONEY, next_friday)
+    )
+
+    seen = await desk.quoted(two_expiries)
+
+    assert (seen.at_expiry.estimated, seen.at_expiry.sketch) == (False, [])
+    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (None, None)
+    # Each leg still has a day's decay of its own: nothing about that needs one expiry.
+    assert seen.decay.estimated
+
+
+# ---- What was asked, said back; and how long the figures stand -----------------------------
+
+
+async def test_every_answer_says_each_leg_back_by_its_place_with_its_rules_in_words(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+
+    waiting = await desk.preview(_BULL_CALL_SPREAD)
+    resolved = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    refused = await desk.preview(_asking(_leg("short_call", "short", "call", _AT_THE_MONEY)))
+
+    for seen in (waiting, resolved):
+        first, second = seen.legs_asked
+        assert (first.leg_id, first.number, first.side_label) == ("long_call", 1, "Buy")
+        assert (second.leg_id, second.number, second.side_label) == ("short_call", 2, "Sell")
+        assert "$5" in second.sentence and "leg 1" in second.sentence and "long_call" not in second.sentence
+        assert "Oct 9 '26" in first.sentence
+    assert waiting.state not in {"resolved", "plan_refused"}
+    assert (resolved.state, refused.state) == ("resolved", "plan_refused")
+    assert [(leg.number, leg.side_label) for leg in refused.legs_asked] == [(1, "Sell")]
+
+
+async def test_a_structure_is_named_as_a_list_writes_it_and_as_a_sentence_takes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    custom = _asking(_leg("only", "long", "call", _AT_THE_MONEY))
+    condor = _as_the_builder_starts(NamedStructure.IRON_CONDOR)
+
+    named, unnamed, with_an = [await desk.preview(asked) for asked in (_BULL_CALL_SPREAD, custom, condor)]
+
+    assert (named.structure_label, named.structure_in_a_sentence) == ("Bull call spread", "a bull call spread on")
+    assert (unnamed.structure, unnamed.structure_label) == (None, "Custom")
+    assert unnamed.structure_in_a_sentence.endswith(" on") and unnamed.structure_in_a_sentence != named.structure_in_a_sentence
+    assert with_an.structure_in_a_sentence == "an iron condor on"
+
+
+async def test_figures_are_good_for_as_long_as_a_pages_request_for_quotes_stands_and_only_figures_carry_that(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+
+    waiting = await desk.preview(_BULL_CALL_SPREAD)
+    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert FIGURES_GOOD_FOR_MS == PREVIEW_LEASE_MS == 60_000
+    assert (seen.figures_good_for_ms, seen.figures_good_until_ms) == (60_000, seen.quotes_read_ms + 60_000)
+    assert seen.figures_stale_sentence and seen.quotes_read_sentence
+    assert (waiting.figures_good_for_ms, waiting.figures_good_until_ms, waiting.figures_stale_sentence) == (None, None, None)
+    assert waiting.quotes_read_sentence is None
+
+
+async def test_what_is_read_together_is_served_together_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The feed's generation, the underlying's quote, the money and how far the search reached come from one
+    reading of the supervisor. A page that keys on one of them finds them all."""
+    desk = Desk(monkeypatch)
+
+    before = await desk.preview(_BULL_CALL_SPREAD)
+    after = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+
+    assert (before.feed_generation, before.underlying_quote, before.the_money, before.watched) == (None, None, None, None)
+    assert None not in (after.feed_generation, after.underlying_quote, after.the_money, after.watched)
+    assert after.watched.sentence and all(reached.sentence for reached in after.watched.ranges)
+    assert "583" in after.watched.ranges[0].sentence and "592" in after.watched.ranges[0].sentence
+
+
+# ---- The owner's own order terms ------------------------------------------------------------
+
+
+_EXPIRING_TODAY = _asking(
+    _leg("long_call", "long", "call", _AT_THE_MONEY, {"selector": "same_day"}), structure="long_call"
+)
+
+
+async def test_a_contract_is_picked_under_the_entry_cutoff_the_owners_own_close_lead_makes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call expiring today, asked about at 10:31:02. Closed 45 minutes before the 16:00 close, an entry on it
+    can still be seen through. Closed 330 minutes before, at 10:30, the entry cutoff passed at 10:28:40."""
+    late_enough = await Desk(monkeypatch).quoted(_EXPIRING_TODAY)
+    too_late = await Desk(monkeypatch).quoted(_EXPIRING_TODAY.model_copy(update={"expiry_close_lead_minutes": 330}))
+
+    assert (late_enough.state, late_enough.order_terms.expiry_close_lead_minutes) == ("resolved", 45)
+    assert (too_late.state, too_late.reason_code) == ("not_resolved", "OPTION_CONTRACT_PAST_ENTRY_CUTOFF")
+    assert too_late.order_terms.expiry_close_lead_minutes == 330
+
+
+async def test_the_entry_wait_counts_toward_that_cutoff_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closed 328 minutes before the close, at 10:32. An entry needs its wait, 30 seconds to prove a cancel and
+    30 more to spare before that. With a wait of 1 second the cutoff is 10:30:59, already past at 10:31:02.
+    The longest wait there is, 300 seconds, is later still. So one more minute of lead is what it turns on:
+    327 minutes with a wait of 1 second is cut off at 10:31:59, not yet reached."""
+    passed = _EXPIRING_TODAY.model_copy(update={"expiry_close_lead_minutes": 328, "entry_wait_seconds": 1})
+    not_yet = _EXPIRING_TODAY.model_copy(update={"expiry_close_lead_minutes": 327, "entry_wait_seconds": 1})
+    passed_by_the_wait = _EXPIRING_TODAY.model_copy(update={"expiry_close_lead_minutes": 327, "entry_wait_seconds": 60})
+
+    seen = [await Desk(monkeypatch).quoted(asked) for asked in (passed, not_yet, passed_by_the_wait)]
+
+    assert [answer.state for answer in seen] == ["not_resolved", "resolved", "not_resolved"]
+    assert seen[2].reason_code == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
+    assert (seen[2].order_terms.entry_wait_seconds, seen[1].order_terms.entry_wait_seconds) == (60, 1)
+
+
+async def test_where_the_owners_close_falls_against_alpacas_hour_is_said_three_ways(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+
+    said = []
+    for minutes in (45, 60, 90):
+        seen = await desk.preview(_BULL_CALL_SPREAD.model_copy(update={"expiry_close_lead_minutes": minutes}))
+        said.append(seen.order_terms.expiry_close_sentence)
+
+    assert len(set(said)) == 3 and all(str(minutes) in words for minutes, words in zip((45, 60, 90), said, strict=True))
+
+
+# ---- A leg is named by its place, never by its id --------------------------------------------
+
+
+def _every_sentence(seen: OptionStructurePreview) -> list[str]:
+    """Every sentence the answer carries, wherever it sits."""
+    found: list[str] = []
+
+    def walk(part: Any, name: str = "") -> None:
+        if isinstance(part, dict):
+            for key, value in part.items():
+                walk(value, key)
+        elif isinstance(part, list):
+            for value in part:
+                walk(value, name)
+        elif isinstance(part, str) and (name.endswith("sentence") or name == "notice"):
+            found.append(part)
+
+    walk(seen.model_dump(mode="json"))
+    return found
+
+
+def _names_no_leg_by_its_id(seen: OptionStructurePreview, *leg_ids: str) -> bool:
+    return not any(f"'{leg_id}'" in said or f" {leg_id} " in said for said in _every_sentence(seen) for leg_id in leg_ids)
+
+
+# Written second and named first in the alphabet: a place is not an order of names.
+_SECOND, _FIRST = "alpha", "zulu"
+
+
+async def test_a_plans_own_refusal_names_legs_by_their_places(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each leg measures its strike from the other."""
+    in_a_loop = _asking(
+        _leg(_FIRST, "long", "call", _from(_SECOND, -5.0)), _leg(_SECOND, "short", "call", _from(_FIRST, 5.0))
+    )
+
+    seen = await Desk(monkeypatch).preview(in_a_loop)
+
+    assert (seen.state, seen.reason_code) == ("plan_refused", "OPTION_PREVIEW_PLAN_REFUSED")
+    assert "leg 1" in seen.notice and "leg 2" in seen.notice
+    assert _names_no_leg_by_its_id(seen, _FIRST, _SECOND)
+
+
+async def test_a_resolvers_refusal_names_the_leg_by_its_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The second leg's contract never gets a quote."""
+    desk = Desk(monkeypatch)
+    spread = _asking(_leg(_FIRST, "long", "call", _AT_THE_MONEY), _leg(_SECOND, "short", "call", _from(_FIRST, 5.0)))
+    await desk.watching(spread)
+    desk.quote("call", 585, "4.08", "4.12")
+    desk.ibkr.now += ARRIVAL_GRACE_MS + 1
+    desk.spy()
+    desk.quote("call", 585, "4.08", "4.12")
+
+    seen = await desk.preview(spread)
+
+    assert (seen.state, seen.reason_code, seen.leg_ids) == ("not_resolved", "OPTION_CONTRACT_SEARCH_INCOMPLETE", [_SECOND])
+    assert "Leg 2" in seen.notice or "leg 2" in seen.notice
+    assert _names_no_leg_by_its_id(seen, _FIRST, _SECOND)
+
+
+async def test_a_shape_that_is_not_the_one_named_names_its_legs_by_their_places(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    upside_down = _asking(
+        _leg(_FIRST, "long", "call", _AT_THE_MONEY),
+        _leg(_SECOND, "short", "call", _from(_FIRST, -5.0)),
+        structure="bull_call_spread",
+    )
+    one_strike = _asking(
+        _leg(_FIRST, "long", "call", _AT_THE_MONEY), _leg(_SECOND, "short", "call", _from(_FIRST, 0.0))
+    )
+
+    reversed_, same = await desk.quoted(upside_down), await Desk(monkeypatch).quoted(one_strike)
+
+    assert reversed_.verdict.red and same.verdict.red
+    assert "leg 1" in reversed_.verdict.resolves_sentence and "leg 2" in reversed_.verdict.resolves_sentence
+    # The check names the pair by their ids' order, zulu after alpha. Said by place, a pair is in its places' order.
+    assert "legs 1 and 2" in same.verdict.resolves_sentence
+    assert sorted(reversed_.verdict.leg_ids) == [_SECOND, _FIRST]
+    assert _names_no_leg_by_its_id(reversed_, _FIRST, _SECOND) and _names_no_leg_by_its_id(same, _FIRST, _SECOND)
+
+
+async def test_a_leg_with_no_delta_is_named_by_its_place_where_the_lean_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    spread = _asking(_leg(_FIRST, "long", "call", _AT_THE_MONEY), _leg(_SECOND, "short", "call", _from(_FIRST, 5.0)))
+
+    seen = await desk.quoted(spread, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
+
+    assert seen.lean is None and "leg 2" in seen.lean_unknown_sentence
+    assert _names_no_leg_by_its_id(seen, _FIRST, _SECOND)
+
+
+@pytest.mark.parametrize("name", list(NamedStructure), ids=lambda name: name.value)
+async def test_no_sentence_of_a_starting_structures_preview_names_a_leg_by_its_id(
+    monkeypatch: pytest.MonkeyPatch, name: NamedStructure
+) -> None:
+    desk = Desk(monkeypatch, reach=6)
+    asked = _as_the_builder_starts(name)
+
+    seen = await desk.quoted(asked)
+
+    assert seen.state in {"resolved", "not_resolved"}
+    assert _names_no_leg_by_its_id(seen, *(leg.leg_id for leg in asked.legs))
+
+
+async def test_two_legs_given_one_id_are_refused_by_their_places_and_ask_for_no_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    twice = _asking(
+        _leg("same", "long", "call", _AT_THE_MONEY), _leg("other", "long", "put", _AT_THE_MONEY),
+        _leg("same", "long", "call", {"selector": "atm_offset", "offset": 2}),
+    )
+
+    seen = await desk.preview(twice)
+
+    assert (seen.state, seen.reason_code, seen.leg_ids) == ("plan_refused", "OPTION_PREVIEW_LEGS_SHARE_AN_ID", ["same"])
+    assert "1 and 3" in seen.notice and "'same'" not in seen.notice
+    assert (seen.verdict.can_be_deployed, seen.verdict.red) == (False, True)
+    assert desk.watch.requests() == ()
 
 
 # ---- The verdict ------------------------------------------------------------------

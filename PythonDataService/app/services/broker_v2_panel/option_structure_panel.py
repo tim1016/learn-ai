@@ -7,18 +7,29 @@ from lives in ``app.options.structure_catalogue``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import date
+from typing import Any
 
 from app.broker.alpaca.market_liveness import get_option_quotes
 from app.broker.ibkr.config import get_settings as ibkr_settings
+from app.options.bounds import Bounds, bounds_of
+from app.options.contract import symbol_expiry_range_ms
+from app.options.expiry import option_expiry_date
 from app.options.named_structures import NamedStructure
 from app.options.structure import MAX_OPTION_LEGS
 from app.options.structure_catalogue import (
+    ALPACA_SENTENCE,
+    CUSTOM_LABEL,
+    ENTRIES_SENTENCE,
+    EXITS_SENTENCE,
     EXPIRY_RULES,
     GROUPS,
+    HOURS_SENTENCE,
     STRIKE_RULES,
     RuleOffered,
     description,
+    in_a_sentence,
     label,
     order_term_starts,
     starting_plan,
@@ -30,6 +41,7 @@ from app.schemas.option_preview import (
     OptionExpiryRule,
     OptionLegRules,
     OptionOrderTermDefaults,
+    OptionOrderTermNotes,
     OptionPercentTerm,
     OptionRuleOtherLeg,
     OptionRuleTolerance,
@@ -38,12 +50,15 @@ from app.schemas.option_preview import (
     OptionStructureCatalogue,
     OptionStructurePreview,
     OptionStructurePreviewRequest,
+    OptionValueBounds,
     OptionWholeNumberTerm,
 )
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.services.option_model_inputs import ModelInputsRead, read_option_model_inputs
+from app.services.option_preview_out_of_range import numbers_out_of_range
+from app.services.option_preview_words import bounds_in_words, expiry_in_words
 from app.services.option_search import PreviewSearches, get_option_searches
-from app.services.option_structure_preview import preview_option_structure
+from app.services.option_structure_preview import preview_of_numbers_out_of_range, preview_option_structure
 from app.services.option_watch import get_option_watch_list
 from app.utils.timestamps import now_ms_utc
 
@@ -78,11 +93,24 @@ async def option_structure_preview(
     )
 
 
+async def option_structure_out_of_range(
+    broker: str, account_id: str, body: object, errors: Sequence[Mapping[str, Any]]
+) -> OptionStructurePreview | None:
+    """The answer to a preview request that its own validation refused, when every fault in it is a number
+    outside the range the catalogue gives for it. ``None`` when the request is malformed some other way."""
+    refused = numbers_out_of_range(body, errors)
+    if refused is None:
+        return None
+    await validate_account(broker, account_id)
+    return preview_of_numbers_out_of_range(refused, watch=get_option_watch_list(), clock=now_ms_utc)
+
+
 def _start(name: NamedStructure) -> NamedStructureStart:
     legs = [leg for leg in starting_plan(name, _ANY_UNDERLYING).on_enter if isinstance(leg, OptionEntryLeg)]
     return NamedStructureStart(
         structure=name,
         label=label(name),
+        in_a_sentence=in_a_sentence(name),
         description=description(name),
         legs=[
             OptionLegRules(
@@ -98,10 +126,32 @@ def _start(name: NamedStructure) -> NamedStructureStart:
     )
 
 
+def _bounds(bounds: Bounds, *, of_dates: bool = False) -> OptionValueBounds:
+    """A range as a form is served it. A date's range is its anchors, and is said in dates."""
+    if of_dates:
+        first, last = (expiry_in_words(option_expiry_date(anchor)) for anchor in symbol_expiry_range_ms())
+        said = f"a date from {first} to {last}"
+    else:
+        said = bounds_in_words(bounds)
+    return OptionValueBounds(
+        min=bounds.lowest,
+        min_included=bounds.lowest_included,
+        max=bounds.highest,
+        max_included=bounds.highest_included,
+        step=bounds.step,
+        sentence=said,
+    )
+
+
 def _value(offered: RuleOffered) -> OptionRuleValue | None:
-    if offered.value_field is None:
+    if offered.value_field is None or offered.value_bounds is None:
         return None
-    return OptionRuleValue(field=offered.value_field, unit=offered.value_unit, unit_label=offered.value_label)
+    return OptionRuleValue(
+        field=offered.value_field,
+        unit=offered.value_unit,
+        unit_label=offered.value_label,
+        bounds=_bounds(offered.value_bounds, of_dates=offered.value_unit == "date"),
+    )
 
 
 def _measured_from(offered: RuleOffered) -> OptionRuleOtherLeg | None:
@@ -111,13 +161,14 @@ def _measured_from(offered: RuleOffered) -> OptionRuleOtherLeg | None:
 
 
 def _tolerance(offered: RuleOffered) -> OptionRuleTolerance | None:
-    if offered.tolerance_field is None:
+    if offered.tolerance_field is None or offered.tolerance_bounds is None:
         return None
     return OptionRuleTolerance(
         field=offered.tolerance_field,
         unit=offered.tolerance_unit,
         unit_label=offered.tolerance_label,
         default=offered.tolerance_default,
+        bounds=_bounds(offered.tolerance_bounds),
     )
 
 
@@ -125,11 +176,16 @@ def _order_terms() -> OptionOrderTermDefaults:
     starts = order_term_starts()
 
     def percent(name: str) -> OptionPercentTerm:
-        return OptionPercentTerm(label=starts[name].label, unit_label=starts[name].unit_label, default=starts[name].default)
+        start = starts[name]
+        return OptionPercentTerm(
+            label=start.label, unit_label=start.unit_label, default=start.default, bounds=_bounds(start.bounds), help=start.help
+        )
 
     def whole(name: str) -> OptionWholeNumberTerm:
+        start = starts[name]
         return OptionWholeNumberTerm(
-            label=starts[name].label, unit_label=starts[name].unit_label, default=int(starts[name].default)
+            label=start.label, unit_label=start.unit_label, default=int(start.default), bounds=_bounds(start.bounds),
+            help=start.help,
         )
 
     return OptionOrderTermDefaults(
@@ -148,9 +204,12 @@ async def option_structure_catalogue(broker: str, account_id: str) -> OptionStru
         groups=[
             NamedStructureGroup(label=group, structures=[_start(name) for name in names]) for group, names in GROUPS
         ],
-        custom_label="Custom",
+        custom_label=CUSTOM_LABEL,
+        custom_in_a_sentence=in_a_sentence(None),
         custom_description=f"Start from no legs and add up to {MAX_OPTION_LEGS}.",
         max_legs=MAX_OPTION_LEGS,
+        leg_quantity_bounds=_bounds(bounds_of(OptionLegRules, "qty_ratio")),
+        structures_bounds=_bounds(bounds_of(OptionStructurePreviewRequest, "structures")),
         strike_rules=[
             OptionStrikeRule(
                 selector=offered.selector,
@@ -165,4 +224,10 @@ async def option_structure_catalogue(broker: str, account_id: str) -> OptionStru
             OptionExpiryRule(selector=offered.selector, label=offered.label, value=_value(offered)) for offered in EXPIRY_RULES
         ],
         order_terms=_order_terms(),
+        order_term_notes=OptionOrderTermNotes(
+            entries_sentence=ENTRIES_SENTENCE,
+            exits_sentence=EXITS_SENTENCE,
+            hours_sentence=HOURS_SENTENCE,
+            alpaca_sentence=ALPACA_SENTENCE,
+        ),
     )
