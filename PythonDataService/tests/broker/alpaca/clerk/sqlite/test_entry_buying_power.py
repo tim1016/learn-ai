@@ -936,23 +936,74 @@ async def test_the_owners_review_over_http_ends_the_hold_and_answers_with_the_bo
     assert len([row for row in paper.log() if row[1] == REVIEWED_SUMMARY_CODE]) == 1
 
 
-@pytest.mark.usefixtures("judged")
-async def test_a_part_fill_is_compared_with_what_filled_and_with_its_share_of_the_set_aside(paper: Paper) -> None:
+async def _one_of_two_filled_and_the_other_cancelled(paper: Paper, *, shows: str) -> str:
+    """Two calls asked for at $1.94; one fills, and the keeper cancels the other at the entry's deadline."""
     order_ref = await paper.resting(units=2)
     paper.wait(1_000)
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
-    # The other contract never fills: the keeper cancels it at the entry's deadline.
     paper.wait(WAIT_MS)
     await paper.round()
     assert paper.outcome(order_ref).standing is EntryStanding.PART_FILLED
-    paper.account.buying_power = Decimal("99806.00")
+    paper.account.buying_power = Decimal(shows)
+    return order_ref
+
+
+@pytest.mark.usefixtures("judged")
+@pytest.mark.parametrize(
+    ("shows", "fall_cents"),
+    [("99806.00", 19_400), ("99612.00", 38_800), ("99611.91", 38_809)],
+    ids=["only the contract that filled", "the whole order still taken", "exactly everything set aside"],
+)
+async def test_a_part_fill_whose_rest_was_cancelled_is_not_judged_inside_everything_the_entry_set_aside(
+    paper: Paper, shows: str, fall_cents: int
+) -> None:
+    order_ref = await _one_of_two_filled_and_the_other_cancelled(paper, shows=shows)
 
     found = await paper.compared(order_ref)
 
-    # Two contracts set aside $388.00 and nine cents of fees. One of the two is $194.045, up to the cent.
+    # Two contracts set aside $388.00 and nine cents of fees. Whether Alpaca has given back the cancelled
+    # contract's $194.00 is not verified, so no fall up to $388.09 is called anything, and no bot is held.
+    assert (found.result, found.reason_code, found.holds) == ("unknown", "UNFILLED_PART_RELEASE_NOT_VERIFIED", False)
     assert (found.contracts_asked, found.contracts_filled, found.commitment_cents) == (2, 1, 38_809)
-    assert (found.set_aside_for_filled_cents, found.premium_paid_cents, found.fall_cents) == (19_405, 19_400, 19_400)
-    assert (found.result, found.holds) == ("consistent", False)
+    # The share for the one that filled is $194.045, up to the cent: recorded, and judged by nothing.
+    assert (found.set_aside_for_filled_cents, found.premium_paid_cents, found.fall_cents) == (19_405, 19_400, fall_cents)
+    assert paper.notices() == []
+    again = await paper.exit()
+    assert again.state is not EffectOperationState.REJECTED, again.explanation
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_part_fill_is_under_reserved_only_above_everything_the_entry_set_aside(paper: Paper) -> None:
+    # $388.10 fell: a cent more than the $388.09 the two contracts set aside. Nothing of the entry explains it.
+    order_ref = await _one_of_two_filled_and_the_other_cancelled(paper, shows="99611.90")
+
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.reason_code, found.holds) == ("under_reserved_unexplained", None, True)
+    assert (found.fall_cents, found.commitment_cents, found.set_aside_for_filled_cents) == (38_810, 38_809, 19_405)
+    # The notice names what the fall was held to: everything the entry set aside, not the one contract's share.
+    cause = under_reserved_cause(paper.repo, strategy_instance_id="a")
+    assert cause is not None
+    assert [(e.order_ref, e.fall_cents, e.set_aside_cents) for e in cause.entries] == [(order_ref, 38_810, 38_809)]
+    [notice] = [n for n in paper.repo.active_uncertainties() if n["reason_code"] == HOLD]
+    assert "388.10" in notice["explanation"] and "388.09" in notice["explanation"]
+    assert "194.05" not in notice["explanation"]
+
+
+@pytest.mark.parametrize(
+    ("shows", "reason"),
+    [("99612.00", "UNFILLED_PART_RELEASE_NOT_VERIFIED"), ("99611.90", "JUDGMENT_NOT_SWITCHED_ON")],
+    ids=["inside everything set aside", "above it"],
+)
+async def test_with_the_setting_off_a_part_fill_says_why_it_cannot_be_judged_before_it_says_not_switched_on(
+    paper: Paper, shows: str, reason: str
+) -> None:
+    order_ref = await _one_of_two_filled_and_the_other_cancelled(paper, shows=shows)
+
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.reason_code, found.holds) == ("unknown", reason, False)
+    assert paper.notices() == []
 
 
 @pytest.mark.usefixtures("judged")

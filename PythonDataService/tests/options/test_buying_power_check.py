@@ -14,6 +14,7 @@ import pytest
 from app.options.buying_power_check import (
     BuyingPowerCheckResult,
     judge_fall,
+    judge_part_fill,
     requirement_for_filled_cents,
     set_aside_for_filled_cents,
     whole_cents,
@@ -22,6 +23,7 @@ from app.options.buying_power_check import (
 CONSISTENT = BuyingPowerCheckResult.CONSISTENT
 OVER = BuyingPowerCheckResult.OVER_RESERVED
 UNDER = BuyingPowerCheckResult.UNDER_RESERVED_UNEXPLAINED
+UNKNOWN = BuyingPowerCheckResult.UNKNOWN
 
 
 @pytest.mark.parametrize(
@@ -68,6 +70,47 @@ def test_a_comparable_pair_is_never_judged_unknown() -> None:
     }
 
     assert results == {CONSISTENT, OVER, UNDER}
+
+
+@pytest.mark.parametrize(
+    ("second", "expected"),
+    [
+        # Two calls at a $1.94 limit set aside $388.00 and nine cents of fees. One filled; the other was cancelled.
+        # Alpaca shows only the contract that filled taken: not called consistent, on a guess that the rest is back.
+        (9_980_600, UNKNOWN),
+        # It still shows the whole order taken, $388.00: inside everything the entry set aside.
+        (9_961_200, UNKNOWN),
+        # Exactly everything the entry set aside, $388.09.
+        (9_961_191, UNKNOWN),
+        # One cent more than that: nothing of the entry explains it.
+        (9_961_190, UNDER),
+        (9_950_000, UNDER),
+        # No fall, and a rise.
+        (10_000_000, UNKNOWN),
+        (10_005_000, UNKNOWN),
+    ],
+)
+def test_a_part_fill_is_held_to_everything_the_entry_set_aside_and_judged_by_nothing_finer(
+    second: int, expected: BuyingPowerCheckResult
+) -> None:
+    assert judge_part_fill(first_cents=10_000_000, second_cents=second, commitment_cents=38_809) is expected
+
+
+def test_a_part_fill_is_never_called_consistent_or_over_reserved() -> None:
+    results = {
+        judge_part_fill(first_cents=100_000, second_cents=second, commitment_cents=38_809)
+        for second in range(0, 120_000, 7)
+    }
+
+    assert results == {UNKNOWN, UNDER}
+
+
+@pytest.mark.parametrize("not_cents", [1.0, "100", None, True])
+def test_a_part_fills_judgment_refuses_a_reading_that_is_not_whole_cents(not_cents: object) -> None:
+    with pytest.raises(ValueError, match="whole cents"):
+        judge_part_fill(first_cents=not_cents, second_cents=0, commitment_cents=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="commitment_cents"):
+        judge_part_fill(first_cents=0, second_cents=0, commitment_cents=0)
 
 
 @pytest.mark.parametrize(

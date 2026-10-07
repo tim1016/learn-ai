@@ -13,20 +13,30 @@ Formula: every figure is whole cents and nothing is rounded but one share.
                         + premium paid for the contracts filled.
   set aside for what filled = the entry's commitment when every contract
     filled; else ceil(commitment * contracts filled / contracts asked).
-  consistent                  when fall == cost of what filled;
-  under_reserved_unexplained  when fall >  set aside for what filled;
-  over_reserved               otherwise.
-  The first row that holds decides. The tolerance is zero: every input is
-  whole cents, and a difference inside the set-aside is over_reserved, which
-  holds nothing.
+  An entry that filled whole (``judge_fall``):
+    consistent                  when fall == cost of what filled;
+    under_reserved_unexplained  when fall >  set aside for what filled,
+                                which is then the entry's whole commitment;
+    over_reserved               otherwise.
+    The first row that holds decides.
+  An entry that filled in part and whose rest ended (``judge_part_fill``):
+    under_reserved_unexplained  when fall >  the entry's whole commitment;
+    unknown                     otherwise.
+    The broker held the whole order's cost while it rested, and whether it
+    had given back the unfilled part by the second reading is not verified.
+    So the share for what filled is recorded and nothing is judged by it.
+  The tolerance is zero: every input is whole cents, and a difference inside
+  the set-aside is over_reserved or unknown, neither of which holds anything.
 Reference: #2913, "Comparing with Alpaca", check 2 ("the fall in
   options_buying_power ... against requirement plus premium for the units
   filled") and its four results; ADR 0076 decision 26. Alpaca's documents do
-  not say when the figure moves for an order that rests, which is why the
-  Clerk judges a pair only once its setting says the account has shown it.
+  not say when the figure moves for an order that rests or is cancelled,
+  which is why the Clerk judges a pair only once its setting says the account
+  has shown it, and never judges a part fill inside its whole set-aside.
 Canonical implementation: this file.
 Validated against: tests/options/test_buying_power_check.py (hand-derived
-  cases, among them the PRD's $1.94 call and the screens' $193.00 fall).
+  cases, among them the PRD's $1.94 call, the screens' $193.00 fall, and two
+  calls of which one filled).
 """
 
 from __future__ import annotations
@@ -101,7 +111,11 @@ def requirement_for_filled_cents(*, requirement_cents: int, units_asked: int, un
 def judge_fall(
     *, first_cents: int, second_cents: int, cost_of_filled_cents: int, set_aside_for_filled_cents: int
 ) -> BuyingPowerCheckResult:
-    """What a comparable pair of readings comes to. Never ``UNKNOWN``: that is said before this is asked."""
+    """What a comparable pair of readings comes to for an entry that filled whole.
+
+    Never ``UNKNOWN``: that is said before this is asked. An entry that
+    filled in part is ``judge_part_fill``'s.
+    """
     for name, value in (("first_cents", first_cents), ("second_cents", second_cents)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{name} is whole cents; got {value!r}")
@@ -115,6 +129,25 @@ def judge_fall(
     return BuyingPowerCheckResult.OVER_RESERVED
 
 
+def judge_part_fill(*, first_cents: int, second_cents: int, commitment_cents: int) -> BuyingPowerCheckResult:
+    """What a comparable pair of readings comes to for an entry that filled in part and whose rest then ended.
+
+    Held to everything the entry set aside, and to nothing finer. A fall
+    of more than that is ``UNDER_RESERVED_UNEXPLAINED``: nothing of the
+    entry explains it, however much of the unfilled part the broker still
+    holds. Any other fall is ``UNKNOWN``. Never ``CONSISTENT`` or
+    ``OVER_RESERVED``: either would be a guess at how much of the fall is
+    the part that filled.
+    """
+    for name, value in (("first_cents", first_cents), ("second_cents", second_cents)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} is whole cents; got {value!r}")
+    _require_whole(commitment_cents, "commitment_cents", least=1)
+    if first_cents - second_cents > commitment_cents:
+        return BuyingPowerCheckResult.UNDER_RESERVED_UNEXPLAINED
+    return BuyingPowerCheckResult.UNKNOWN
+
+
 def _require_whole(value: int, name: str, *, least: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < least:
         raise ValueError(f"{name} is a whole number, {least} or more; got {value!r}")
@@ -123,6 +156,7 @@ def _require_whole(value: int, name: str, *, least: int) -> None:
 __all__ = [
     "BuyingPowerCheckResult",
     "judge_fall",
+    "judge_part_fill",
     "requirement_for_filled_cents",
     "set_aside_for_filled_cents",
     "whole_cents",

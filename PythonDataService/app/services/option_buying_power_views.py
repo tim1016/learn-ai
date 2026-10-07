@@ -73,6 +73,10 @@ REASON_SENTENCES: dict[NotComparedReason, str] = {
         "The account was not checked against Alpaca soon enough after the second reading."
     ),
     NotComparedReason.ENTRY_BOUGHT_NOTHING: "The entry bought nothing, so there was no cost to compare.",
+    NotComparedReason.UNFILLED_PART_RELEASE_NOT_VERIFIED: (
+        "The entry filled in part and the rest was cancelled. Whether Alpaca had given back what it held for "
+        "the unfilled part is not verified, and the figure moved by no more than the entry set aside in all."
+    ),
     NotComparedReason.OUTCOME_NOT_PROVEN: "What the entry came to was not proven in time.",
     NotComparedReason.CLERK_RESTARTED: (
         "The account's Clerk restarted before the second reading, and the first was lost with it."
@@ -193,18 +197,22 @@ def _sentence(facts: EntryBuyingPowerComparedFacts, result: BuyingPowerCheckResu
     across = f"Alpaca's option buying power {moved} across this entry"
     if result is BuyingPowerCheckResult.CONSISTENT:
         return f"{across}, which is what the contracts that filled cost."
-    aside = f"The bot had set aside ${dollars(facts.set_aside_for_filled_cents)} for the contracts that filled"
     if result is BuyingPowerCheckResult.OVER_RESERVED:
         return (
-            f"{across}. The contracts that filled cost ${dollars(facts.cost_of_filled_cents)}. {aside}, so "
-            "Alpaca took no more than was set aside."
+            f"{across}. The contracts that filled cost ${dollars(facts.cost_of_filled_cents)}. The bot had set "
+            f"aside ${dollars(facts.set_aside_for_filled_cents)} for the contracts that filled, so Alpaca took "
+            "no more than was set aside."
         )
     ending = (
         "This bot will open nothing new until you have reviewed this."
         if held
         else "The notice this raised has been reviewed."
     )
-    return f"{across}. {aside}. No other order moved in between. {ending}"
+    # Held to everything the entry set aside, which for an entry that filled whole is what filled.
+    return (
+        f"{across}. The bot had set aside ${dollars(facts.commitment_cents)} for the whole entry. "
+        f"No other order moved in between. {ending}"
+    )
 
 
 def _amount(cents: int | None) -> OptionBuyingPowerAmount | None:

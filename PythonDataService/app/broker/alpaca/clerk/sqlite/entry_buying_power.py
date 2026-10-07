@@ -71,6 +71,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.options.buying_power_check import (
     BuyingPowerCheckResult,
     judge_fall,
+    judge_part_fill,
     requirement_for_filled_cents,
     set_aside_for_filled_cents,
     whole_cents,
@@ -134,6 +135,9 @@ class NotComparedReason(StrEnum):
     ACCOUNT_NOT_CHECKED_AFTER = "ACCOUNT_NOT_CHECKED_AFTER"
     # Nothing filled, so there was no cost to compare.
     ENTRY_BOUGHT_NOTHING = "ENTRY_BOUGHT_NOTHING"
+    # It filled in part and the rest ended. Whether the broker had given back what it held for the
+    # unfilled part is not verified, and the fall is inside everything the entry set aside.
+    UNFILLED_PART_RELEASE_NOT_VERIFIED = "UNFILLED_PART_RELEASE_NOT_VERIFIED"
     # The entry's outcome was not proven in time.
     OUTCOME_NOT_PROVEN = "OUTCOME_NOT_PROVEN"
     # The Clerk restarted before the second reading, and the first was lost with it.
@@ -435,12 +439,13 @@ class EntryBuyingPowerWatch:
                 )
                 if facts.holds:
                     # The notice first: were the Clerk to stop between the two writes, the bot is held.
-                    assert facts.fall_cents is not None and facts.set_aside_for_filled_cents is not None
+                    # It names what the fall was held to: everything the entry set aside.
+                    assert facts.fall_cents is not None
                     _raise_under_reserved(
                         self._repo, strategy_instance_id=effect.strategy_instance_id or "",
                         entry=UnderReservedEntry(
                             order_ref=watched.order_ref, fall_cents=facts.fall_cents,
-                            set_aside_cents=facts.set_aside_for_filled_cents,
+                            set_aside_cents=facts.commitment_cents,
                         ),
                     )
                 self._repo.append_transition(
@@ -521,16 +526,30 @@ def _compare(
     reason = forced or _why_not_compared(
         conn, watched=watched, outcome=outcome, contracts_filled=contracts_filled, first_cents=first_cents,
         second_cents=second_cents, cost_cents=cost_cents, set_aside_cents=set_aside_cents,
-        effect_operation_id=effect_operation_id, broker_order_id=broker_order_id, judged=judged,
+        effect_operation_id=effect_operation_id, broker_order_id=broker_order_id,
     )
     result = BuyingPowerCheckResult.UNKNOWN
     if reason is None:
+        # A clean pair. What it comes to is the arithmetic's to say, and whether that is acted on the setting's.
         assert first_cents is not None and second_cents is not None
         assert cost_cents is not None and set_aside_cents is not None
-        result = judge_fall(
-            first_cents=first_cents, second_cents=second_cents, cost_of_filled_cents=cost_cents,
-            set_aside_for_filled_cents=set_aside_cents,
+        part_fill = (
+            judge_part_fill(
+                first_cents=first_cents, second_cents=second_cents,
+                commitment_cents=entry.money.entry_commitment_cents,
+            )
+            if contracts_filled < contracts_asked
+            else None
         )
+        if part_fill is BuyingPowerCheckResult.UNKNOWN:
+            reason = NotComparedReason.UNFILLED_PART_RELEASE_NOT_VERIFIED
+        elif not judged:
+            reason = NotComparedReason.JUDGMENT_NOT_SWITCHED_ON
+        else:
+            result = part_fill or judge_fall(
+                first_cents=first_cents, second_cents=second_cents, cost_of_filled_cents=cost_cents,
+                set_aside_for_filled_cents=set_aside_cents,
+            )
     return EntryBuyingPowerComparedFacts(
         result=result.value,
         reason_code=None if reason is None else reason.value,
@@ -565,9 +584,12 @@ def _why_not_compared(
     set_aside_cents: int | None,
     effect_operation_id: str,
     broker_order_id: str | None,
-    judged: bool,
 ) -> NotComparedReason | None:
-    """The first reason this pair of readings cannot be judged, or ``None`` when it can."""
+    """The first reason this pair of readings is not a clean pair, or ``None`` when it is one.
+
+    What a clean pair comes to, and whether the account's setting has it
+    judged, is said after this (``_compare``).
+    """
     first, second = watched.first, watched.second
     if first is None or first.failed:
         return NotComparedReason.FIRST_READING_FAILED
@@ -596,8 +618,6 @@ def _why_not_compared(
         after_sequence=first.began_after_sequence,
     ):
         return NotComparedReason.OTHER_ORDER_MOVED
-    if not judged:
-        return NotComparedReason.JUDGMENT_NOT_SWITCHED_ON
     return None
 
 
@@ -685,7 +705,7 @@ def _raise_under_reserved(
     )
     named = " ".join(
         f"Across entry {item.order_ref} Alpaca's option buying power fell ${dollars(item.fall_cents)}. "
-        f"The bot had set aside ${dollars(item.set_aside_cents)} for what filled."
+        f"The bot had set aside ${dollars(item.set_aside_cents)} for the whole entry."
         for item in cause.entries
     )
     return raise_uncertainty(
