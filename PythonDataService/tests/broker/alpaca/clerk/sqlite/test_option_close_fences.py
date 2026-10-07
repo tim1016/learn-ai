@@ -998,6 +998,8 @@ async def test_a_stopped_bot_the_clerk_gave_up_closing_is_told_its_contract_expi
     await _stopped_on_thursday_with_nothing_bid(dry_run)
     await _passes(dry_run, 50)  # twelve and a half minutes of Thursday's session
     assert open_exit_stuck(dry_run.repo, SID) is not None, "the Clerk never gave up retrying"
+    # Before the expiry the page does send the owner to a flatten: what is asserted absent below was there.
+    assert all("flatten" in notice.next_step.lower() for notice in (await _page_notices(dry_run)).values())
     _wait_until(dry_run, MONDAY_NOON)
 
     await _passes(dry_run, 2)
@@ -1061,7 +1063,8 @@ async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_
     await _stopped_on_thursday_with_nothing_bid(dry_run)
     await _passes(dry_run, 10)  # past the two minutes a refused close is left to settle: one retry
     assert open_exit_stuck(dry_run.repo, SID) is None, "the Clerk gave up after fewer than three retries"
-    assert "again" in _notice_words(dry_run), "the notice of a close still retried no longer says so"
+    # Before the expiry the notice does promise a retry: what is asserted absent below was there.
+    assert "again" in _notice_words(dry_run).lower()
     _wait_until(dry_run, MONDAY_NOON)
 
     await _passes(dry_run, 2)
