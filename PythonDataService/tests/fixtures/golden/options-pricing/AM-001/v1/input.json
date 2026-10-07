@@ -1,0 +1,6406 @@
+{
+  "quantlib_version": "1.42.1",
+  "engine": "BinomialLRVanillaEngine",
+  "cases": [
+    {
+      "case": "30d_vol0.15_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 118.7695,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 30,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 108.6641,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 128.3092,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 7,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 103.1904,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 109.8797,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 1.0
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9107,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.7571,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.08333333333333333
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.321,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.15,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+4_call_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "call",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+4_put_101steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 101
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+4_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.9662,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "volatility": 0.45,
+        "right": "put",
+        "steps": 401
+      },
+      "quantlib": {
+        "days": 1,
+        "fraction_of_span": 0.010416666666666666
+      }
+    }
+  ]
+}
