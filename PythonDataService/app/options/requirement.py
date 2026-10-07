@@ -61,6 +61,8 @@ class StructureMoneyRefusal(StrEnum):
     COMMITMENT_NOT_POSITIVE = "OPTION_STRUCTURE_COMMITMENT_NOT_POSITIVE"
     # Opening and closing at once would cost more than the owner's limit, as a percent of the commitment.
     COST_OVER_LIMIT = "OPTION_STRUCTURE_COST_OVER_LIMIT"
+    # One leg's own market is wider than the owner's limit, as a percent of its mid.
+    LEG_GAP_OVER_LIMIT = "OPTION_STRUCTURE_LEG_GAP_OVER_LIMIT"
 
 
 class StructureMoneyRefused(ValueError):
