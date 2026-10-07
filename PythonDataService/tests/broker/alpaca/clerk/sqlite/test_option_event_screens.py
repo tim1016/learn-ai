@@ -15,7 +15,7 @@ from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionRead
 from app.schemas.bot_history import BotHistoryOrders, BotHistoryRun
 from app.schemas.option_endings import OptionEndingKind
 from app.services.option_ending_views import option_ending_view
-from app.services.sqlite_clerk_transaction_projection import _option_event_operations, _summary_row
+from app.services.sqlite_clerk_transaction_projection import _option_endings, _summary_row
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, documented_option_activity
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import ACCOUNT_ID
 from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import books_at, holds_option, poll
@@ -70,7 +70,7 @@ async def test_activity_is_told_which_bot_held_the_contract_and_how_its_position
         reader = SqliteClerkProjectionReader.from_repository(repo)
         try:
             operations = reader.operation_page(page_size=10).operations
-            endings = reader.option_endings(_option_event_operations(operations))
+            endings = _option_endings(reader, operations)
             rows = [_summary_row(operation, account_id=ACCOUNT_ID, option_endings=endings) for operation in operations]
         finally:
             reader.close()

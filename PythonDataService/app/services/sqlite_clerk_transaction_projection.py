@@ -184,7 +184,7 @@ def _origin_filtered_operation_page(
                 for order in _economic_orders(operation)
             )
         )
-        endings = reader.option_endings(_option_event_operations(page.operations))
+        endings = _option_endings(reader, page.operations)
         for operation in page.operations:
             row = _summary_row(
                 operation, account_id=account_id, execution_summaries=summaries, option_endings=endings
@@ -235,7 +235,7 @@ def sqlite_transaction_detail(
         executions = economic_reader.effective_order_executions(
             tuple(order.order_ref for order in _economic_orders(operation))
         )
-        endings = reader.option_endings(_option_event_operations((operation,)))
+        endings = _option_endings(reader, (operation,))
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
             "SQLite execution economics are unavailable for transaction detail."
@@ -412,7 +412,7 @@ def _all_transaction_history(
                 for order in _economic_orders(operation)
             )
         )
-        endings = reader.option_endings(_option_event_operations(operations))
+        endings = _option_endings(reader, operations)
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
             "SQLite execution economics are unavailable for transaction history."
@@ -824,6 +824,14 @@ def _option_event_operations(operations: Iterable[ProjectedOperation]) -> tuple[
     return tuple(
         operation.effect_operation_id for operation in operations if operation.kind == OPTION_EVENT_EFFECT_KIND
     )
+
+
+def _option_endings(
+    reader: SqliteClerkProjectionReader, operations: Iterable[ProjectedOperation]
+) -> Mapping[str, RecordedOptionEnding]:
+    """What each of ``operations`` recorded as an option position ended. Nothing is read when none could have."""
+    event_operations = _option_event_operations(operations)
+    return reader.option_endings(event_operations) if event_operations else {}
 
 
 def _summary_row(
