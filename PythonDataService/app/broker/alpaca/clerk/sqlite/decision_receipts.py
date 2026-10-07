@@ -859,9 +859,7 @@ class SqliteDecisionReceipts:
             return None
         with self._repository.write_fence():
             order = self._repository.order_for_effect_operation(effect_operation_id)
-            if order is None or order.role != "ENTRY":
-                return None
-            if option_entry_of_order(self._repository, order.order_ref) is None:
+            if order is None or option_entry_of_order(self._repository, order.order_ref) is None:
                 return None
             return entry_settlement(self._repository, order.order_ref)
 

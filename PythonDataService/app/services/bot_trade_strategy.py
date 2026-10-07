@@ -1804,8 +1804,9 @@ def _journal_option_fill(
 
     entering = intent.kind is SignalIntentKind.ENTER
     fills = clerk.option_fills_of_decision(binding.strategy_instance_id, evaluation.evaluation_id)
-    came_to = None if settled is None or not entering else entry_came_to(settled.standing)
-    if entering and settled is not None and bool(fills) != bool(settled.units_filled):
+    # Only an ENTER comes with an answer about its entry.
+    came_to = None if settled is None else entry_came_to(settled.standing)
+    if settled is not None and bool(fills) != bool(settled.units_filled):
         raise RuntimeError(
             f"The Clerk says this option entry filled {settled.units_filled} of {settled.units_asked}, and "
             f"has {len(fills)} fill(s) of it on record."

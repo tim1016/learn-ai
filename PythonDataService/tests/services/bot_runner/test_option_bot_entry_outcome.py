@@ -284,7 +284,9 @@ async def test_an_entry_that_fills_in_part_is_settled_as_entered_and_the_exit_se
 
     async def a_minute_on(floor: Floor) -> None:
         await floor.bar_arrives(ENTER_MS + MINUTE + DELIVERY_MS)
+        (asked,) = paper.watch.requests()
         seen["held"] = (paper.watched_as_held(), floor.holds())
+        seen["window centred on"] = asked.money
 
     paper.while_it_rests(3_000, look_while_it_rests)
     paper.while_it_rests(5_000, lambda: paper.alpaca_fills(1))
@@ -303,8 +305,10 @@ async def test_an_entry_that_fills_in_part_is_settled_as_entered_and_the_exit_se
     assert [outcome for outcome, _ in ran.outcomes()][-1] == "exit_intent"
     # While the entry rested the run's window was still asked for, and nothing was held yet.
     assert seen["resting"] == (True, (), True)
-    # From the part fill on, the run asks for the contract it holds as a held line.
+    # From the part fill on, the run asks for the contract it holds as a held line, before any further bar,
+    # and its window stays where the last bar put it.
     assert seen["held"] == ((CALL_585,), {CALL: 1.0})
+    assert seen["window centred on"] == Decimal("585.00")
     assert paper.replayed_dispositions().outcomes[_decision(ran, ENTER_MS)] == "enter_intent"
 
 

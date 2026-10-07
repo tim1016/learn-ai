@@ -396,8 +396,9 @@ class OptionRun:
         return tuple(contract for contract in held if not past_last_session(contract.expiry_date, now))
 
     def follow_what_is_held(self) -> None:
-        """Ask again, with the window where it is: what the bot holds has changed. The runner says so as an
-        entry settles and after an exit; each closed bar of the underlying asks again by itself."""
+        """Ask again, with the window where it is: what the bot holds may have changed. The runner says so
+        as an entry settles. Each bar that moves the window asks again by itself, which is when a contract
+        the bot has sold since stops being asked for."""
         if self._names_what_it_holds:
             self._watch(money=self._money)
 
@@ -413,8 +414,6 @@ class OptionRun:
             if bar.volume > 0:
                 # A minute with no trade has no price to centre a window on: it stays where it was.
                 self._watch(money=bar.close)
-            else:
-                self.follow_what_is_held()
             self._keep_the_model_inputs_read(bar.end_ms)
         except Exception:
             logger.exception(
