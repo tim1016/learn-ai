@@ -14121,6 +14121,11 @@ export interface components {
              * @description What the set could not show, in words, e.g. that the current settings were not run on this window.
              */
             notes: string[];
+            /**
+             * Sessions Ms
+             * @description Every session close any line of the set scored, in order, sent once.
+             */
+            sessions_ms: number[];
         };
         /** GoldenSearchDecision */
         GoldenSearchDecision: {
@@ -15630,13 +15635,6 @@ export interface components {
             error: string | null;
             /** Evaluation Key */
             evaluation_key: string;
-            /** Fold Index */
-            fold_index: number | null;
-            /**
-             * Group
-             * @enum {string}
-             */
-            group: "search" | "pair_audit" | "recent" | "fold_training" | "fold_test" | "candidate" | "neighbor" | "stress" | "final";
             /** Has Curve */
             has_curve: boolean;
             /**
@@ -15651,8 +15649,6 @@ export interface components {
              * @description The run's settings in words; with the label it tells any two runs of a study apart.
              */
             params_sentence: string;
-            /** Scenario */
-            scenario: string;
             /** Sharpe Ratio */
             sharpe_ratio: number | null;
             /**
@@ -15671,16 +15667,14 @@ export interface components {
         };
         /**
          * GoldenSearchRunCurve
-         * @description One run's daily curve, as parallel lists over its session closes.
+         * @description One run's daily curve against the read's ``sessions_ms``: its values from ``first_session`` to its last session.
          */
         GoldenSearchRunCurve: {
-            /** Close Ms */
-            close_ms: number[];
             /**
              * Cumulative Return
-             * @description Equity over the study's starting capital, less 1, at each session close.
+             * @description Equity over the study's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.
              */
-            cumulative_return: number[];
+            cumulative_return: (number | null)[];
             /**
              * Deepest Drawdown
              * @description The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.
@@ -15688,11 +15682,16 @@ export interface components {
             deepest_drawdown: number | null;
             /**
              * Drawdown
-             * @description Equity over its running peak, less 1; null when the peak never rose above 0.
+             * @description Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.
              */
-            drawdown: number[] | null;
+            drawdown: (number | null)[] | null;
             /** Evaluation Key */
             evaluation_key: string;
+            /**
+             * First Session
+             * @description The index in sessions_ms of the run's first session close.
+             */
+            first_session: number;
         };
         /** GoldenSearchRunCurves */
         GoldenSearchRunCurves: {
@@ -15703,6 +15702,11 @@ export interface components {
              * @description The runs asked for that kept no daily equity; never drawn as a flat line.
              */
             not_recorded: string[];
+            /**
+             * Sessions Ms
+             * @description Every session close any returned curve scored, in order, sent once.
+             */
+            sessions_ms: number[];
         };
         /** GoldenSearchRunDetail */
         GoldenSearchRunDetail: {

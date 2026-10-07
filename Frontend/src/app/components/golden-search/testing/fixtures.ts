@@ -1032,13 +1032,10 @@ function permittedFor(state: StudyState): StudyDetail['permitted_actions'] {
 export function studyRun(key: string, overrides: Partial<StudyRun> = {}): StudyRun {
   return {
     evaluation_key: key,
-    group: 'search',
-    fold_index: null,
     label: 'All-period search',
     params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
     window_start_ms: DEVELOPMENT_START_MS,
     window_end_ms: FINAL_START_MS,
-    scenario: 'base',
     status: 'completed',
     total_trades: 146,
     total_return_pct: 0.087,
@@ -1067,17 +1064,20 @@ export function runsPage(overrides: Partial<RunsPage> = {}): RunsPage {
       studyRun('run-second', { total_return_pct: 0.041, sharpe_ratio: 0.72, params_sentence: 'Gap $0.10 · RSI 48–72 · EMA 8/21 · hold 4 bars' }),
       studyRun('run-old', { has_curve: false, total_return_pct: 0.02, params_sentence: 'Gap $0.05 · RSI 48–72 · EMA 8/21 · hold 4 bars' }),
       studyRun('run-failed', { status: 'failed', error: 'no bars', has_curve: false, total_trades: 0, total_return_pct: null, sharpe_ratio: null, max_drawdown_pct: null, params_sentence: 'Gap $0.60 · RSI 48–72 · EMA 8/21 · hold 4 bars' }),
-      studyRun('run-fold', { group: 'fold_test', fold_index: 0, label: 'Fold 1 test · Fold winner', window_start_ms: etMidnightMs('2025-07-01'), window_end_ms: etMidnightMs('2025-10-01') }),
+      studyRun('run-fold', { label: 'Fold 1 test · Fold winner', window_start_ms: etMidnightMs('2025-07-01'), window_end_ms: etMidnightMs('2025-10-01') }),
     ],
     ...overrides,
   };
 }
 
-/** A run's curve over three session closes, ending at `end`; it dips a quarter of that from its first peak. */
+/** The session closes every fixture curve is read against. */
+export const CURVE_SESSIONS_MS: readonly number[] = [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')];
+
+/** A run's curve over the three fixture sessions, ending at `end`; it dips a quarter of that from its first peak. */
 export function runCurve(key: string, end = 0.087): RunCurve {
   return {
     evaluation_key: key,
-    close_ms: [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')],
+    first_session: 0,
     cumulative_return: [0, end / 2, end],
     drawdown: [0, -end / 4, 0],
     deepest_drawdown: -end / 4,
@@ -1085,7 +1085,7 @@ export function runCurve(key: string, end = 0.087): RunCurve {
 }
 
 export function runCurves(keys: readonly string[], notRecorded: readonly string[] = []): RunCurves {
-  return { curves: keys.map((key, i) => runCurve(key, 0.087 - i * 0.02)), not_recorded: [...notRecorded] };
+  return { sessions_ms: [...CURVE_SESSIONS_MS], curves: keys.map((key, i) => runCurve(key, 0.087 - i * 0.02)), not_recorded: [...notRecorded] };
 }
 
 /** A step's set of lines: a search's winner, the current settings and one other scored point, unless the set is another. */
@@ -1108,5 +1108,5 @@ export function curveSet(set: CurveSetKey = 'search', overrides: Partial<CurveSe
       { role: 'neighbor', label: 'Fast EMA length one step below (7)', current_settings: false, params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 7/21 · hold 4 bars', curve: runCurve('run-neighbor', 0.052) },
     ],
   };
-  return { lines: lines[set], left_out: 0, not_recorded: 0, failed: 0, notes: [], ...overrides };
+  return { sessions_ms: [...CURVE_SESSIONS_MS], lines: lines[set], left_out: 0, not_recorded: 0, failed: 0, notes: [], ...overrides };
 }

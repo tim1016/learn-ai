@@ -40,9 +40,49 @@ export function sessionAxis(closes: readonly (readonly number[])[]): { readonly 
 }
 
 /** Each session's value, or null where this line recorded none. */
-export function alignToSessions(sessions: readonly number[], closes: readonly number[], values: readonly number[]): (number | null)[] {
+export function alignToSessions(sessions: readonly number[], closes: readonly number[], values: readonly (number | null)[]): (number | null)[] {
   const byMs = new Map(closes.map((ms, i) => [ms, values[i]] as const));
   return sessions.map((ms) => byMs.get(ms) ?? null);
+}
+
+/** A run's curve as a read returns it: its values from `first_session` on, along that read's session closes. */
+export interface SessionCurve {
+  readonly first_session: number;
+  readonly cumulative_return: readonly (number | null)[];
+  readonly drawdown: readonly (number | null)[] | null;
+}
+
+/** One curve with the session closes of the read that returned it. */
+export interface ReadCurve {
+  readonly sessions: readonly number[];
+  readonly curve: SessionCurve;
+}
+
+/**
+ * The curves on one axis: its sessions as ET dates, and each curve's return
+ * and fall at each. Curves of one read already share its sessions; curves of
+ * several reads are joined by instant. A curve with no fall recorded has none
+ * at any session.
+ */
+export function onOneAxis(curves: readonly ReadCurve[]): { readonly dates: string[]; readonly lines: { readonly returns: (number | null)[]; readonly falls: (number | null)[] }[] } {
+  const closes = curves.map(({ sessions, curve }) => sessions.slice(curve.first_session, curve.first_session + curve.cumulative_return.length));
+  const { sessions, dates } = sessionAxis(closes);
+  return {
+    dates,
+    lines: curves.map(({ curve }, i) => ({
+      returns: alignToSessions(sessions, closes[i], curve.cumulative_return),
+      falls: curve.drawdown === null ? sessions.map(() => null) : alignToSessions(sessions, closes[i], curve.drawdown),
+    })),
+  };
+}
+
+/** The indexes of a line's first and last recorded sessions; null for a line that recorded none. */
+export function recordedSpan(values: readonly (number | null)[]): readonly [number, number] | null {
+  const first = values.findIndex((value) => value !== null);
+  if (first < 0) return null;
+  let last = values.length - 1;
+  while (values[last] === null) last--;
+  return [first, last];
 }
 
 export function lastValue(values: readonly (number | null)[]): number | null {

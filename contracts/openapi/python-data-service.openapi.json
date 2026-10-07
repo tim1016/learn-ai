@@ -19902,9 +19902,20 @@
             },
             "title": "Notes",
             "type": "array"
+          },
+          "sessions_ms": {
+            "description": "Every session close any line of the set scored, in order, sent once.",
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Sessions Ms",
+            "type": "array"
           }
         },
         "required": [
+          "sessions_ms",
           "lines",
           "left_out",
           "not_recorded",
@@ -24054,32 +24065,6 @@
             "title": "Evaluation Key",
             "type": "string"
           },
-          "fold_index": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fold Index"
-          },
-          "group": {
-            "enum": [
-              "search",
-              "pair_audit",
-              "recent",
-              "fold_training",
-              "fold_test",
-              "candidate",
-              "neighbor",
-              "stress",
-              "final"
-            ],
-            "title": "Group",
-            "type": "string"
-          },
           "has_curve": {
             "title": "Has Curve",
             "type": "boolean"
@@ -24103,10 +24088,6 @@
           "params_sentence": {
             "description": "The run's settings in words; with the label it tells any two runs of a study apart.",
             "title": "Params Sentence",
-            "type": "string"
-          },
-          "scenario": {
-            "title": "Scenario",
             "type": "string"
           },
           "sharpe_ratio": {
@@ -24166,13 +24147,10 @@
         },
         "required": [
           "evaluation_key",
-          "group",
-          "fold_index",
           "label",
           "params_sentence",
           "window_start_ms",
           "window_end_ms",
-          "scenario",
           "status",
           "total_trades",
           "total_return_pct",
@@ -24186,21 +24164,19 @@
       },
       "GoldenSearchRunCurve": {
         "additionalProperties": false,
-        "description": "One run's daily curve, as parallel lists over its session closes.",
+        "description": "One run's daily curve against the read's ``sessions_ms``: its values from ``first_session`` to its last session.",
         "properties": {
-          "close_ms": {
-            "items": {
-              "maximum": 253402300799999.0,
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "title": "Close Ms",
-            "type": "array"
-          },
           "cumulative_return": {
-            "description": "Equity over the study's starting capital, less 1, at each session close.",
+            "description": "Equity over the study's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.",
             "items": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "title": "Cumulative Return",
             "type": "array"
@@ -24221,7 +24197,14 @@
             "anyOf": [
               {
                 "items": {
-                  "type": "number"
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "type": "array"
               },
@@ -24229,17 +24212,23 @@
                 "type": "null"
               }
             ],
-            "description": "Equity over its running peak, less 1; null when the peak never rose above 0.",
+            "description": "Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.",
             "title": "Drawdown"
           },
           "evaluation_key": {
             "title": "Evaluation Key",
             "type": "string"
+          },
+          "first_session": {
+            "description": "The index in sessions_ms of the run's first session close.",
+            "minimum": 0.0,
+            "title": "First Session",
+            "type": "integer"
           }
         },
         "required": [
           "evaluation_key",
-          "close_ms",
+          "first_session",
           "cumulative_return",
           "drawdown",
           "deepest_drawdown"
@@ -24264,9 +24253,20 @@
             },
             "title": "Not Recorded",
             "type": "array"
+          },
+          "sessions_ms": {
+            "description": "Every session close any returned curve scored, in order, sent once.",
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Sessions Ms",
+            "type": "array"
           }
         },
         "required": [
+          "sessions_ms",
           "curves",
           "not_recorded"
         ],

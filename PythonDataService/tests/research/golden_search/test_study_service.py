@@ -946,14 +946,15 @@ async def test_every_run_keeps_its_daily_curve_and_the_runs_read_groups_them(con
     # The fold's winner is the settings the all-period search also chose, so its run carries both names.
     assert sorted(run["label"] for run in tests) == ["Fold 1 test · All-period fit · Fold winner", "Fold 1 test · Current settings"]
     stressed = (await service.runs(row.id, group="stress"))["rows"]
-    assert {run["scenario"] for run in stressed} == {"slippage_1c", "commission_1"} and "Extra $1 per order" in stressed[-1]["label"]
+    # A stressed run is told apart by its cost scenario, named in its label.
+    assert {run["label"].split(" · ")[1] for run in stressed} == {"Extra 1¢/share slippage", "Extra $1 per order"}
 
     # The stored curve is the one the candidate's detail read draws.
     recent = final[0]
     curves = await service.run_curves(row.id, [recent["evaluation_key"]])
     (curve,) = curves["curves"]
     detail = (await service.candidate(row.id, "recent"))["exam"]
-    assert curve["close_ms"] == [point["ms"] for point in detail["cumulative_return"]]
+    assert curves["sessions_ms"] == [point["ms"] for point in detail["cumulative_return"]] and curve["first_session"] == 0
     assert curve["cumulative_return"] == pytest.approx([point["value"] for point in detail["cumulative_return"]], abs=1e-12, rel=0)
     assert curve["drawdown"] == pytest.approx([point["drawdown"] for point in detail["drawdown"]], abs=1e-12, rel=0)
     assert curves["not_recorded"] == []
@@ -967,7 +968,7 @@ async def test_each_step_draws_its_own_runs_with_the_line_each_one_is(driver: Dr
     roles = [line["role"] for line in search["lines"]]
     assert roles.count("winner") == 1 and roles.count("incumbent") == 1 and roles.count("other") == len(roles) - 2
     winner = next(line for line in search["lines"] if line["role"] == "winner")
-    assert winner["params_sentence"].startswith("Gap $0.30") and len(winner["curve"]["close_ms"]) == len(winner["curve"]["cumulative_return"]) > 0
+    assert winner["params_sentence"].startswith("Gap $0.30") and len(search["sessions_ms"]) == len(winner["curve"]["cumulative_return"]) > 0
     # Two lines never read the same: a scored point is told apart by its settings.
     assert len({(line["label"], line["params_sentence"]) for line in search["lines"]}) == len(search["lines"])
     assert (search["left_out"], search["not_recorded"], search["notes"]) == (0, 0, [])
@@ -977,14 +978,15 @@ async def test_each_step_draws_its_own_runs_with_the_line_each_one_is(driver: Dr
     folds = await service.curve_set(row.id, curve_set="fold_tests")
     assert [line["label"] for line in folds["lines"]] == ["Fold 1 winner", "Fold 1 current settings", "Fold 2 winner", "Fold 2 current settings"]
     # Each fold's line covers its own test window and no other; none reaches the final interval.
-    assert folds["lines"][0]["curve"]["close_ms"][-1] < folds["lines"][2]["curve"]["close_ms"][0]
-    assert all(line["curve"]["close_ms"][-1] < row.protocol["final_start_ms"] for line in folds["lines"])
+    first_fold, second_fold = folds["lines"][0]["curve"], folds["lines"][2]["curve"]
+    assert first_fold["first_session"] + len(first_fold["cumulative_return"]) <= second_fold["first_session"]
+    assert folds["sessions_ms"][-1] < row.protocol["final_start_ms"]
 
     candidate = await service.curve_set(row.id, curve_set="candidate", candidate_key="all_period")
     by_role: dict[str, list[str]] = {}
     for line in candidate["lines"]:
         by_role.setdefault(line["role"], []).append(line["label"])
-        assert line["curve"]["close_ms"][-1] < row.protocol["final_start_ms"]  # development only, though the fit also sat the final test
+    assert candidate["sessions_ms"][-1] < row.protocol["final_start_ms"]  # development only, though the fit also sat the final test
     assert by_role["candidate"] == ["All-period fit"]
     assert sorted(by_role["stress"]) == ["Extra $1 per order", "Extra 1¢/share slippage"]
     # Gap and hold are searched: one step either side of each.

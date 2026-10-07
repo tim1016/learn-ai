@@ -1,7 +1,7 @@
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { NOT_RECORDED, signedPercentOrNotRecorded, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import { percentText, signedPercentText } from './golden-search-display';
-import { alignToSessions, lastValue, sessionAxis, sessionCurvesOption, type SessionLine } from './golden-search-session-curves';
+import { lastValue, onOneAxis, sessionCurvesOption, type SessionLine } from './golden-search-session-curves';
 import type { CandidateKey, CurveLine, LineRole } from './golden-search.types';
 
 interface AlignedLine {
@@ -22,15 +22,13 @@ const END_LABELS = 8;
  * other points faint behind them all. The current settings are dashed
  * whatever their role, also when they are the winner or the candidate. A faint
  * line is named by its settings, since the server calls every one of them
- * "Scored point". Every value is the server's.
+ * "Scored point". Every value is the server's, each line's along the set's
+ * `sessions`.
  */
-export function stepCurvesSpec(lines: readonly CurveLine[], ceiling: number, accent: CandidateKey): ChartSpec {
-  const { sessions, dates } = sessionAxis(lines.map((line) => line.curve.close_ms));
-  const aligned: AlignedLine[] = lines.map((line) => ({
-    line,
-    returns: alignToSessions(sessions, line.curve.close_ms, line.curve.cumulative_return),
-    falls: line.curve.drawdown === null ? sessions.map(() => null) : alignToSessions(sessions, line.curve.close_ms, line.curve.drawdown),
-  }));
+export function stepCurvesSpec(sessions: readonly number[], lines: readonly CurveLine[], ceiling: number, accent: CandidateKey): ChartSpec {
+  const axis = onOneAxis(lines.map((line) => ({ sessions, curve: line.curve })));
+  const dates = axis.dates;
+  const aligned: AlignedLine[] = lines.map((line, i) => ({ line, ...axis.lines[i] }));
   const named = lines.filter((line) => line.role !== 'other').length;
   return {
     label: 'Run cumulative return and fall from peak',
