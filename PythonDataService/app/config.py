@@ -262,6 +262,14 @@ class Settings(BaseSettings):
     # been checked against Alpaca. Turn it on only after the first Paper
     # option orders have been checked there. A Dry Run and a Paper account
     # never read it, and a Live Shadow takes no option bot either way.
+    #
+    # Off stops what opens, never what closes. A contract bought while it
+    # was on is still held after it is switched off (or after a restart
+    # that lost the variable), and every order that only closes still goes
+    # out: the bot's own EXIT, the Clerk's scheduled close, Stop's close and
+    # Flatten. Off, a held bot cannot be started again, so its contract is
+    # closed by the Clerk or by the owner. The one reader is
+    # ``app.broker.alpaca.live_option_bots``.
     ALPACA_LIVE_OPTION_BOTS_ENABLED: bool = False
     # Startup join (#2410): how long a starting or resuming bot may spend
     # filling the minutes before its live stream from IBKR history, counted

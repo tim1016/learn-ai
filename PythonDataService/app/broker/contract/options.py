@@ -277,6 +277,17 @@ def closing_order(structure: ResolvedStructure, *, units: int) -> OptionOrderReq
     )
 
 
+def only_closes(order: OptionOrderRequest) -> bool:
+    """Whether every leg of an order closes a position: it can reduce what is held and open nothing.
+
+    Read from the order's own legs, the same field the broker is sent. One
+    leg that opens makes the whole order an opening one.
+    """
+    if isinstance(order, SingleOptionOrderRequest):
+        return order.intent is OptionPositionIntent.CLOSE
+    return all(leg.intent is OptionPositionIntent.CLOSE for leg in order.legs)
+
+
 # ── What the broker says back ───────────────────────────────────────────────
 
 
