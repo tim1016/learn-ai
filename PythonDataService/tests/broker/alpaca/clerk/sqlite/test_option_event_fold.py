@@ -7,6 +7,7 @@ or a later caller's mistake, could: so the fold is its own fence.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -21,11 +22,18 @@ from app.broker.alpaca.clerk.simulated_option_settlement import (
     SynthesizedOptionSettlement,
 )
 from app.broker.alpaca.clerk.sqlite import fee_evidence
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_POSITION_ENDED
+from app.broker.alpaca.clerk.sqlite.option_events import book_option_events
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, complete_fee_evidence, documented_option_activity
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    _broker_order_fixture,
+    _FakeReadPort,
+    complete_fee_evidence,
+    documented_option_activity,
+)
 from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import (
     bookings,
     books_at,
@@ -138,6 +146,56 @@ async def test_the_fold_refuses_shares_or_cash_that_are_not_the_contracts(tmp_pa
             }))
 
         assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()
+
+
+async def test_the_fold_refuses_an_exercise_that_names_an_outside_order(tmp_path: Path) -> None:
+    """Naming an outside order takes that order out of the money reads' count. Only its own sale may."""
+    repo, facts = await _booked_exercise(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="names the outside order"):
+            repo.append_transition(replace(_as_for_bot_b(facts), broker_order_id="by-hand-1"))
+
+        assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()
+
+
+def test_the_fold_refuses_a_sale_that_does_not_name_the_order_it_books(tmp_path: Path) -> None:
+    """A sale booked with no order named would leave that order counted outside the books as well."""
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL", "bot-b": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    try:
+        observe_external_order(
+            repo,
+            order=_broker_order_fixture(
+                "not-ours-1", order_id="alpaca-sells-1", symbol=CALL, status="filled", side="sell", quantity=1,
+                filled_quantity=1, filled_avg_price=0.40,
+            ),
+        )
+        book_option_events(repo, None)
+        [booked] = bookings(repo)
+        holds_option(repo, "bot-b", CALL, contracts=1)
+        # The same sale handed to the fold again for the other bot. A sale has no date of its own.
+        facts = json.loads(booked["facts_json"])
+        key = facts["idempotency_key"].removesuffix("bot-a") + "bot-b"
+        again = replace(
+            _as_for_bot_b({**facts, "event_date_ms": 0}, observed_at_ms=repo.clock()),
+            facts_json=json.dumps(
+                {**facts, "idempotency_key": key, "option_order_ref": "learn-ai/bot-b/v1:oc-again",
+                 "close_execution_id": "option-outside-sale:fill:again:bot-b"},
+                sort_keys=True,
+            ),
+        )
+
+        for named in (None, "another-order"):
+            with pytest.raises(ValueError, match="names the outside order"):
+                repo.append_transition(replace(again, broker_order_id=named))
+        assert held(repo, "bot-b") == {CALL: 1.0} and len(bookings(repo)) == 1
+
+        repo.append_transition(replace(again, broker_order_id="alpaca-sells-1"))
+        assert held(repo, "bot-b") == {}
     finally:
         repo.close()
 

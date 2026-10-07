@@ -431,6 +431,14 @@ def fold_option_position_ended(
         raise ValueError("the booking's order is the one that closes the option lot")
     if payload["source_event_at_ms"] != facts.booked_as_of_ms:
         raise ValueError("the booking's time must be the one its facts state")
+    # A sale by an order the Clerk did not place names that order, and nothing else names one:
+    # the money reads stop counting an outside order by this name, and by no other.
+    sold_by = facts.source_id if facts.ended_by == OptionEnding.SOLD_OUTSIDE.value else None
+    if payload["broker_order_id"] != sold_by:
+        raise ValueError(
+            f"a booking names the outside order whose fill it books and no other; this one names "
+            f"{payload['broker_order_id']!r} and books {facts.ended_by} from {facts.source_id!r}"
+        )
     contract = OptionContract.from_occ_symbol(facts.contract_symbol)
     recorded = contract_terms(conn, facts.contract_symbol)
     if recorded is None or recorded.multiplier != facts.multiplier:

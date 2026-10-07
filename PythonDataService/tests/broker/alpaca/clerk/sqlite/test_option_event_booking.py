@@ -19,11 +19,12 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import option_events
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_POSITION_ENDED
 from app.broker.alpaca.clerk.sqlite.option_events import OUTSIDE_THE_BOOKS, OptionEventRead, book_option_events
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.lean_sidecar.trading_calendar import session_window_for_date
-from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, documented_option_activity
+from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture, _FakeReadPort, documented_option_activity
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import ACCOUNT_ID, option_fold_registry
 from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import (
     bookings,
@@ -443,6 +444,38 @@ async def test_a_rebuild_from_the_mirror_books_every_event_again_as_it_was(
     )
     try:
         assert _money_tables(rebuilt) == before
+    finally:
+        rebuilt.close()
+
+
+def test_a_rebuild_from_the_mirror_still_counts_a_booked_sale_once(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """The booking's record names the outside order it booked. A rebuild reads that name back from the mirror."""
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", AAPL_CALL, contracts=1)
+    observe_external_order(
+        repo,
+        order=_broker_order_fixture(
+            "not-ours-1", order_id="alpaca-sells-1", symbol=AAPL_CALL, status="filled", side="sell", quantity=1,
+            filled_quantity=1, filled_avg_price=0.40,
+        ),
+    )
+    book_option_events(repo, None)
+    before = _money_tables(repo)
+    assert repo.external_order_resources() == ()
+    clock = repo.clock
+    replay_root = tmp_path_factory.mktemp("replay")
+    shutil.copytree(tmp_path, replay_root, dirs_exist_ok=True, ignore=shutil.ignore_patterns("clerk.db*"))
+    repo.close()
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id=ACCOUNT_ID, artifacts_root=replay_root, clock=clock, fold_registry=option_fold_registry()
+    )
+    try:
+        assert _money_tables(rebuilt) == before
+        assert rebuilt.external_order_resources() == ()
+        assert rebuilt.external_order_by_broker_order_id("alpaca-sells-1") is not None
     finally:
         rebuilt.close()
 

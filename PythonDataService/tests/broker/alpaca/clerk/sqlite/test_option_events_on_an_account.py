@@ -15,11 +15,13 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import option_events
+from app.broker.alpaca.clerk.sqlite import option_events, reads
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
+from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
@@ -31,7 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, Re
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import UNEXPLAINED_ORDER_HOLD_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import Capability
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
-from app.broker.contract.models import BrokerOrderEvent
+from app.broker.contract.models import BrokerActivity, BrokerOrderEvent
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -780,3 +782,78 @@ async def test_a_bots_exit_sends_no_second_closing_order_beside_the_brokers_own_
     assert [booked["summary_code"] for booked in bookings(paper.repo)] == ["OPTION_SOLD_OUTSIDE"]
     assert paper.venue.option_submit_calls == sent_before
     assert paper.repo.active_exit_for_strategy("a") is None
+
+
+# ── a booked sale beside the account's money ─────────────────────────────────
+
+
+def _sale_at(at_ms: int, **changes: Any) -> Any:
+    """Alpaca's own sale of bot ``a``'s one call, filled at $0.40, as the stream shows it at ``at_ms``."""
+    order = _outside("alpaca-sells-1", **{"status": "filled", "filled": 1, "price": 0.40, "symbol": SYMBOL, **changes})
+    return order.model_copy(update={"submitted_at_ms": at_ms, "created_at_ms": at_ms, "updated_at_ms": at_ms, "observed_at_ms": at_ms})
+
+
+def _the_sales_execution(at_ms: int) -> BrokerActivity:
+    """The one execution of that sale, as the account's trade activities list it."""
+    return BrokerActivity(
+        broker="alpaca", activity_id="20260918::alpaca-sells-1-fill", native_order_id="alpaca-sells-1",
+        activity_type="FILL", category="trade_activity", symbol=SYMBOL, side="sell", quantity=1, price=0.40,
+        net_amount=None, occurred_at_ms=at_ms, observed_at_ms=at_ms,
+    )
+
+
+async def test_a_sale_booked_against_a_bot_is_counted_once_by_the_fees_and_the_money_and_is_an_outside_order_no_more(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Bot ``a`` bought one call at $1.94. Alpaca sells it at $0.40 and the sale is booked against the bot.
+
+    The one execution is then the bot's and nobody else's. Before, it was
+    counted a second time as an outside order's: priced once more by the
+    stock fee model, added to the sales the cash has not seen at 40 cents
+    for one "share", and named for good as one contract sold short by
+    outside orders, on an account that is flat.
+
+    By hand, the day's fees over the bot's two fills (one contract bought,
+    one sold at $0.40), each fee type rounded up to the cent once for the
+    day: SEC 40.00 x 0.0000206, 1 cent; TAF 0.00329, 1; CAT 2 x 0.0003, 1;
+    ORF 2 x 0.015, 3; OCC 2 x 0.025, 5. Eleven cents. The sale brings in
+    1 x 0.40 x 100 = $40.00.
+    """
+    await _holding_one_call(paper)
+    sold_at = paper.clock()
+    observe_external_order(paper.repo, order=_sale_at(sold_at))
+    record_fee_evidence(paper.repo, [_the_sales_execution(sold_at)], checked_at_ms=sold_at, history_complete=True)
+
+    done = book_option_events(paper.repo, None)
+    paper.wait(1_000)
+    record_fee_evidence(paper.repo, [], checked_at_ms=paper.clock(), history_complete=True)
+
+    assert len(done.booked) == 1 and paper.held() == {}
+    fees = paper.repo.fee_attribution(now_ms=paper.clock())
+    assert fees.known, fees.unresolved
+    assert fees.external_fills == ()
+    assert fees.predicted_total == fees.total_for(bot_subject_id("a")) == Decimal("0.11")
+    # The cash was last read before the sale: its proceeds are still to come, once.
+    money = paper.repo.account_money(cash=100_000 - 194, seen_before_ms=sold_at)
+    assert money.unseen_sales == Decimal("40")
+    assert money.unvalued == ()
+    # No read that lists outside orders lists it again: the record of what was observed stays.
+    assert paper.repo.external_order_resources() == ()
+    with paper.repo.write_fence() as conn:
+        assert reads.filled_outside_order_ids(conn) == frozenset()
+    assert paper.repo.external_order_by_broker_order_id("alpaca-sells-1") is not None
+
+
+async def test_until_it_is_booked_a_filled_sale_is_still_the_outside_order_it_always_was(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Only the booking makes the execution the bot's. Before it, the order is counted outside, as any is."""
+    await _holding_one_call(paper)
+    sold_at = paper.clock()
+    observe_external_order(paper.repo, order=_sale_at(sold_at))
+    record_fee_evidence(paper.repo, [_the_sales_execution(sold_at)], checked_at_ms=sold_at, history_complete=True)
+
+    fees = paper.repo.fee_attribution(now_ms=paper.clock())
+
+    assert [fill.native_order_id for fill in fees.external_fills] == ["alpaca-sells-1"]
+    assert [order.broker_order_id for order in paper.repo.external_order_resources()] == ["alpaca-sells-1"]

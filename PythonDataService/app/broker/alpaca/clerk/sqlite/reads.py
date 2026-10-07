@@ -133,14 +133,31 @@ def _manual_chain_order_ref_sql(broker_order_id: str) -> str:
     )
 
 
+#: The bookings of an outside order's fill against the bot that held its option
+#: contract (ADR 0076 decision 22). Such a booking is an ``OPTION_POSITION_ENDED``
+#: record that names the outside order, on an order bound to the contract. Read
+#: from the orders bound to a contract outward (``CROSS JOIN`` keeps that order),
+#: so books with no option order read one empty table and nothing else.
+_BOOKED_AS_A_BOTS_SALE_SQL = (
+    "SELECT t.broker_order_id FROM order_contracts bound "
+    "CROSS JOIN custody_transitions t ON t.order_ref = bound.order_ref "
+    "WHERE t.transition_kind = 'OPTION_POSITION_ENDED' AND t.broker_order_id IS NOT NULL"
+)
+
 #: Whether the ``external_orders`` row ``eo`` is still an outside order. Only
 #: this module's reads apply it. Alpaca gives a replacement a client id of its
 #: own, so the Clerk can take a replacement for a foreign order before it
 #: knows the manual leg's chain holds it (#2656). From the moment the chain holds it, the order is
 #: the leg's own and its executions are the leg's (#2787): its row stays as
 #: the record of what was observed, but no money read counts it outside the
-#: Clerk again, so its fill is counted once.
-_OUTSIDE_ORDER_SQL = f"NOT EXISTS ({_manual_chain_order_ref_sql('eo.broker_order_id')})"
+#: Clerk again, so its fill is counted once. The same holds from the moment an
+#: outside order's fill is booked against the bot that held its option contract
+#: (ADR 0076 decision 22): the booking is the execution, and it is the bot's.
+_OUTSIDE_ORDER_SQL = (
+    f"NOT EXISTS ({_manual_chain_order_ref_sql('eo.broker_order_id')}) "
+    f"AND NOT EXISTS ({_BOOKED_AS_A_BOTS_SALE_SQL} AND bound.symbol = UPPER(eo.symbol) "
+    "AND t.broker_order_id = eo.broker_order_id)"
+)
 
 
 def _row_to_command_resource(row: sqlite3.Row) -> CommandResource:
@@ -469,6 +486,16 @@ def filled_outside_order_ids(conn: sqlite3.Connection) -> frozenset[str]:
         f"WHERE eo.filled_avg_price IS NOT NULL AND ABS(eo.qty) >= 1e-9 AND {_OUTSIDE_ORDER_SQL}"
     ).fetchall()
     return frozenset(row[0] for row in rows)
+
+
+def outside_orders_booked_as_a_bots_sale(conn: sqlite3.Connection) -> frozenset[str]:
+    """The broker ids of the outside orders whose fill is booked against a bot (ADR 0076 decision 22).
+
+    Each is left out of :func:`external_orders`. Its executions in the
+    account's activities are the booking's own, on the bot, so no money read
+    counts them a second time as an outside order's.
+    """
+    return frozenset(row[0] for row in conn.execute(_BOOKED_AS_A_BOTS_SALE_SQL))
 
 
 UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE = "UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED"

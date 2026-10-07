@@ -30,7 +30,11 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_EVENT_CLOSE_EXECUTION_PREFIX
 from app.broker.alpaca.clerk.sqlite.reads import external_orders as tracked_external_orders
-from app.broker.alpaca.clerk.sqlite.reads import filled_outside_order_ids, governing_acknowledgement
+from app.broker.alpaca.clerk.sqlite.reads import (
+    filled_outside_order_ids,
+    governing_acknowledgement,
+    outside_orders_booked_as_a_bots_sale,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
@@ -611,6 +615,9 @@ def custody_fee_attribution(
     # executions are credited to the leg, never awaited as an outside
     # order's (#2787).
     external_orders = filled_outside_order_ids(conn)
+    # An outside order's fill booked against the bot that held its option contract is that
+    # bot's execution (ADR 0076 decision 22): priced once, on the bot, by the option fee model.
+    booked_as_a_sale = outside_orders_booked_as_a_bots_sale(conn)
     witnessed_external: set[str] = set()
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
@@ -618,6 +625,8 @@ def custody_fee_attribution(
     for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():
             if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
+                continue
+            if row.native_order_id in booked_as_a_sale:
                 continue
             if row.native_order_id in owned_orders:
                 if execution_id_from_activity_id(row.activity_id) not in execution_ids:

@@ -774,8 +774,15 @@ def _append_booking(
     simulation: dict[str, Any] | None,
     notes: list[dict[str, str]] | None,
     owner_word: dict[str, Any] | None = None,
+    broker_order_id: str | None = None,
 ) -> OptionPositionEndedFacts | None:
-    """Book one bot's part of one event, once. The record when this call booked it; None when it was booked before."""
+    """Book one bot's part of one event, once. The record when this call booked it; None when it was booked before.
+
+    ``broker_order_id`` is the outside order a sale books, and None for
+    every other ending. The record names it, and that is what takes the
+    order out of the money reads' count of outside orders: its one
+    execution is then counted once, on the bot.
+    """
     idempotency_key = f"{key}{sid}"
     command_id = f"cmd:{idempotency_key}"
     symbol = contract.occ_symbol
@@ -823,6 +830,7 @@ def _append_booking(
             command_id=command_id,
             effect_operation_id=f"effect:{idempotency_key}",
             order_ref=facts.option_order_ref,
+            broker_order_id=broker_order_id,
             transition_kind=OPTION_POSITION_ENDED,
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
@@ -1432,6 +1440,7 @@ def _book_outside_orders(
                 multiplier=terms.multiplier, contracts=sum(row["contracts"] for row in mine), held=reduces,
                 close_price=Decimal(str(order.filled_avg_price)), booked_as_of_ms=booked_as_of_ms, simulated=False,
                 allocation=taken, share_trade=None, simulation=None, notes=None,
+                broker_order_id=order.broker_order_id,
             )
             if record is not None:
                 booked.append((sid, record))
