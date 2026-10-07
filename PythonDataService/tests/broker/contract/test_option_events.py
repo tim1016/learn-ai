@@ -459,9 +459,11 @@ def test_the_bot_that_sold_first_is_assigned_whether_the_expiry_or_the_assignmen
 ) -> None:
     """Bot A sold 2, then bot B sold 3. On expiry night 2 are assigned and 3 expire.
 
-    Alpaca dates the expiry the Friday and, as in its own example, the
-    assignment the Saturday, so the expiry is first by date. A's lots, the
-    oldest, are the ones assigned all the same.
+    Say the expiry is dated the Friday and the assignment the Saturday, or
+    the assignment simply arrives a poll later: the expiry is matched first.
+    A's lots, the oldest, are the ones assigned all the same. (No published
+    example dates an assignment after its expiry; the rule must not need
+    them to come in order.)
     """
     lots = [
         _sold("bot-a", 2, opened=date(2023, 7, 10), sequence=5, contract=_AAPL_CALL),

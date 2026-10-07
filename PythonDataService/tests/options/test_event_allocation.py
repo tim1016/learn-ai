@@ -245,7 +245,7 @@ def test_only_an_expiry_is_refused_for_a_contract_held_on_both_sides(kind: Optio
 def test_an_expiry_signed_for_the_other_side_still_closes_lots_held_on_one_side_only(
     held: int, change: int, books_move: int
 ) -> None:
-    """Alpaca's pages show only a bought option expiring, so a sold one's sign is not known.
+    """Every expiry Alpaca's pages show is signed negative, so a sold one's sign is not known.
 
     With lots on one side only, the row can mean nothing but those lots.
     The books then move the opposite way to the row's sign.
@@ -267,6 +267,18 @@ def test_an_expiry_takes_the_newest_lot_first() -> None:
     assert _taken(whole) == [("bot-b", 14, 3)]
     assert _taken(and_part_of_the_older) == [("bot-b", 14, 3), ("bot-a", 11, 1)]
     assert and_part_of_the_older.lots[1].remaining_quantity == -1
+
+
+def test_lots_alike_in_time_and_sequence_are_taken_in_one_order_however_they_are_offered() -> None:
+    """Two bots' lots opened in one millisecond under one sequence number. Which is taken must not turn on
+    the order the caller happened to list them in: the owner's name settles it."""
+    same_instant = _at(date(2023, 7, 10))
+    a, b = _lot("bot-a", -1, opened=same_instant, sequence=7), _lot("bot-b", -1, opened=same_instant, sequence=7)
+
+    assert _taken(_allocate(OptionEventKind.ASSIGNED, 1, [a, b])) == [("bot-a", 7, 1)]
+    assert _taken(_allocate(OptionEventKind.ASSIGNED, 1, [b, a])) == [("bot-a", 7, 1)]
+    assert _taken(_allocate(OptionEventKind.EXPIRED, 1, [a, b])) == [("bot-b", 7, 1)]
+    assert _taken(_allocate(OptionEventKind.EXPIRED, 1, [b, a])) == [("bot-b", 7, 1)]
 
 
 def test_expiring_lots_opened_in_the_same_millisecond_are_taken_last_in_the_books_order_first() -> None:
@@ -689,9 +701,9 @@ def _in_parts(rng: random.Random, total: int) -> list[int]:
 def test_the_lots_assigned_are_the_same_whichever_row_is_matched_first() -> None:
     """Random one-sided books; some contracts assigned or exercised, some expired; every order of the rows.
 
-    An assignment dated the day after the expiry it belongs with (as Alpaca's
-    own example is), or read in a later poll, is matched after it. The bot
-    assigned must still be the one that sold first.
+    An assignment dated the day after the expiry it belongs with, or read in
+    a later poll, is matched after it. The bot assigned must still be the one
+    that sold first.
     """
     rng = random.Random(291313)
     rows_in_a_book: set[int] = set()

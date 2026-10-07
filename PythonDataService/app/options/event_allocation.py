@@ -60,8 +60,9 @@ What is Alpaca's documented behaviour, and what is not:
   over, because it did not exist when the event happened. The broker
   reports an event against the account and names no lot.
 - **This repo's rule (ADR 0076):** an expiry of a contract held on both
-  sides is refused. The broker's row is the account's net, bought less
-  sold, and no count of it says how many contracts each side lost.
+  sides is refused. The broker's row is taken to be the account's net,
+  bought less sold (no published example shows one), and no count of it
+  says how many contracts each side lost.
 
 Shares sold are sold whether or not the owner held them. A call assigned to
 a bot with no shares leaves that bot short the stock, and its books must show
@@ -326,11 +327,11 @@ def allocate_option_event(
     bought lots only; a change signed for the other side is not that kind of
     event and raises ``ValueError``. An expiry takes the side its sign
     names. When lots are held on one side only, an expiry signed for the
-    other side still closes them: Alpaca's pages show only a bought option
-    expiring, so the sign of a sold one is an inference, and the books hold
+    other side still closes them: every expiry Alpaca's pages show is signed
+    negative, so the sign of a sold one is an inference, and the books hold
     nothing else the row could mean. When lots are held on both sides an
-    expiry is refused (``HELD_ON_BOTH_SIDES``): the broker's row is the
-    account's net, and no count of it can be matched to lots.
+    expiry is refused (``HELD_ON_BOTH_SIDES``): the broker's row is taken to
+    be the account's net, and no count of it can be matched to lots.
 
     **Which lots.** An assignment or an exercise takes the oldest lots
     first. An expiry takes the newest first, because it is what is left once
