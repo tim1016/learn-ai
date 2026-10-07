@@ -848,6 +848,8 @@ async def test_a_later_dry_run_writes_down_no_exit_of_a_position_an_entry_refuse
     (refused,) = _said(the_runner_is_heard, "bot_option_entry_refused_at_the_send")
     assert (refused.came_to, refused.reason_code) == (EntryCameTo.REJECTED.value, on_the_books["summary_code"])
     assert _said(the_runner_is_heard, "bot_option_entry_settled") == [], "nothing was asked about its outcome"
+    # Said once, by the line that carries its word: the journal's writer is not asked about a refused decision.
+    assert _said(the_runner_is_heard, "dry_run_option_entry_not_filled") == []
     retained = dry_run.authority.source_bars()
     try:
         retained.append(red(EXIT_MS), run_id=dry_run.binding.run_id)
