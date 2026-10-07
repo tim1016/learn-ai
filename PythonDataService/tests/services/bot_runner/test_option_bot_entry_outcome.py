@@ -776,17 +776,20 @@ async def test_in_a_dry_run_an_entry_is_settled_at_once_through_the_same_wait(dr
 
     asked_for_while_held: list[Any] = []
 
-    async def a_minute_on(floor: Floor) -> None:
-        await floor.bar_arrives(ENTER_MS + MINUTE + DELIVERY_MS)
+    async def two_minutes_on(floor: Floor) -> None:
+        await floor.bar_arrives(ENTER_MS + 2 * MINUTE + DELIVERY_MS)
         asked_for_while_held.extend(floor.watch.requests())
+        asked_for_while_held.append(floor.holds())
 
     script = _round_trip()
-    script[2] = Step(script[2].bar, before=a_minute_on)
+    script[3] = Step(script[3].bar, before=two_minutes_on)
 
     ran = await dry_run.run(script)
 
-    # What a Dry Run's bot holds is its Clerk's to ask for, not its run's.
-    (the_runs_own,) = asked_for_while_held
+    # What a Dry Run's bot holds is its Clerk's to ask for, not its run's: a bar after the fill, with the
+    # window moved since, the run's own request still names no held contract.
+    the_runs_own, held = asked_for_while_held
+    assert held == {CALL: 1.0}
     assert the_runs_own.plan is not None and the_runs_own.held == ()
     assert dry_run.transitions("ENTRY_SETTLED") == 1
     (order_ref,) = [row.order_ref for row in ran.journal if row.intent == "ENTER"]
