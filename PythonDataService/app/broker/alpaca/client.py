@@ -229,6 +229,28 @@ class AlpacaTradingClient:
             self._uncertain_submissions.pop(client_order_id, None)
             return False
 
+    def hold_submission_uncertain(self, order_key: str) -> None:
+        """Start the visibility window for an order Alpaca answered for whose answer the caller would not take.
+
+        :meth:`submit_order` closes the window on a 200. A caller that then
+        refuses that answer, because it will not read or names another
+        order, knows no more than after a timeout, and Alpaca's lookup index
+        may still be catching up: for the same grace, a lookup's 404 stays
+        "not visible yet" (#2913).
+
+        ``order_key`` is the client order id, for the lookup by it, or the
+        broker order id in its canonical spelling, for a read by that id.
+        """
+        self._mark_submission_uncertain(order_key)
+
+    def settle_submission(self, order_key: str) -> None:
+        """Close the visibility window: the caller has taken an answer as this order's.
+
+        For a lookup made with ``found_settles_submission=False``, and for a
+        read by a broker order id held with :meth:`hold_submission_uncertain`.
+        """
+        self._clear_uncertain_submission(order_key)
+
     def _build_default_client(self) -> Any:
         # Injected settings are the whole binding; otherwise the one this
         # worker resolved (ADR 0060). Deferred to first use, so the client can
@@ -571,7 +593,7 @@ class AlpacaTradingClient:
         )
 
     async def get_order_by_client_order_id(
-        self, client_order_id: str
+        self, client_order_id: str, *, found_settles_submission: bool = True
     ) -> dict[str, Any] | None:
         """GET ``/v2/orders:by_client_order_id`` for the order we minted (S5).
 
@@ -590,6 +612,12 @@ class AlpacaTradingClient:
         ``BrokerUnavailable``: definitively absent → the submit failed, whereas
         unreachable must stay uncertain. Every other failure (timeout, 5xx,
         network, other 4xx) flows through ``_call`` unchanged.
+
+        A found order closes the visibility window. A caller that judges the
+        answer itself passes ``found_settles_submission=False``: the window
+        then stays open until that caller takes an answer as this order's
+        and calls :meth:`settle_submission`, so an answer it refuses is never
+        followed by a 404 read as "absent" (#2913).
         """
 
         def _get(client: Any) -> dict[str, Any] | None:
@@ -610,7 +638,7 @@ class AlpacaTradingClient:
                 raise
 
         result = await self._call(_get, describe="order lookup by client_order_id")
-        if result is not None:
+        if result is not None and found_settles_submission:
             self._clear_uncertain_submission(client_order_id)
         return result
 
@@ -630,24 +658,7 @@ class AlpacaTradingClient:
         raises a bare ``ValueError`` for one it cannot parse, which no caller
         of an order read expects.
         """
-        try:
-            UUID(order_id)
-        except ValueError as exc:
-            raise BrokerRequestInvalid(
-                f"{order_id!r} is not an Alpaca order id.",
-                broker=self.broker_id,
-                detail="An Alpaca order id is a UUID; nothing was asked of Alpaca.",
-            ) from exc
-
-        def _get(client: Any) -> dict[str, Any] | None:
-            try:
-                return client.get_order_by_id(order_id)
-            except APIError as exc:
-                if status_of(exc) == 404:
-                    return None
-                raise
-
-        return await self._call(_get, describe="order lookup by broker order id")
+        return await self._order_by_broker_order_id(order_id, nested=False)
 
     async def get_nested_order_by_broker_order_id(self, order_id: str) -> dict[str, Any] | None:
         """GET ``/v2/orders/{order_id}?nested=true``: one order with its legs nested under it.
@@ -659,8 +670,23 @@ class AlpacaTradingClient:
         definitive 404, and an id that is not a UUID refused before anything
         is asked of Alpaca.
         """
+        return await self._order_by_broker_order_id(order_id, nested=True)
+
+    async def _order_by_broker_order_id(self, order_id: str, *, nested: bool) -> dict[str, Any] | None:
+        """The one read of ``/v2/orders/{order_id}``, plain or with its legs nested.
+
+        The UUID gate, the 404 that means absent and the error taxonomy are
+        the same read's, so they are written once. Only ``nested`` adds the
+        query parameter; without it the SDK is called as it always was.
+
+        A 404 is "absent" except inside a visibility window a caller holds
+        for this order id (:meth:`hold_submission_uncertain`, under the id's
+        canonical spelling): Alpaca answered for the order a moment ago, so
+        its not-found proves nothing yet (#2913). Nothing holds one for a
+        stock order.
+        """
         try:
-            UUID(order_id)
+            held_under = str(UUID(order_id))
         except ValueError as exc:
             raise BrokerRequestInvalid(
                 f"{order_id!r} is not an Alpaca order id.",
@@ -670,10 +696,22 @@ class AlpacaTradingClient:
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:
-                return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+                if nested:
+                    return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+                return client.get_order_by_id(order_id)
             except APIError as exc:
                 if status_of(exc) == 404:
+                    if self._submission_may_become_visible(held_under):
+                        raise BrokerUnavailable(
+                            "Alpaca answered for this order a moment ago and now reports no such order.",
+                            broker=self.broker_id,
+                            detail=(
+                                "Alpaca returned 404 inside the visibility window held for "
+                                "this order id; the outcome remains uncertain."
+                            ),
+                        ) from exc
                     return None
                 raise
 
-        return await self._call(_get, describe="nested order lookup by broker order id")
+        describe = "nested order lookup by broker order id" if nested else "order lookup by broker order id"
+        return await self._call(_get, describe=describe)

@@ -9,12 +9,17 @@ which is the form the broker that takes the order uses. The symbol is parsed,
 never rebuilt from the contract's fields, and a contract whose fields
 disagree with its own symbol is left out.
 
-What the listing cannot say is taken as standard and proven elsewhere: a
-stock or ETF option is counted as American, and a contract in the
-underlying's own trading class as delivering one share per unit of its
-multiplier. The broker's contract reference is asked about each picked
-contract before any order (ADR 0076). Contracts in another trading class,
-which is how an adjusted contract is listed, are not part of the chain.
+What the listing cannot say is taken as standard: a stock or ETF option is
+counted as American, and a contract in the underlying's own trading class as
+delivering one share per unit of its multiplier. Proving both for a picked
+contract is the broker's contract reference's job, before any order; nothing
+asks it yet (ADR 0076). Contracts in another trading class, which is how an
+adjusted contract is listed, are not part of the chain.
+
+IBKR answers a listing request it cannot serve with nothing at all, and the
+library reports that as an empty answer, not an error. So an answer that
+names no expiry, or no contract for an expiry, is ``OptionListingUnavailable``
+and is to be asked again. It is never a chain that lists nothing.
 """
 
 from __future__ import annotations
@@ -36,6 +41,10 @@ logger = logging.getLogger(__name__)
 EXPIRIES_TIMEOUT_S = 10
 CONTRACTS_TIMEOUT_S = 30
 _RIGHTS = {"C": "call", "P": "put"}
+
+
+class OptionListingUnavailable(RuntimeError):
+    """IBKR's answer to a listing request held nothing of the underlying's own."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +73,7 @@ async def listed_expiries(client: IbkrClient, symbol: str) -> tuple[date, ...]:
         timeout=EXPIRIES_TIMEOUT_S,
     )
     root = occ_root(symbol)
-    return tuple(
+    expiries = tuple(
         sorted(
             {
                 datetime.strptime(expiry, "%Y%m%d").date()
@@ -75,6 +84,9 @@ async def listed_expiries(client: IbkrClient, symbol: str) -> tuple[date, ...]:
             }
         )
     )
+    if not expiries:
+        raise OptionListingUnavailable(f"IBKR named no option expiry for {symbol}")
+    return expiries
 
 
 def _listed(detail: Any, root: str, expiry: date) -> ListedContract | None:
@@ -129,4 +141,6 @@ async def listed_contracts(client: IbkrClient, symbol: str, expiry: date) -> dic
             "Left out listed option contracts that are not the underlying's own",
             extra={"action": "option_chain_contracts_left_out", "symbol": symbol, "count": left_out},
         )
+    if not listed:
+        raise OptionListingUnavailable(f"IBKR named no {symbol} option contract expiring {expiry}")
     return listed

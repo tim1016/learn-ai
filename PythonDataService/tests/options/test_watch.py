@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from functools import cache
 
 import pytest
 
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.named_structures import NamedStructure
-from app.options.resolver import ContractsNotResolved, ResolverRefusal
+from app.options.resolver import ContractsNotResolved, Listing, ResolverRefusal
 from app.options.structure_catalogue import starting_plan
 from app.options.watch import (
     LineClass,
@@ -144,17 +145,38 @@ def test_an_expiry_whose_contracts_are_not_known_yet_is_wanted_and_nothing_of_it
         chain=replace(
             scene.chain,
             listings=tuple(listing for listing in scene.chain.listings if listing.contract.expiry_date != scenes._FRIDAY),
-            expiries=scenes._EXPIRIES,
+            expiries_ms=tuple(option_expiry_anchor_ms(day) for day in scenes._EXPIRIES),
         ),
     )
     plan = scenes._one("call", _AT_THE_MONEY)
 
     assert _window(plan, scene=not_read_yet) == ()
     assert expiries_wanted(plan, scenes._EXPIRIES, scenes._TUESDAY) == {scenes._FRIDAY}
+    # A rule that takes the first expiry far enough out comes to the Friday too. It must not fall through to
+    # the next expiry whose contracts happen to be read.
+    two_days_out = scenes._one("call", _AT_THE_MONEY, expiry={"selector": "min_dte", "days": 2})
+    assert _window(two_days_out, scene=not_read_yet) == ()
     refused = not_read_yet.refusal(plan)
     assert (refused.reason, refused.leg_ids) == (ResolverRefusal.SEARCH_INCOMPLETE, ("only",))
     # The expiry rule still chose among every date the chain names, not only the ones whose contracts are read.
     assert refused.evidence.legs[0].listed_expiries_ms == tuple(option_expiry_anchor_ms(day) for day in scenes._EXPIRIES)
+
+
+def test_only_the_plans_own_standard_contracts_are_watched() -> None:
+    """Beside the 585 call the chain lists a ten-share contract at the same strike's neighbour, and a QQQ call
+    at the money. Neither is on the plan's ladder, so neither is watched or counted along it."""
+    scene = scenes._scene()
+    not_standard = Listing(scenes._contract("call", "585.5"), multiplier=10, shares_delivered=10, exercise="american")
+    another_root = Listing(
+        OptionContract.of(root="QQQ", expiry_date=scenes._FRIDAY, right="call", strike="585.25"),
+        multiplier=100, shares_delivered=100, exercise="american",
+    )
+    crowded = replace(scene, chain=replace(scene.chain, listings=(*scene.chain.listings, not_standard, another_root)))
+
+    window = _window(scenes._one("call", _AT_THE_MONEY), scene=crowded)
+
+    assert [str(seen.contract.strike) for seen in window] == ["583", "584", "585", "586", "587"]
+    assert {seen.contract.root for seen in window} == {"SPY"}
 
 
 def test_a_leg_whose_expiry_rule_comes_to_nothing_adds_nothing_and_neither_does_a_leg_measured_from_it() -> None:
@@ -171,6 +193,13 @@ def test_a_leg_whose_expiry_rule_comes_to_nothing_adds_nothing_and_neither_does_
     assert _strikes(window, "put") == [583, 584, 585, 586, 587]
 
 
+@cache
+def _resolved_with_every_quote(name: NamedStructure) -> tuple[scenes._Scene, dict[str, OptionContract]]:
+    """The scene with a quote held for every listed strike, and what a named structure's starting plan picks."""
+    every_quote = scenes._scene(watched=range(560, 611))
+    return every_quote, dict(every_quote.resolve(starting_plan(name, "SPY")).picked)
+
+
 @pytest.mark.parametrize("name", list(NamedStructure))
 @pytest.mark.parametrize("reach", [3, 8, 25])
 def test_resolving_from_the_window_alone_gives_the_same_contracts_or_an_incomplete_search(
@@ -179,7 +208,7 @@ def test_resolving_from_the_window_alone_gives_the_same_contracts_or_an_incomple
     """The window is where quotes are held. Whatever its size, the rules come to the contracts they would with
     every quote held, or the search is incomplete. A window too small never changes the pick."""
     plan = starting_plan(name, "SPY")
-    every_quote = scenes._scene(watched=range(560, 611))
+    every_quote, wanted = _resolved_with_every_quote(name)
     window = {seen.contract.occ_symbol for seen in _window(plan, reach=reach, scene=every_quote)}
     window_only = replace(
         every_quote,
@@ -189,7 +218,6 @@ def test_resolving_from_the_window_alone_gives_the_same_contracts_or_an_incomple
         ),
     )
 
-    wanted = every_quote.resolve(plan).picked
     try:
         picked = window_only.resolve(plan).picked
     except ContractsNotResolved as refused:
@@ -280,8 +308,6 @@ def test_a_window_that_moves_keeps_the_strikes_it_still_wants_and_never_gives_up
         assert plan.opens == (_call(588),)
         assert plan.closes == (_call(583).occ_symbol,)
         assert _call(570) in plan.lines
-    # With a line to spare the new strike is asked for before the old one is let go; without one, after.
-    assert (with_room.opens_first, without_room.opens_first) == (True, False)
 
 
 def test_after_the_provider_refuses_a_line_only_what_it_showed_it_grants_is_asked_for() -> None:

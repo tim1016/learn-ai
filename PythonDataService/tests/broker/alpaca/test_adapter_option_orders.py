@@ -37,6 +37,8 @@ from tests.broker.alpaca.test_schema_drift import _known_names
 
 _REF = "learn-ai/spy-options/v1:enter-1"
 _OBSERVED = 1_700_000_000_000
+# The order id of Alpaca's documented single-leg answer.
+_SINGLE_ORDER_ID = "30a077fa-96f6-4f20-a052-4b921ee2f243"
 
 _BUY, _SELL = OrderSide.BUY, OrderSide.SELL
 _OPEN, _CLOSE = OptionPositionIntent.OPEN, OptionPositionIntent.CLOSE
@@ -117,6 +119,19 @@ _DOCUMENTED_MULTI_LEG: dict[str, MultiLegOptionOrderRequest] = {
 }
 
 
+# The order reference's own two option requests, under the names it gives them.
+_DOCUMENTED_ORDER_REFERENCE: dict[str, OptionOrderRequest] = {
+    "Options": _single("AAPL250620C00100000", _BUY, 2, limit="10"),
+    "MultilegOptions": _multi(
+        ("AAPL241213C00250000", _BUY, _OPEN),
+        ("AAPL241213C00260000", _SELL, _OPEN),
+        limit="10",
+        quantity=3,
+        ratios=(3, 1),
+    ),
+}
+
+
 def _requests(kind: str) -> dict[str, dict[str, Any]]:
     return documented("option_orders", "documented_requests.json")[kind]
 
@@ -130,8 +145,44 @@ def _responses(name: str) -> dict[str, Any]:
 
 def test_every_documented_example_is_matched() -> None:
     """A new example on Alpaca's pages must be matched here, not passed over."""
+    assert set(documented("option_orders", "documented_requests.json")) == {
+        "single_leg",
+        "multi_leg",
+        "order_reference",
+    }
     assert set(_requests("single_leg")) == set(_DOCUMENTED_SINGLE_LEG)
     assert set(_requests("multi_leg")) == set(_DOCUMENTED_MULTI_LEG)
+    assert set(_requests("order_reference")) == set(_DOCUMENTED_ORDER_REFERENCE)
+
+
+def test_the_order_references_own_two_option_requests_are_sent_as_it_writes_them() -> None:
+    reference = _requests("order_reference")
+
+    single = to_alpaca_option_order_request(_DOCUMENTED_ORDER_REFERENCE["Options"], client_order_id=_REF)
+    multi = to_alpaca_option_order_request(_DOCUMENTED_ORDER_REFERENCE["MultilegOptions"], client_order_id=_REF)
+
+    # Its single-leg example leaves ``position_intent`` out, as the Options Orders page's do.
+    assert single == {**reference["Options"], "position_intent": "buy_to_open", "client_order_id": _REF}
+    assert multi == {**reference["MultilegOptions"], "client_order_id": _REF}
+
+
+def test_the_references_multi_leg_request_and_answer_do_not_agree_on_the_quantity() -> None:
+    """Recorded, not resolved: it is why a leg's quantity is read and not held to its ratio (see the attribution).
+
+    The request asks for three structures of 3:1. The answer beside it, on
+    the same contracts at the same price, is for one. Its legs' 3 and 1 are
+    the ratios times one, or the ratios alone: one answer cannot say which.
+    """
+    request = _requests("order_reference")["MultilegOptions"]
+    answer = _responses("MultilegOptionsOrderResponse")
+
+    def legs(order: dict[str, Any]) -> list[tuple[str, str, str]]:
+        return [(leg["symbol"], leg["ratio_qty"], leg["side"]) for leg in order["legs"]]
+
+    assert legs(request) == legs(answer)
+    assert request["limit_price"] == answer["limit_price"]
+    assert (request["qty"], answer["qty"]) == ("3", "1")
+    assert [leg["qty"] for leg in answer["legs"]] == ["3", "1"]
 
 
 @pytest.mark.parametrize("example", sorted(_DOCUMENTED_SINGLE_LEG))
@@ -272,6 +323,38 @@ def test_a_price_is_sent_in_plain_digits_whatever_its_exponent() -> None:
     assert single["limit_price"] == "100"
 
 
+def test_a_net_price_is_sent_in_plain_digits_whatever_its_exponent() -> None:
+    paid = _multi(("SPY261218C00450000", _BUY, _OPEN), ("SPY261218C00455000", _SELL, _OPEN), limit="1E+1")
+    received = _multi(("SPY261218C00450000", _SELL, _OPEN), ("SPY261218C00455000", _BUY, _OPEN), limit="-307E-2")
+
+    assert to_alpaca_option_order_request(paid, client_order_id=_REF)["limit_price"] == "10"
+    assert to_alpaca_option_order_request(received, client_order_id=_REF)["limit_price"] == "-3.07"
+
+
+@pytest.mark.parametrize(
+    "client_order_id",
+    [
+        pytest.param(f" {_REF}", id="a space before it"),
+        pytest.param(f"{_REF} ", id="a space after it"),
+        pytest.param(f"{_REF}\n", id="a line end after it"),
+        pytest.param("x" * 129, id="one character more than Alpaca takes"),
+    ],
+)
+def test_a_client_order_id_alpaca_could_not_keep_as_given_is_never_written_out(client_order_id: str) -> None:
+    """Trimmed, cut or refused: whichever Alpaca did, the id it kept might not be the one the order is looked up by."""
+    with pytest.raises(ValueError, match="client order id"):
+        to_alpaca_option_order_request(_DOCUMENTED_MULTI_LEG["long_call_spread"], client_order_id=client_order_id)
+
+
+def test_a_client_order_id_of_the_full_length_alpaca_documents_is_sent_as_given() -> None:
+    """The order reference: ``client_order_id`` is at most 128 characters."""
+    longest = "x" * 128
+
+    body = to_alpaca_option_order_request(_DOCUMENTED_MULTI_LEG["long_call_spread"], client_order_id=longest)
+
+    assert body["client_order_id"] == longest
+
+
 @pytest.mark.parametrize("client_order_id", ["", "   "])
 def test_an_option_order_is_never_written_out_without_its_callers_client_order_id(client_order_id: str) -> None:
     """Alpaca makes an id up for an order sent without one, and no lookup of ours could then find the order."""
@@ -331,7 +414,7 @@ def test_each_leg_has_its_own_order_id_filled_quantity_average_price_and_status(
     assert bought.order_id == "df4ff24a-c58a-4e37-8b9f-ef32b83a11f2"
     assert bought.contract == OptionContract.from_occ_symbol("AAPL241213C00250000")
     assert (bought.side, bought.intent) == (OrderSide.BUY, OptionPositionIntent.OPEN)
-    # Contracts: three a structure, one structure.
+    # As Alpaca wrote them. For this parent quantity of 1 they are the ratio and the ratio times it alike.
     assert (bought.ratio, bought.quantity, bought.filled_quantity) == (3, 3, 3)
     assert (bought.filled_avg_price, bought.status) == (Decimal("0.43"), "filled")
 
@@ -396,6 +479,58 @@ def test_a_closing_intent_is_read_from_a_single_order_that_states_it() -> None:
     assert (order.side, order.intent) == (OrderSide.SELL, OptionPositionIntent.CLOSE)
 
 
+def test_each_time_alpaca_states_is_read_into_its_own_field() -> None:
+    stated = {
+        "submitted_at": "2024-12-10T16:15:51Z",
+        "created_at": "2024-12-10T16:15:52Z",
+        "updated_at": "2024-12-10T16:15:53Z",
+        "filled_at": "2024-12-10T16:15:54Z",
+        "canceled_at": "2024-12-10T16:15:55Z",
+        "expired_at": "2024-12-10T16:15:56Z",
+    }
+    payload = _responses("MultilegOptionsOrderResponse")
+    payload.update(stated)
+    payload["legs"][0].update(stated)
+
+    order = from_alpaca_option_order(payload, observed_at_ms=_OBSERVED)
+
+    for read in (order, order.legs[0]):
+        assert {name: getattr(read, f"{name}_ms") for name in stated} == {
+            name: rfc3339_to_ms(text) for name, text in stated.items()
+        }
+
+
+def test_an_order_type_is_read_from_type_and_from_its_older_name_only_when_type_is_missing() -> None:
+    """``order_type`` is the reference's deprecated name for ``type``."""
+
+    def order_type_of(**names: str | None) -> str:
+        payload = _responses("OptionOrderResponse")
+        for name in ("type", "order_type"):
+            del payload[name]
+        payload.update({name: value for name, value in names.items() if value is not None})
+        return from_alpaca_option_order(payload, observed_at_ms=_OBSERVED).order_type
+
+    assert order_type_of(type="market") == "market"
+    assert order_type_of(order_type="market") == "market"
+    assert order_type_of(type="", order_type="market") == "market"
+    assert order_type_of(type="limit", order_type="market") == "limit"
+    with pytest.raises(ValueError, match="'type'"):
+        order_type_of()
+
+
+def test_a_price_is_read_with_no_digit_lost_or_added() -> None:
+    """Through a float, the first would lose its last digits and the second its trailing zero."""
+    payload = _responses("MultilegOptionsOrderResponse")
+    payload.update(limit_price="12345678.123456789012345", filled_avg_price="1.280")
+    payload["legs"][0]["filled_avg_price"] = "1234567.00000000000000001"
+
+    order = from_alpaca_option_order(payload, observed_at_ms=_OBSERVED)
+
+    assert str(order.limit_price) == "12345678.123456789012345"
+    assert str(order.filled_avg_price) == "1.280"
+    assert str(order.legs[0].filled_avg_price) == "1234567.00000000000000001"
+
+
 def test_a_plain_orders_class_may_be_blank_or_left_out() -> None:
     for order_class in ("", None):
         payload = _responses("OptionOrderResponse")
@@ -422,6 +557,12 @@ def _first_leg_with(**changes: Any) -> dict[str, Any]:
 def _first_leg_without(field: str) -> dict[str, Any]:
     payload = _responses("MultilegOptionsOrderResponse")
     del payload["legs"][0][field]
+    return payload
+
+
+def _single_with(**changes: Any) -> dict[str, Any]:
+    payload = _responses("OptionOrderResponse")
+    payload.update(changes)
     return payload
 
 
@@ -453,12 +594,70 @@ def _first_leg_without(field: str) -> dict[str, Any]:
             _first_leg_with(id="83f37e9f-6b1f-49ed-8fc6-3e6af716323f"), id="a leg carrying the parent's order id"
         ),
         pytest.param([], id="an answer that is not an object"),
+        pytest.param(_multi_leg_with(qty=None), id="a parent with no quantity"),
+        # Unfilled, so nothing but the missing quantity itself can refuse it: absent must not read as zero.
+        pytest.param(_multi_leg_with(qty=None, filled_qty="0"), id="an unfilled parent with no quantity"),
+        pytest.param(_multi_leg_with(qty="", filled_qty="0"), id="an unfilled parent with a blank quantity"),
+        pytest.param(_single_with(qty=None), id="a single order with no quantity"),
+        pytest.param(_single_with(order_class="bracket"), id="a single order of a stock order's class: bracket"),
+        pytest.param(_single_with(order_class="oco"), id="a single order of a stock order's class: oco"),
+        pytest.param(_single_with(order_class="oto"), id="a single order of a stock order's class: oto"),
+        # Numbers that cannot be true whatever a quantity counts.
+        pytest.param(_multi_leg_with(filled_qty="7"), id="a parent filled beyond its quantity"),
+        pytest.param(_first_leg_with(filled_qty="99"), id="a leg filled beyond its quantity"),
+        pytest.param(_first_leg_with(symbol="AAPL241213C00260000"), id="two legs on one contract"),
+        pytest.param(_single_with(qty="0"), id="a single order for no contracts"),
+        pytest.param(_single_with(filled_qty="3"), id="a single order filled beyond its quantity"),
+        # Unfilled, so nothing but the quantity of zero itself can refuse it.
+        pytest.param(_multi_leg_with(qty="0", filled_qty="0"), id="a multi-leg parent for no structures"),
+        pytest.param(_first_leg_with(symbol="MSFT241213C00250000"), id="legs on two underlyings"),
+        # A parent that states what only its legs carry contradicts being a parent.
+        pytest.param(_multi_leg_with(symbol="AAPL241213C00250000"), id="a parent that names a contract of its own"),
+        pytest.param(_multi_leg_with(side="buy"), id="a parent that states a side of its own"),
+        pytest.param(_multi_leg_with(position_intent="buy_to_open"), id="a parent that states an intent of its own"),
+        pytest.param(_multi_leg_with(symbol=" "), id="a parent whose symbol is a space, which is not blank"),
+        pytest.param(_multi_leg_with(side=0), id="a parent whose side is a number"),
+        pytest.param(_multi_leg_with(position_intent=False), id="a parent whose intent is a boolean"),
+        # One contract's price is never below zero; only a parent's net price is signed.
+        pytest.param(_first_leg_with(filled_avg_price="-0.43"), id="a leg filled at a price below zero"),
+        pytest.param(_single_with(limit_price="-10"), id="a single order limited at a price below zero"),
+        pytest.param(_single_with(filled_avg_price="-1.28"), id="a single order filled at a price below zero"),
+        # The order reference gives ``id`` the format ``uuid``, on the order and on each leg.
+        pytest.param(_multi_leg_with(id="not-an-order-id"), id="a parent whose order id is not a UUID"),
+        pytest.param(_first_leg_with(id="leg-1"), id="a leg whose order id is not a UUID"),
+        pytest.param(_single_with(id="not-an-order-id"), id="a single order whose id is not a UUID"),
+        pytest.param(_single_with(id=f" {_SINGLE_ORDER_ID}"), id="an order id with a space before it"),
     ],
 )
 def test_an_answer_that_cannot_be_read_whole_is_refused_and_states_no_outcome(payload: Any) -> None:
     """A filled quantity that will not parse must not become zero contracts filled."""
     with pytest.raises((TypeError, ValueError)):
         from_alpaca_option_order(payload, observed_at_ms=_OBSERVED)
+
+
+def test_a_multi_leg_parent_is_read_with_its_own_symbol_side_and_intent_blank_null_or_left_out() -> None:
+    """Alpaca's published parent writes ``symbol`` and ``side`` as empty strings and has no ``position_intent``."""
+    published = _responses("MultilegOptionsOrderResponse")
+    assert (published["symbol"], published["side"]) == ("", "")
+    assert "position_intent" not in published
+
+    left_out = _responses("MultilegOptionsOrderResponse")
+    del left_out["symbol"], left_out["side"]
+    for payload in (
+        published,
+        left_out,
+        _multi_leg_with(symbol="", side="", position_intent=""),
+        _multi_leg_with(symbol=None, side=None, position_intent=None),
+    ):
+        order = from_alpaca_option_order(payload, observed_at_ms=_OBSERVED)
+        assert (order.multi_leg, order.contract, order.side, order.intent) == (True, None, None, None)
+
+
+def test_an_order_id_is_read_as_alpaca_wrote_it_whatever_spelling_of_a_uuid_it_is() -> None:
+    """The read and the cancel by id take every spelling of a UUID, so each one is an id an order can be reached by."""
+    shouted = _SINGLE_ORDER_ID.upper()
+
+    assert from_alpaca_option_order(_single_with(id=shouted), observed_at_ms=_OBSERVED).order_id == shouted
 
 
 def test_a_stock_order_is_never_read_as_an_option_order(load_alpaca_fixture: Any) -> None:

@@ -70,12 +70,12 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
+    OptionOrdersNotTaken,
     filter_synthesized_orders,
     shape_immediate_order,
     synthesized_positions,
 )
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
-from app.broker.contract.errors import BrokerOptionsNotSupported
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -88,12 +88,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
-from app.broker.contract.options import (
-    BrokerOptionAccountSnapshot,
-    BrokerOptionContract,
-    BrokerOptionOrder,
-    OptionOrderRequest,
-)
+from app.broker.contract.options import BrokerOptionAccountSnapshot, BrokerOptionContract
 from app.broker.contract.ports import BrokerReadPort
 from app.engine.live.order_identity import (
     NAMESPACE_ROOT,
@@ -577,10 +572,11 @@ def _execution_window_witnessed(bars: list[RetainedSourceBar], *, start_ms: int,
     return covered_until >= end_ms and end_ms > start_ms
 
 
-class NoSubmitAlpacaTradePort:
+class NoSubmitAlpacaTradePort(OptionOrdersNotTaken):
     """``BrokerTradePort`` that synthesizes every order and never reaches Alpaca (ADR 0059 D2)."""
 
     broker_id = SHADOW_BROKER_ID
+    _named_in_option_refusals = "The shadow order book"
 
     def __init__(self, book: ShadowOrderBook) -> None:
         self._book = book
@@ -611,27 +607,6 @@ class NoSubmitAlpacaTradePort:
 
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return self._book.order_by_broker_order_id(order_id)
-
-    async def submit_option_order(
-        self, order: OptionOrderRequest, *, client_order_id: str
-    ) -> BrokerOptionOrder:
-        del order, client_order_id
-        raise self._options_not_supported("takes no option orders")
-
-    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
-        del client_order_id
-        raise self._options_not_supported("holds no option orders")
-
-    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
-        del order_id
-        raise self._options_not_supported("holds no option orders")
-
-    def _options_not_supported(self, what: str) -> BrokerOptionsNotSupported:
-        return BrokerOptionsNotSupported(
-            f"The shadow order book {what}.",
-            broker=self.broker_id,
-            detail="Its capabilities say so; nothing was sent and no order exists.",
-        )
 
 
 class ShadowAccountReadPort:

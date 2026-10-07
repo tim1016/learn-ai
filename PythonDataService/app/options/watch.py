@@ -18,9 +18,9 @@ budget of its own, and learns a lower ceiling when the provider refuses a
 line. One contract is one line however many bots or pages want it. Priority,
 highest first:
 
-1. ``HELD``       contracts a bot holds or has a working order in. Never
-                  given up for a lower class, and asked for even past the
-                  budget.
+1. ``HELD``       contracts a bot holds or has a working order in. They
+                  count toward the budget, are never given up for a lower
+                  class, and are asked for even past it.
 3. ``CANDIDATE``  the watched windows of running bots, nearest their centre
                   first.
 4. ``PREVIEW``    previews and viewer pages: only what is spare.
@@ -126,9 +126,10 @@ def watched_window(
         return ()
     root = legs[0].instrument.underlying.upper()
     price = Fraction(money) * _THOUSANDTHS_PER_DOLLAR
+    named = chain.expiry_dates
     listed = (
-        chain.expiries
-        if chain.expiries is not None
+        named
+        if named is not None
         else sorted({listing.contract.expiry_date for listing in chain.listings if listing.is_standard})
     )
     # The strike each leg aims at, in thousandths: what a leg measured from it starts from.
@@ -200,6 +201,11 @@ class NoLine(StrEnum):
     OVER_BUDGET = "OPTION_LINE_OVER_BUDGET"
     # The provider refused a line while the Clerk was inside its budget: the account's allowance is in use.
     NO_CAPACITY = "OPTION_LINE_NO_CAPACITY"
+    # It is to hold a line, and the chain's contracts for its expiry have not been read yet.
+    LISTING_NOT_READ = "OPTION_LINE_LISTING_NOT_READ"
+    # It is to hold a line and has not been asked for yet: a refused request waits to be tried again, or
+    # too many were asked for at once.
+    WAITING_TO_BE_ASKED_FOR = "OPTION_LINE_WAITING_TO_BE_ASKED_FOR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,9 +216,6 @@ class LinePlan:
     opens: tuple[OptionContract, ...]
     # Contract symbols with a line open that are to give it up.
     closes: tuple[str, ...]
-    # Whether the opens fit beside the lines still open: then new lines are asked for before old ones are let
-    # go. Otherwise the old ones go first, to make room.
-    opens_first: bool
     # Wanted contracts that get no line, by contract symbol.
     without: Mapping[str, NoLine]
 
@@ -266,6 +269,5 @@ def plan_lines(
         lines=lines,
         opens=opens,
         closes=tuple(sorted(symbol for symbol in open_lines if symbol not in to_hold)),
-        opens_first=len(open_lines) + len(opens) <= max(granted, len(held)),
         without=MappingProxyType(without),
     )

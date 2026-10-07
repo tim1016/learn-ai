@@ -115,11 +115,14 @@ class BrokerOrderNotPermitted(BrokerOrderRejected):
 class BrokerOptionsNotSupported(BrokerError):
     """This broker was asked for something in options it does not do (ADR 0076).
 
-    An option order, a lookup of one, or its contract reference. Its
-    capabilities already say so (``supports_option_orders``,
-    ``supports_multi_leg_option_orders``); this is the refusal for a caller
-    that asked anyway. Definitive: nothing was sent and no order exists, so
-    it is never the uncertain :class:`BrokerUnavailable`. Surfaced as ``501``.
+    An option order or a lookup of one: its capabilities already say so
+    (``supports_option_orders``, ``supports_multi_leg_option_orders``), and
+    this is the refusal for a caller that asked anyway. Or its option
+    contract reference, which no capability describes: a broker with no
+    listing to consult refuses the read rather than call a contract unlisted.
+
+    Definitive either way: nothing was sent and no order exists, so it is
+    never the uncertain :class:`BrokerUnavailable`. Surfaced as ``501``.
     """
 
     http_status: ClassVar[int] = 501
@@ -151,6 +154,29 @@ class BrokerEvidenceUnavailable(BrokerUnavailable):
     This remains a 503 at the HTTP boundary while allowing safety consumers to
     distinguish malformed or contradictory evidence from a transient outage.
     """
+
+
+class BrokerOrderAnswerUnreadable(BrokerEvidenceUnavailable):
+    """The broker answered about one order, and the answer could not be read whole (#2913).
+
+    The outcome is unknown, as for any :class:`BrokerEvidenceUnavailable`.
+    ``broker_order_id`` is the order's own id when the answer still carried
+    one and was plainly about the order asked for, so the order can be
+    cancelled, or read again, by that id. ``None`` when that could not be
+    told: another order's id is never given as this one's.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        broker: str | None = None,
+        detail: str | None = None,
+        code: int | None = None,
+        broker_order_id: str | None = None,
+    ) -> None:
+        super().__init__(message, broker=broker, detail=detail, code=code)
+        self.broker_order_id = broker_order_id
 
 
 class BrokerSubmissionHeld(BrokerError):

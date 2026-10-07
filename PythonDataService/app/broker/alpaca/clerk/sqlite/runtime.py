@@ -353,6 +353,20 @@ class _PricingBarBoundTradePort:
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return await self._inner.get_order_by_broker_order_id(order_id)
 
+    # No bar is bound to an option order: one is filled from a quote, which
+    # ``_OptionQuoteBoundTradePort`` binds, never from a bar (ADR 0076). The
+    # wrapped port's answer is passed on as it is, so that its answer or its
+    # refusal never becomes a missing method here.
+
+    async def submit_option_order(self, order: OptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
+        return await self._inner.submit_option_order(order, client_order_id=client_order_id)
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        return await self._inner.get_option_order_by_client_order_id(client_order_id)
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        return await self._inner.get_option_order_by_broker_order_id(order_id)
+
 
 class _OptionQuoteBoundTradePort:
     """Bind a simulated option entry to the one quote its limit price was worked out from (ADR 0076).

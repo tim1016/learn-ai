@@ -111,7 +111,16 @@ def _order_requests(pages_dir: Path | None) -> dict[str, dict[str, dict[str, Any
     }
     if not single or not multi:
         raise SystemExit("the order pages no longer carry the examples this reads")
-    return {"single_leg": single, "multi_leg": multi}
+    # The order reference's own request examples, under the names it gives them.
+    # Its others are stock, crypto and IPO orders.
+    reference = _openapi(_page("reference/postorder", pages_dir))["paths"]["/v2/orders"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["examples"]
+    return {
+        "single_leg": single,
+        "multi_leg": multi,
+        "order_reference": {name: reference[name]["value"] for name in ("Options", "MultilegOptions")},
+    }
 
 
 def _order_responses(pages_dir: Path | None) -> dict[str, dict[str, Any]]:
