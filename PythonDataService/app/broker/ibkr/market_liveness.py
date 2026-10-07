@@ -144,8 +144,7 @@ class IbkrMarketStatusSource:
         for subscription in self._subscriptions.values():
             self._release(subscription)
         self._subscriptions.clear()
-        if self._options is not None:
-            self._options.release()
+        self._option_side(lambda lines: lines.release())
         if self._owner is not None:
             self._owner.ib.errorEvent -= self._on_error
         self._owner = None
@@ -173,9 +172,8 @@ class IbkrMarketStatusSource:
         await self._flush_halts()
         requested = self._symbols()
         symbols = await requested if isawaitable(requested) else requested
-        if self._options is not None:
-            # An option contract is watched beside its underlying's own quote.
-            symbols = (*symbols, *self._options.underlyings())
+        # An option contract is watched beside its underlying's own quote.
+        symbols = (*symbols, *self._option_side(lambda lines: lines.underlyings(), ()))
         self._demand = tuple(dict.fromkeys(symbol.upper() for symbol in symbols))
         client, now = self._client(), self._clock()
         if client is None or not client.is_connected():
@@ -207,8 +205,7 @@ class IbkrMarketStatusSource:
             self._connection_changed_at_ms = now
             self._attempts.clear()
             self._retry_at.clear()
-            if self._options is not None:
-                self._options.adopt(client, now, maintained=maintained)
+            self._option_side(lambda lines: lines.adopt(client, now, maintained=maintained))
             if maintained:
                 for subscription in self._subscriptions.values():
                     if subscription.ticker is not None:
@@ -241,13 +238,19 @@ class IbkrMarketStatusSource:
                 subscription = MarketSubscription(symbol, now)
                 self._subscriptions[symbol] = subscription
                 self._pending[symbol] = asyncio.create_task(self._subscribe(subscription, client, generation))
-        if self._options is not None:
-            try:
-                self._options.reconcile(client, now, self._underlying_mid)
-            except Exception:
-                # The option side never takes the stock quotes down with it.
-                logger.exception("The option quote lines failed their pass", extra={"action": "option_lines_pass_failed"})
+        self._option_side(lambda lines: lines.reconcile(client, now, self._underlying_mid))
         return self._snapshot(self._clock(), connected=self._connected())
+
+    def _option_side(self, step: Callable[[OptionQuoteLines], Any], otherwise: Any = None) -> Any:
+        """Run one step of the option lines, when this Clerk has them. A fault there is logged and never
+        takes the stock quotes down with it."""
+        if self._options is None:
+            return otherwise
+        try:
+            return step(self._options)
+        except Exception:
+            logger.exception("The option quote lines failed a step", extra={"action": "option_lines_step_failed"})
+            return otherwise
 
     def underlying_quote(self, symbol: str) -> HeldQuote | None:
         """The underlying's quote as it was received, in the option feed's generation. None while this
@@ -326,8 +329,7 @@ class IbkrMarketStatusSource:
         subscription.request_id = request_id if isinstance(request_id, int) else None
 
     def _on_error(self, req_id: int, code: int, _message: str, _contract: Any) -> None:
-        if self._options is not None:
-            self._options.on_error(req_id, code)
+        self._option_side(lambda lines: lines.on_error(req_id, code))
         if code in REQUEST_FAILURE_CODES:
             for subscription in self._subscriptions.values():
                 if subscription.request_id == req_id:

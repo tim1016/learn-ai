@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -573,6 +573,30 @@ async def test_a_bot_that_only_holds_a_contract_keeps_it_quoted_in_whatever_expi
     assert {listing.contract.expiry_date for listing in lines.chain("SPY").listings} == {scenes._NEXT_FRIDAY}
 
 
+async def test_a_held_contract_is_quoted_while_the_chains_expiries_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A held contract names its own expiry, so its line does not wait for the list of them."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot(held=(_call(570),)))
+    ibkr.client.ib.reqSecDefOptParamsAsync.side_effect = TimeoutError("no answer")
+
+    await _settle(status)
+
+    assert lines.chain("SPY") is None
+    assert ibkr.open_option_lines() == _symbols(570)
+
+
+async def test_a_held_contract_of_a_date_gone_by_has_no_listing_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IBKR lists nothing for a date gone by, so asking would fail for ever. The contract is still said to
+    have no line."""
+    expired = _call(570, scenes._TUESDAY - timedelta(days=1))
+    status, lines, ibkr, _ = _watching(monkeypatch, WatchRequest("SPY", LineClass.CANDIDATE, held=(expired,)), budget=0)
+
+    await _settle(status)
+
+    assert ibkr.client.ib.reqContractDetailsAsync.await_count == 0
+    assert ibkr.open_option_lines() == set()
+    assert dict(lines.line_use().without) == {expired.occ_symbol: NoLine.LISTING_NOT_READ}
+
+
 async def test_no_more_than_twenty_lines_are_asked_for_in_one_pass_the_nearest_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -772,6 +796,27 @@ async def test_a_recovery_that_kept_the_requests_alive_keeps_the_lines_and_nothi
     assert _held(lines, 585) == HeldQuote(QuoteSide(Decimal("4.2"), NOW), None, QuoteDataType.LIVE, before + 1)
 
 
+async def test_ibkrs_model_delta_from_before_a_recovery_is_not_the_lines_after_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The library still holds the model figures it was sent before the data was lost. A callback after the
+    recovery that carries no new ones must not make them this line's."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    name = _call(585).occ_symbol
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.61)
+    ibkr.tick(name, bid=4.10, ask=4.14)
+    before = lines._lines[name].vendor_delta
+
+    ibkr.client.connectivity_lost_count += 1
+    ibkr.client.last_ibkr_code = 1102
+    await _settle(status, passes=1)
+    ibkr.tick(name, sizes=True)
+    old_figures = lines._lines[name].vendor_delta
+    ibkr.lines[name].modelGreeks = OptionComputation(0, delta=0.58)
+    ibkr.tick(name, sizes=True)
+
+    assert (before, old_figures, lines._lines[name].vendor_delta) == (0.61, None, 0.58)
+
+
 async def test_a_line_kept_through_a_recovery_that_gets_no_new_price_is_asked_for_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -811,14 +856,33 @@ async def test_the_underlyings_quote_is_handed_over_only_once_each_side_has_had_
     ibkr.tick("SPY", sizes=True)
     sizes_only = status.underlying_quote("SPY")
     ibkr.tick("SPY", bid=585.20)
+    bid_priced_only = status.underlying_quote("SPY")
     ibkr.now += 300
     ibkr.tick("SPY", ask=585.24)
 
     assert (before.bid.price, before.ask.price) == (Decimal("585.1"), Decimal("585.12"))
     assert sizes_only is None
+    assert bid_priced_only is None
     assert status.underlying_quote("SPY") == HeldQuote(
         QuoteSide(Decimal("585.2"), NOW), QuoteSide(Decimal("585.24"), NOW + 300), QuoteDataType.LIVE, before.generation + 1
     )
+
+
+async def test_an_underlying_that_went_to_delayed_data_and_back_waits_for_live_prices_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The price the library holds after the switch back is a delayed one. A tick of the sizes alone must not
+    hand it over as a live price received now."""
+    status, _, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    ibkr.tick("SPY", bid=585.10, ask=585.12)
+
+    ibkr.lines["SPY"].marketDataType = 3
+    ibkr.tick("SPY", bid=584.00, ask=584.02)
+    ibkr.lines["SPY"].marketDataType = 1
+    ibkr.tick("SPY", sizes=True)
+
+    assert status.underlying_quote("SPY") is None
 
 
 async def test_an_underlying_whose_own_line_ibkr_refused_has_no_quote_to_hand_over(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -841,6 +905,47 @@ async def test_a_fault_on_the_option_side_does_not_stop_the_stock_quotes(monkeyp
 
     assert snapshot.connected
     assert [quote.symbol for quote in snapshot.quotes] == ["SPY"]
+
+
+async def test_when_what_is_wanted_cannot_be_read_the_last_answer_stands_and_the_stock_quotes_go_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Clerk's books are what say which contracts are held. A pass on which they cannot be read must not
+    give a held contract's line up, nor its underlying's, nor fail the pass."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot(held=(_call(570),)))
+    await _settle(status)
+    ibkr.keep_alive()
+    open_before = ibkr.open_option_lines()
+    monkeypatch.setattr(lines, "_requests", Mock(side_effect=RuntimeError("the books cannot be read")))
+
+    snapshot = await status()
+
+    assert snapshot.connected
+    assert [quote.symbol for quote in snapshot.quotes] == ["SPY"]
+    assert (ibkr.open_option_lines(), ibkr.cancelled) == (open_before, [])
+
+
+@pytest.mark.parametrize("step", ["underlyings", "adopt", "release", "on_error"])
+async def test_no_step_of_the_option_side_takes_the_stock_quotes_down(monkeypatch: pytest.MonkeyPatch, step: str) -> None:
+    """A stock bot wants SPY's quote too. Through a reconnect and a refusal, with one step of the option side
+    broken, the stock side still asks for its line again, hands its quote over and hears IBKR refuse it."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
+    monkeypatch.setattr(status, "_symbols", lambda: ("SPY",))
+    await _settle(status)
+    ibkr.tick("SPY", bid=585.10, ask=585.12)
+    monkeypatch.setattr(lines, step, Mock(side_effect=RuntimeError("an option-side bug")))
+
+    ibkr.reconnect()
+    await _settle(status, passes=2)
+    ibkr.tick("SPY", bid=585.10, ask=585.12)
+    snapshot = await status()
+    quoted = status.underlying_quote("SPY")
+    ibkr.refuse(ibkr.lines["SPY"], 354)
+
+    assert snapshot.connected
+    assert [quote.symbol for quote in snapshot.quotes] == ["SPY"]
+    assert quoted is not None
+    assert status.underlying_quote("SPY") is None
 
 
 def test_a_window_that_reaches_a_negative_number_of_strikes_is_refused_when_the_lines_are_built() -> None:
@@ -874,16 +979,114 @@ async def test_a_line_that_never_delivers_is_asked_for_again_and_one_gone_quiet_
     assert _held(lines, 584).bid == QuoteSide(Decimal("1"), NOW)
 
 
+async def test_a_line_that_delivered_one_side_only_is_asked_for_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Half a quote is nothing a rule can use, and IBKR sends a side again only when it changes. Asking again
+    makes it send both."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    half = _call(585).occ_symbol
+    ibkr.keep_alive(but=half)
+    ibkr.tick(half, bid=2.00)
+
+    ibkr.now += SUBSCRIPTION_TIMEOUT_MS + 1
+    ibkr.tick("SPY", bid=585.10, ask=585.12)
+    await _settle(status, passes=1)
+    ibkr.now += 1_000
+    await _settle(status, passes=1)
+
+    assert (ibkr.asked.count(half), ibkr.cancelled) == (2, [half])
+    assert _held(lines, 585) is None
+
+
+async def test_a_line_that_loses_a_side_it_held_is_given_the_wait_again_before_it_is_asked_for_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line open a long while goes to delayed data: nothing it held is of the new kind. The prices of the
+    new kind are on their way, so the line is not given up on the next pass, only once the wait has run out
+    with no whole quote."""
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    switched = _call(585).occ_symbol
+    ibkr.keep_alive()
+    ibkr.now += 10 * SUBSCRIPTION_TIMEOUT_MS
+    ibkr.keep_alive()
+
+    ibkr.lines[switched].marketDataType = 3
+    ibkr.tick(switched, bid=4.00)
+    await _settle(status, passes=1)
+    kept = (ibkr.asked.count(switched), list(ibkr.cancelled), _held(lines, 585).ask)
+    ibkr.now += SUBSCRIPTION_TIMEOUT_MS + 1
+    ibkr.keep_alive(but=switched)
+    await _settle(status, passes=1)
+
+    assert kept == (1, [], None)
+    assert ibkr.cancelled == [switched]
+
+
+async def test_a_line_that_keeps_delivering_half_a_quote_is_asked_for_again_less_and_less_often(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One side alone does not show a line is mended, so the wait before it is asked for again keeps growing:
+    a second after the first time, two after the second."""
+    status, _, ibkr, _ = _watching(monkeypatch, _bot())
+    await _settle(status)
+    half = _call(585).occ_symbol
+    for _ in range(2):
+        ibkr.keep_alive(but=half)
+        ibkr.tick(half, bid=2.00)
+        ibkr.now += SUBSCRIPTION_TIMEOUT_MS + 1
+        ibkr.keep_alive(but=half)
+        await _settle(status, passes=1)
+        ibkr.now += 1_000
+        ibkr.keep_alive(but=half)
+        await _settle(status, passes=1)
+    a_second_after_the_second_time = ibkr.asked.count(half)
+    ibkr.now += 1_000
+    await _settle(status, passes=1)
+
+    assert (a_second_after_the_second_time, ibkr.asked.count(half)) == (2, 3)
+
+
 async def test_a_dropped_connection_gives_every_line_up_and_says_the_feed_is_not_up(monkeypatch: pytest.MonkeyPatch) -> None:
     status, lines, ibkr, _ = _watching(monkeypatch, _bot())
     await _settle(status)
+    ibkr.tick("SPY", bid=585.10, ask=585.12)
+    held_while_up = status.underlying_quote("SPY")
+
+    # The socket drops between two passes: the client says so at once, and nothing is handed over meanwhile.
+    ibkr.client.is_connected.return_value = False
+    ibkr.client.connection_state = "disconnected"
+    unread = status.underlying_quote("SPY")
+    await _settle(status, passes=1)
+
+    assert held_while_up is not None
+    assert status.option_feed().unhealthy is not None
+    assert lines.line_use().open == 0
+    assert unread is None
+    assert status.underlying_quote("SPY") is None
+
+
+async def test_a_listing_still_being_read_is_dropped_with_the_connection_it_was_asked_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status, _, ibkr, _ = _watching(monkeypatch, _bot())
+    outcome: list[str] = []
+
+    async def never_answers(**_: Any) -> list[OptionChain]:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            outcome.append("cancelled")
+            raise
+        return []
+
+    ibkr.client.ib.reqSecDefOptParamsAsync = AsyncMock(side_effect=never_answers)
+    await _settle(status, passes=1)
 
     ibkr.client.is_connected.return_value = False
     await _settle(status, passes=1)
 
-    assert status.option_feed().unhealthy is not None
-    assert lines.line_use().open == 0
-    assert status.underlying_quote("SPY") is None
+    assert outcome == ["cancelled"]
 
 
 # ---- The listing ---------------------------------------------------------------
@@ -982,6 +1185,33 @@ async def test_the_next_days_listing_replaces_the_last_only_when_it_lands(monkey
     assert (expiries.await_count, contracts.await_count) == (3, 3)
     assert (ibkr.open_option_lines(), ibkr.cancelled) == (open_before, [])
     assert len(lines.chain("SPY").listings) == 104
+
+
+async def test_a_held_contract_only_the_new_days_listing_has_gets_its_line_when_that_listing_lands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whether a contract is listed is a fact of the listing in service, asked on every pass. Yesterday's
+    lacks the 611 call; that says nothing once today's has been read."""
+    status, lines, ibkr, wanted = _watching(monkeypatch, _bot())
+    await _settle(status)
+    ibkr.keep_alive()
+    contracts = ibkr.client.ib.reqContractDetailsAsync
+
+    ibkr.now = scenes._at(scenes._WEDNESDAY, 0, 0, 1)
+    ibkr.strikes.append(611)
+    todays = await ibkr._details(ibkr.option("call", 585, FRIDAY))
+    contracts.side_effect = [[], *([todays] * 3)]
+    wanted[0] = _bot(held=(_call(611),))
+    ibkr.keep_alive()
+    await _settle(status, passes=2)
+    off_yesterdays = dict(lines.line_use().without)
+    ibkr.now += 1_000
+    ibkr.keep_alive()
+    await _settle(status)
+
+    assert list(off_yesterdays) == [_call(611).occ_symbol]
+    assert _call(611).occ_symbol in ibkr.open_option_lines()
+    assert dict(lines.line_use().without) == {}
 
 
 async def test_only_the_expiries_a_plan_comes_to_have_their_contracts_read(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -31,10 +31,10 @@ the next reconnect, so the lowest classes give way and a held contract is
 asked for again. The ceiling is tried one line higher once a minute while
 something is waiting for capacity. A line IBKR refuses for another reason
 stays refused until nothing wants it or the connection changes; it is not
-asked for again and again. A line that has not delivered a whole quote within
-the subscription timeout of being opened is asked for again, which makes IBKR
-send its current prices. One that delivered a whole quote and went quiet is
-left alone.
+asked for again and again. A line that has gone the subscription timeout with
+no whole quote, since it was opened or since it last lost a side, is asked for
+again, which makes IBKR send its current prices. One that holds a whole quote
+and went quiet is left alone.
 
 The chain's listing is read once a New York day. A day's read replaces the
 last only when it lands, so the listing in service, and the lines opened from
@@ -60,7 +60,13 @@ from typing import Any
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.market_subscription import REQUEST_FAILURE_CODES, SUBSCRIPTION_TIMEOUT_MS, retry_delay_ms
 from app.broker.ibkr.models import _coerce_optional_float
-from app.broker.ibkr.option_chain import ListedContract, listed_contracts, listed_expiries, occ_root
+from app.broker.ibkr.option_chain import (
+    ListedContract,
+    OptionListingUnavailable,
+    listed_contracts,
+    listed_expiries,
+    occ_root,
+)
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import Chain, WatchedContract
@@ -152,7 +158,8 @@ class OptionLine:
     """One contract's line: mutable ingestion state, written only by its own callback."""
 
     contract: OptionContract
-    opened_at_ms: int
+    # When the line was opened, or last lost a side it held. The wait for a whole quote counts from here.
+    incomplete_since_ms: int
     ticker: Any = None
     callback: Any = None
     request_id: int | None = None
@@ -161,11 +168,13 @@ class OptionLine:
     market_data_type: int | None = None
     # IBKR's own model delta, when it has sent one on this line. Kept beside the quote, never used for a pick.
     vendor_delta: float | None = None
-    # The model figures the library already held for the contract when this line opened: another line's.
+    # The model figures the library already held for the contract when this line began: another line's, or
+    # from before a data loss.
     stale_greeks: Any = None
 
     def ingest(self, ticker: Any, now: int) -> None:
         """Accept one callback. Only the ticks it carries are read, never the library's cache of prices."""
+        whole = self.has_a_whole_quote
         if self.market_data_type != ticker.marketDataType:
             # A quote is of one kind of data. A switch of kind leaves nothing received.
             self.bid = self.ask = None
@@ -179,6 +188,8 @@ class OptionLine:
                 self.bid = _sized(self.bid, tick.size, now)
             elif tick.tickType in _ASK_SIZE_TICKS:
                 self.ask = _sized(self.ask, tick.size, now)
+        if whole and not self.has_a_whole_quote:
+            self.incomplete_since_ms = now
         greeks = getattr(ticker, "modelGreeks", None)
         if greeks is not None and greeks is not self.stale_greeks:
             self.vendor_delta = _coerce_optional_float(greeks.delta)
@@ -277,7 +288,11 @@ class OptionQuoteLines:
 
     def underlyings(self) -> tuple[str, ...]:
         """Read what is wanted now, and return the tickers whose own quotes must be watched for it."""
-        self._wanted = tuple(self._requests())
+        try:
+            self._wanted = tuple(self._requests())
+        except Exception:
+            # What was wanted a moment ago stands: a held contract keeps its line while the asking fails.
+            logger.exception("Could not read what option quotes are wanted", extra={"action": "option_demand_failed"})
         return tuple(dict.fromkeys(request.underlying.upper() for request in self._wanted))
 
     def adopt(self, client: IbkrClient, now: int, *, maintained: bool) -> None:
@@ -471,6 +486,13 @@ class OptionQuoteLines:
             self._read_backoff.succeeded(key)
         except asyncio.CancelledError:
             raise
+        except OptionListingUnavailable as nothing:
+            # An answer IBKR gives, perhaps all day for an expiry it does not list: tried again, with no traceback.
+            self._read_backoff.failed(key, self._clock())
+            logger.warning(
+                "IBKR answered an option listing request with nothing",
+                extra={"action": "option_listing_empty", "symbol": key[0], "expiry": str(key[1]), "detail": str(nothing)},
+            )
         except Exception:
             self._read_backoff.failed(key, self._clock())
             logger.exception(
@@ -499,13 +521,13 @@ class OptionQuoteLines:
     # ---- the lines ------------------------------------------------------------
 
     def _ask_again_for_lines_with_no_quote(self, now: int) -> None:
-        """A line that has not delivered a whole quote within the timeout of being opened is given up, to be
-        asked for again: IBKR answers a new request with its current prices. One that delivered a whole
-        quote and went quiet is left alone. An option can go a long time with nothing new to say, and
-        replacing its line would turn a stale quote, which a search walks past, into one not yet arrived,
-        which stops it."""
+        """A line that has gone the timeout with no whole quote, since it was opened or since it last lost a
+        side, is given up, to be asked for again: IBKR answers a new request with its current prices. One
+        that holds a whole quote and went quiet is left alone. An option can go a long time with nothing new
+        to say, and replacing its line would turn a stale quote, which a search walks past, into one not yet
+        arrived, which stops it."""
         for symbol, line in tuple(self._lines.items()):
-            if not line.has_a_whole_quote and now - line.opened_at_ms > SUBSCRIPTION_TIMEOUT_MS:
+            if not line.has_a_whole_quote and now - line.incomplete_since_ms > SUBSCRIPTION_TIMEOUT_MS:
                 self._drop(symbol)
                 self._line_backoff.failed(symbol, now)
                 logger.warning(
@@ -533,7 +555,8 @@ class OptionQuoteLines:
             if (contract.root, contract.expiry_date) not in read:
                 without[symbol] = str(NoLine.LISTING_NOT_READ)
             elif symbol not in listed:
-                self._refused[symbol] = "IBKR does not list this contract in the underlying's own class"
+                # A fact of the listing in service, so asked again each pass: the next day's read may list it.
+                without[symbol] = "IBKR does not list this contract in the underlying's own class"
             elif asked >= _MAX_OPENS_PER_PASS or not self._line_backoff.may_try(symbol, now):
                 without[symbol] = str(NoLine.WAITING_TO_BE_ASKED_FOR)
             else:
@@ -543,7 +566,7 @@ class OptionQuoteLines:
 
     def _open(self, contract: OptionContract, listed: ListedContract, client: IbkrClient, now: int) -> None:
         ticker = client.ib.reqMktData(copy(listed.ibkr_contract), "", False, False)
-        line = OptionLine(contract, now, ticker=ticker, stale_greeks=getattr(ticker, "modelGreeks", None))
+        line = OptionLine(contract, now, ticker=ticker)
         self._lines[contract.occ_symbol] = line
         self._attach(line, client)
 
@@ -562,6 +585,7 @@ class OptionQuoteLines:
                 self._line_backoff.succeeded(symbol)
 
         line.callback = receive
+        line.stale_greeks = getattr(line.ticker, "modelGreeks", None)
         line.ticker.updateEvent += receive
         line.request_id = self._request_id(client, line)
 
