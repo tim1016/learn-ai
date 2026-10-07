@@ -34,15 +34,21 @@ Validated against: tests/options/test_event_allocation.py, which holds the
 
 What is Alpaca's documented behaviour, and what is not:
 
-- **Documented:** the option position is removed with no cash of its own (the
-  event's ``net_amount`` is "0"), and the shares trade at the strike, 100 a
-  contract in every example. So the lot closes at a price of zero. The
-  premium paid or received when it opened stays in the lot's cost; nothing
-  here moves it into the shares' cost.
-- **The contract's standard meaning, not a page:** that a contract moves
-  ``m`` shares, for a multiplier other than 100. The multiplier here is both
-  the shares a contract delivers and what its strike is multiplied by. That
+- **Documented for the Trading API, which this repo trades through:** an
+  exercised call buys the shares at the strike, an assigned call sells them,
+  and an option that expires is removed and nothing more. The event's own
+  ``net_amount`` is "0" and the shares are 100 a contract in every example.
+- **Documented only for the Broker API, another product:** that an exercised
+  put sells the shares and an assigned put buys them. It is also what a put
+  means, and it is used here on that footing.
+- **The contract's standard meaning, on no page:** that a contract moves
+  ``m`` shares when its multiplier is not 100. The multiplier here is both
+  the shares a contract delivers and what its strike is multiplied by, which
   is true of a standard contract, the only kind a bot trades.
+- **This repo's bookkeeping (ADR 0076):** the lot closes at a price of zero,
+  so the premium paid or received when it opened stays in the lot's cost and
+  is not moved into the shares' cost. Alpaca's zero net amount on the event
+  is consistent with that and does not prescribe it.
 - **This repo's rule (#2913):** the oldest lot is taken first when more than
   one holds the contract, and a lot opened on a later New York date than the
   event is passed over, because it did not exist when the event happened.
@@ -51,7 +57,9 @@ What is Alpaca's documented behaviour, and what is not:
 Shares sold are sold whether or not the owner held them. A call assigned to
 a bot with no shares leaves that bot short the stock, and its books must show
 the short position: ``share_quantity_change`` is negative and nothing here
-nets it against anything.
+nets it against anything. No page read says what Alpaca itself then does
+with such an account; that the shares are sold at the strike is the
+contract's meaning.
 
 Every figure is a whole number of contracts, shares or cents, and no step
 rounds. Cash that does not come to whole cents is refused.

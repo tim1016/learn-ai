@@ -16,6 +16,7 @@ from app.broker.contract.option_events import (
     BrokerOptionShareTradeActivity,
     OptionActivityStatus,
     allocation_of,
+    in_allocation_order,
     share_trade_disagreements,
 )
 from app.options.contract import OptionContract
@@ -124,6 +125,17 @@ def test_an_expiry_may_end_a_bought_position_or_a_sold_one(position_change: int)
     assert event.contracts == 2
 
 
+@pytest.mark.parametrize("net_amount", [Decimal("-450"), Decimal("0.01")])
+def test_an_event_that_states_cash_of_its_own_is_not_one_the_books_can_follow(net_amount: Decimal) -> None:
+    with pytest.raises(ValidationError, match="moves no cash of its own"):
+        _event(net_amount=net_amount)
+
+
+@pytest.mark.parametrize("net_amount", [None, Decimal("0"), Decimal("0.00")])
+def test_an_event_states_no_cash_or_none_at_all(net_amount: Decimal | None) -> None:
+    assert _event(net_amount=net_amount).net_amount == net_amount
+
+
 @pytest.mark.parametrize("changes", [{"shares": 0}, {"price": Decimal("0")}, {"price": Decimal("-4.5")}])
 def test_a_share_trade_is_for_some_shares_at_a_price_above_zero(changes: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
@@ -144,6 +156,7 @@ def _unreadable() -> BrokerOptionActivityUnreadable:
         activity_id="20240301000000000::4bd8c683-0b2c-489f-9df9-1243ff621648",
         activity_type="OPEXP",
         activity_date_ms=et_midnight_ms(_ASSIGNED_ON),
+        symbol="QS240301P00000500",
         reason="Alpaca field 'qty' must be a whole number other than zero; got '-0.5'",
     )
 
@@ -265,7 +278,75 @@ def test_cash_that_differs_far_below_a_cent_is_still_a_difference() -> None:
     assert len(share_trade_disagreements(_expected(), _share_trade(net_amount=a_hair_over))) == 1
 
 
+@pytest.mark.parametrize("status", [OptionActivityStatus.CORRECT, OptionActivityStatus.CANCELED])
+def test_a_share_trade_the_broker_does_not_report_as_executed_agrees_with_nothing(
+    status: OptionActivityStatus,
+) -> None:
+    assert share_trade_disagreements(_expected(), _share_trade(status=status)) == (
+        f"the broker reports the share trade as {status.value}, not executed",
+    )
+
+
 def test_several_differences_are_all_named() -> None:
     differences = share_trade_disagreements(_expected(), _share_trade(shares=-200, net_amount=Decimal("900")))
 
     assert len(differences) == 2
+
+
+# ── The order events are matched in ─────────────────────────────────────────
+
+
+def _on(day: date, kind: OptionEventKind, activity_id: str) -> BrokerOptionEventActivity:
+    code = {"assigned": "OPASN", "exercised": "OPEXC", "expired": "OPEXP"}[kind.value]
+    return _event(
+        kind=kind,
+        activity_type=code,
+        activity_id=activity_id,
+        activity_date_ms=et_midnight_ms(day),
+        position_change=1 if kind is OptionEventKind.ASSIGNED else -1,
+    )
+
+
+def test_events_are_matched_oldest_date_first_though_they_are_read_newest_first() -> None:
+    friday = _on(date(2024, 3, 1), OptionEventKind.EXPIRED, "c")
+    tuesday = _on(date(2024, 2, 27), OptionEventKind.EXERCISED, "b")
+    monday = _on(date(2024, 2, 26), OptionEventKind.ASSIGNED, "a")
+
+    assert in_allocation_order([friday, tuesday, monday]) == (monday, tuesday, friday)
+
+
+def test_on_one_date_an_expiry_is_matched_after_the_assignments_and_exercises() -> None:
+    """What expires is what is left: the oldest sold lot is the one assigned, not the one that lapsed."""
+    expiry = _on(date(2024, 3, 1), OptionEventKind.EXPIRED, "a-first-by-id")
+    assignment = _on(date(2024, 3, 1), OptionEventKind.ASSIGNED, "z-last-by-id")
+    exercise = _on(date(2024, 3, 1), OptionEventKind.EXERCISED, "m")
+
+    assert in_allocation_order([expiry, assignment, exercise]) == (exercise, assignment, expiry)
+
+
+def test_the_order_does_not_depend_on_how_the_rows_arrived() -> None:
+    events = [_on(date(2024, 3, 1), OptionEventKind.ASSIGNED, activity_id) for activity_id in ("b", "c", "a")]
+
+    assert [event.activity_id for event in in_allocation_order(events)] == ["a", "b", "c"]
+    assert in_allocation_order(reversed(events)) == in_allocation_order(events)
+
+
+def test_an_assignment_and_an_expiry_on_one_date_take_the_lots_the_order_gives_them() -> None:
+    """Bot A sold first. One of three is assigned and two expire: A is the one assigned."""
+    lots = [
+        _sold("bot-a", 1, opened=date(2024, 2, 26), sequence=5),
+        _sold("bot-b", 2, opened=date(2024, 2, 28), sequence=8),
+    ]
+    expiry = _event(
+        kind=OptionEventKind.EXPIRED, activity_type="OPEXP", activity_id="a-first-by-id", position_change=2
+    )
+    assignment = _event(activity_id="z-last-by-id", position_change=1)
+
+    first, second = in_allocation_order([expiry, assignment])
+    assigned = allocation_of(first, multiplier=100, lots=lots)
+    # The books then hold only what the assignment left.
+    expired = allocation_of(second, multiplier=100, lots=lots[1:])
+
+    assert first is assignment
+    assert [(lot.owner, lot.contracts, lot.share_quantity_change) for lot in assigned.lots] == [("bot-a", 1, -100)]
+    assert [(lot.owner, lot.contracts, lot.share_quantity_change) for lot in expired.lots] == [("bot-b", 2, 0)]

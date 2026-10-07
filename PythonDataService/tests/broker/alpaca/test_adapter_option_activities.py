@@ -287,6 +287,7 @@ _UNREADABLE_EVENTS: dict[str, dict[str, Any]] = {
     "a quantity that is not finite": {"qty": "-Infinity"},
     "an exercise that adds contracts": {"qty": "2"},
     "cash that is not a number": {"net_amount": "none"},
+    "cash of its own": {"net_amount": "-30000"},
     "another currency": {"currency": "EUR"},
     "a group id that is not text": {"group_id": 7},
     "a creation time that is not one": {"created_at": "yesterday"},
@@ -523,9 +524,18 @@ async def test_a_row_that_cannot_be_read_whole_is_listed_as_unreadable_and_the_r
     assert unreadable.activity_id == damaged["id"]
     assert unreadable.activity_type == "OPEXP"
     assert unreadable.activity_date_ms == _FRIDAY
+    # The symbol is the row's own text, unparsed.
+    assert unreadable.symbol == "QS240301P00000500"
     assert "'qty' must be a whole number other than zero" in unreadable.reason
-    # It carries nothing of what happened: no contract, no count, no cash.
-    assert set(unreadable.model_dump()) == {"broker", "activity_id", "activity_type", "activity_date_ms", "reason"}
+    # It carries nothing of what happened: no count, no cash, no parsed contract.
+    assert set(unreadable.model_dump()) == {
+        "broker",
+        "activity_id",
+        "activity_type",
+        "activity_date_ms",
+        "symbol",
+        "reason",
+    }
     # The page was short, so the walk is complete; the read is still not whole.
     assert evidence.history_complete is True
     assert evidence.read_whole is False
@@ -560,6 +570,7 @@ async def test_an_option_activity_of_a_kind_this_app_does_not_read_is_listed_and
     assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
     (unreadable,) = evidence.unreadable
     assert (unreadable.activity_id, unreadable.activity_type) == (corporate_action["id"], code)
+    assert unreadable.symbol == "FIZZ"
     assert unreadable.reason == f"Alpaca activity type '{code}' is an option activity this app does not read"
     assert evidence.read_whole is False
 

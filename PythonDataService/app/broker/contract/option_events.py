@@ -23,7 +23,7 @@ session time exists for it, and 16:00 is an expiry's anchor alone.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
@@ -95,7 +95,8 @@ class BrokerOptionEventActivity(_OptionActivityModel):
     # as the broker signs it: negative takes from a bought position, positive
     # from a sold one. Never zero.
     position_change: int
-    # Dollars, exact as the broker wrote them. ``None`` when the row carries none.
+    # Dollars the event itself moved, exact as the broker wrote them: zero, or
+    # ``None`` when the row carries none. The cash is the share trade's.
     net_amount: Decimal | None
     # The broker's link between sibling activities. ``None`` when the row carries none.
     group_id: str | None
@@ -113,6 +114,10 @@ class BrokerOptionEventActivity(_OptionActivityModel):
             raise ValueError(f"an exercise takes from a bought position; this one adds {self.position_change}")
         if self.kind is OptionEventKind.ASSIGNED and self.position_change < 0:
             raise ValueError(f"an assignment takes from a sold position; this one adds {-self.position_change}")
+        # The books move no cash for the event itself. One that states some is
+        # settled in a way they do not follow, and would leave them out by it.
+        if self.net_amount is not None and self.net_amount != 0:
+            raise ValueError(f"an option event moves no cash of its own; this one states {self.net_amount}")
         return self
 
     @property
@@ -174,6 +179,9 @@ class BrokerOptionActivityUnreadable(_OptionActivityModel):
     activity_type: str = Field(min_length=1)
     # ``None`` when the row's date is what could not be read.
     activity_date_ms: ActivityDateMs | None
+    # The symbol on the row, as the broker wrote it and unparsed: a contract's,
+    # an underlying's, or one this app cannot name. ``None`` when it has none.
+    symbol: str | None
     # What could not be read, in plain words.
     reason: str = Field(min_length=1)
 
@@ -197,6 +205,24 @@ class BrokerOptionEventEvidence(_OptionActivityModel):
     def read_whole(self) -> bool:
         """Whether every option activity in the window is in hand and was read."""
         return self.history_complete and not self.unreadable
+
+
+def in_allocation_order(events: Iterable[BrokerOptionEventActivity]) -> tuple[BrokerOptionEventActivity, ...]:
+    """Events in the order they are matched to lots: the oldest date first, and on one date an expiry last.
+
+    A read returns the newest first, and lots are taken oldest first, so an
+    older event must take its lots before a newer one does. On one date an
+    expiry is what is left once that day's assignments and exercises are
+    done, so it comes after them: which bot's lot was assigned must not turn
+    on which row was matched first. The id settles any other tie, so the
+    order never depends on how the rows arrived.
+    """
+    return tuple(
+        sorted(
+            events,
+            key=lambda event: (event.activity_date_ms, event.kind is OptionEventKind.EXPIRED, event.activity_id),
+        )
+    )
 
 
 def allocation_of(
@@ -231,9 +257,12 @@ def share_trade_disagreements(expected: ShareTrade, reported: BrokerOptionShareT
 
     ``expected`` is ``expected_share_trade`` of the event. The underlying is
     compared with the contract's root as written, so a share-class ticker,
-    whose root drops the dot, reads as a difference.
+    whose root drops the dot, reads as a difference. A share trade the broker
+    does not report as executed agrees with nothing.
     """
     differences: list[str] = []
+    if reported.status is not OptionActivityStatus.EXECUTED:
+        differences.append(f"the broker reports the share trade as {reported.status.value}, not executed")
     if reported.underlying_symbol != expected.root:
         differences.append(f"the shares are in {reported.underlying_symbol}, and the contract's root is {expected.root}")
     if reported.shares != expected.shares:

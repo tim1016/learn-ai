@@ -258,6 +258,7 @@ def _read_option_activity(
             activity_date_ms=(
                 None if row.occurred_at_ms is None else et_midnight_ms(et_date_at_ms(row.occurred_at_ms))
             ),
+            symbol=row.symbol,
             reason=_why_unreadable(exc),
         )
 
