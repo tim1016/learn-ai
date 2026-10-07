@@ -99,8 +99,8 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
         conn, symbol=facts.symbol, side=facts.side, broker_order_id=facts.broker_order_id
     ):
         # ADR 0076 decision 22: an order in an option contract a bot holds, on the side that
-        # reduces it, is held against that bot. The account-wide hold refuses reductions,
-        # and the bot must stay able to close its own position beside it.
+        # reduces it, stands against that bot and that contract alone. The row written above is
+        # what the bot's own reductions ask, from this transition on.
         return
     active = reads.active_hold(
         conn, scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE

@@ -50,6 +50,19 @@ read still has its cause. It ends when a whole read no longer has it, or
 when the owner acknowledges it (:func:`acknowledge_option_event_hold`). A
 read that failed or was not whole ends no hold and is never read as "nothing
 happened".
+
+**An order the Clerk did not place, in a contract a bot holds.** It stands
+against that bot and that contract alone. While it is unsettled (working, or
+filled and not yet booked) no order of the bot's own to reduce that contract
+is sent: it would be a second order on the same contracts. That is asked of
+the books' record of the order where every reduction is admitted
+(``uncertainty.decide_capability``), not of a hold. The owner's review of
+the order releases it.
+
+**A row read after the owner wrote its position off** closes nothing: the
+write-off closed no lot and the bot is offered none. An expiry's row then
+confirms the write-off and holds nobody. An exercise's or an assignment's
+row holds that bot by name for the shares on no bot's books.
 """
 
 from __future__ import annotations
@@ -83,13 +96,22 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
 from app.broker.alpaca.clerk.sqlite.option_event_books import (
     EVENT_KEY_PREFIX,
+    OPTION_EVENT_HOLD_ACKNOWLEDGED,
     OUTSIDE_ORDER_BROKER,
     SALE_KEY_PREFIX,
+    OutsideFillUnknown,
+    acknowledged_hold_items,
     booking_key,
     bookings,
     books_record_no_contract,
     held_option_positions,
+    hold_item_ack_ref,
+    outside_fill,
+    outside_order_hold_ref,
     outside_order_reduces_a_bots_contract,
+    outside_orders_in,
+    unsettled_outside_order,
+    written_off_contracts,
 )
 from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OPTION_ENDING_SUMMARY_CODES,
@@ -99,7 +121,6 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OptionEnding,
     OptionPositionEndedFacts,
 )
-from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -163,9 +184,7 @@ MAX_OPTION_EVENT_PAGES = 50
 
 # The owner of the lot that stands for outside orders in a contract. It is no bot and no custody subject.
 OUTSIDE_THE_BOOKS = "outside-the-books"
-OPTION_EVENT_HOLD_ACKNOWLEDGED = "OPTION_EVENT_HOLD_ACKNOWLEDGED"
 _ACK_OPERATOR_REF_PREFIX = "operator:"
-_ACK_ITEM_REF_PREFIX = "item:"
 _BOUGHT, _SOLD = "bought", "sold"
 _ENDINGS: dict[OptionEventKind, OptionEnding] = {
     OptionEventKind.EXPIRED: OptionEnding.EXPIRED,
@@ -268,6 +287,10 @@ _HOLD_COPY: dict[str, tuple[str, str]] = {
 }
 _NEXT_STEPS: dict[str, str] = {
     OPTION_SHARES_HELD_REASON_CODE: "Stop the bot and flatten it to close the shares.",
+    OPTION_ORDER_NOT_OURS_REASON_CODE: (
+        "Nothing to do while the order works: once it has ended, what it filled is booked against this bot. "
+        "If the order is your own, cancel it at the broker, or mark it reviewed and the bot's own orders go on."
+    ),
     OPTION_EVENTS_NOT_READ_REASON_CODE: "Nothing to do: the Clerk reads them once more within a minute.",
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
         "Nothing to send. It is settled when the broker's activity for it is read, or, in a simulation, when a "
@@ -276,6 +299,11 @@ _NEXT_STEPS: dict[str, str] = {
 }
 # What a hold means for the bot, where the family's own sentence would not be true.
 _OPERATOR_IMPACTS: dict[str, str] = {
+    OPTION_ORDER_NOT_OURS_REASON_CODE: (
+        "This bot takes no new entries, and no order of its own to close that contract is sent until the order "
+        "is settled or reviewed: it would be a second order on the same contracts. Its other reductions stay "
+        "available."
+    ),
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: "This bot takes no new entries. No order can close an expired contract.",
 }
 _DEFAULT_NEXT_STEP = "Compare this bot's positions with the broker's, then acknowledge the notice."
@@ -481,47 +509,20 @@ def _bot_books(conn: sqlite3.Connection, account_id: str, contract: OptionContra
     return {sid: _bot_book(conn, sid, contract, records) for sid, records in by_bot.items()}
 
 
-def _outside_orders(conn: sqlite3.Connection, symbol: str) -> list[ExternalOrderResource]:
-    """The outside orders the books recorded in one contract, oldest first."""
-    rows = conn.execute(
-        "SELECT broker_order_id FROM external_orders WHERE UPPER(symbol) = ? ORDER BY observed_at_ms, broker_order_id",
-        (symbol,),
-    ).fetchall()
-    orders = [reads.external_order_by_broker_order_id(conn, row["broker_order_id"]) for row in rows]
-    return [order for order in orders if order is not None]
-
-
-class _OutsideHoldingUnknown(Exception):
-    """An outside order in the contract does not state what it filled, so what is held outside is not known."""
-
-
-def _signed_fill(order: ExternalOrderResource) -> int:
-    """Whole contracts an outside order filled, signed as it changed the account's position."""
-    filled = order.filled_quantity
-    if filled is None:
-        if order.filled_avg_price is None and (order.broker_state or "").lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
-            # Ended with no fill price: nothing filled.
-            return 0
-        raise _OutsideHoldingUnknown(order.broker_order_id)
-    if not float(filled).is_integer():
-        raise _OutsideHoldingUnknown(order.broker_order_id)
-    return int(filled) if order.side == "BUY" else -int(filled)
-
-
 def _outside_lot(
     conn: sqlite3.Connection, contract: OptionContract, *, leaving_out: frozenset[str] = frozenset()
 ) -> HeldOptionLot | None:
     """One lot for what outside orders hold of ``contract``, or None when they hold nothing.
 
     Orders already booked against a bot as a sale are left out: they closed a
-    bot's lot, not an outside one. Raises ``_OutsideHoldingUnknown`` when an
+    bot's lot, not an outside one. Raises ``OutsideFillUnknown`` when an
     order does not state what it filled.
     """
     held, opened_at_ms, sequence = 0, None, None
-    for order in _outside_orders(conn, contract.occ_symbol):
+    for order in outside_orders_in(conn, contract.occ_symbol):
         if order.broker_order_id in leaving_out or bookings(conn, booking_key(SALE_KEY_PREFIX, OUTSIDE_ORDER_BROKER, order.broker_order_id)):
             continue
-        signed = _signed_fill(order)
+        signed = outside_fill(order)
         if signed and opened_at_ms is None:
             opened_at_ms = order.observation_recorded_at_ms or order.observed_at_ms
             sequence = order.observation_sequence or 0
@@ -553,24 +554,6 @@ class _Holds:
 
     def items(self) -> Mapping[tuple[str | None, str], list[OptionEventHoldItem]]:
         return self._found
-
-
-def _acknowledged(conn: sqlite3.Connection) -> frozenset[str]:
-    """Every (bot, reason, thing) the owner has acknowledged, as the references the acknowledgements carry."""
-    rows = conn.execute(
-        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RESOLVED' AND summary_code = ?",
-        (OPTION_EVENT_HOLD_ACKNOWLEDGED,),
-    ).fetchall()
-    return frozenset(
-        ref
-        for row in rows
-        for ref in json.loads(row["facts_json"])["evidence_refs"]
-        if ref.startswith(_ACK_ITEM_REF_PREFIX)
-    )
-
-
-def _ack_ref(sid: str | None, reason_code: str, item_ref: str) -> str:
-    return f"{_ACK_ITEM_REF_PREFIX}{sid or '-'}:{reason_code}:{item_ref}"
 
 
 def _raise_hold(repo: ClerkSqliteRepository, sid: str | None, reason_code: str, items: Sequence[OptionEventHoldItem]) -> None:
@@ -646,7 +629,7 @@ def acknowledge_option_event_hold(
             summary_code=OPTION_EVENT_HOLD_ACKNOWLEDGED,
             evidence_refs=(
                 f"{_ACK_OPERATOR_REF_PREFIX}{operator.strip()}",
-                *(_ack_ref(strategy_instance_id, reason_code, item.ref) for item in cause.items),
+                *(hold_item_ack_ref(strategy_instance_id, reason_code, item.ref) for item in cause.items),
             ),
         )
 
@@ -655,12 +638,12 @@ def _sync_holds(
     repo: ClerkSqliteRepository, conn: sqlite3.Connection, holds: _Holds, *, codes: Sequence[str], may_end: bool
 ) -> list[tuple[str | None, str]]:
     """Raise each hold found, and end each open one of ``codes`` that was not, when this run may."""
-    acknowledged = _acknowledged(conn)
+    acknowledged = acknowledged_hold_items(conn)
     wanted: dict[tuple[str | None, str], list[OptionEventHoldItem]] = {}
     for (sid, reason_code), items in holds.items().items():
         if reason_code not in codes:
             continue
-        standing = [item for item in items if _ack_ref(sid, reason_code, item.ref) not in acknowledged]
+        standing = [item for item in items if hold_item_ack_ref(sid, reason_code, item.ref) not in acknowledged]
         if standing:
             wanted[(sid, reason_code)] = standing
     for hold in _active_holds(conn):
@@ -828,6 +811,26 @@ def _bots_a_row_names(conn: sqlite3.Connection, symbol: str | None) -> list[str]
     return _holders(conn, symbol.upper()) or _holders_under(conn, symbol.upper())
 
 
+def _bots_that_wrote_it_off(
+    conn: sqlite3.Connection, books: Mapping[str, _BotBook], event: BrokerOptionEventActivity
+) -> tuple[str, ...]:
+    """The bots whose written-off position in the event's contract accounts for the whole event, or none.
+
+    An exercise ends a bought position and an assignment a sold one. An
+    expiry ends either. A write-off took the position off the books and
+    closed no lot, so the event has no lot to take: booking it would count
+    the same contracts a second time.
+    """
+    sides = {OptionEventKind.EXERCISED: (_BOUGHT,), OptionEventKind.ASSIGNED: (_SOLD,)}.get(event.kind, (_BOUGHT, _SOLD))
+    wrote_off = {
+        sid: abs(contracts)
+        for sid in books
+        if (contracts := written_off_contracts(conn, sid, event.contract.occ_symbol))
+        and (_BOUGHT if contracts > 0 else _SOLD) in sides
+    }
+    return tuple(sorted(wrote_off)) if sum(wrote_off.values()) >= abs(event.position_change) else ()
+
+
 def _pair_share_trades(
     events: Sequence[BrokerOptionEventActivity],
     share_trades: Sequence[BrokerOptionShareTradeActivity],
@@ -926,7 +929,7 @@ def _book_events(
             if taken_outside:
                 try:
                     whole = _outside_lot(conn, contract)
-                except _OutsideHoldingUnknown:
+                except OutsideFillUnknown:
                     whole = None
                 if whole is not None:
                     outside_left[symbol] = outside_left.get(symbol, whole.quantity) + taken_outside
@@ -934,7 +937,7 @@ def _book_events(
             terms = contract_terms(conn, symbol)
             try:
                 outside = _outside_lot(conn, contract)
-            except _OutsideHoldingUnknown:
+            except OutsideFillUnknown:
                 # Whose lot the event took is not known while an outside order in the contract does not
                 # state what it filled. The bots holding it are held for that order by name.
                 continue
@@ -951,7 +954,29 @@ def _book_events(
             try:
                 allocation = allocation_of(event, multiplier=100 if terms is None else terms.multiplier, lots=lots)
             except OptionEventRefused as refused:
-                hold(refused.reason.value, _holders(conn, symbol), str(refused))
+                wrote_off = (
+                    _bots_that_wrote_it_off(conn, books, event)
+                    if refused.reason is OptionEventRefusal.CONTRACT_NOT_HELD
+                    else ()
+                )
+                if wrote_off and event.kind is OptionEventKind.EXPIRED:
+                    # The owner took the position off the books before the row came. The row moves
+                    # nothing more, so nothing is booked and nobody is held.
+                    logger.info(
+                        "an option expiry was read for a position already written off; nothing is booked",
+                        extra={
+                            "action": "option_event_already_written_off", "account_id": account_id,
+                            "symbol": symbol, "activity_id": event.activity_id, "bots": list(wrote_off),
+                        },
+                    )
+                elif wrote_off:
+                    hold(
+                        OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, wrote_off,
+                        f"The position in {symbol} was written off before this row was read. The row says it was "
+                        f"{event.kind.value}: the shares and the cash that moved are on no bot's books.",
+                    )
+                else:
+                    hold(refused.reason.value, _holders(conn, symbol), str(refused))
                 continue
             taken_by_bot = [lot for lot in allocation.lots if lot.owner != OUTSIDE_THE_BOOKS]
             owners = sorted({lot.owner for lot in taken_by_bot})
@@ -1179,7 +1204,9 @@ def _book_outside_orders(
     is booked against the oldest lots at the broker's average price. It is
     not booked while another outside order may hold the same contract, when
     it filled more than the bots hold, or when it states no fill or no
-    price: the hold then says which.
+    price: the hold then says which. Which orders these are is
+    ``unsettled_outside_order``'s to say, and every check of a bot's own
+    order reads the same answer (``outside_order_in_the_way``).
     """
     booked: list[tuple[str, OptionPositionEndedFacts]] = []
     rows = conn.execute(
@@ -1188,45 +1215,36 @@ def _book_outside_orders(
     ).fetchall()
     for row in rows:
         order = reads.external_order_by_broker_order_id(conn, row["broker_order_id"])
-        if order is None:
+        # An order that adds to what is held outside the books asks nothing here: it is offered
+        # to an event as an outside lot.
+        unsettled = None if order is None else unsettled_outside_order(conn, order)
+        if order is None or unsettled is None:
             continue
         symbol = order.symbol.upper()
         key = booking_key(SALE_KEY_PREFIX, OUTSIDE_ORDER_BROKER, order.broker_order_id)
-        held_by = {sid: quantity for sid, held_symbol, quantity in held_option_positions(conn) if held_symbol == symbol}
-        if not held_by or bookings(conn, key):
-            continue
-        ref = f"outside-order:{order.broker_order_id}"
+        ref = outside_order_hold_ref(order.broker_order_id)
         named = f"Order {order.broker_order_id} to {order.side.lower()} {order.qty:g} of {symbol}"
-        try:
-            filled = abs(_signed_fill(order))
-        except _OutsideHoldingUnknown:
-            holds.add(
-                OPTION_ORDER_NOT_OURS_REASON_CODE, sorted(held_by), ref=ref, symbol=symbol, date_ms=None,
-                detail=f"{named} does not state what it filled.",
-            )
-            continue
         reduces = _BOUGHT if order.side == "SELL" else _SOLD
-        holders = sorted(sid for sid, quantity in held_by.items() if (quantity > 0) == (reduces == _BOUGHT))
-        if not holders:
-            # It adds to what is held outside the books, and is offered to an event as an outside lot.
-            continue
 
-        def hold(detail: str, *, _ref: str = ref, _symbol: str = symbol, _bots: Sequence[str] = tuple(holders)) -> None:
-            holds.add(OPTION_ORDER_NOT_OURS_REASON_CODE, _bots, ref=_ref, symbol=_symbol, date_ms=None, detail=detail)
+        def hold(
+            detail: str, *, _order: ExternalOrderResource = order, _ref: str = ref, _symbol: str = symbol,
+            _bots: Sequence[str] = unsettled.against,
+        ) -> None:
+            # An order the owner has reviewed is held for no more. What it filled is still booked.
+            if _order.acknowledged_at_ms is None:
+                holds.add(OPTION_ORDER_NOT_OURS_REASON_CODE, _bots, ref=_ref, symbol=_symbol, date_ms=None, detail=detail)
 
-        state = (order.broker_state or "").lower()
-        if state not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
-            hold(f"{named} is {state or 'in a state the broker did not give'}.")
+        if unsettled.filled is None or not unsettled.ended:
+            hold(unsettled.sentence)
             continue
-        if not filled:
-            continue
+        filled = unsettled.filled
         if order.filled_avg_price is None or order.filled_avg_price <= 0:
             hold(f"{named} filled {filled} and states no price for it.")
             continue
         contract = OptionContract.from_occ_symbol(symbol)
         try:
             outside = _outside_lot(conn, contract, leaving_out=frozenset({order.broker_order_id}))
-        except _OutsideHoldingUnknown:
+        except OutsideFillUnknown:
             # The order that does not state its fill is held for by name, above.
             continue
         if outside is not None and (outside.quantity > 0) == (reduces == _BOUGHT):

@@ -7,11 +7,14 @@ it a question. Everything here reads the books and writes nothing.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
+from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OPTION_EVENT_EFFECT_KIND,
     OPTION_EVENT_SHARE_ORDER_ROLE,
@@ -19,6 +22,8 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OptionEnding,
     OptionPositionEndedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_ORDER_NOT_OURS_REASON_CODE
 
 # The idempotency key of a booking starts with what was booked: an activity, or an outside order's fill.
 EVENT_KEY_PREFIX = "option-event:"
@@ -76,9 +81,9 @@ def outside_order_reduces_a_bots_contract(conn: sqlite3.Connection, *, symbol: s
     """Whether an outside order is one the books tie to a bot: in a recorded contract a bot holds, on the reducing side.
 
     Such an order is held against that bot and never against the account:
-    the account-wide hold refuses reductions, and a bot must stay able to
-    close its own position beside an order the broker placed. An order
-    already booked against a bot as a sale stays tied to it.
+    the account-wide hold refuses every reduction of every bot, for one
+    bot's one contract. An order already booked against a bot as a sale
+    stays tied to it.
     """
     contract_symbol = symbol.upper()
     if books_record_no_contract(conn) or contract_terms(conn, contract_symbol) is None:
@@ -89,6 +94,179 @@ def outside_order_reduces_a_bots_contract(conn: sqlite3.Connection, *, symbol: s
         held_symbol == contract_symbol and (quantity > 0) == (side.upper() == "SELL")
         for _sid, held_symbol, quantity in held_option_positions(conn)
     )
+
+
+# ── What the owner has acknowledged ──────────────────────────────────────────
+
+# The summary code of the resolution an owner's acknowledgement of an option-event hold writes.
+OPTION_EVENT_HOLD_ACKNOWLEDGED = "OPTION_EVENT_HOLD_ACKNOWLEDGED"
+ACK_ITEM_REF_PREFIX = "item:"
+
+
+def hold_item_ack_ref(strategy_instance_id: str | None, reason_code: str, item_ref: str) -> str:
+    """The reference an acknowledgement carries for one thing one hold named."""
+    return f"{ACK_ITEM_REF_PREFIX}{strategy_instance_id or '-'}:{reason_code}:{item_ref}"
+
+
+def acknowledged_hold_items(conn: sqlite3.Connection) -> frozenset[str]:
+    """Every (bot, reason, thing) the owner has acknowledged, as the references the acknowledgements carry."""
+    rows = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RESOLVED' AND summary_code = ?",
+        (OPTION_EVENT_HOLD_ACKNOWLEDGED,),
+    ).fetchall()
+    return frozenset(
+        ref
+        for row in rows
+        for ref in json.loads(row["facts_json"])["evidence_refs"]
+        if ref.startswith(ACK_ITEM_REF_PREFIX)
+    )
+
+
+# ── Orders the Clerk did not place, in a contract a bot holds ────────────────
+
+
+class OutsideFillUnknown(Exception):
+    """An outside order does not state what it filled."""
+
+
+def outside_orders_in(conn: sqlite3.Connection, symbol: str) -> list[ExternalOrderResource]:
+    """The outside orders the books recorded in one contract, oldest first."""
+    rows = conn.execute(
+        "SELECT broker_order_id FROM external_orders WHERE UPPER(symbol) = ? ORDER BY observed_at_ms, broker_order_id",
+        (symbol,),
+    ).fetchall()
+    orders = [reads.external_order_by_broker_order_id(conn, row["broker_order_id"]) for row in rows]
+    return [order for order in orders if order is not None]
+
+
+def outside_fill(order: ExternalOrderResource) -> int:
+    """Whole contracts an outside order filled, signed as it changed the account's position."""
+    filled = order.filled_quantity
+    if filled is None:
+        if order.filled_avg_price is None and (order.broker_state or "").lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
+            # Ended with no fill price: nothing filled.
+            return 0
+        raise OutsideFillUnknown(order.broker_order_id)
+    if not float(filled).is_integer():
+        raise OutsideFillUnknown(order.broker_order_id)
+    return int(filled) if order.side == "BUY" else -int(filled)
+
+
+def outside_order_hold_ref(broker_order_id: str) -> str:
+    """How a hold names one outside order."""
+    return f"outside-order:{broker_order_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class UnsettledOutsideOrder:
+    """An outside order in a recorded contract that the books have not settled, and the bots it stands against."""
+
+    order: ExternalOrderResource
+    # Whole contracts it filled. None when the order does not state it.
+    filled: int | None
+    # Whether the broker's last word on the order is that it has ended.
+    ended: bool
+    # The bots that hold the contract on the side the order reduces. Every holder when its fill is not stated.
+    against: tuple[str, ...]
+
+    @property
+    def sentence(self) -> str:
+        """What the order is, in one sentence the owner reads."""
+        order = self.order
+        named = f"Order {order.broker_order_id} to {order.side.lower()} {order.qty:g} of {order.symbol.upper()}"
+        if self.filled is None:
+            return f"{named} does not state what it filled."
+        if not self.ended:
+            return f"{named} is {(order.broker_state or '').lower() or 'in a state the broker did not give'}."
+        return f"{named} filled {self.filled}."
+
+
+def unsettled_outside_order(conn: sqlite3.Connection, order: ExternalOrderResource) -> UnsettledOutsideOrder | None:
+    """What one outside order still asks of the books, or None when it asks nothing.
+
+    It asks nothing when no bot holds its contract on the side it reduces,
+    when its fill is already booked against a bot as a sale, and when it
+    ended having filled nothing. Until then it is unsettled: still working,
+    or filled and not yet booked.
+    """
+    symbol = order.symbol.upper()
+    held_by = {sid: quantity for sid, held_symbol, quantity in held_option_positions(conn) if held_symbol == symbol}
+    if not held_by or bookings(conn, booking_key(SALE_KEY_PREFIX, OUTSIDE_ORDER_BROKER, order.broker_order_id)):
+        return None
+    ended = (order.broker_state or "").lower() in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+    try:
+        filled = abs(outside_fill(order))
+    except OutsideFillUnknown:
+        return UnsettledOutsideOrder(order=order, filled=None, ended=ended, against=tuple(sorted(held_by)))
+    against = tuple(sorted(sid for sid, quantity in held_by.items() if (quantity > 0) == (order.side == "SELL")))
+    if not against or (ended and not filled):
+        return None
+    return UnsettledOutsideOrder(order=order, filled=filled, ended=ended, against=against)
+
+
+def outside_order_reviewed(
+    conn: sqlite3.Connection, strategy_instance_id: str, order: ExternalOrderResource
+) -> bool:
+    """Whether the owner has looked at an outside order: reviewed the order itself, or acknowledged this bot's hold for it."""
+    if order.acknowledged_at_ms is not None:
+        return True
+    return hold_item_ack_ref(
+        strategy_instance_id, OPTION_ORDER_NOT_OURS_REASON_CODE, outside_order_hold_ref(order.broker_order_id)
+    ) in acknowledged_hold_items(conn)
+
+
+def outside_order_in_the_way(
+    conn: sqlite3.Connection, *, strategy_instance_id: str, symbol: str | None = None
+) -> UnsettledOutsideOrder | None:
+    """The oldest unsettled outside order that stands against one bot and that the owner has not reviewed.
+
+    The fact every check of a bot's own order reads (ADR 0076 decision 22).
+    While it is not None, an order of the bot to close ``symbol`` would be a
+    second order on contracts the outside order may sell, or has sold and
+    the books have not yet counted. ``symbol`` names one contract; without
+    it every contract the bot holds is asked about.
+
+    Read from the books alone, from the record the observation's own
+    transition wrote, so it is true from that transition on and needs no
+    hold raised first. Books that never recorded a contract stop at the
+    first read.
+    """
+    if books_record_no_contract(conn):
+        return None
+    wanted = None if symbol is None else symbol.upper()
+    held = sorted(
+        {
+            held_symbol
+            for sid, held_symbol, _quantity in held_option_positions(conn)
+            if sid == strategy_instance_id and wanted in (None, held_symbol)
+        }
+    )
+    for held_symbol in held:
+        for order in outside_orders_in(conn, held_symbol):
+            unsettled = unsettled_outside_order(conn, order)
+            if (
+                unsettled is not None
+                and strategy_instance_id in unsettled.against
+                and not outside_order_reviewed(conn, strategy_instance_id, order)
+            ):
+                return unsettled
+    return None
+
+
+def written_off_contracts(conn: sqlite3.Connection, strategy_instance_id: str, symbol: str) -> int:
+    """Contracts of ``symbol`` the owner wrote off one bot's books, signed as they were held.
+
+    Read from the write-offs themselves. A position that was written off is
+    on the books no more, and the lots that made it stay open in the fills.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(json_extract(d.facts_json, '$.discharged_qty')), 0) AS contracts "
+        "FROM custody_transitions d WHERE d.strategy_instance_id = ? "
+        "AND d.transition_kind = 'ATTRIBUTED_RESIDUE_DISCHARGED' "
+        "AND UPPER(json_extract(d.facts_json, '$.symbol')) = ?",
+        (strategy_instance_id, symbol.upper()),
+    ).fetchone()
+    return int(row["contracts"])
 
 
 def event_share_order_symbol(conn: sqlite3.Connection, order_ref: str) -> str | None:

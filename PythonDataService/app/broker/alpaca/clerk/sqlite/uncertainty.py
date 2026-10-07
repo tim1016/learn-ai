@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource, OrderResource, TransitionInput
+from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_in_the_way
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
@@ -41,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     HOLD_REASON_CODES,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     OPTION_EVENT_HOLD_REASON_CODES,
+    OPTION_ORDER_NOT_OURS_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -1111,6 +1113,17 @@ def decide_capability(
                 reason_code=reason_code,
                 why=uncertainty["explanation"],
             )
+    if capability is Capability.REDUCE and strategy_instance_id is not None and reduction_intent is not None:
+        outside_order = _outside_option_order_in_the_way(
+            repo, strategy_instance_id=strategy_instance_id, intent=reduction_intent
+        )
+        if outside_order is not None:
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code=OPTION_ORDER_NOT_OURS_REASON_CODE,
+                why=outside_order,
+            )
     if capability is Capability.NEW_EXPOSURE and strategy_instance_id is not None:
         active_enter = next(
             (
@@ -1189,6 +1202,30 @@ def _working_option_entry(repo: ClerkSqliteRepository, *, strategy_instance_id: 
     """
     with repo.write_fence() as conn:
         return reads.working_option_entry_for_strategy(conn, strategy_instance_id)
+
+
+def _outside_option_order_in_the_way(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, intent: ReductionIntent
+) -> str | None:
+    """Why an order the Clerk did not place stops this bot's reduction, or None (ADR 0076 decision 22).
+
+    An order of the bot to close a contract is not sent beside an outside
+    order that may sell the same contracts, or that has sold them and is not
+    yet booked: it would be a second closing order. Asked of the books' own
+    record of the outside order, which the transition that observed it
+    wrote, so no hold has to be raised first. A reduction is asked about its
+    own contract and no other. An entry is not asked: a bot that holds a
+    contract takes no second entry whatever else is true. Books that never
+    recorded a contract stop at the first read.
+    """
+    with repo.write_fence() as conn:
+        found = outside_order_in_the_way(conn, strategy_instance_id=strategy_instance_id, symbol=intent.symbol)
+    if found is None:
+        return None
+    return (
+        f"{found.sentence} The Clerk did not place it, and it is in a contract this bot holds. No order of the "
+        "bot's own in that contract is sent until it is settled or reviewed."
+    )
 
 
 class AdmissionBlockedError(Exception):

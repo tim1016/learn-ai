@@ -18,14 +18,14 @@ from app.broker.alpaca.clerk.sqlite import option_events
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import ReductionIntent, decide_capability
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, ReductionIntent, decide_capability
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import UNEXPLAINED_ORDER_HOLD_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import Capability
 from app.services.session_authority import et_minute_of_day_ms
@@ -287,27 +287,162 @@ def _account_hold(repo: ClerkSqliteRepository) -> dict | None:
     return repo.active_hold(scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE)
 
 
-def _bot_may_sell(repo: ClerkSqliteRepository, bot: str, symbol: str, contracts: float) -> bool:
+def _sale_refused_for(repo: ClerkSqliteRepository, bot: str, symbol: str, contracts: float) -> str | None:
+    """Why the bot's own order to sell ``contracts`` of ``symbol`` would not be sent, or None when it would."""
     return decide_capability(
         repo, capability=Capability.REDUCE, strategy_instance_id=bot,
         reduction_intent=ReductionIntent(symbol=symbol, side="SELL", quantity=contracts),
-    ).allowed
+    ).reason_code
+
+
+def _bot_may_sell(repo: ClerkSqliteRepository, bot: str, symbol: str, contracts: float) -> bool:
+    return _sale_refused_for(repo, bot, symbol, contracts) is None
+
+
+OTHER_CALL = "AAPL230721C00160000"
 
 
 def test_a_working_sale_the_clerk_did_not_place_holds_the_bot_that_holds_the_contract_and_not_the_account(
     tmp_path: Path,
 ) -> None:
-    """Today such an order holds the whole account and refuses reductions, the bot's own close included."""
-    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL", "bot-b": "AAPL"})
+    """Before, such an order held the whole account and refused every reduction of every bot.
+
+    Now it stands against the one bot in the one contract. That bot's own
+    order to close the same contracts is not sent beside it: it would be a
+    second closing order. Its other contract, and every other bot, go on.
+    """
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL", "bot-b": "AAPL", "bot-c": "AAPL"})
     holds_option(repo, "bot-a", CALL, contracts=1)
+    holds_option(repo, "bot-a", OTHER_CALL, contracts=1)
+    holds_option(repo, "bot-c", OTHER_CALL, contracts=1)
     try:
         observe_external_order(repo, order=_outside("alpaca-sells-1", status="new"))
         book_option_events(repo, None)
 
         assert _account_hold(repo) is None
         assert option_holds(repo).keys() == {("bot-a", "OPTION_ORDER_NOT_OURS")}
-        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+        assert _sale_refused_for(repo, "bot-a", CALL, 1) == "OPTION_ORDER_NOT_OURS"
+        assert _bot_may_sell(repo, "bot-a", OTHER_CALL, 1)
+        assert _bot_may_sell(repo, "bot-c", OTHER_CALL, 1)
         assert decide_capability(repo, capability=Capability.NEW_EXPOSURE, strategy_instance_id="bot-b").allowed
+    finally:
+        repo.close()
+
+
+def test_the_bots_own_close_waits_from_the_moment_the_order_is_on_the_books_before_any_hold_is_raised(
+    tmp_path: Path,
+) -> None:
+    """Alpaca's stream can show the order minutes before a pass or a poll raises the bot's hold.
+
+    The record of the order is itself what every close of the bot asks. So
+    no second order to sell the same contracts goes out in between.
+    """
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    try:
+        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+
+        observe_external_order(repo, order=_outside("alpaca-sells-1", status="new"))
+
+        assert option_holds(repo) == {} and _account_hold(repo) is None
+        assert _sale_refused_for(repo, "bot-a", CALL, 1) == "OPTION_ORDER_NOT_OURS"
+    finally:
+        repo.close()
+
+
+def test_an_outside_sale_stands_in_the_way_of_the_bot_it_reduces_and_not_of_a_bot_short_the_same_contract(
+    tmp_path: Path,
+) -> None:
+    """One bot bought the call and another sold it. A sale from outside reduces the first and adds to the second."""
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bought": "AAPL", "sold": "AAPL"})
+    holds_option(repo, "bought", CALL, contracts=1)
+    holds_option(repo, "sold", CALL, contracts=-1)
+    try:
+        observe_external_order(repo, order=_outside("alpaca-sells-1", status="new"))
+
+        assert _sale_refused_for(repo, "bought", CALL, 1) == "OPTION_ORDER_NOT_OURS"
+        bought_back = decide_capability(
+            repo, capability=Capability.REDUCE, strategy_instance_id="sold",
+            reduction_intent=ReductionIntent(symbol=CALL, side="BUY", quantity=1),
+        )
+        assert bought_back.allowed, bought_back.why
+    finally:
+        repo.close()
+
+
+def test_once_the_order_has_ended_with_nothing_filled_the_bots_own_close_goes_on(tmp_path: Path) -> None:
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    try:
+        observe_external_order(repo, order=_outside("alpaca-sells-1", status="new"))
+        book_option_events(repo, None)
+        assert not _bot_may_sell(repo, "bot-a", CALL, 1)
+
+        observe_external_order(repo, order=_outside("alpaca-sells-1", status="canceled"))
+
+        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+        book_option_events(repo, None)
+        assert option_holds(repo) == {} and held(repo, "bot-a") == {CALL: 1.0}
+    finally:
+        repo.close()
+
+
+def test_a_sale_that_filled_holds_the_bots_own_close_back_until_it_is_booked_and_then_only_what_is_left_is_sold(
+    tmp_path: Path,
+) -> None:
+    """The bot holds two. The order sold one. Until that is booked the books still say two, and a sale of two would oversell."""
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=2)
+    try:
+        observe_external_order(repo, order=_outside("alpaca-sells-1", status="filled", filled=1, price=0.40))
+        assert _sale_refused_for(repo, "bot-a", CALL, 2) == "OPTION_ORDER_NOT_OURS"
+
+        book_option_events(repo, None)
+
+        assert held(repo, "bot-a") == {CALL: 1.0}
+        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+    finally:
+        repo.close()
+
+
+def test_an_order_the_owner_has_reviewed_holds_nothing_back_and_its_fill_is_still_booked(tmp_path: Path) -> None:
+    """The owner's review of an outside order released the account's hold before. It releases the bot's the same way."""
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1, price=1.94)
+    try:
+        observe_external_order(repo, order=_outside("by-hand-1", status="new"))
+        book_option_events(repo, None)
+        [order] = repo.external_order_resources()
+
+        acknowledge_external_order(repo, external_order_id=order.external_order_id, operator="owner")
+        book_option_events(repo, None)
+
+        assert option_holds(repo) == {}
+        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+
+        observe_external_order(repo, order=_outside("by-hand-1", status="filled", filled=1, price=0.40))
+        book_option_events(repo, None)
+
+        assert held(repo, "bot-a") == {} and fifo(repo, "bot-a").exact_realized_pnl == -154
+        assert option_holds(repo) == {}
+    finally:
+        repo.close()
+
+
+def test_acknowledging_the_bots_hold_for_the_order_lets_its_own_close_go_on(tmp_path: Path) -> None:
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL"})
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    try:
+        observe_external_order(repo, order=_outside("by-hand-1", status="new"))
+        book_option_events(repo, None)
+
+        assert option_events.acknowledge_option_event_hold(
+            repo, strategy_instance_id="bot-a", reason_code="OPTION_ORDER_NOT_OURS", operator="owner"
+        )
+
+        assert _bot_may_sell(repo, "bot-a", CALL, 1)
+        book_option_events(repo, None)
+        assert option_holds(repo) == {}
     finally:
         repo.close()
 
@@ -415,7 +550,7 @@ async def test_a_pass_does_not_put_a_bots_outside_order_back_on_the_accounts_hol
 
     assert _account_hold(paper.repo) is None
     assert option_holds(paper.repo).keys() == {("a", "OPTION_ORDER_NOT_OURS")}
-    assert _bot_may_sell(paper.repo, "a", SYMBOL, 1)
+    assert _sale_refused_for(paper.repo, "a", SYMBOL, 1) == "OPTION_ORDER_NOT_OURS"
 
 
 def test_a_sale_that_has_filled_in_part_and_is_still_working_is_booked_only_once_it_has_ended(tmp_path: Path) -> None:
@@ -539,3 +674,40 @@ async def test_a_slow_read_of_option_events_does_not_hold_the_keepers_round_or_t
     finally:
         answered.set()
         await keeper.stop()
+
+
+
+async def test_a_bots_exit_sends_no_second_closing_order_beside_the_brokers_own_sale_and_ends_flat_when_it_filled(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Alpaca is selling the bot's one call. The bot decides to exit in the same minute.
+
+    The exit is taken and kept, and no order of the bot's is sent: two
+    orders would be selling one contract. When Alpaca's sale has filled it is
+    booked against the bot, and the exit that was kept ends with nothing left to sell.
+    """
+    await _holding_one_call(paper)
+    paper.account.outside_orders = [_outside("alpaca-sells-1", status="new", symbol=SYMBOL)]
+    await paper.pass_()
+    sent_before = list(paper.venue.option_submit_calls)
+
+    with pytest.raises(AdmissionBlockedError) as refused:
+        await paper.exit()
+
+    assert refused.value.decision.reason_code == "OPTION_ORDER_NOT_OURS"
+    kept = paper.repo.active_exit_for_strategy("a")
+    assert kept is not None and paper.venue.option_submit_calls == sent_before
+
+    # Alpaca's stream reports the sale filled, and the account no longer holds the contract.
+    observe_external_order(
+        paper.repo, order=_outside("alpaca-sells-1", status="filled", filled=1, price=0.40, symbol=SYMBOL)
+    )
+    paper.account.outside_orders = []
+    paper.account.settled.add(SYMBOL)
+    await paper.pass_()
+    await paper.pass_()
+
+    assert paper.held() == {} and option_holds(paper.repo) == {}
+    assert [booked["summary_code"] for booked in bookings(paper.repo)] == ["OPTION_SOLD_OUTSIDE"]
+    assert paper.venue.option_submit_calls == sent_before
+    assert paper.repo.active_exit_for_strategy("a") is None

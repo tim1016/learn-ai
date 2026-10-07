@@ -551,32 +551,95 @@ async def test_a_bot_that_closed_an_older_lot_of_its_own_before_the_row_was_read
         repo.close()
 
 
-async def test_a_position_the_owner_wrote_off_is_not_closed_a_second_time_by_a_row_that_comes_later(
-    tmp_path: Path,
-) -> None:
-    """The broker held none of the expired contract and no row came, so the owner wrote the position off.
-    The row comes afterwards. The bot's lot is offered to it no more: nothing is booked, and it is held by name."""
+def _the_owner_writes_off(repo: ClerkSqliteRepository, bot: str, symbol: str, contracts: float) -> None:
+    """The owner's write-off of one bot's position the broker no longer holds, as the Clerk records it."""
     from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
     from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 
-    repo = _one_bot(tmp_path)
     repo.append_transition(TransitionInput(
-        strategy_instance_id="bot-a", transition_kind="ATTRIBUTED_RESIDUE_DISCHARGED", custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=bot, transition_kind="ATTRIBUTED_RESIDUE_DISCHARGED", custody_owner="ACCOUNT_CLERK",
         execution_authority="ACCOUNT_CLERK", operation_state="succeeded", clerk_observed_at_ms=repo.clock(),
         summary_code="ATTRIBUTED_RESIDUE_DISCHARGED",
         facts_json=AttributedResidueDischargedFacts(
-            symbol=CALL, discharged_qty=1.0, broker_qty=0.0, account_attributed_qty=1.0,
+            symbol=symbol, discharged_qty=contracts, broker_qty=0.0, account_attributed_qty=contracts,
             broker_observed_at_ms=repo.clock(), uncertainty_ids=[], operator_reason="expired, no row",
         ).to_facts_json(),
     ))
-    assert held(repo, "bot-a") == {}
+    assert held(repo, bot) == {}
+
+
+async def test_a_position_the_owner_wrote_off_is_not_closed_a_second_time_by_a_row_that_comes_later(
+    tmp_path: Path,
+) -> None:
+    """The broker held none of the expired contract and no row had come, so the owner wrote the position off.
+
+    The expiry's row comes the next morning. The write-off already took the
+    contract off the books and the row moves nothing more: nothing is
+    booked, and nobody is held for a row that only confirms it.
+    """
+    repo = _one_bot(tmp_path)
+    _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
     holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
     account = _FakeReadPort()
+    written = repo.last_custody_sequence()
     try:
         await _read(repo, account, _expiry())
 
         assert bookings(repo) == [] and held(repo, "bot-a") == {}
-        assert option_holds(repo).keys() == {(None, "OPTION_EVENT_CONTRACT_NOT_HELD")}
+        assert option_holds(repo) == {}
+        assert repo.last_custody_sequence() == written
+    finally:
+        repo.close()
+
+
+async def test_an_exercise_read_after_its_position_was_written_off_is_not_booked_and_holds_that_bot_by_name(
+    tmp_path: Path,
+) -> None:
+    """The contract the owner wrote off as expired was exercised: the account now holds 100 shares.
+
+    Booking the exercise would close a lot the write-off already took off
+    the books. So nothing is booked. The shares are real and on no bot's
+    books, and the bot that held the contract is told so by name. No other bot is held.
+    """
+    repo = _one_bot(tmp_path)
+    _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
+    holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _exercise(), _share_trade(100))
+
+        assert bookings(repo) == [] and held(repo, "bot-a") == {}
+        assert ("bot-a", "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+        assert not any(bot is None or bot == "bot-b" for bot, _reason in option_holds(repo))
+    finally:
+        repo.close()
+
+
+async def test_a_write_off_of_one_contract_does_not_explain_an_expiry_of_two(tmp_path: Path) -> None:
+    repo = _one_bot(tmp_path)
+    _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
+    holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry(qty="-2"))
+
+        assert bookings(repo) == []
+        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+    finally:
+        repo.close()
+
+
+async def test_a_write_off_of_a_bought_contract_does_not_explain_an_assignment_of_it(tmp_path: Path) -> None:
+    """An assignment ends a sold position. The bot wrote off a bought one, so the row is still nobody's."""
+    repo = _one_bot(tmp_path)
+    _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
+    holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _assignment(date="2023-07-21"), _share_trade(-100))
+
+        assert bookings(repo) == []
+        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
     finally:
         repo.close()
 
