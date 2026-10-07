@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, submit_absence_grace_ms
@@ -853,7 +854,10 @@ async def test_a_stock_only_accounts_books_are_never_read_however_long_their_log
         repo = await _a_stock_account_with_a_working_entry(tmp_path / str(transitions), transitions=transitions)
         try:
             written = repo.last_custody_sequence()
-            keeper = DeadlineKeeper(repo=repo, trade=_FakeTradePort(), off_loop=run_inline)
+            keeper = DeadlineKeeper(
+                repo=repo, trade=_FakeTradePort(), intake=ReentrantAsyncLock(), pricing=UNPRICEABLE_RECOVERY,
+                off_loop=run_inline,
+            )
             with _StepsCounted(repo) as idle_round:
                 done = await keeper.tick()
             with _StepsCounted(repo) as the_step:
@@ -866,7 +870,9 @@ async def test_a_stock_only_accounts_books_are_never_read_however_long_their_log
             repo.close()
 
     assert costs[0] == costs[3_000]
-    assert all(0 < steps < 100 for steps in costs[0])
+    # The round also runs the keeper's other step, the scheduled closes, which reads the positions once.
+    the_round, the_step, the_gates_question = costs[0]
+    assert 0 < the_round < 200 and 0 < the_step < 100 and 0 < the_gates_question < 100, costs[0]
 
 
 async def test_one_round_of_the_keeper_reads_the_worklist_once(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811

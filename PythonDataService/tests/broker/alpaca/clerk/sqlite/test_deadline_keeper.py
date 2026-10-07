@@ -47,7 +47,7 @@ def _keeper_on_the_tests_clock(paper: PaperOptions, *, rounds: int) -> tuple[Dea
         slept.append(round(seconds * 1000))
         paper.wait(round(seconds * 1000))
 
-    return DeadlineKeeper(repo=paper.repo, trade=paper.venue, rest=rest, off_loop=run_inline, max_rounds=rounds), slept
+    return paper.another_keeper(rest=rest, max_rounds=rounds), slept
 
 
 # ── on time ───────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ async def test_accepting_an_entry_wakes_a_sleeping_keeper(paper: PaperOptions) -
         await asyncio.wait_for(nudged.wait(), timeout=5)
         woken.append(nudged.is_set())
 
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, rest=rest, off_loop=run_inline, max_rounds=1)
+    keeper = paper.another_keeper(rest=rest, max_rounds=1)
     paper.clerk._entry_deadline_nudge = keeper.nudge
     running = asyncio.create_task(keeper.run())
     await asyncio.sleep(0)
@@ -217,7 +217,7 @@ async def test_a_nudge_is_spent_by_the_round_that_follows_it(paper: PaperOptions
     async def rest(_seconds: float, nudged: asyncio.Event) -> None:
         seen.append(nudged.is_set())
 
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, rest=rest, off_loop=run_inline, max_rounds=2)
+    keeper = paper.another_keeper(rest=rest, max_rounds=2)
     keeper.nudge()
 
     await keeper.run()
@@ -257,7 +257,7 @@ async def test_a_round_that_fails_does_not_end_the_keeper(paper: PaperOptions, m
 
 async def test_a_keeper_stopped_in_the_moment_it_wakes_still_stops(paper: PaperOptions) -> None:  # noqa: F811
     """A stop that lands just as a nudge ends the rest must end the task, never be swallowed by it."""
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
+    keeper = paper.another_keeper()
     keeper.start()
     await asyncio.sleep(0.01)
     keeper.nudge()
@@ -279,7 +279,7 @@ async def test_a_stop_that_lands_inside_alpacas_cancel_while_the_claim_cannot_be
         await asyncio.Event().wait()
 
     paper.venue.cancel = cancel_that_never_answers  # type: ignore[method-assign]
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
+    keeper = paper.another_keeper()
     keeper.start()
     await asyncio.wait_for(inside_the_cancel.wait(), timeout=2)
     monkeypatch.setattr(paper.repo, "renew_operation_claim", lambda **_claim: False)
@@ -300,7 +300,7 @@ async def test_a_stop_that_comes_out_of_a_round_as_any_other_error_still_stops(p
         raise AssertionError("unreachable")
 
     monkeypatch.setattr(deadline_keeper, "cancel_resting_entries", round_that_turns_a_stop_into_an_error)
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, off_loop=run_inline)
+    keeper = paper.another_keeper()
     keeper.start()
     await asyncio.wait_for(inside_the_round.wait(), timeout=2)
 
@@ -378,10 +378,11 @@ async def test_a_cancel_left_uncertain_at_a_restart_is_proven_by_the_keepers_fir
 # ── where it is composed ─────────────────────────────────────────────────
 
 
-async def test_a_dry_runs_clerk_has_a_keeper_running_and_stores_a_deadline_it_never_needs(dry_run: _DryRun) -> None:  # noqa: F811
+async def test_a_dry_runs_clerk_has_a_keeper_and_stores_a_deadline_it_never_needs(dry_run: _DryRun) -> None:  # noqa: F811
+    # That the keeper is running on an account opened to operate is shown where it is composed
+    # (``test_deadline_keeper_composition``): this scene's clock is the test's, so its task is stopped.
     runtime = get_clerk_runtime(dry_run.binding.sealed_account_id or "")
     assert runtime is not None and isinstance(runtime.deadline_keeper, DeadlineKeeper)
-    assert runtime.deadline_keeper._task is not None and not runtime.deadline_keeper._task.done()
 
     bought = await dry_run.enter(dry_run.evidence())
 

@@ -20,15 +20,29 @@ order until its next round. The keeper and an EXIT act under different
 effects and can each ask the broker to cancel one order; asking twice for
 the same order is a retry, never a second intent.
 
-**A round is a list of steps.** Today there is one: cancel what has not
-filled of every entry past its wait (``resting_entries``). A position's
-scheduled close is one more step of the same round, not a second task.
+**A round is a list of steps.** There are two. The first cancels what has
+not filled of every entry past its wait (``resting_entries``). The second
+sends every scheduled close of an option position that is due and records
+each one its session ended on (``scheduled_close``). On a Dry Run's
+account, which has no pass on a timer, it also drives on a close that was
+taken and has not finished, and takes a failed close again.
 
-**One round reads the worklist once.** What is due, and when to wake, both
+**Each step runs by itself.** One that fails is logged with its name and
+the other still runs: an entry that cannot be listed must not keep a close
+from going out, nor a close an entry's cancel. A stop is no failure and
+ends the round. A lost execution lease is no step's own failure: nothing
+more can be written, so it ends the round too.
+
+**The keeper is built whole.** Its second step is driven with the facade's
+own pricing, and the facade is built with the keeper's nudge. So the nudge
+is made first (:class:`Nudge`), the facade with it, and the keeper last.
+
+**One round reads each worklist once.** What is due, and when to wake, both
 come from that one read.
 
-**How long it sleeps.** Until the next stored deadline, and never longer
-than the idle wake. An entry past its deadline and still not proven is
+**How long it sleeps.** Until the next stored deadline, the next close that
+comes due or the end of the session one is owed in, and never longer than
+the idle wake. An entry past its deadline and still not proven is
 asked about again every second for the first ten seconds past that
 deadline, then no more often than the idle wake, however often the keeper
 wakes for other entries. That pause is kept in memory only. It is not a
@@ -63,10 +77,13 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.resting_entries import (
     RestingEntry,
     WaitEndedRound,
@@ -75,6 +92,7 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
     cancel_resting_entries,
     resting_entries,
 )
+from app.broker.alpaca.clerk.sqlite.scheduled_close import ScheduledCloseRound, drive_scheduled_closes
 from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
@@ -110,6 +128,24 @@ class KeeperRound:
 
     entries: WaitEndedRound
     wake_in_ms: int
+    closes: ScheduledCloseRound = field(default_factory=ScheduledCloseRound)
+    # The steps that failed in this round, by name. Each is logged where it failed.
+    failed: tuple[str, ...] = ()
+
+
+class Nudge:
+    """What ends the keeper's sleep at once: sent by the facade when it accepts an option entry.
+
+    Made before the keeper, so that the facade can be built with it and the
+    keeper built whole once the facade exists. It carries no meaning: lost,
+    the idle wake and the pass still find what is due.
+    """
+
+    def __init__(self) -> None:
+        self.sent = asyncio.Event()
+
+    def __call__(self) -> None:
+        self.sent.set()
 
 
 class DeadlineKeeper:
@@ -125,26 +161,67 @@ class DeadlineKeeper:
         *,
         repo: ClerkSqliteRepository,
         trade: BrokerTradePort,
+        intake: ReentrantAsyncLock,
+        pricing: RecoveryPricing,
+        nudge: Nudge | None = None,
         rest: Rest = rest_until_nudged,
         off_loop: OffLoop = to_thread,
         max_rounds: int | None = None,
     ) -> None:
         self._repo = repo
         self._trade = trade
+        # The lock a scheduled close is accepted under and the pricing it is driven with: the
+        # facade's own (ADR 0076). A close is an EXIT like any other.
+        self._intake = intake
+        self._pricing = pricing
         self._rest = rest
         self._off_loop = off_loop
         self._max_rounds = max_rounds
-        self._nudged = asyncio.Event()
+        self._nudge = nudge if nudge is not None else Nudge()
+        self._nudged = self._nudge.sent
         self._task: asyncio.Task[None] | None = None
         # When each due entry was last asked about, on the Clerk's clock. A pause, not a worklist.
         self._asked_at_ms: dict[str, int] = {}
 
     def nudge(self) -> None:
         """End the keeper's sleep: a deadline may have been stored that is sooner than it knew."""
-        self._nudged.set()
+        self._nudge()
 
     async def tick(self) -> KeeperRound:
-        """One round: act on every deadline that is due, then say when the next one is."""
+        """One round: each step by itself, then when to look again."""
+        failed: list[str] = []
+        resting, entries = await self._step(
+            "resting_entries", self._cancel_entries_past_their_wait, ([], WaitEndedRound()), failed
+        )
+        closes = await self._step("scheduled_closes", self._take_scheduled_closes, ScheduledCloseRound(), failed)
+        wake_in_ms = min(self._wake_in_ms(resting, ended=entries.ended), self._wake_for_closes(closes))
+        return KeeperRound(entries=entries, wake_in_ms=wake_in_ms, closes=closes, failed=tuple(failed))
+
+    async def _step[Done](
+        self, name: str, step: Callable[[], Awaitable[Done]], nothing_done: Done, failed: list[str]
+    ) -> Done:
+        """Run one step of a round by itself. Its failure is logged with its name and stops no other step.
+
+        A stop is not a failure: it ends the round, also when it came out of
+        a broker call as another error. A lost execution lease is raised,
+        because nothing more can be written under it.
+        """
+        try:
+            return await step()
+        except ExecutionLeaseLost:
+            raise
+        except Exception:
+            if being_cancelled():
+                raise asyncio.CancelledError from None
+            logger.exception(
+                "a step of the deadline keeper's round failed; the round's other step still runs",
+                extra={"action": "deadline_keeper_step_failed", "step": name, "account_id": self._repo.account_id},
+            )
+            failed.append(name)
+            return nothing_done
+
+    async def _cancel_entries_past_their_wait(self) -> tuple[list[RestingEntry], WaitEndedRound]:
+        """The first step: cancel what has not filled of every entry past its wait. Also says what rests."""
         resting = await self._off_loop(lambda: resting_entries(self._repo))
         now_ms = self._repo.clock()
         to_ask = [entry for entry in resting if entry.due(now_ms) and self._may_ask_again(entry, now_ms)]
@@ -156,7 +233,27 @@ class DeadlineKeeper:
             order_ref: asked for order_ref, asked in self._asked_at_ms.items()
             if order_ref in listed and order_ref not in entries.ended
         }
-        return KeeperRound(entries=entries, wake_in_ms=self._wake_in_ms(resting, ended=entries.ended))
+        return resting, entries
+
+    async def _take_scheduled_closes(self) -> ScheduledCloseRound:
+        """The second step: send every scheduled close that is due, and record each one its session ended on."""
+        return await drive_scheduled_closes(
+            self._repo, trade=self._trade, intake=self._intake, pricing=self._pricing, off_loop=self._off_loop,
+            # A real account's pass drives every unfinished EXIT on and sends a failed close again.
+            # A Dry Run has no pass on a timer, so its keeper does both.
+            no_pass_on_a_timer=is_synthetic_account_id(self._repo.account_id),
+        )
+
+    def _wake_for_closes(self, closes: ScheduledCloseRound) -> int:
+        """How long until a close comes due, is ready to be taken again, or its session ends: at most the idle wake.
+
+        A close that is due and not yet taken is looked at again at the
+        idle wake: what keeps it from being taken is another EXIT of its bot
+        still working, which does not end by the second.
+        """
+        if closes.next_change_ms is None:
+            return IDLE_WAKE_MS
+        return min(IDLE_WAKE_MS, max(closes.next_change_ms - self._repo.clock(), 0))
 
     def _may_ask_again(self, entry: RestingEntry, now_ms: int) -> bool:
         """Whether a due entry's pause since it was last asked about is over."""
@@ -260,4 +357,5 @@ __all__ = [
     "UNPROVEN_RETRY_WINDOW_MS",
     "DeadlineKeeper",
     "KeeperRound",
+    "Nudge",
 ]

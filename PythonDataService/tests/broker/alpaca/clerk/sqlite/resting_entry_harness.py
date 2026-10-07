@@ -28,7 +28,7 @@ from app.broker.alpaca import adapter as alpaca_adapter
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectPurpose
 from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
-from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper, Nudge
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOutcome, entry_outcome
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
@@ -187,6 +187,13 @@ class PaperOptions:
         """One round of the deadline keeper."""
         return await self.keeper.tick()
 
+    def another_keeper(self, **changes: Any) -> DeadlineKeeper:
+        """A keeper of the test's own over the same books, handed the lock and the pricing the account's own has."""
+        return DeadlineKeeper(**{
+            "repo": self.repo, "trade": self.venue, "intake": self.clerk.intake,
+            "pricing": self.clerk.recovery_pricing, "off_loop": run_inline, **changes,
+        })
+
     async def pass_(self) -> AccountReconciliationResult:
         """One reconciliation pass of the account, as its sweep runs it."""
         return await reconcile_account(
@@ -281,10 +288,14 @@ def _compose(
 
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     sync = LiveEnvelopeSync(repo=repo, read=account, envelope=gate, sleep=pause)
-    keeper = DeadlineKeeper(repo=repo, trade=venue, off_loop=run_inline)
+    # As the account's own composition builds them: the nudge, the facade with it, then the keeper whole.
+    nudge = Nudge()
     clerk = SqliteAlpacaClerkFacade(
         repo=repo, read=account, trade=venue, account_mode="paper", live_envelope=gate,
-        entry_reading=sync.read_for_entry, entry_deadline_nudge=keeper.nudge,
+        entry_reading=sync.read_for_entry, entry_deadline_nudge=nudge,
+    )
+    keeper = DeadlineKeeper(
+        repo=repo, trade=venue, intake=clerk.intake, pricing=clerk.recovery_pricing, nudge=nudge, off_loop=run_inline
     )
     return sync, keeper, clerk
 

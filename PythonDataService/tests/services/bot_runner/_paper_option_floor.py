@@ -40,7 +40,7 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper, Nudge
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOutcome, SettledEntry, entry_outcome, recorded_settlement
@@ -182,10 +182,15 @@ class PaperFloor(Floor):
 
         gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
         self.sync = LiveEnvelopeSync(repo=repo, read=self.account, envelope=gate, sleep=reading_pause)
-        self.keeper = DeadlineKeeper(repo=repo, trade=self.venue, off_loop=run_inline)
+        # As the account's own composition builds them: the nudge, the facade with it, then the keeper whole.
+        nudge = Nudge()
         clerk = SqliteAlpacaClerkFacade(
             repo=repo, read=self.account, trade=self.venue, account_mode="paper", live_envelope=gate,
-            entry_reading=self.sync.read_for_entry, entry_deadline_nudge=self.keeper.nudge,
+            entry_reading=self.sync.read_for_entry, entry_deadline_nudge=nudge,
+        )
+        self.keeper = DeadlineKeeper(
+            repo=repo, trade=self.venue, intake=clerk.intake, pricing=clerk.recovery_pricing, nudge=nudge,
+            off_loop=run_inline,
         )
         clerk._outcome_pause = self._an_entry_rests
         ask = clerk.await_entry_outcome

@@ -202,7 +202,9 @@ next open otherwise -- and records the property on every re-drive. While a
 sale waits for the open it is a line in the lane's attention bell, naming the
 bot, the symbol and the open; the line clears once the sale is sent. This is
 the one sale a dead run makes by itself; every other dead-run position keeps
-the rule above. On a `sim:` authority the end is a Stop and the Dry Run's
+the rule above. (Since 2026-10-07 there is a second: the scheduled close of an
+option position, in the amendment of that date below.) On a `sim:` authority
+the end is a Stop and the Dry Run's
 run-end close does the sale; a Dry Run is never offered KEEP, and a stopped
 Dry Run's end is recorded carried out when it comes, since its run-end close
 already sold. Every operator Stop -- the panel's, the raw lifecycle Stop route's
@@ -448,3 +450,27 @@ and is available the whole time, and the held order may be one no action
 settles. Once the blocked exit is `EXIT_STUCK` the watchdog never re-drives
 it, so the notice also says that the Clerk does not send that bot's exit by
 itself again, even after the other bot's order is settled.
+
+
+## 2026-10-07 amendment: the scheduled close of an option position is a second sale the Clerk makes by itself (#2913)
+
+The 2026-09-29 amendment calls the sale at a bot's owner-scheduled end the one
+sale a dead run makes by itself. There is now a second. An option position is
+closed by the Clerk ahead of the session's close on its contract's expiry day,
+and before every session's close while it has a sold leg, whether its bot is
+running, stopped, or its run died (ADR 0076 decision 20).
+
+It differs from the scheduled end in what it is owed by. The scheduled end is
+the bot's desired state, kept by the runner, and an owner's Stop cancels it. The
+scheduled close is owed by what is held, read from the Clerk's own books, so a
+Stop, a dead runner and a restart cancel nothing. It is also taken while the
+run is ACTIVE, which the sale at a scheduled end never is.
+
+It keeps to the same holds. None is taken while `EXIT_STUCK` is open. It goes
+out only as a market order inside the regular session. It is sent with no
+check of the account of its own, as a bot's own exit and the sale at a
+scheduled end are. An order of it that was sent keeps its position's custody
+past its session, by the 2026-10-03 amendment above.
+
+Every other position of a run that is not running keeps the rule: the Clerk
+warns, and does not sell.

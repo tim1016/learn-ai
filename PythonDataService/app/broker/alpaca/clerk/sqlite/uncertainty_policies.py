@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
+    SCHEDULED_CLOSE_MISSED_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
@@ -40,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FailedEnterFilledCause,
     LossHoldCause,
     PositionDriftCause,
+    ScheduledCloseMissedCause,
     StreamHealthHoldCause,
     UnexplainedOrderCause,
     UnfoldableBrokerOrderCause,
@@ -177,6 +179,14 @@ def _exit_stuck_cause_is_valid(value: Any) -> bool:
 def _failed_enter_filled_cause_is_valid(value: Any) -> bool:
     try:
         FailedEnterFilledCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _scheduled_close_missed_cause_is_valid(value: Any) -> bool:
+    try:
+        ScheduledCloseMissedCause.from_mapping(value)
     except ValueError:
         return False
     return True
@@ -419,6 +429,29 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_lane_quiet=False,
         residue_discharge="admits",
     ),
+    # ADR 0076: a session ended with an option contract still held that the
+    # Clerk owed a close of. It holds that bot's entries and no other bot's,
+    # and admits every reduction of what the bot holds: the owner's Flatten,
+    # the bot's own exit, the Clerk's retry at the next open. It doubts no
+    # quantity, so it takes no clock: it ends when the bot no longer holds a
+    # contract past its close, which the scheduled-close step reads from the
+    # books on every round and every pass.
+    SCHEDULED_CLOSE_MISSED_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        cause_is_valid=_scheduled_close_missed_cause_is_valid,
+        age=CauseCleared(),
+        # It says a position the Clerk meant to close is still open, so a
+        # lane is not quiet under it. It cannot wedge a flat lane: the pass a
+        # draining lane still runs ends it once the bot holds nothing.
+        blocks_lane_quiet=True,
+        # An expired contract the broker has since taken off its books is a
+        # residue no order can close. The write-off's own proof still asks
+        # the broker, so a contract the broker holds is never written off.
+        residue_discharge="strands",
+    ),
 }
 
 
@@ -436,6 +469,16 @@ def residue_discharge_role(reason_code: str) -> ResidueDischargeRole:
     """An episode's residue-discharge role; an unregistered code refuses (#2381)."""
     policy = reason_policy(reason_code)
     return "refuses" if policy is None else policy.residue_discharge
+
+
+def reasons_that_strand_a_residue() -> str:
+    """Every reason whose open episode lets a residue be written off, as a refusal names them: "A, B or C".
+
+    Read from the registry, so a refusal that says which episode is missing
+    names every one that would do.
+    """
+    codes = [code for code, policy in _REASON_POLICIES.items() if policy.residue_discharge == "strands"]
+    return " or ".join(filter(None, (", ".join(codes[:-1]), codes[-1])))
 
 
 def reason_age_policy[AgePolicyT: (CauseCleared, VoidAfter, RedriveThenEscalate)](
