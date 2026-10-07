@@ -879,6 +879,36 @@ def _option_order_intent(value: Any, side: OrderSide, *, field: str) -> OptionPo
     return intent
 
 
+def _option_order_id(value: Any, *, field: str) -> str:
+    """Read an option order's id, or a leg's, as Alpaca wrote it; one that is not a UUID is refused.
+
+    The order reference gives ``id`` the format ``uuid``, and the read and
+    the cancel by id take nothing else: an order under any other id could
+    be neither read nor cancelled. Any spelling of a UUID is one.
+    """
+    text = to_str(value, field=field)
+    try:
+        UUID(text)
+    except ValueError as exc:
+        raise ValueError(f"Alpaca field {field!r} is not an order id, which is a UUID: {text!r}") from exc
+    return text
+
+
+def _require_a_multi_leg_parent_states_nothing_of_its_own(payload: Mapping[str, Any]) -> None:
+    """Refuse a multi-leg parent that states a contract, a side or an intent: its legs carry all three.
+
+    Alpaca's published parent writes ``symbol`` and ``side`` as the empty
+    string and has no ``position_intent``. So null, left out and the empty
+    string are a parent stating none. Anything else is taken as stated,
+    a space and a value that is not text included, and contradicts the
+    order being a parent.
+    """
+    for field in ("symbol", "side", "position_intent"):
+        stated = payload.get(field)
+        if stated is not None and stated != "":
+            raise ValueError(f"Alpaca's multi-leg parent states a {field!r} of its own: {stated!r}")
+
+
 def _option_order_times(payload: Mapping[str, Any]) -> dict[str, int | None]:
     return {
         "submitted_at_ms": opt_rfc3339_to_ms(payload.get("submitted_at")),
@@ -895,7 +925,7 @@ def _from_alpaca_option_order_leg(payload: Any) -> BrokerOptionOrderLeg:
         raise TypeError(f"Alpaca order leg must be an object, got {type(payload).__name__}")
     side = OrderSide(to_str(payload.get("side"), field="legs.side"))
     return BrokerOptionOrderLeg(
-        order_id=to_str(payload.get("id"), field="legs.id"),
+        order_id=_option_order_id(payload.get("id"), field="legs.id"),
         client_order_id=_opt_text(payload.get("client_order_id"), field="legs.client_order_id"),
         contract=OptionContract.from_occ_symbol(to_str(payload.get("symbol"), field="legs.symbol")),
         side=side,
@@ -937,9 +967,15 @@ def from_alpaca_option_order(
     contracts filled.
 
     A multi-leg parent has no symbol or side of its own and Alpaca writes
-    both blank; its legs carry them. A leg's own ``type`` is blank too and is
-    not read. A symbol that is not an option contract's is refused, so a
-    stock order looked up by mistake is never read as an option order.
+    both blank; its legs carry them. A parent that states a symbol, a side
+    or a position intent contradicts itself and is refused. A leg's own
+    ``type`` is blank too and is not read. A symbol that is not an option
+    contract's is refused, so a stock order looked up by mistake is never
+    read as an option order.
+
+    The order's id, and each leg's, is a UUID, as the order reference
+    writes it. One that is not is refused here, where Alpaca's rule
+    belongs: the broker-neutral model holds an id to no spelling.
     """
     if not isinstance(payload, Mapping):
         raise TypeError(f"Alpaca order payload must be an object, got {type(payload).__name__}")
@@ -948,6 +984,7 @@ def from_alpaca_option_order(
         raw_legs = payload.get("legs")
         if not isinstance(raw_legs, list) or not raw_legs:
             raise ValueError("Alpaca's multi-leg order came without its legs")
+        _require_a_multi_leg_parent_states_nothing_of_its_own(payload)
         legs = tuple(_from_alpaca_option_order_leg(leg) for leg in raw_legs)
         contract = side = intent = None
     elif order_class is None or order_class in _ALPACA_SINGLE_ORDER_CLASSES:
@@ -961,7 +998,7 @@ def from_alpaca_option_order(
         raise ValueError(f"Alpaca order class {order_class!r} is not an option order's")
     return BrokerOptionOrder(
         broker=BROKER_ID,
-        order_id=to_str(payload.get("id"), field="id"),
+        order_id=_option_order_id(payload.get("id"), field="id"),
         client_order_id=_opt_text(payload.get("client_order_id"), field="client_order_id"),
         multi_leg=bool(legs),
         contract=contract,

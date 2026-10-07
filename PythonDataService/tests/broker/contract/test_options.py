@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType
 from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
     BrokerOptionContract,
     BrokerOptionDeliverable,
     BrokerOptionOrder,
@@ -578,6 +579,16 @@ def _legs_on(*strikes: str) -> tuple[BrokerOptionOrderLeg, ...]:
             {"legs": (_reported_leg("bought", "450", OrderSide.BUY), _reported_leg("sold", "450", OrderSide.SELL))},
             id="two legs on one contract",
         ),
+        pytest.param(
+            {
+                "legs": (
+                    _reported_leg("bought", "450", OrderSide.BUY),
+                    _reported_leg("sold", "455", OrderSide.SELL, contract=_contract("call", "455", root="QQQ")),
+                )
+            },
+            id="legs on two underlyings",
+        ),
+        pytest.param({"quantity": 0}, id="no structures"),
     ],
 )
 def test_a_reported_multi_leg_order_that_cannot_be_one_is_refused(change: dict[str, object]) -> None:
@@ -621,6 +632,59 @@ def test_a_leg_is_not_held_to_its_ratio_times_the_parents_quantity() -> None:
     )
 
     assert [leg.quantity for leg in _reported_spread(quantity=3, legs=legs).legs] == [3, 1]
+
+
+def test_only_a_multi_leg_net_price_may_be_below_zero() -> None:
+    """A net price is negative when the structure receives. One contract's price never is."""
+    received = _reported_spread(limit_price=Decimal("-3.07"), filled_avg_price=Decimal("-3.10"))
+    assert (received.limit_price, received.filled_avg_price) == (Decimal("-3.07"), Decimal("-3.10"))
+
+    with pytest.raises(ValidationError):
+        _reported_single(limit_price=Decimal("-4.10"))
+    with pytest.raises(ValidationError):
+        _reported_single(filled_avg_price=Decimal("-4.10"))
+    with pytest.raises(ValidationError):
+        _reported_leg("bought", "450", OrderSide.BUY, filled_avg_price=Decimal("-0.43"))
+
+    # Zero is not below zero.
+    assert _reported_leg("bought", "450", OrderSide.BUY, filled_avg_price=Decimal("0")).filled_avg_price == 0
+
+
+# ── The account's option fields ─────────────────────────────────────────────
+
+
+def _option_account(*, approved: int | None, in_force: int | None) -> BrokerOptionAccountSnapshot:
+    return BrokerOptionAccountSnapshot(
+        broker="alpaca",
+        account_id="PA0SANITIZED00001",
+        account_mode="paper",
+        options_buying_power=Decimal("100000"),
+        options_approved_level=approved,
+        options_trading_level=in_force,
+        observed_at_ms=1_700_000_000_000,
+    )
+
+
+@pytest.mark.parametrize(("approved", "in_force"), [(0, 1), (1, 2), (2, 3), (0, 3)])
+def test_a_trading_level_above_the_approved_level_is_refused(approved: int, in_force: int) -> None:
+    """Alpaca's account reference on ``options_trading_level``, read 2026-10-07: "This is the minimum between
+    account options_approved_level and account configurations max_options_trading_level." So an answer whose
+    level in force is above the level approved contradicts itself, and is not read as approval for either."""
+    with pytest.raises(ValidationError):
+        _option_account(approved=approved, in_force=in_force)
+
+
+@pytest.mark.parametrize(
+    ("approved", "in_force"),
+    [(3, 3), (3, 1), (2, 0), (0, 0), (None, 3), (1, None), (None, None)],
+)
+def test_a_trading_level_within_the_approved_level_or_beside_an_unknown_one_is_read(
+    approved: int | None, in_force: int | None
+) -> None:
+    """A level the broker did not state stays unknown: there is nothing to hold the other one to."""
+    account = _option_account(approved=approved, in_force=in_force)
+
+    assert (account.options_approved_level, account.options_trading_level) == (approved, in_force)
 
 
 # ── Which contracts a bot may trade ─────────────────────────────────────────

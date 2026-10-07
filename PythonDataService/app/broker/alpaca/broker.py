@@ -941,16 +941,26 @@ class AlpacaBroker:
             self._answered_and_not_taken(not_taken, client_order_id=client_order_id)
             raise
 
-    def _answered_and_not_taken(self, not_taken: Exception, *, client_order_id: str | None = None) -> None:
+    def _answered_and_not_taken(
+        self, not_taken: Exception, *, client_order_id: str | None = None, order_id: str | None = None
+    ) -> None:
         """Alpaca answered for an order, and the answer was not taken as that order's.
 
-        Whatever stopped it, a 404 in the next seconds is not "absent": not
-        to the lookup by the client order id, and not to a read by the
-        broker order id an unreadable answer handed on. Each gets the
-        visibility grace, counted from this answer.
+        ``client_order_id`` and ``order_id`` are the ids Alpaca was asked by.
+        Whatever stopped the answer, a 404 in the next seconds is not
+        "absent": not to the lookup by the client order id, not to a read
+        by the broker order id that was asked for, and not to a read by the
+        one an unreadable answer handed on. Each gets the visibility grace,
+        counted from this answer.
+
+        Holding a grace under the id asked by hands nothing on: the only
+        id a caller is given is the one an unreadable answer can vouch for.
         """
         if client_order_id is not None:
             self._client.hold_submission_uncertain(client_order_id)
+        asked_by = _order_uuid(order_id)
+        if asked_by is not None:
+            self._client.hold_submission_uncertain(str(asked_by))
         handed_on = _order_uuid(not_taken.broker_order_id) if isinstance(not_taken, BrokerOrderAnswerUnreadable) else None
         if handed_on is not None:
             self._client.hold_submission_uncertain(str(handed_on))
@@ -970,7 +980,9 @@ class AlpacaBroker:
 
         Alpaca documents no way to ask this read for nested legs, so a
         multi-leg parent that comes back without them is read again by its
-        broker order id, which has one.
+        broker order id, which has one. When that second read is answered
+        and its answer is not taken, the grace is held under the parent's
+        id too, as it is for any read by broker order id.
         """
         payload = await self._client.get_order_by_client_order_id(client_order_id, found_settles_submission=False)
         if payload is None:
@@ -982,7 +994,7 @@ class AlpacaBroker:
                 order_id, payload = await self._nested_order(payload, client_order_id=client_order_id)
             accepted = _option_order_asked_about(payload, client_order_id=client_order_id, order_id=order_id)
         except Exception as not_taken:
-            self._answered_and_not_taken(not_taken, client_order_id=client_order_id)
+            self._answered_and_not_taken(not_taken, client_order_id=client_order_id, order_id=order_id)
             raise
         self._client.settle_submission(client_order_id)
         return accepted
@@ -993,7 +1005,10 @@ class AlpacaBroker:
         ``order_id`` is the parent's. ``None`` only on a definitive 404:
         for the visibility grace after an answer about this order that could
         not be read, which is where a caller gets the id from, a 404 stays
-        unknown. The grace ends once an answer is read whole here.
+        unknown. So it does after any answer to this read that is not taken
+        as the order's, an answer naming another order included: Alpaca
+        answered for this id, so its not-found a moment later proves
+        nothing. The grace ends once an answer is read whole here.
         """
         payload = await self._client.get_nested_order_by_broker_order_id(order_id)
         if payload is None:
@@ -1001,7 +1016,7 @@ class AlpacaBroker:
         try:
             accepted = _option_order_asked_about(payload, order_id=order_id)
         except Exception as not_taken:
-            self._answered_and_not_taken(not_taken)
+            self._answered_and_not_taken(not_taken, order_id=order_id)
             raise
         self._client.settle_submission(str(UUID(order_id)))
         return accepted

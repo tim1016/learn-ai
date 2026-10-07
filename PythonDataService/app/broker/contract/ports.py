@@ -223,8 +223,9 @@ class BrokerTradePort(Protocol):
     order. Only an answer taken as that order's ends the grace early; one
     the lookup refuses starts it again. A read by the broker order id that
     an unreadable answer carried keeps the same grace, counted from that
-    answer. Outside a grace, ``None`` from either lookup is the vendor
-    saying no such order exists.
+    answer. So does a read by any broker order id, after an answer to it
+    that was not taken as that order's. Outside a grace, ``None`` from
+    either lookup is the vendor saying no such order exists.
     """
 
     broker_id: str

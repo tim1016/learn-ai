@@ -43,6 +43,23 @@ From the order reference (`CreateOrderRequest`, `MLegOrderLeg`, and the
   say nothing of a space before or after one; this repo refuses that too,
   as its own rule, because the id Alpaca kept might not be the one sent.
 
+From the same reference's answer schemas (`Order`, `OrderLeg`, `OrderSide`),
+read again on 2026-10-07 for the rules an answer is held to:
+
+- An order's `id`, and a leg's, is a string of format `uuid`. An answer
+  whose id, or a leg's, is not a UUID is refused by Alpaca's reader: nothing
+  could be read or cancelled by it.
+- `symbol` is "required for all order classes except for `mleg`", and
+  `OrderSide` is "Required for all order classes except for mleg". The one
+  published multi-leg parent writes both as the empty string and has no
+  `position_intent`. So a parent is read when each of the three is the
+  empty string, null or left out, and refused when it states any of them.
+- The published legs' `filled_avg_price` are unsigned: three bought at 0.43
+  and one sold at 0.01 net to the parent's 1.28 only when the sold leg's
+  price is taken as positive and its side applied. So a leg's fill price,
+  and a single order's two prices, are never below zero; only a parent's
+  net price is signed.
+
 From Options Trading (https://docs.alpaca.markets/docs/options-trading, last
 updated 2026-09-16): an option order's `qty` is a whole number, `notional` is
 not set, and `extended_hours` is false or absent.
@@ -73,6 +90,11 @@ No recording exists for any of this. Until one does, it is unverified.
   `filled_avg_price` is not shown.
 - **A multi-leg market order.** The reference lists the type; no page shows a
   body or an answer.
+- **What a real multi-leg parent writes for its own `symbol`, `side` and
+  `position_intent`.** One example shows two empty strings and no third
+  field. A real parent that states any of them would not be read.
+- **A leg's fill price in a received structure.** If Alpaca wrote a sold
+  leg's price below zero, the answer would not be read.
 - **A closing order of one leg**, and **`position_intent` in a single-leg
   answer** (the example answer predates the field and omits it).
 - **A leg's `qty` and `filled_qty` for an order of more than one

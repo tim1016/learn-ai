@@ -297,6 +297,12 @@ def _require_filled_within_quantity(filled: int, quantity: int | None, *, what: 
         raise ValueError(f"{what} cannot have filled {filled} of a quantity of {quantity}")
 
 
+def _require_not_below_zero(price: Decimal | None, *, what: str) -> None:
+    """Refuse one contract's price below zero: only a multi-leg net price is signed."""
+    if price is not None and price < 0:
+        raise ValueError(f"{what} is one contract's price and is never below zero; got {price}")
+
+
 class BrokerOptionOrderLeg(_OptionEvidenceModel):
     """One leg of a multi-leg order as the broker reports it: an order of its own, under the parent."""
 
@@ -311,7 +317,7 @@ class BrokerOptionOrderLeg(_OptionEvidenceModel):
     # ``quantity`` is ``None`` when the answer does not say.
     quantity: int | None = Field(ge=0)
     filled_quantity: int = Field(ge=0)
-    # Dollars a share, as the broker reports this leg's fills.
+    # Dollars a share, as the broker reports this leg's fills: this contract's price, never below zero.
     filled_avg_price: Decimal | None
     status: str = Field(min_length=1)
     submitted_at_ms: int | None
@@ -322,8 +328,9 @@ class BrokerOptionOrderLeg(_OptionEvidenceModel):
     expired_at_ms: int | None
 
     @model_validator(mode="after")
-    def _no_more_filled_than_ordered(self) -> BrokerOptionOrderLeg:
+    def _no_more_filled_than_ordered_and_no_price_below_zero(self) -> BrokerOptionOrderLeg:
         _require_filled_within_quantity(self.filled_quantity, self.quantity, what="an option order leg")
+        _require_not_below_zero(self.filled_avg_price, what="an option order leg's fill price")
         return self
 
 
@@ -333,8 +340,10 @@ class BrokerOptionOrder(_OptionEvidenceModel):
     A single-leg order carries its own ``contract`` and ``side``, its
     ``intent`` when the broker's answer states one (``None`` when it does
     not), and no ``legs``. A multi-leg parent has none of the three and two
-    to four ``legs``, each on a contract of its own. Its ``limit_price`` and
-    ``filled_avg_price`` are net, a share, signed as the broker signs them.
+    to four ``legs``, each on a contract of its own and all on one
+    underlying. Its ``limit_price`` and ``filled_avg_price`` are net, a
+    share, signed as the broker signs them. A single order's two prices,
+    and a leg's fill price, are one contract's: never below zero.
 
     A parent's ``quantity`` and ``filled_quantity`` count structures. A
     leg's are the broker's own numbers for that leg. Alpaca's one published
@@ -342,7 +351,11 @@ class BrokerOptionOrder(_OptionEvidenceModel):
     comes to are the same number; what a leg says for more is not yet
     recorded (#2913). So no leg is held to its ratio times the parent's
     quantity. What is held is true whatever the units: nothing fills beyond
-    its quantity, and a single order is for one contract or more.
+    its quantity, and an order is for one contract, or one structure, or
+    more.
+
+    An order id is held to no spelling here: each broker's reader holds it
+    to that broker's own, and a simulated broker's ids are its own.
     """
 
     broker: str
@@ -355,7 +368,8 @@ class BrokerOptionOrder(_OptionEvidenceModel):
     intent: OptionPositionIntent | None
     order_type: str = Field(min_length=1)
     time_in_force: str = Field(min_length=1)
-    quantity: int = Field(ge=0)
+    # Contracts of a single order, structures of a multi-leg one: one or more of either.
+    quantity: int = Field(ge=1)
     filled_quantity: int = Field(ge=0)
     limit_price: Decimal | None
     filled_avg_price: Decimal | None
@@ -382,10 +396,14 @@ class BrokerOptionOrder(_OptionEvidenceModel):
             symbols = [leg.contract.occ_symbol for leg in self.legs]
             if len(set(symbols)) != len(symbols):
                 raise ValueError(f"a multi-leg order has each contract in one leg; these repeat: {sorted(symbols)}")
+            roots = sorted({leg.contract.root for leg in self.legs})
+            if len(roots) != 1:
+                raise ValueError(f"every leg of a multi-leg order is on one underlying; these are on {roots}")
         elif self.legs or self.contract is None or self.side is None:
             raise ValueError("a single option order names its contract and side and has no legs")
-        elif self.quantity < 1:
-            raise ValueError("a single option order is for one contract or more")
+        else:
+            _require_not_below_zero(self.limit_price, what="a single option order's limit price")
+            _require_not_below_zero(self.filled_avg_price, what="a single option order's fill price")
         _require_filled_within_quantity(self.filled_quantity, self.quantity, what="an option order")
         return self
 
@@ -560,6 +578,12 @@ class BrokerOptionAccountSnapshot(_OptionEvidenceModel):
     Absent is unknown, never zero: a level of zero is the broker saying
     options are off.
 
+    The level in force is never above the approved one. Alpaca's account
+    reference defines it as "the minimum between" the approved level and
+    the most the owner's configuration allows, so an answer that states
+    both with the first above the second contradicts itself and is refused.
+    A level that is unknown holds the other to nothing.
+
     These are read apart from ``BrokerAccountSnapshot`` so that model, which a
     route serves, is unchanged.
     """
@@ -574,3 +598,10 @@ class BrokerOptionAccountSnapshot(_OptionEvidenceModel):
     # The level in force: the approved level, or a lower one the owner set.
     options_trading_level: _OptionLevel | None
     observed_at_ms: int
+
+    @model_validator(mode="after")
+    def _the_level_in_force_is_not_above_the_approved_level(self) -> BrokerOptionAccountSnapshot:
+        approved, in_force = self.options_approved_level, self.options_trading_level
+        if approved is not None and in_force is not None and in_force > approved:
+            raise ValueError(f"an option trading level of {in_force} is above the approved level of {approved}")
+        return self
