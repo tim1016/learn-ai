@@ -1013,6 +1013,18 @@ class SqliteAlpacaClerkFacade:
         """How a simulation priced each option order it answered, by client order id."""
         return self._trade.synthesized_option_fills()
 
+    def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
+        """The option contracts one bot holds now, by OCC symbol, its newest entry's first (ADR 0076).
+
+        The books' answer, among the contracts the bot's own entries opened:
+        what its EXIT closes. The plan's rules are not asked.
+        """
+        return tuple(
+            symbol
+            for symbol in option_entry_contracts(self._repo, strategy_instance_id)
+            if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
+        )
+
     async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
         async with self._intake:
             self._repo.record_deploy_launched(strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id)

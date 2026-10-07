@@ -6,6 +6,8 @@ from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
     from app.broker.alpaca.clerk.models import (
         ClerkCustodySnapshot,
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
     from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
+    from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOptionFill
     from app.schemas.action_plan import ActionPlan
     from app.schemas.exit_terms import ExitTerms
     from app.services.bot_binding_repository import BrokerBotBinding
@@ -132,6 +135,14 @@ class ActiveAlpacaClerk(Protocol):
         option_entry: OptionEntryEvidence | None = None,
         option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt: ...
+
+    def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
+        """The option contracts one bot holds now, by OCC symbol: what its EXIT closes (ADR 0076)."""
+        ...
+
+    def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
+        """How a simulation priced each option order it answered, by order ref; empty on a real account."""
+        ...
 
     async def reconcile_once(self) -> ReconciliationVerdict: ...
 

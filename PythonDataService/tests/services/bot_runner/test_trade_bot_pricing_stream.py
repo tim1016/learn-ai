@@ -26,6 +26,7 @@ import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
 from app.marketdata.feed import (
@@ -463,8 +464,8 @@ async def test_a_bot_that_trades_what_it_listens_to_opens_no_second_stream(run: 
     assert ran.feed.symbols_asked_for == [SIGNAL]
 
 
-async def test_a_plan_that_trades_options_is_not_handed_its_underlyings_share_price(tmp_path: Path) -> None:
-    """A second stream is a stream of share bars. It prices a stock or an ETF and nothing else."""
+async def test_the_paper_runner_refuses_a_plan_that_trades_options_by_name_and_opens_no_stream(tmp_path: Path) -> None:
+    """Only a Dry Run runs an option bot for now. A Paper bot's is refused before any stream is asked for."""
     options_on_the_signal = ActionPlan.model_validate(
         {
             "on_enter": [
@@ -487,8 +488,9 @@ async def test_a_plan_that_trades_options_is_not_handed_its_underlyings_share_pr
     set_alpaca_clerk(_FakeClerk(repository=repo))
     feed = _ScriptedFeed([])
     try:
-        with pytest.raises(RuntimeError, match="only in a stock or an ETF"):
+        with pytest.raises(OptionPlanRefused) as refused:
             await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger, pricing_feed=feed)
+        assert refused.value.reason is OptionEffectRefusal.ACCOUNT_NOT_SIMULATED
         assert feed.symbols_asked_for == []
     finally:
         set_alpaca_clerk(None)

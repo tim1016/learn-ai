@@ -323,6 +323,25 @@ def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(row["symbol"] for row in rows)
 
 
+def option_contracts_to_watch(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """The option contracts this account must have quoted, by OCC symbol (ADR 0076).
+
+    A contract a bot holds, and a contract an order is working in at the
+    broker. The sibling of :func:`market_data_symbols` for contracts: a
+    contract is told by its recorded terms, never by its symbol's spelling,
+    so a stock position is never in the answer.
+    """
+    working = ",".join("?" for _ in WORKING_BROKER_STATES)
+    rows = conn.execute(
+        "SELECT p.symbol AS symbol FROM positions p JOIN option_contracts c ON c.symbol = p.symbol "
+        "WHERE p.attributed_qty != 0 "
+        "UNION SELECT oc.symbol FROM order_contracts oc JOIN orders o ON o.order_ref = oc.order_ref "
+        f"WHERE lower(o.broker_state) IN ({working}) ORDER BY symbol",
+        tuple(sorted(WORKING_BROKER_STATES)),
+    ).fetchall()
+    return tuple(row["symbol"] for row in rows)
+
+
 def strategy_instance(conn: sqlite3.Connection, strategy_instance_id: str) -> dict | None:
     row = conn.execute(
         "SELECT strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms "

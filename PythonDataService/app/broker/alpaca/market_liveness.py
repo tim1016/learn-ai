@@ -33,6 +33,7 @@ from app.services.market_liveness import MarketLivenessStore, get_market_livenes
 from app.utils.timestamps import Clock, now_ms_utc
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.held_option_quotes import HeldOptionQuotes
     from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
     from app.services.option_watch import OptionWatchList
 
@@ -385,6 +386,7 @@ class AlpacaMarketLivenessConsumer:
         store: MarketLivenessStore | None = None,
         journal: CaptureJournal | None = None,
         option_watch: OptionWatchList | None = None,
+        held_option_quotes: HeldOptionQuotes | None = None,
     ) -> AlpacaMarketLivenessConsumer:
         """Use IBKR data locally or through an authenticated IBKR status owner.
 
@@ -392,6 +394,11 @@ class AlpacaMarketLivenessConsumer:
         the source keeps using the binding it was started for. A consumer that
         re-read configuration on reconnect could silently switch accounts or
         status topology without a controlled restart.
+
+        ``option_watch`` is what this process's option bots and pages ask to
+        have watched. ``held_option_quotes`` is what its Dry Run Clerks' books
+        say their bots hold: those contracts are asked for too, and their
+        quotes kept, on each pass of the local source (ADR 0076).
         """
         resolved = settings or resolved_alpaca_settings()
         store = store or get_market_liveness_store()
@@ -402,10 +409,19 @@ class AlpacaMarketLivenessConsumer:
             raise RuntimeError("Direct Alpaca market-data subscriptions are disabled.")
             yield ""  # pragma: no cover
 
+        from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
         from app.broker.ibkr.config import get_settings as ibkr_settings
         from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
-        from app.broker.ibkr.option_quotes import OptionQuoteLines
+        from app.broker.ibkr.option_quotes import OptionQuoteLines, WatchRequest
         from app.services.option_watch import get_option_watch_list
+
+        watch = option_watch or get_option_watch_list()
+        held = held_option_quotes or get_held_option_quotes()
+
+        def option_requests() -> tuple[WatchRequest, ...]:
+            # What bots and pages ask for, and what the Clerks' own books say is held. A held
+            # contract's request does not depend on any runner being alive to make it.
+            return (*watch.requests(), *held.requests())
 
         cached_demand: tuple[str, ...] = ()
         cached_revision: tuple[object, int] | None = None
@@ -432,6 +448,9 @@ class AlpacaMarketLivenessConsumer:
             # seam. The stable projection is invalidated by custody/lifecycle
             # commits; no per-bot files are read by the market-data loop.
             durable = await to_thread(durable_demand)
+            # The option side of the same demand: the contracts each Dry Run's bots hold, read
+            # from its books before this pass asks what is wanted.
+            await _contained(held.read_books(), "held_option_books_round_failed")
             feed = get_market_data_feed()
             active = () if feed is None else feed.active_symbols()
             return tuple(dict.fromkeys((*active, *durable, *store.requested_symbols())))
@@ -444,12 +463,20 @@ class AlpacaMarketLivenessConsumer:
             # Option contracts are quoted on this Clerk's own IBKR connection, for whatever its bots ask
             # to have watched, inside the line budget it is configured with (zero until set).
             options=OptionQuoteLines(
-                requests=(option_watch or get_option_watch_list()).requests,
+                requests=option_requests,
                 budget=ibkr_settings().option_line_budget,
                 strikes_each_side=ibkr_settings().option_window_strikes_each_side,
             ),
         )
-        status_source = local_source
+
+        async def local_status() -> MarketStatusSnapshot:
+            snapshot = await local_source()
+            # The Clerk's own keeping, after the pass: the newest usable quote of every contract a
+            # Dry Run here holds, so a close, a Flatten and a mark have one with no runner alive.
+            await _contained(held.keep(local_source), "held_option_quotes_round_failed")
+            return snapshot
+
+        status_source = local_status
         if resolved.market_status_upstream_url is not None:
             from app.config import settings as service_settings
 
@@ -475,6 +502,18 @@ class AlpacaMarketLivenessConsumer:
             status_source_close=local_source.close,
             option_quotes=local_source,
         )
+
+
+async def _contained(step: Awaitable[object], action: str) -> None:
+    """Run one step of the option side beside the stock quotes. A fault there is logged with its stack and
+    never takes the stock evidence down with it: the status source this runs inside blocks every entry
+    when it raises."""
+    try:
+        await step
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("A step of the held option quotes failed", extra={"action": action})
 
 
 async def read_shared_market_status(

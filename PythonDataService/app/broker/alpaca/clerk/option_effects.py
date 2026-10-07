@@ -60,6 +60,9 @@ class OptionEffectRefusal(StrEnum):
     SEVERAL_CONTRACTS_HELD = "OPTION_EXIT_SEVERAL_CONTRACTS_HELD"
     # An EXIT came with a quote of a contract the bot does not hold.
     EXIT_QUOTES_FOR_ANOTHER_CONTRACT = "OPTION_EXIT_QUOTES_NOT_THE_HELD_CONTRACT"
+    # The plan's watched window can need more quote lines than this Clerk may open, so its
+    # contracts could never all be quoted. Refused when the run starts, not at every entry.
+    WINDOW_OVER_LINE_BUDGET = "OPTION_WINDOW_OVER_LINE_BUDGET"
 
 
 # Shares one standard contract's price stands for. A listing with any other
