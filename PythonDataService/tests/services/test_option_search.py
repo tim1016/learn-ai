@@ -1,19 +1,24 @@
 """Where an option search runs: a worker process of its own, the answer it brings back, and each way it brings none.
 
-The tests that start a real worker process say so in their names. Every
-other test hands the lane an executor that runs the search here, through the
-same pickling a worker's pipe does, or one whose answers the test holds back.
+The tests that start a real worker process say so in their names, and look
+for it among this process's own live children, by process id. Every other
+test hands the lane an executor that runs the search here, through the same
+pickling a worker's pipe does, or one whose answers the test holds back.
 """
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import json
+import multiprocessing
 import os
 import pickle
 import signal
-from collections.abc import Callable
-from concurrent.futures import Executor, Future
+import subprocess
+import sys
+from collections.abc import Callable, Iterator
+from concurrent.futures import Executor, Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import fields, replace
 from datetime import date
@@ -43,6 +48,9 @@ from app.services.option_search import (
 # The resolver's own scenes: SPY at 585 on a dollar-wide ladder, selected on a Tuesday at 10:31:02.
 from tests.options import test_resolver as scenes
 
+# What a real worker that does not come up runs when it starts.
+from tests.services import _search_workers as stuck
+
 
 class InThisProcess(Executor):
     """Runs what it is handed at once, here, through the pickling a worker process's pipe does."""
@@ -65,9 +73,11 @@ def searches_in_this_process() -> PreviewSearches[Any]:
 class Held(Executor):
     """A worker whose searches answer only when the test lets them. The first call, which starts it, answers at once."""
 
-    def __init__(self) -> None:
+    def __init__(self, handed: asyncio.Event | None = None) -> None:
         self.searches: list[Future[Any]] = []
         self.shut_down = False
+        # Set each time a search is handed over.
+        self._handed = handed or asyncio.Event()
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
         answer: Future[Any] = Future()
@@ -76,6 +86,7 @@ class Held(Executor):
             answer.set_running_or_notify_cancel()
             answer.asked = args[0]  # type: ignore[attr-defined]
             self.searches.append(answer)
+            self._handed.set()
         else:
             answer.set_result(fn(*args, **kwargs))
         return answer
@@ -94,10 +105,20 @@ class Workers:
 
     def __init__(self) -> None:
         self.made: list[Held] = []
+        self._handed = asyncio.Event()
 
     def __call__(self) -> Held:
-        self.made.append(Held())
+        self.made.append(Held(self._handed))
         return self.made[-1]
+
+    async def handed(self, searches: int = 1, *, worker: int = 0) -> Held:
+        """The worker, once it has been handed this many searches. A test waits on this and never on a sleep:
+        how long an ask takes to reach its search is the machine's business."""
+        async with asyncio.timeout(30):
+            while len(self.made) <= worker or len(self.made[worker].searches) < searches:
+                self._handed.clear()
+                await self._handed.wait()
+        return self.made[worker]
 
 
 def _ask(plan: ActionPlan, scene: scenes._Scene | None = None) -> SearchAsk:
@@ -267,6 +288,40 @@ async def test_what_could_not_describe_a_market_is_the_callers_mistake_from_the_
 # ---- A real worker process ------------------------------------------------------------
 
 
+def _gone(pid: int) -> bool:
+    """True when no process has this id any more: it has ended and been reaped. One only killed still has it."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+@pytest.fixture
+def workers_alive() -> Iterator[Callable[[], set[int]]]:
+    """The process ids of this test's live worker processes: every live child of this process that was not one
+    before the test began. Whatever is still alive when the test ends is killed, so a failure leaves nothing."""
+    before = {child.pid for child in multiprocessing.active_children()}
+
+    def alive() -> set[int]:
+        return {child.pid for child in multiprocessing.active_children()} - before
+
+    yield alive
+    for child in multiprocessing.active_children():
+        if child.pid not in before:
+            child.kill()
+            child.join(5)
+
+
+def _a_worker_that(starts_with: Callable[[], None]) -> ProcessPoolExecutor:
+    """One spawned worker process as the lane's own is made, but for what it runs when it starts."""
+    return ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"), initializer=starts_with)
+
+
+def _never_comes_up() -> ProcessPoolExecutor:
+    return _a_worker_that(stuck.never_comes_up)
+
+
 async def test_a_real_worker_process_answers_as_the_resolver_does_here_for_every_starting_plan() -> None:
     """The twelve named structures as the builder starts them, each with a leg picked by delta."""
     scene = scenes._scene()
@@ -304,6 +359,156 @@ async def test_a_real_worker_that_dies_mid_search_is_a_search_not_run_and_the_ne
         assert lane.worker_pid not in (None, first_worker, os.getpid())
     finally:
         lane.close()
+
+
+async def test_a_lane_holds_its_real_workers_process_from_the_moment_it_is_spawned(
+    workers_alive: Callable[[], set[int]],
+) -> None:
+    """Before the worker has said anything. The lane reads the process off its pool's own record of what it
+    spawned, which is not public: were that record to change, this test is where it shows."""
+    lane = OptionSearchLane("entry")
+    try:
+        lane.warm()
+        spawned = workers_alive()
+        answered = await lane.search(_ask(_AT_THE_MONEY))
+
+        # One process, and the one that answers: what the worker says its own id is.
+        assert isinstance(answered, Resolution)
+        assert spawned == {lane.worker_pid} == workers_alive()
+    finally:
+        lane.close()
+    assert all(_gone(pid) for pid in spawned) and workers_alive() == set()
+
+
+async def test_a_real_worker_whose_start_never_finishes_is_killed_and_reaped_when_the_bound_is_up(
+    workers_alive: Callable[[], set[int]],
+) -> None:
+    lane = OptionSearchLane("preview", executor=_never_comes_up, hang_bound_s=0.3)
+    try:
+        lane.warm()
+        (coming_up,) = workers_alive()
+
+        # Bounded here too: a lane that waited for ever would hang this test, not fail it.
+        told = await asyncio.wait_for(lane.search(_ask(_AT_THE_MONEY)), timeout=15)
+
+        assert isinstance(told, SearchNotRun) and told.reason is SearchNotRunReason.WORKER_DID_NOT_ANSWER
+        assert _gone(coming_up), "the worker that never came up was left running, or left unreaped"
+        assert workers_alive() == set() and lane.worker_pid is None
+    finally:
+        lane.close()
+
+
+async def test_asked_again_and_again_a_lane_whose_real_worker_never_starts_has_one_worker_at_most(
+    workers_alive: Callable[[], set[int]],
+) -> None:
+    lane = OptionSearchLane("preview", executor=_never_comes_up, hang_bound_s=0.2)
+    started: set[int] = set()
+    most_at_once = 0
+
+    try:
+        async with asyncio.timeout(30):
+            for _ in range(3):
+                asking = asyncio.ensure_future(lane.search(_ask(_AT_THE_MONEY)))
+                # Looked at every hundredth of a second for as long as the ask is out.
+                while not asking.done():
+                    alive = workers_alive()
+                    started |= alive
+                    most_at_once = max(most_at_once, len(alive))
+                    await asyncio.sleep(0.01)
+                told = await asking
+                assert isinstance(told, SearchNotRun) and told.reason is SearchNotRunReason.WORKER_DID_NOT_ANSWER
+                assert workers_alive() == set()
+    finally:
+        lane.close()
+
+    # Each ask started a worker of its own, and each was gone before the next was started.
+    assert (len(started), most_at_once) == (3, 1)
+    assert all(_gone(pid) for pid in started)
+
+
+async def test_a_real_worker_too_slow_to_start_is_ended_and_the_search_that_needs_one_is_answered_by_the_next(
+    monkeypatch: pytest.MonkeyPatch, workers_alive: Callable[[], set[int]]
+) -> None:
+    """Started ahead of its first search, as a page's worker and a bot's are, and still not up when the bound
+    has passed. The search that comes then ends it, starts one worker and has its answer from that one. The
+    lane's own clock is moved here; the processes, the kill and the answer are real."""
+    now = [100.0]
+    monkeypatch.setattr(option_search, "_monotonic", lambda: now[0])
+    made: list[ProcessPoolExecutor] = []
+
+    def worker() -> ProcessPoolExecutor:
+        # Slow once: the first never comes up, and each one after it is the lane's own kind.
+        made.append(option_search.a_worker_process() if made else _never_comes_up())
+        return made[-1]
+
+    lane = OptionSearchLane("entry", executor=worker)
+    try:
+        lane.warm()
+        (too_slow,) = workers_alive()
+        now[0] += option_search.SEARCH_HANG_BOUND_S
+
+        found = await lane.search(_ask(_AT_THE_MONEY))
+
+        assert isinstance(found, Resolution) and found == scenes._scene().resolve(_AT_THE_MONEY)
+        assert _gone(too_slow) and len(made) == 2
+        assert workers_alive() == {lane.worker_pid}
+    finally:
+        lane.close()
+    assert workers_alive() == set()
+
+
+async def _close_a_lane_in_each_state() -> dict[str, int]:
+    """Bring four lanes to the four states a worker can be in, close each twice, and return each worker's
+    process id by its state."""
+    slow = scenes._scene(model=replace(scenes._MODEL, tree_steps=DEFAULT_TREE_STEPS))
+    by_delta = starting_plan(NamedStructure.IRON_CONDOR, "SPY")
+    coming_up = OptionSearchLane("coming-up", executor=_never_comes_up)
+    searching, hung, broken = (OptionSearchLane(name) for name in ("searching", "hung", "broken"))
+
+    coming_up.warm()
+    workers = {"coming_up": multiprocessing.active_children()[0].pid}
+    for lane in (searching, hung, broken):
+        lane.warm()
+    for lane in (searching, hung, broken):
+        assert isinstance(await lane.search(_ask(_AT_THE_MONEY)), Resolution)
+        workers[lane.name] = lane.worker_pid
+    in_hand = [lane.start(_ask(by_delta, slow)) for lane in (searching, hung)]
+    await _moments()
+    # Alive and answering nothing, as a worker that hangs is.
+    os.kill(workers["hung"], signal.SIGSTOP)
+    # Dead, and the lane has not been told.
+    os.kill(workers["broken"], signal.SIGKILL)
+    assert not any(search.done() for search in in_hand)
+
+    for lane in (coming_up, searching, hung, broken):
+        lane.close()
+        lane.close()
+    return workers
+
+
+def close_a_lane_in_each_state_and_end() -> None:
+    """What the test below runs in a process of its own. It writes the workers' process ids and returns: the
+    process then ends, unless something a lane left behind keeps it."""
+    sys.stdout.write(json.dumps(asyncio.run(_close_a_lane_in_each_state())))
+
+
+def test_closing_a_lane_leaves_no_real_worker_whatever_it_was_doing_and_lets_its_process_end() -> None:
+    """A lane whose worker is coming up, one searching, one hung and one whose worker has died are each closed,
+    twice, in a process of its own. That process must then end by itself: a pool left with a live worker keeps
+    a thread that the interpreter waits for, for ever. And none of the four workers may outlive it."""
+    ran = subprocess.run(
+        [sys.executable, "-c", "from tests.services import test_option_search as t; t.close_a_lane_in_each_state_and_end()"],
+        cwd=Path(option_search.__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert ran.returncode == 0, ran.stderr
+    workers = json.loads(ran.stdout)
+    assert set(workers) == {"coming_up", "searching", "hung", "broken"}
+    assert {state: _gone(pid) for state, pid in workers.items()} == dict.fromkeys(workers, True)
 
 
 # ---- A worker that dies, hangs, or cannot be started ------------------------------------
@@ -391,6 +596,72 @@ async def test_a_worker_that_does_not_answer_within_the_bound_is_ended_and_repla
     assert isinstance(await searching_again, Resolution)
 
 
+class _ComingUp(Held):
+    """A worker whose first call, which starts it, is answered only when the test says it is up."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.up: Future[Any] = Future()
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        if fn is option_search.search:
+            return super().submit(fn, *args, **kwargs)
+        self.up.set_running_or_notify_cancel()
+        return self.up
+
+
+async def test_a_search_that_comes_while_the_worker_is_still_coming_up_waits_for_it_and_starts_no_other() -> None:
+    made: list[_ComingUp] = []
+
+    def worker() -> _ComingUp:
+        made.append(_ComingUp())
+        return made[-1]
+
+    lane = OptionSearchLane("entry", executor=worker)
+    lane.warm()
+    first, second = lane.start(_ask(_AT_THE_MONEY)), lane.start(_ask(_SPREAD))
+    await _moments()
+    lane.warm()
+    started_while_it_came_up = len(made)
+    handed_before_it_was_up = len(made[0].searches)
+
+    made[0].up.set_result(os.getpid())
+    await _moments()
+    made[0].let_go(0)
+    await first
+    await _moments()
+    made[0].let_go(1)
+
+    assert (started_while_it_came_up, handed_before_it_was_up) == (1, 0)
+    assert isinstance(await first, Resolution) and isinstance(await second, Resolution)
+    assert len(made) == 1 and not made[0].shut_down
+
+
+async def test_a_worker_started_ahead_that_never_came_up_is_ended_the_next_time_the_lane_is_warmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page asks every second, and each ask warms its lane. The bound is counted from when the worker was
+    started: inside it the worker is waited for, and past it the worker is ended and one more is started."""
+    now = [100.0]
+    monkeypatch.setattr(option_search, "_monotonic", lambda: now[0])
+    made: list[_ComingUp] = []
+
+    def worker() -> _ComingUp:
+        made.append(_ComingUp())
+        return made[-1]
+
+    lane = OptionSearchLane("preview", executor=worker, hang_bound_s=20.0)
+    lane.warm()
+    now[0] += 19.9
+    lane.warm()
+    inside_the_bound = (len(made), made[0].shut_down)
+    now[0] += 0.1
+    lane.warm()
+
+    assert inside_the_bound == (1, False)
+    assert [worker.shut_down for worker in made] == [True, False]
+
+
 @pytest.mark.parametrize("failure", [PermissionError("no semaphores to be had"), NotImplementedError("no process pools here")])
 async def test_a_worker_that_cannot_be_started_is_a_search_not_run(failure: Exception) -> None:
     def worker() -> Executor:
@@ -404,17 +675,45 @@ async def test_a_worker_that_cannot_be_started_is_a_search_not_run(failure: Exce
     assert isinstance(lost, SearchNotRun) and lost.reason is SearchNotRunReason.WORKER_FAILED
 
 
-async def test_a_search_that_raises_in_the_worker_is_not_run_and_is_not_an_answer() -> None:
+@pytest.mark.parametrize(
+    "fault",
+    [
+        KeyError("a fault in the search itself"),
+        # What a dead worker's pool raises is a ``RuntimeError`` too, and what a process that cannot be started
+        # raises an ``OSError``. Raised by the search, neither says anything about its worker.
+        RuntimeError("the search itself raised this"),
+        OSError("the search itself raised this"),
+        TimeoutError("the search itself raised this, long before the lane's own bound"),
+    ],
+    ids=lambda fault: type(fault).__name__,
+)
+async def test_a_search_that_raises_in_the_worker_is_the_searchs_failure_and_its_worker_takes_the_next(
+    fault: Exception,
+) -> None:
     class Faulty(Held):
         def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
             answer = super().submit(fn, *args, **kwargs)
-            if fn is option_search.search:
-                answer.set_exception(KeyError("a fault in the search itself"))
+            if fn is option_search.search and len(self.searches) == 1:
+                answer.set_exception(fault)
             return answer
 
-    lost = await OptionSearchLane("entry", executor=Faulty).search(_ask(_AT_THE_MONEY))
+    made: list[Faulty] = []
+
+    def worker() -> Faulty:
+        made.append(Faulty())
+        return made[-1]
+
+    lane = OptionSearchLane("entry", executor=worker)
+
+    lost = await lane.search(_ask(_AT_THE_MONEY))
+    searching_again = lane.start(_ask(_AT_THE_MONEY))
+    await _moments()
+    made[0].let_go(1)
 
     assert isinstance(lost, SearchNotRun) and lost.reason is SearchNotRunReason.FAILED
+    # Not "its worker process ended": the worker is as it was, and is the one that answers next.
+    assert isinstance(await searching_again, Resolution)
+    assert len(made) == 1 and not made[0].shut_down
 
 
 def test_a_process_that_never_searches_never_starts_a_worker() -> None:

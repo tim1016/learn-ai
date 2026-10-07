@@ -25,8 +25,17 @@ resolution or its typed refusal, rebuilt here as the resolver made it.
 
 **A search that could not be run is not an answer.** A worker that could not
 be started, died, or did not answer within the bound gives ``SearchNotRun``:
-never a refusal of the plan, and never a guess. A worker that died is
-replaced on the next search; one that did not answer is ended first.
+never a refusal of the plan, and never a guess. An error the search itself
+raised is the search's failure, and leaves its worker as it was.
+
+**A lane holds its worker's process from the moment it is spawned, and never
+has two.** A worker is up within the bound of being started, and answers a
+search within the bound of being handed it. One that does neither is killed
+and reaped, and only then is another started: by the search that was waiting
+for it, or, when none was, by the next use of the lane. A search that comes
+while a worker is still coming up waits for that worker. Closing a lane kills
+and reaps its worker whatever it is doing, so nothing is left to keep this
+process from ending.
 
 **The preview lane has rules of its own** (``PreviewSearches``): one search
 at a time for one page, at most one more waiting behind the one running, and
@@ -37,16 +46,17 @@ the page's next ask, when that ask still stands on what the search stood on.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import multiprocessing
 import os
 import signal
 import time
 from collections.abc import Callable
-from concurrent.futures import Executor, Future, ProcessPoolExecutor
+from concurrent.futures import BrokenExecutor, Executor, Future, ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from multiprocessing import connection
+from multiprocessing.process import BaseProcess
 from types import MappingProxyType
 
 from app.options.american import AmericanIvStatus
@@ -72,14 +82,26 @@ logger = logging.getLogger(__name__)
 PREVIEW_SEARCH_WAIT_S = 4.0
 # How long a search that outlived its ask is kept for the page's next one.
 PREVIEW_ANSWER_KEPT_S = 5.0
-# A worker that has not answered a search for this long is ended and replaced. Several times the preview
-# lane's wait: an iron condor on the default window takes about a second.
+# A worker that is not up this long after it was started, or has not answered a search this long after it
+# was handed one, is ended and replaced. Several times the preview lane's wait: a worker loads in about a
+# second, and an iron condor on the default window takes about as long.
 SEARCH_HANG_BOUND_S = 20.0
+# How long a worker that was just killed is waited for. One is gone in milliseconds; this only bounds the wait.
+KILLED_WORKER_WAIT_S = 2.0
 # The most searches the preview lane has in hand at once: one running and one waiting behind it.
 _PREVIEW_SEARCHES_IN_HAND = 2
 
-# What starting a worker process can raise: no semaphores or processes to be had, or an interpreter going down.
+# What starting a worker process, or handing it a search, can raise: no semaphores or processes to be had, an
+# interpreter going down, or a worker found dead (the pool's own error for that is a ``RuntimeError``).
 _CANNOT_START = (OSError, RuntimeError, NotImplementedError)
+
+
+# This process's own clock, for how long ago a worker was started. Never a time of day.
+_monotonic = time.monotonic
+
+
+class _NoAnswerInTime(Exception):
+    """A worker had not answered when the lane's own bound ran out. Nothing a worker raises is this."""
 
 
 class SearchNotRunReason(StrEnum):
@@ -87,7 +109,7 @@ class SearchNotRunReason(StrEnum):
 
     # The worker process could not be started, or ended before it answered. The next search starts another.
     WORKER_FAILED = "OPTION_SEARCH_WORKER_FAILED"
-    # The worker had not answered within the bound, and was ended. The next search starts another.
+    # The worker was not up, or had not answered, within the bound, and was ended. The next search starts another.
     WORKER_DID_NOT_ANSWER = "OPTION_SEARCH_WORKER_DID_NOT_ANSWER"
     # The search raised in the worker, or what was asked or answered could not cross between the processes.
     FAILED = "OPTION_SEARCH_FAILED"
@@ -229,11 +251,76 @@ def a_worker_process() -> ProcessPoolExecutor:
     )
 
 
+# ---- a worker's own process -------------------------------------------------------
+
+
+def _spawned_by(pool: Executor) -> tuple[BaseProcess, ...]:
+    """The processes a pool has spawned. A ``ProcessPoolExecutor`` keeps each from the moment it starts it,
+    and nothing public names them: a test pins that this record holds a lane's worker. An executor of any
+    other kind has no process of its own."""
+    if not isinstance(pool, ProcessPoolExecutor):
+        return ()
+    return tuple((getattr(pool, "_processes", None) or {}).values())
+
+
+def _worker_process_of(pool: Executor) -> BaseProcess | None:
+    """The one process of a pool of one, once its first call has been handed to it. None for an executor with
+    no process of its own. A process pool that does not show its one process cannot be ended, and is not used."""
+    if not isinstance(pool, ProcessPoolExecutor):
+        return None
+    spawned = _spawned_by(pool)
+    if len(spawned) != 1:
+        raise RuntimeError(f"a search worker's pool shows {len(spawned)} processes where it must show its one")
+    return spawned[0]
+
+
+def _has_gone(process: BaseProcess) -> bool:
+    """Whether a process has ended. Its sentinel reads as ready from then on, whichever thread reaps it."""
+    return bool(connection.wait([process.sentinel], timeout=0))
+
+
+def _kill(process: BaseProcess, lane: str) -> None:
+    """Kill a worker's process and reap it, whatever it is doing. Nothing else stops a search once it has
+    begun, or a worker that is stuck coming up. One already dead is only reaped."""
+    try:
+        process.kill()
+    except OSError:
+        logger.exception(
+            "An option search worker could not be sent its kill",
+            extra={"action": "option_search_worker_kill_failed", "lane": lane, "pid": process.pid},
+        )
+    process.join(KILLED_WORKER_WAIT_S)
+    if not _has_gone(process):
+        logger.error(
+            "An option search worker was killed and has not gone",
+            extra={"action": "option_search_worker_not_gone", "lane": lane, "pid": process.pid},
+        )
+
+
+async def _answer_within[T](answer: Future[T], seconds: float) -> T:
+    """A worker's answer, waited for no longer than ``seconds``: past that, ``_NoAnswerInTime``. Whatever the
+    worker's own call raised is raised as it was, a ``TimeoutError`` of its own included."""
+    if answer.done():
+        return answer.result()
+    bound = asyncio.timeout(max(seconds, 0.0))
+    try:
+        async with bound:
+            return await asyncio.wrap_future(answer)
+    except TimeoutError:
+        if bound.expired():
+            raise _NoAnswerInTime from None
+        raise
+
+
 # ---- one lane -------------------------------------------------------------------
 
 
 class OptionSearchLane:
-    """One worker process, and one search in it at a time, in the order asked."""
+    """One worker process, and one search in it at a time, in the order asked.
+
+    The lane holds its worker's process from the moment it is spawned, and
+    never has two: a worker is killed and reaped before another is started.
+    """
 
     def __init__(
         self,
@@ -246,6 +333,10 @@ class OptionSearchLane:
         self._make = executor
         self._hang_bound_s = hang_bound_s
         self._pool: Executor | None = None
+        # The worker's own process, held from the moment it is spawned. None for an executor that has none.
+        self._process: BaseProcess | None = None
+        # When the worker was started, on this process's own clock. It is up within the bound of this, or ended.
+        self._started_at = 0.0
         # The worker's answer to its first call: its process id.
         self._up: Future[int] | None = None
         self._worker_pid: int | None = None
@@ -265,7 +356,9 @@ class OptionSearchLane:
 
     def warm(self) -> None:
         """Start the worker now, so that the first search does not wait for it to load. Call it off the path
-        of the ask that will need it: a page's when its window is first asked for, a bot's when it starts."""
+        of the ask that will need it: a page's when its window is first asked for, a bot's when it starts.
+        A worker started earlier that never came up is ended first."""
+        self._end_a_worker_that_never_came_up()
         if self._pool is not None:
             return
         try:
@@ -324,46 +417,63 @@ class OptionSearchLane:
         return found
 
     def close(self) -> None:
-        """Stop the lane. A search in hand is not waited for."""
-        searching = bool(self._in_hand)
+        """Stop the lane. Its worker is killed and reaped whatever it is doing: coming up, searching, hung, or
+        dead already. A search in hand is not waited for. Closing a lane that is closed does nothing."""
         for task in tuple(self._in_hand):
             task.cancel()
-        if searching:
-            self._end_worker()
-        else:
-            self._drop_worker()
+        self._end_worker()
 
     # ---- the worker -----------------------------------------------------------
 
     def _start(self) -> None:
+        """Spawn the lane's worker. The lane has none when this is called."""
         pool = self._make()
-        self._pool, self._worker_pid = pool, None
-        # The first call starts the process and loads the resolver in it.
-        self._up = pool.submit(_worker_is_up)
+        try:
+            # The first call starts the process and loads the resolver in it.
+            up = pool.submit(_worker_is_up)
+            process = _worker_process_of(pool)
+        except BaseException:
+            # Nothing half started is left behind: not a process the pool spawned before it failed.
+            for spawned in _spawned_by(pool):
+                _kill(spawned, self.name)
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        self._pool, self._process, self._up, self._worker_pid = pool, process, up, None
+        self._started_at = _monotonic()
+
+    def _end_a_worker_that_never_came_up(self) -> None:
+        """A worker started longer ago than the bound that has still not said it is up, with no search waiting
+        for it: one started ahead of its first search. It is ended, so that the lane can start another."""
+        if self._up is None or self._up.done() or _monotonic() - self._started_at < self._hang_bound_s:
+            return
+        logger.error(
+            "An option search worker never came up, and was ended",
+            extra={"action": "option_search_worker_never_came_up", "lane": self.name, "bound_s": self._hang_bound_s},
+        )
+        self._end_worker()
 
     async def _worker(self) -> Executor:
-        """The lane's worker, started and loaded."""
+        """The lane's worker, started and loaded. It is up within the bound of being started, whoever started
+        it and however long ago: past that this raises ``_NoAnswerInTime``."""
+        self._end_a_worker_that_never_came_up()
         if self._pool is None:
             self._start()
         assert self._pool is not None and self._up is not None
         if self._worker_pid is None:
-            self._worker_pid = await asyncio.wait_for(asyncio.wrap_future(self._up), self._hang_bound_s)
+            left = self._started_at + self._hang_bound_s - _monotonic()
+            self._worker_pid = await _answer_within(self._up, left)
         return self._pool
 
-    def _drop_worker(self) -> None:
-        """Let go of the worker. The next search starts another."""
-        pool, self._pool, self._up, self._worker_pid = self._pool, None, None, None
+    def _end_worker(self) -> None:
+        """End the lane's worker, whatever it is doing: its process is killed and reaped before this returns,
+        and its pool let go of. With the process dead the pool's own thread ends by itself. The next search
+        starts another worker."""
+        pool, process = self._pool, self._process
+        self._pool = self._process = self._up = self._worker_pid = None
+        if process is not None:
+            _kill(process, self.name)
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
-
-    def _end_worker(self) -> None:
-        """End a worker that is still searching: nothing else stops a search once it has begun."""
-        pid = self._worker_pid
-        self._drop_worker()
-        if pid is not None and pid != os.getpid():
-            # It may have gone by itself a moment ago.
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
 
     def _its_turn(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -381,11 +491,14 @@ class OptionSearchLane:
             try:
                 worker = await self._worker()
                 return worker.submit(search, plain)
-            except TimeoutError:
+            except _NoAnswerInTime:
                 self._end_worker()
-                return self._not_run(SearchNotRunReason.WORKER_DID_NOT_ANSWER, "its worker process did not start in time")
+                return self._not_run(
+                    SearchNotRunReason.WORKER_DID_NOT_ANSWER,
+                    f"its worker process was not up {self._hang_bound_s:g} seconds after it was started, and was ended",
+                )
             except _CANNOT_START:
-                self._drop_worker()
+                self._end_worker()
                 if last_try or not had_a_worker:
                     return self._not_run(
                         SearchNotRunReason.WORKER_FAILED, "its worker process could not be started", failed=True
@@ -398,22 +511,23 @@ class OptionSearchLane:
             if isinstance(handed, SearchNotRun):
                 return handed
             try:
-                found = await asyncio.wait_for(asyncio.wrap_future(handed), self._hang_bound_s)
-            except TimeoutError:
+                found = await _answer_within(handed, self._hang_bound_s)
+            except _NoAnswerInTime:
                 self._end_worker()
                 return self._not_run(
                     SearchNotRunReason.WORKER_DID_NOT_ANSWER,
                     f"its worker process had not answered after {self._hang_bound_s:g} seconds, and was ended",
                 )
-            except _CANNOT_START:
-                # A worker that dies takes its pool with it.
-                self._drop_worker()
+            except BrokenExecutor:
+                # The worker ended under the search, and took its pool with it.
+                self._end_worker()
                 return self._not_run(
                     SearchNotRunReason.WORKER_FAILED, "its worker process ended before it answered", failed=True
                 )
             except Exception:
                 # Not the resolver's refusal and not a caller's mistake: those come back as answers. A fault in
-                # the search itself, or something that would not cross to the worker or back.
+                # the search itself, whatever it raised, or something that would not cross to the worker or
+                # back. The worker is as it was, and takes the next search.
                 return self._not_run(
                     SearchNotRunReason.FAILED, "it failed in its worker process, or could not be handed to it", failed=True
                 )
