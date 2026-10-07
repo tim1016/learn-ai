@@ -200,10 +200,11 @@ async function expectDeployOpen(page: Page): Promise<void> {
   for (const step of ['What', 'How', 'Money', 'Confirm']) {
     await expect(page.getByRole('heading', { name: step, exact: true, level: 2 })).toBeVisible();
   }
-  // The steps stand open side by side: What shows its strategy and symbol.
+  // The steps stand open side by side: What shows its strategy and the symbol
+  // the bot listens to (#2912).
   const what = page.getByRole('region', { name: 'What', exact: true });
   await expect(what.getByRole('combobox', { name: 'Deployment strategy' })).toHaveValue('deployment_validation');
-  await expect(what.getByRole('combobox', { name: 'Trading symbol' })).toContainText('SPY');
+  await expect(what.getByRole('combobox', { name: 'Listens to' })).toContainText('SPY');
   await expect(page.getByRole('link', { name: 'Deploy a bot', exact: true }))
     .toHaveAttribute('aria-current', 'page');
 }
