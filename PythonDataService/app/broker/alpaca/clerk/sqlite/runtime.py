@@ -1041,6 +1041,16 @@ class SqliteAlpacaClerkFacade:
             raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
         return the_one_bought_option_leg(action_plan).instrument.underlying
 
+    def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
+        """Raise the typed refusal of an option plan this account does not take (ADR 0076).
+
+        What a runner asks before it opens a stream or asks for a quote
+        line: the rule a bot is registered under, so the two cannot differ.
+        A plan in shares, and an option plan this account takes, raise
+        nothing.
+        """
+        self._symbol_to_register(action_plan)
+
     def _option_plan_account_refusal(self) -> str | None:
         """Why this account takes no option plan, or ``None`` when it does: a Dry Run's and a Paper account do.
 

@@ -150,6 +150,10 @@ class ActiveAlpacaClerk(Protocol):
         """
         ...
 
+    def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
+        """Raise the typed refusal of an option plan this account does not take (ADR 0076)."""
+        ...
+
     def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
         """The option contracts one bot holds now, by OCC symbol: what its EXIT closes (ADR 0076)."""
         ...
