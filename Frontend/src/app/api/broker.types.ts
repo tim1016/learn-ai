@@ -5870,6 +5870,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/walk-forward-studies/{study_id}/fold-curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Walk Forward Fold Curves
+         * @description Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).
+         *
+         *     Every fold's test run starts from the study's starting capital, so each
+         *     curve starts flat. A fold that did not complete has no curve and nothing
+         *     stands in for it.
+         */
+        get: operations["get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/snapshot/options-chain": {
         parameters: {
             query?: never;
@@ -13193,6 +13217,31 @@ export interface components {
             train_start_ms: number;
             /** Training Candidates */
             training_candidates?: components["schemas"]["TrainingCandidateResult"][];
+        };
+        /** FoldTestCurve */
+        FoldTestCurve: {
+            /**
+             * Cumulative Return
+             * @description Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.
+             */
+            cumulative_return: (number | null)[];
+            /**
+             * Deepest Drawdown
+             * @description The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.
+             */
+            deepest_drawdown: number | null;
+            /**
+             * Drawdown
+             * @description Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.
+             */
+            drawdown: (number | null)[] | null;
+            /**
+             * First Session
+             * @description The index in sessions_ms of the run's first session close.
+             */
+            first_session: number;
+            /** Fold Index */
+            fold_index: number;
         };
         /** FreshCross */
         FreshCross: {
@@ -25103,6 +25152,27 @@ export interface components {
             symbol: string;
             /** Walk Forward Id */
             walk_forward_id: string;
+        };
+        /**
+         * WalkForwardFoldCurvesResponse
+         * @description Each completed fold's winner over its test window, from the study's starting capital afresh (#2936).
+         */
+        WalkForwardFoldCurvesResponse: {
+            /**
+             * Curves
+             * @description In fold order. A fold that did not complete has none: the line breaks there.
+             */
+            curves: components["schemas"]["FoldTestCurve"][];
+            /**
+             * Not Recorded
+             * @description The completed folds whose winner's test run kept no daily equity; never drawn as a flat line.
+             */
+            not_recorded: number[];
+            /**
+             * Sessions Ms
+             * @description Every session close any fold's curve scored, in order, sent once.
+             */
+            sessions_ms: number[];
         };
         /**
          * WalkForwardHttpRequest
@@ -37033,6 +37103,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalkForwardFoldCurvesResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

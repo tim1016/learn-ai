@@ -13,8 +13,9 @@ import { ValidationScopeNoteComponent } from '../../shared/validation-scope/vali
 import { GridSearchResultComponent } from '../grid-search/grid-search-result.component';
 import { isTerminal } from '../grid-search/grid-search.types';
 import type { StrategyInfo } from '../strategy-lab/strategy-lab.models';
+import { WalkForwardFoldCurvesComponent } from './walk-forward-fold-curves.component';
 import { WalkForwardStudyService } from './walk-forward-study.service';
-import type { Fold, WalkForwardStudyDetail } from './walk-forward-study.types';
+import { winnerText, type Fold, type WalkForwardStudyDetail } from './walk-forward-study.types';
 
 export interface OpenSweep {
   readonly id: string;
@@ -24,13 +25,14 @@ export interface OpenSweep {
 
 /**
  * One study's result (PRD #1925 "Frontend"): the verdict with its coverage,
- * the fold table (winner, training and test Sharpe, retention, trades), the
- * per-fold sweeps opened in place through Grid Search's result view, and
- * Finish, Cancel and Delete. Polls while the study runs.
+ * each fold's test-window equity curve (#2936), the fold table (winner,
+ * training and test Sharpe, retention, trades), the per-fold sweeps opened
+ * in place through Grid Search's result view, and Finish, Cancel and Delete.
+ * Polls while the study runs.
  */
 @Component({
   selector: 'app-walk-forward-study-result',
-  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent],
+  imports: [AssetIdentityComponent, ButtonModule, DecimalPipe, PercentPipe, GridSearchResultComponent, RecordControlsComponent, ReceiptLabelPipe, TimestampDisplayComponent, ValidationScopeNoteComponent, WalkForwardFoldCurvesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './walk-forward-study-result.component.html',
   styleUrl: './walk-forward-study-result.component.scss',
@@ -94,9 +96,7 @@ export class WalkForwardStudyResultComponent {
     }
   }
 
-  winnerText(fold: Fold): string {
-    return fold.winner_params ? Object.entries(fold.winner_params).map(([k, v]) => `${k}=${v}`).join(', ') : '—';
-  }
+  protected readonly winnerText = winnerText;
 
   open(fold: Fold, phase: 'train' | 'test'): void {
     const id = phase === 'train' ? fold.train_search_id : fold.test_search_id;

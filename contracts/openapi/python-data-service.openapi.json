@@ -17558,6 +17558,79 @@
         "title": "FoldResult",
         "type": "object"
       },
+      "FoldTestCurve": {
+        "additionalProperties": false,
+        "properties": {
+          "cumulative_return": {
+            "description": "Equity over the run's starting capital, less 1, at each session close from first_session on; null at a session the run did not score.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Cumulative Return",
+            "type": "array"
+          },
+          "deepest_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lowest value of drawdown, at a session close; the engine's bar-by-bar worst fall can be deeper. Null without a drawdown.",
+            "title": "Deepest Drawdown"
+          },
+          "drawdown": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Equity over its running peak, less 1, against the same sessions; null as a whole when the peak never rose above 0.",
+            "title": "Drawdown"
+          },
+          "first_session": {
+            "description": "The index in sessions_ms of the run's first session close.",
+            "minimum": 0.0,
+            "title": "First Session",
+            "type": "integer"
+          },
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_session",
+          "cumulative_return",
+          "drawdown",
+          "deepest_drawdown",
+          "fold_index"
+        ],
+        "title": "FoldTestCurve",
+        "type": "object"
+      },
       "FreshCross": {
         "additionalProperties": false,
         "properties": {
@@ -47549,6 +47622,44 @@
         "title": "WalkForwardConfig",
         "type": "object"
       },
+      "WalkForwardFoldCurvesResponse": {
+        "description": "Each completed fold's winner over its test window, from the study's starting capital afresh (#2936).",
+        "properties": {
+          "curves": {
+            "description": "In fold order. A fold that did not complete has none: the line breaks there.",
+            "items": {
+              "$ref": "#/components/schemas/FoldTestCurve"
+            },
+            "title": "Curves",
+            "type": "array"
+          },
+          "not_recorded": {
+            "description": "The completed folds whose winner's test run kept no daily equity; never drawn as a flat line.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Not Recorded",
+            "type": "array"
+          },
+          "sessions_ms": {
+            "description": "Every session close any fold's curve scored, in order, sent once.",
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Sessions Ms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions_ms",
+          "curves",
+          "not_recorded"
+        ],
+        "title": "WalkForwardFoldCurvesResponse",
+        "type": "object"
+      },
       "WalkForwardHttpRequest": {
         "additionalProperties": false,
         "description": "Inputs for ``POST /api/research/strategy-runs/walk-forward``.",
@@ -71813,6 +71924,49 @@
           }
         },
         "summary": "Get Walk Forward Study",
+        "tags": [
+          "research-walk-forward-study"
+        ]
+      }
+    },
+    "/api/research/walk-forward-studies/{study_id}/fold-curves": {
+      "get": {
+        "description": "Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).\n\nEvery fold's test run starts from the study's starting capital, so each\ncurve starts flat. A fold that did not complete has no curve and nothing\nstands in for it.",
+        "operationId": "get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "title": "Study Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkForwardFoldCurvesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Walk Forward Fold Curves",
         "tags": [
           "research-walk-forward-study"
         ]

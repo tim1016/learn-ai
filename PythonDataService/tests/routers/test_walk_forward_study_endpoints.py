@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from app.lean_sidecar.trading_calendar import expected_sessions
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.main import app
 from app.research.grid_search import service as sweeps
 from app.research.grid_search.models import CellResult
@@ -163,6 +164,76 @@ async def test_launch_lists_by_job_id_and_the_detail_carries_folds_and_the_verdi
         assert (await c.get(f"/api/research/grid-search/{payload['folds'][0]['train_search_id']}")).status_code == 404
 
     assert captured["job_id"] == job_id
+
+
+def _curve_factory(*, fold_one_trades: int, fold_zero_test_keeps_a_curve: bool):
+    """The fake engine, with each cell's equity over the first two sessions of its sweep's window: up 100 a session per unit of its short window."""
+
+    def factory(row, spec):
+        base = _fake_factory(row, spec)
+        days = [close for close in (session_close_ms_utc(day) for day in SESSIONS) if spec.start_ms <= close < spec.end_ms][:2]
+
+        def execute(candidate) -> CellResult:
+            gain = candidate.params["short_window"] * 100.0
+            kept = fold_zero_test_keeps_a_curve or (row.owner.fold_index, row.owner.phase) != (0, "test")
+            trades = 3 if row.owner.fold_index == 0 else fold_one_trades
+            return replace(base(candidate), total_trades=trades, daily_equity=[(days[0], 50_000.0 + gain), (days[1], 50_000.0 + 2 * gain)] if kept else None)
+
+        return execute
+
+    return factory
+
+
+async def _run_study(c: httpx.AsyncClient, factory) -> str:
+    job_id = f"job-wf-{uuid.uuid4().hex[:8]}"
+    launched = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(initial_cash=50_000.0), "jobId": job_id})
+    assert launched.status_code == 202, launched.text
+    await asyncio.to_thread(service.execute, launched.json()["study_id"], job_id=job_id, cell_executor=factory)
+    return launched.json()["study_id"]
+
+
+async def test_each_completed_folds_winner_is_drawn_over_its_own_test_window_from_fresh_capital(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    monkeypatch.setattr(study_router, "run_in_thread", lambda jid, work, **kwargs: None)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda jid: True)
+
+    async with client as c:
+        study_id = await _run_study(c, _curve_factory(fold_one_trades=3, fold_zero_test_keeps_a_curve=True))
+        folds = (await c.get(f"/api/research/walk-forward-studies/{study_id}")).json()["folds"]
+        read = await c.get(f"/api/research/walk-forward-studies/{study_id}/fold-curves")
+        await c.delete(f"/api/research/walk-forward-studies/{study_id}")
+
+    assert read.status_code == 200, read.text
+    body = read.json()
+    first, second = body["curves"]
+    assert body["not_recorded"] == [] and (first["fold_index"], second["fold_index"]) == (0, 1)
+    # One date axis, fold after fold: each fold's two sessions fall inside its own test window.
+    assert len(body["sessions_ms"]) == 4 and (first["first_session"], second["first_session"]) == (0, 2)
+    for fold, curve in zip(folds, body["curves"], strict=True):
+        own = body["sessions_ms"][curve["first_session"] : curve["first_session"] + len(curve["cumulative_return"])]
+        assert all(fold["test_start_ms"] <= close < fold["test_end_ms"] for close in own)
+    # Each fold is its winner's run (short window 3, then 2) from the study's 50,000 afresh: neither carries the other's gain.
+    assert first["cumulative_return"] == pytest.approx([0.006, 0.012], abs=1e-12, rel=0)
+    assert second["cumulative_return"] == pytest.approx([0.004, 0.008], abs=1e-12, rel=0)
+    assert first["drawdown"] == [0.0, 0.0] and first["deepest_drawdown"] == 0.0
+
+
+async def test_a_fold_that_kept_no_curve_is_named_and_a_fold_that_failed_has_no_line(client, lake, monkeypatch) -> None:
+    _requires_ephemeral_db()
+    monkeypatch.setattr(study_router, "run_in_thread", lambda jid, work, **kwargs: None)
+    monkeypatch.setattr(lifecycle, "job_is_live", lambda jid: True)
+
+    async with client as c:
+        # Fold 0's test runs kept no curve, as a study from before folds kept theirs; fold 1 has no eligible winner.
+        study_id = await _run_study(c, _curve_factory(fold_one_trades=0, fold_zero_test_keeps_a_curve=False))
+        folds = (await c.get(f"/api/research/walk-forward-studies/{study_id}")).json()["folds"]
+        read = await c.get(f"/api/research/walk-forward-studies/{study_id}/fold-curves")
+        missing = await c.get("/api/research/walk-forward-studies/no-such-study/fold-curves")
+        await c.delete(f"/api/research/walk-forward-studies/{study_id}")
+
+    assert [fold["status"] for fold in folds] == ["completed", "failed"]
+    assert read.json() == {"sessions_ms": [], "curves": [], "not_recorded": [0]}
+    assert missing.status_code == 404
 
 
 async def test_an_unidentifiable_environment_refuses_without_hiding_the_detail(

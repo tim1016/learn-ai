@@ -38,7 +38,7 @@ def _along(at: Sequence[int], values: Sequence[float]) -> list[float | None]:
     return line
 
 
-def session_curves(stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> tuple[list[int], dict[str, dict[str, Any]]]:
+def session_curves[K](stored: Mapping[K, Sequence[tuple[int, float]]], capital: float) -> tuple[list[int], dict[K, dict[str, Any]]]:
     """The runs' curves against one list of session closes: the list, and each run's curve by its key.
 
     A curve is the run's cumulative return and its fall from peak from its
@@ -46,7 +46,7 @@ def session_curves(stored: Mapping[str, Sequence[tuple[int, float]]], capital: f
     """
     sessions = sorted({ms for daily in stored.values() for ms, _ in daily})
     position = {ms: index for index, ms in enumerate(sessions)}
-    curves: dict[str, dict[str, Any]] = {}
+    curves: dict[K, dict[str, Any]] = {}
     for key, daily in stored.items():
         try:
             falls: list[float] | None = [value for _, value in drawdown_series(daily)]

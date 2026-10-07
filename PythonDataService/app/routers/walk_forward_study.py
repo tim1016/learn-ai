@@ -1,7 +1,7 @@
 """Walk-Forward Study HTTP boundary (PRD #1925 "HTTP contract").
 
 ``router`` — ``/api/research/walk-forward-studies``: preflight, history,
-detail (folds and verdict), delete. ``jobs_router`` —
+detail (folds and verdict), the folds' test-window curves, delete. ``jobs_router`` —
 ``POST /api/jobs-internal/walk-forward-study``, dispatched by the .NET jobs
 boundary with a minted ``job_id`` (a new study, or Finish of an incomplete
 one via ``resume_study_id``). Per-fold sweeps are read through the Grid
@@ -11,26 +11,31 @@ Search surface by their search ids.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
+import asyncpg
 from anyio import to_thread
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search.engine_adapter import default_execute_cell
 from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
+from app.research.session_curves import session_curves
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study import service
-from app.research.walk_forward_study.models import StudyRow
+from app.research.walk_forward_study.models import FoldRecord, StudyRow, StudySpec
 from app.routers import research_records as records
 from app.schemas.walk_forward_study import (
     FoldPlanResponse,
     FoldResponse,
     VerdictResponse,
+    WalkForwardFoldCurvesResponse,
     WalkForwardStudyDetailResponse,
     WalkForwardStudyJobRequest,
     WalkForwardStudyPreflightResponse,
@@ -151,6 +156,36 @@ async def get_walk_forward_study(study_id: str) -> WalkForwardStudyDetailRespons
         folds=[FoldResponse(**fold.as_dict()) for fold in row.folds],
         resumable=refusal is None,
         resume_refusal=refusal,
+    )
+
+
+async def _winner_test_curves(conn: asyncpg.Connection, folds: Sequence[FoldRecord]) -> dict[int, list[tuple[int, float]]]:
+    """The stored daily equity of each completed fold's winner on its test window, by fold index, for those that kept one."""
+    curves: dict[int, list[tuple[int, float]]] = {}
+    for fold in folds:
+        if fold.status != "completed" or fold.test_search_id is None or fold.winner_params_hash is None:
+            continue
+        stored = await sweep_repo.cell_curves(conn, fold.test_search_id, [fold.winner_params_hash])
+        if fold.winner_params_hash in stored:
+            curves[fold.fold_index] = stored[fold.winner_params_hash]
+    return curves
+
+
+@router.get("/{study_id}/fold-curves", response_model=WalkForwardFoldCurvesResponse)
+async def get_walk_forward_fold_curves(study_id: str) -> WalkForwardFoldCurvesResponse:
+    """Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).
+
+    Every fold's test run starts from the study's starting capital, so each
+    curve starts flat. A fold that did not complete has no curve and nothing
+    stands in for it.
+    """
+    row = await _load(study_id)
+    stored = await with_connection(_winner_test_curves, row.folds)
+    sessions, curves = session_curves(stored, StudySpec.from_request_dict(row.request).grid.initial_cash)
+    return WalkForwardFoldCurvesResponse(
+        sessions_ms=sessions,
+        curves=[{"fold_index": index, **curve} for index, curve in sorted(curves.items())],
+        not_recorded=[fold.fold_index for fold in row.folds if fold.status == "completed" and fold.fold_index not in stored],
     )
 
 
