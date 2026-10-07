@@ -1056,18 +1056,29 @@ class SqliteAlpacaClerkFacade:
     def _option_plan_account_refusal(self) -> str | None:
         """Why this account takes no option plan, or ``None`` when it does: a Dry Run's and a Paper account do.
 
-        A Live Shadow and a Live account are each refused by name. Nothing
-        about an option order has been sent to Alpaca yet, so real money
-        waits for what Paper shows (ADR 0076).
+        A Live Shadow is refused by name: it is not built. A Live account is
+        refused by name while ``ALPACA_LIVE_OPTION_BOTS_ENABLED`` is off,
+        which it is unless a deployment turns it on: nothing about an option
+        order has been sent to Alpaca yet, so real money waits for what
+        Paper shows (ADR 0076 decision 24). The setting is read at every
+        ask, so no registration and no effect outlives a change of it.
         """
         if self.authority_kind == "synthetic":
             return None
         if self.authority_kind == "sqlite" and self._account_mode == "paper":
             return None
-        account = "A Live Shadow" if self.authority_kind == "shadow" else "A Live account"
+        if self.authority_kind == "shadow":
+            return (
+                "This bot trades option contracts. A Live Shadow does not take an option bot yet: it is not "
+                "built. A Dry Run and a Paper account do."
+            )
+        if settings.ALPACA_LIVE_OPTION_BOTS_ENABLED:
+            return None
         return (
-            f"This bot trades option contracts. {account} does not take an option bot yet: a Dry Run and a "
-            "Paper account do. Option orders have not been checked against Alpaca with real money at stake."
+            "This bot trades option contracts. A Live account does not take an option bot yet: option bots are "
+            "switched off on Live accounts, because option orders have not been checked against Alpaca with "
+            "real money at stake. Check the first Paper option orders at Alpaca, then set "
+            "ALPACA_LIVE_OPTION_BOTS_ENABLED=true for this Clerk."
         )
 
     @property

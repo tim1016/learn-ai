@@ -15,7 +15,9 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    SerializerFunctionWrapHandler,
     field_validator,
+    model_serializer,
     model_validator,
 )
 from pydantic.json_schema import SkipJsonSchema
@@ -27,6 +29,7 @@ from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.deployment_budget import DeploymentBudgetInput
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.live_runs import BotDutyOutcomeView
+from app.schemas.option_deploy import DeployTrades, TradesAnotherStock, TradesOptions, TradesTheSignal
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.traded_asset_acknowledgement import (
@@ -155,8 +158,16 @@ class AlpacaPaperDeployRequest(BaseModel):
     # here is the same choice and is normalised to omitted, so one bot never
     # has two identities.
     traded_symbol: str | None = Field(default=None, min_length=1, max_length=12)
+    # What the bot trades, said once (#2913): the signal's own shares,
+    # another stock or ETF, or an option structure with its four order
+    # terms. A request says this or ``traded_symbol``, never both. Once
+    # validated a request has one spelling: only an option choice stays
+    # here, another stock is ``traded_symbol``, and the signal's own shares
+    # are nothing said (``_what_it_trades_has_one_spelling``). So a bot in
+    # shares dumps and hashes as it did before this field existed.
+    trades: DeployTrades | None = None
     # The owner's written acceptance that the strategy is untested trading
-    # ``traded_symbol``. Deploy requires it for a Paper, Live Shadow or Live
+    # what the bot trades. Deploy requires it for a Paper, Live Shadow or Live
     # bot that trades another asset, and refuses it for every other bot
     # (``traded_asset_acknowledgement_fault``). A review needs none: the
     # owner accepts last, above the Deploy button, so it stays out of
@@ -177,6 +188,15 @@ class AlpacaPaperDeployRequest(BaseModel):
     # "SELL"}``, no end; an explicit ``null`` is refused. The owner's
     # schedule, not a sealed term: it stays out of ``fingerprint``.
     end: BotEndInput | SkipJsonSchema[None] = None
+
+    # No return annotation: the request's published schema stays this model's own fields.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_trades_choice(self, handler: SerializerFunctionWrapHandler):
+        """A request for a bot in shares is dumped exactly as it was before ``trades`` existed."""
+        dumped = handler(self)
+        if dumped.get("trades") is None:
+            dumped.pop("trades", None)
+        return dumped
 
     @model_validator(mode="before")
     @classmethod
@@ -208,6 +228,17 @@ class AlpacaPaperDeployRequest(BaseModel):
         return None if value is None else normalized_symbol(value)
 
     @model_validator(mode="after")
+    def _what_it_trades_has_one_spelling(self) -> AlpacaPaperDeployRequest:
+        trades = self.trades
+        if trades is not None and self.traded_symbol is not None:
+            raise ValueError("say what the bot trades once: 'trades' or 'traded_symbol', not both")
+        if isinstance(trades, TradesAnotherStock):
+            self.traded_symbol = normalized_symbol(trades.symbol)
+        if isinstance(trades, TradesTheSignal | TradesAnotherStock):
+            self.trades = None
+        return self
+
+    @model_validator(mode="after")
     def _trading_the_signal_is_trading_nothing_else(self) -> AlpacaPaperDeployRequest:
         if self.traded_symbol == self.symbol:
             self.traded_symbol = None
@@ -220,8 +251,19 @@ class AlpacaPaperDeployRequest(BaseModel):
         return self
 
     @property
+    def options(self) -> TradesOptions | None:
+        """The option structure this bot trades, or ``None`` for a bot in shares."""
+        return self.trades if isinstance(self.trades, TradesOptions) else None
+
+    @property
     def order_symbol(self) -> str:
-        """The symbol this bot's orders are in: what it trades, which is what it listens to unless it says otherwise."""
+        """The symbol this bot's orders are in: what it trades, which is what it listens to unless it says otherwise.
+
+        For a bot that trades option contracts, the symbol they are on: the
+        one the Clerk registers the bot under.
+        """
+        if self.options is not None:
+            return self.options.underlying
         return self.traded_symbol or self.symbol
 
     def fingerprint(self, **bound_to: str) -> str:
@@ -247,6 +289,9 @@ class AlpacaPaperDeployRequest(BaseModel):
             # Omitted when absent, so a Deploy that trades the symbol it
             # listens to keeps the fingerprint it had before the field existed.
             del payload["traded_symbol"]
+        # ``trades`` is in the payload only as an option choice (#2913), and
+        # then the review binds its legs and its four order terms: an absent
+        # one is never dumped (``_omit_an_absent_trades_choice``).
         if payload["budget"] is not None:
             payload["budget"].pop("review_token", None)
             payload["budget"].pop("live_confirmation", None)
@@ -282,11 +327,23 @@ class BotDeployPrefill(BaseModel):
     symbol: str
     # What the earlier bot traded, when that was not ``symbol`` (#2912).
     traded_symbol: str | None = None
+    # The option structure the earlier bot traded, with its order terms
+    # (#2913). ``traded_symbol`` is then ``None``.
+    trades: TradesOptions | None = None
     sizing: AlpacaPaperSizingSelection
     parameters: dict[str, JsonValue]
     # ``None`` when the source bot's terms were never recorded in full: the
     # form then starts from this account's defaults.
     exit_terms: ExitTermsInput | None = None
+
+    # No return annotation: the published schema stays this model's own fields.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_option_choice(self, handler: SerializerFunctionWrapHandler):
+        """An earlier bot in shares is answered exactly as it was before ``trades`` existed."""
+        dumped = handler(self)
+        if dumped.get("trades") is None:
+            dumped.pop("trades", None)
+        return dumped
 
 
 class DeployTradedAssetView(BaseModel):

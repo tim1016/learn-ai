@@ -256,6 +256,13 @@ class Settings(BaseSettings):
     # Account-level half of the two-key carryover permission. A deployment
     # must also opt in explicitly; the default remains flat-only Resume.
     ALPACA_PAPER_CARRYOVER_ENABLED: bool = False
+    # Whether a Live account may run a bot that trades option contracts (ADR
+    # 0076 decision 24). Off: Deploy, the account Clerk and the Alpaca port
+    # each refuse it by name, because no option order from this system has
+    # been checked against Alpaca. Turn it on only after the first Paper
+    # option orders have been checked there. A Dry Run and a Paper account
+    # never read it, and a Live Shadow takes no option bot either way.
+    ALPACA_LIVE_OPTION_BOTS_ENABLED: bool = False
     # Startup join (#2410): how long a starting or resuming bot may spend
     # filling the minutes before its live stream from IBKR history, counted
     # from the close of the minute the stream joined. One fixed deadline per

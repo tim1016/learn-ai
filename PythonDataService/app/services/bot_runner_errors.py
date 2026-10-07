@@ -170,7 +170,8 @@ def require_traded_asset_acknowledgement(
     )
     if fault is None:
         return
-    traded = traded_instrument(action_plan).underlying
+    instrument = traded_instrument(action_plan)
+    traded = instrument.underlying if instrument.kind == "stock" else f"options on {instrument.underlying}"
     if fault == "required":
         raise TradedAssetAcknowledgementRefusedError(
             f"Accept that this strategy is untested trading {traded} before deploying.",

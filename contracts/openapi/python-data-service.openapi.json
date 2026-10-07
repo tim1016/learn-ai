@@ -1126,6 +1126,35 @@
               }
             ],
             "title": "Traded Symbol"
+          },
+          "trades": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "options": "#/components/schemas/TradesOptions-Input",
+                    "signal": "#/components/schemas/TradesTheSignal",
+                    "stock": "#/components/schemas/TradesAnotherStock"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/TradesTheSignal"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TradesAnotherStock"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TradesOptions-Input"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trades"
           }
         },
         "required": [
@@ -1727,6 +1756,35 @@
               }
             ],
             "title": "Traded Symbol"
+          },
+          "trades": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "options": "#/components/schemas/TradesOptions-Input",
+                    "signal": "#/components/schemas/TradesTheSignal",
+                    "stock": "#/components/schemas/TradesAnotherStock"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/TradesTheSignal"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TradesAnotherStock"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TradesOptions-Input"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trades"
           }
         },
         "required": [
@@ -4503,6 +4561,16 @@
               }
             ],
             "title": "Traded Symbol"
+          },
+          "trades": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradesOptions-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -13381,6 +13449,16 @@
               }
             ],
             "title": "Observed At Ms"
+          },
+          "option_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionDeployReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "review_token": {
             "anyOf": [
@@ -34213,6 +34291,258 @@
         "title": "OptionContractView",
         "type": "object"
       },
+      "OptionDeployBlocker": {
+        "additionalProperties": false,
+        "description": "One thing that stops this Deploy, for the \"Can't deploy yet\" list.",
+        "properties": {
+          "fix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fix"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "label",
+          "headline",
+          "fix"
+        ],
+        "title": "OptionDeployBlocker",
+        "type": "object"
+      },
+      "OptionDeployNote": {
+        "additionalProperties": false,
+        "description": "Something the owner should read before deploying. Never a refusal.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "headline",
+          "detail"
+        ],
+        "title": "OptionDeployNote",
+        "type": "object"
+      },
+      "OptionDeployReview": {
+        "additionalProperties": false,
+        "description": "What Deploy says of a bot that trades an option structure, beside its budget.",
+        "properties": {
+          "ask_again_in_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Again In Ms"
+          },
+          "blockers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OptionDeployBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "custom_structures_explanation": {
+            "title": "Custom Structures Explanation",
+            "type": "string"
+          },
+          "end_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Sentence"
+          },
+          "entry_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Sentence"
+          },
+          "figures_good_until_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figures Good Until Ms"
+          },
+          "money_rows": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OptionMoneyRow"
+            },
+            "title": "Money Rows",
+            "type": "array"
+          },
+          "money_sentence": {
+            "title": "Money Sentence",
+            "type": "string"
+          },
+          "notes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OptionDeployNote"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "one_structure_explanation": {
+            "title": "One Structure Explanation",
+            "type": "string"
+          },
+          "orders_summary": {
+            "title": "Orders Summary",
+            "type": "string"
+          },
+          "picks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OptionPickedContract"
+            },
+            "title": "Picks",
+            "type": "array"
+          },
+          "preview_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Reason Code"
+          },
+          "preview_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Sentence"
+          },
+          "preview_state": {
+            "enum": [
+              "plan_refused",
+              "no_quote_source",
+              "feed_not_up",
+              "no_quote_line",
+              "listing_not_read",
+              "quotes_arriving",
+              "underlying_quote_unusable",
+              "pricing_inputs_unknown",
+              "search_not_done",
+              "not_resolved",
+              "resolved"
+            ],
+            "title": "Preview State",
+            "type": "string"
+          },
+          "quotes_read_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quotes Read Ms"
+          },
+          "structure_in_a_sentence": {
+            "title": "Structure In A Sentence",
+            "type": "string"
+          },
+          "structure_label": {
+            "title": "Structure Label",
+            "type": "string"
+          },
+          "structures": {
+            "title": "Structures",
+            "type": "integer"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "underlying",
+          "structure_label",
+          "structure_in_a_sentence",
+          "structures",
+          "orders_summary",
+          "one_structure_explanation",
+          "custom_structures_explanation",
+          "end_sentence",
+          "preview_state",
+          "preview_reason_code",
+          "preview_sentence",
+          "ask_again_in_ms",
+          "quotes_read_ms",
+          "figures_good_until_ms",
+          "money_sentence",
+          "entry_sentence"
+        ],
+        "title": "OptionDeployReview",
+        "type": "object"
+      },
       "OptionEntryLeg": {
         "additionalProperties": false,
         "description": "Option ``ActionEntity`` \u2014 Slice 1C.\n\nAdds ``right``, ``strike``, ``expiry`` on top of the common entry-leg\nfields. ``leg_id`` is the same stable identity stock legs carry \u2014\neach option leg of a multi-leg structure resolves to its own\n``conId`` at consumption time, even when several legs share the same\nexpiry-selector inputs.",
@@ -34480,6 +34810,75 @@
         "title": "OptionLegRules",
         "type": "object"
       },
+      "OptionMoneyRow": {
+        "additionalProperties": false,
+        "description": "One row of the money an option entry would mean, as the structure preview priced it.",
+        "properties": {
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "amount_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Usd"
+          },
+          "key": {
+            "enum": [
+              "set_aside",
+              "premium",
+              "broker_requirement",
+              "fees",
+              "loss_at_expiry",
+              "budget_free"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "part_of_set_aside": {
+            "title": "Part Of Set Aside",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "amount_cents",
+          "amount_usd",
+          "note",
+          "part_of_set_aside"
+        ],
+        "title": "OptionMoneyRow",
+        "type": "object"
+      },
       "OptionOrderTermDefaults": {
         "additionalProperties": false,
         "description": "The option order terms a Deploy starts from. Each is fixed for the bot's life once it is deployed.",
@@ -34579,6 +34978,34 @@
           "range_reason"
         ],
         "title": "OptionPercentTerm",
+        "type": "object"
+      },
+      "OptionPickedContract": {
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "$ref": "#/components/schemas/OptionContractView"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "integer"
+          },
+          "side_label": {
+            "title": "Side Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "side_label",
+          "ratio",
+          "contract"
+        ],
+        "title": "OptionPickedContract",
         "type": "object"
       },
       "OptionPreviewAtExpiry": {
@@ -43413,7 +43840,7 @@
           "option_order_terms": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SealedOptionOrderTerms"
+                "$ref": "#/components/schemas/SealedOptionOrderTerms-Output"
               },
               {
                 "type": "null"
@@ -43482,7 +43909,59 @@
         "title": "SealedBotProgram",
         "type": "object"
       },
-      "SealedOptionOrderTerms": {
+      "SealedOptionOrderTerms-Input": {
+        "additionalProperties": false,
+        "description": "An option bot's four order terms. Every one is said; none is filled in.",
+        "properties": {
+          "cost_limit_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Cost Limit Percent"
+          },
+          "entry_wait_seconds": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Entry Wait Seconds",
+            "type": "integer"
+          },
+          "expiry_close_lead_minutes": {
+            "maximum": 390.0,
+            "minimum": 0.0,
+            "title": "Expiry Close Lead Minutes",
+            "type": "integer"
+          },
+          "gap_limit_percent": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Gap Limit Percent"
+          }
+        },
+        "required": [
+          "gap_limit_percent",
+          "entry_wait_seconds",
+          "cost_limit_percent",
+          "expiry_close_lead_minutes"
+        ],
+        "title": "SealedOptionOrderTerms",
+        "type": "object"
+      },
+      "SealedOptionOrderTerms-Output": {
         "additionalProperties": false,
         "description": "An option bot's four order terms. Every one is said; none is filled in.",
         "properties": {
@@ -48887,6 +49366,131 @@
           "symbol"
         ],
         "title": "TradedInstrumentView",
+        "type": "object"
+      },
+      "TradesAnotherStock": {
+        "additionalProperties": false,
+        "description": "Another stock or ETF than the symbol the bot listens to (#2912).",
+        "properties": {
+          "kind": {
+            "const": "stock",
+            "title": "Kind"
+          },
+          "symbol": {
+            "maxLength": 12,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "symbol"
+        ],
+        "title": "TradesAnotherStock",
+        "type": "object"
+      },
+      "TradesOptions-Input": {
+        "additionalProperties": false,
+        "description": "An option structure on one underlying, with the order terms it is deployed under.",
+        "properties": {
+          "kind": {
+            "const": "options",
+            "title": "Kind"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/OptionLegRules"
+            },
+            "maxItems": 8,
+            "title": "Legs",
+            "type": "array"
+          },
+          "order_terms": {
+            "$ref": "#/components/schemas/SealedOptionOrderTerms-Input"
+          },
+          "structure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NamedStructure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "underlying": {
+            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "underlying",
+          "legs",
+          "order_terms"
+        ],
+        "title": "TradesOptions",
+        "type": "object"
+      },
+      "TradesOptions-Output": {
+        "additionalProperties": false,
+        "description": "An option structure on one underlying, with the order terms it is deployed under.",
+        "properties": {
+          "kind": {
+            "const": "options",
+            "title": "Kind"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/OptionLegRules"
+            },
+            "maxItems": 8,
+            "title": "Legs",
+            "type": "array"
+          },
+          "order_terms": {
+            "$ref": "#/components/schemas/SealedOptionOrderTerms-Output"
+          },
+          "structure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NamedStructure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "underlying": {
+            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "underlying",
+          "legs",
+          "order_terms"
+        ],
+        "title": "TradesOptions",
+        "type": "object"
+      },
+      "TradesTheSignal": {
+        "additionalProperties": false,
+        "description": "The shares of the symbol the bot listens to.",
+        "properties": {
+          "kind": {
+            "const": "signal",
+            "title": "Kind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "TradesTheSignal",
         "type": "object"
       },
       "TradingCalendarWindow": {

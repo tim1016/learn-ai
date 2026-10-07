@@ -63,6 +63,7 @@ from app.broker.contract.options import (
     OptionOrderRequest,
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
+from app.config import settings as app_settings
 from app.options.contract import OptionContract
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
@@ -977,14 +978,19 @@ class AlpacaBroker:
         own binding says. An opening order and a closing one are refused
         alike: a Live account's books can hold no option position to close.
         Alpaca itself takes option orders on a live account, which is why
-        the capabilities still say so. Opening Live to option bots removes
-        this refusal on purpose (#2913).
+        the capabilities still say so. Opening Live to option bots lifts
+        this refusal on purpose, by the one setting the Clerk and Deploy
+        read too: ``ALPACA_LIVE_OPTION_BOTS_ENABLED``, off unless a
+        deployment turns it on (ADR 0076 decision 24).
         """
-        if self._posting_settings().is_live:
+        if self._posting_settings().is_live and not app_settings.ALPACA_LIVE_OPTION_BOTS_ENABLED:
             raise BrokerOptionsNotSupported(
                 "This app sends no option order to a Live Alpaca account yet.",
                 broker=BROKER_ID,
-                detail="Option bots run on a Dry Run and on a Paper account. Nothing was sent.",
+                detail=(
+                    "Option bots run on a Dry Run and on a Paper account. Nothing was sent. Live accounts are "
+                    "opened to them by ALPACA_LIVE_OPTION_BOTS_ENABLED, which is off."
+                ),
             )
         body = _option_order_body(order, client_order_id=client_order_id)
         payload = await self._client.submit_order(body)

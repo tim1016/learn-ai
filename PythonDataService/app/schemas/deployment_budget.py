@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.account_money import FULL_BAR_BPS, SegmentKind
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.alpaca.clerk.money import consent_cents, dollars
 from app.schemas.account_authority import AuthorityKind
+from app.schemas.option_deploy import OptionDeployReview
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetWarning
 
 
@@ -234,6 +235,10 @@ class DeploymentBudgetPreview(BaseModel):
     # something else, and how many shares. ``None`` on a preview no route
     # served.
     trades_summary: str | None = None
+    # What Deploy says of a bot that trades an option structure (#2913): its
+    # money rows, what stops the Deploy, and what the owner should know.
+    # ``None`` for every bot in shares.
+    option_review: OptionDeployReview | None = None
     # The previewed amount as Python normalizes it: what Deploy sets aside.
     budget_usd: str | None = None
     observed_at_ms: EpochMs | None = None

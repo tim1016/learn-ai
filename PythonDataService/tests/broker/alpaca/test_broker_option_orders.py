@@ -164,6 +164,25 @@ async def test_a_live_account_is_sent_no_option_order_and_the_refusal_says_nothi
 
 
 @responses.activate
+async def test_the_one_setting_that_opens_live_to_option_bots_is_what_lifts_the_ports_refusal(
+    live_broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Off, a Live binding sends nothing. On, the same broker posts the same order to its own endpoint, which
+    here is a stand-in: nothing leaves this process."""
+    live_orders = "https://api.alpaca.markets/v2/orders"
+    responses.add(responses.POST, live_orders, json=_answer("OptionOrderResponse"))
+    with pytest.raises(BrokerOptionsNotSupported) as refused:
+        await live_broker.submit_option_order(_long_call(), client_order_id=_REF)
+    assert "ALPACA_LIVE_OPTION_BOTS_ENABLED" in (refused.value.detail or "")
+    assert len(responses.calls) == 0
+
+    monkeypatch.setattr("app.broker.alpaca.broker.app_settings.ALPACA_LIVE_OPTION_BOTS_ENABLED", True)
+    await live_broker.submit_option_order(_long_call(), client_order_id=_REF)
+
+    assert [call.request.url for call in responses.calls] == [live_orders]
+
+
+@responses.activate
 async def test_a_broker_built_around_a_live_client_with_no_settings_of_its_own_sends_no_option_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
