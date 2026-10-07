@@ -88,7 +88,6 @@ from app.research.golden_search.run_curves import (
     RunSort,
     curve_set_lines,
     curve_set_view,
-    curves_view,
     runs_page,
 )
 from app.research.golden_search.search_charts import procedure_windows, search_charts
@@ -96,6 +95,7 @@ from app.research.golden_search.stages import ApprovalBinding, StageOutcome, exe
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
 from app.research.persistence import lifecycle
 from app.research.persistence.db import connection, with_connection
+from app.research.session_curves import curves_read
 from app.research.sweep.identity import CodeIdentity
 from app.schemas.grid_search import SYMBOL_PATTERN
 from app.utils.timestamps import now_ms_utc
@@ -677,7 +677,7 @@ async def run_curves(study_id: str, evaluation_keys: Sequence[str]) -> dict[str,
     if not 1 <= len(keys) <= MAX_CURVES:
         raise GoldenSearchRefusal(f"Name between 1 and {MAX_CURVES} runs.", code="RUNS_QUERY_INVALID", field="key")
     stored = await with_connection(repo.evaluation_curves, study_id, keys)
-    return curves_view(keys, stored, float(row.protocol["execution"]["initial_cash"]))
+    return curves_read(keys, stored, float(row.protocol["execution"]["initial_cash"]), key="evaluation_key")
 
 
 async def curve_set(study_id: str, *, curve_set: CurveSet, candidate_key: str | None = None) -> dict[str, Any]:

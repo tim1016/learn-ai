@@ -16776,7 +16776,7 @@ export interface components {
             exploratory: boolean;
             /**
              * Has Curve
-             * @description The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it.
+             * @description The cell kept its daily equity; a failed cell never does.
              */
             has_curve: boolean;
             /** Is Leader */

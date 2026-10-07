@@ -89,7 +89,15 @@ async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<Walk
       provideRouter([]),
       ...charts.providers,
       { provide: WalkForwardStudyService, useValue: { get: vi.fn(async () => row), foldCurves: vi.fn(async () => foldCurves()), finish: vi.fn(), delete: vi.fn(async () => undefined), ...overrides } },
-      { provide: GridSearchService, useValue: { get: gridGet, cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', cells: [] })) } },
+      {
+        provide: GridSearchService,
+        useValue: {
+          get: gridGet,
+          cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', without_curve: 0, cells: [] })),
+          // An opened sweep draws its winner's curve; this one kept none.
+          cellCurves: vi.fn(async (_id: string, hashes: readonly string[]) => ({ sessions_ms: [], curves: [], not_recorded: [...hashes] })),
+        },
+      },
       { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
     ],
   });

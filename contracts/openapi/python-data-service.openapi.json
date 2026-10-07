@@ -27208,7 +27208,7 @@
             "type": "boolean"
           },
           "has_curve": {
-            "description": "The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it.",
+            "description": "The cell kept its daily equity; a failed cell never does.",
             "title": "Has Curve",
             "type": "boolean"
           },

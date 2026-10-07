@@ -64,3 +64,13 @@ def session_curves[K](stored: Mapping[K, Sequence[tuple[int, float]]], capital: 
             "deepest_drawdown": min(falls) if falls else None,
         }
     return sessions, curves
+
+
+def curves_read(asked: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float, *, key: str) -> dict[str, Any]:
+    """The curves of the runs asked for, in the order asked and each named under ``key``, and the runs among them that kept none."""
+    sessions, curves = session_curves({name: stored[name] for name in asked if name in stored}, capital)
+    return {
+        "sessions_ms": sessions,
+        "curves": [{key: name, **curves[name]} for name in asked if name in curves],
+        "not_recorded": [name for name in asked if name not in stored],
+    }

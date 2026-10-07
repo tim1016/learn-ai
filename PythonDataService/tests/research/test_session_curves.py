@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.research.session_curves import session_curves
+from app.research.session_curves import curves_read, session_curves
 from app.research.sweep.daily_equity import drawdown_series
 
 
@@ -51,3 +51,14 @@ def test_a_session_the_caller_names_stands_on_the_axis_though_no_run_scored_it()
     assert sessions == [1, 2, 3, 4, 5, 6]
     assert (curves["first"]["first_session"], curves["first"]["cumulative_return"]) == (0, pytest.approx([0.1, 0.21], abs=1e-12, rel=0))
     assert (curves["third"]["first_session"], curves["third"]["cumulative_return"]) == (4, pytest.approx([-0.1], abs=1e-12, rel=0))
+
+
+def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_not_drawn() -> None:
+    stored = {"b": [(1, 100.0)], "a": [(1, 110.0)], "unasked": [(9, 100.0)]}
+
+    read = curves_read(["a", "old", "b"], stored, 100.0, key="params_hash")
+
+    assert [curve["params_hash"] for curve in read["curves"]] == ["a", "b"]
+    assert read["not_recorded"] == ["old"]
+    # The sessions are those of the runs asked for, not of every run that kept a curve.
+    assert read["sessions_ms"] == [1]

@@ -229,16 +229,6 @@ def runs_page(
     }
 
 
-def curves_view(evaluation_keys: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float) -> dict[str, Any]:
-    """The curves of the named runs, in the order asked, and the runs among them that kept none."""
-    sessions, curves = session_curves({key: stored[key] for key in evaluation_keys if key in stored}, capital)
-    return {
-        "sessions_ms": sessions,
-        "curves": [{"evaluation_key": key, **curves[key]} for key in evaluation_keys if key in curves],
-        "not_recorded": [key for key in evaluation_keys if key not in stored],
-    }
-
-
 # ── A step's set of lines ────────────────────────────────────────────────
 
 Window = tuple[int, int]

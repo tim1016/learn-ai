@@ -70,8 +70,8 @@ class CellSummary:
 class CellResult(CellSummary):
     """One completed or failed cell, as the runner hands it to persistence."""
 
-    #: The run's ``(session close ms, equity)`` at each session it scored (#2935); none for a failed cell or a
-    #: run whose day ends could not be anchored to sessions.
+    #: The run's ``(session close ms, equity)`` at each session it scored (#2935); none for a failed cell and
+    #: for a run whose day ends could not be anchored to sessions.
     daily_equity: Sequence[tuple[int, float]] | None = None
 
 
@@ -82,8 +82,8 @@ class CellRow(CellSummary):
     search_id: str
     attempt: int
     completed_at_ms: int
-    #: False for a failed cell and for one recorded before cells kept their daily equity.
-    has_curve: bool = False
+    #: Whether the cell kept its daily equity; a failed cell never does.
+    has_curve: bool
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -118,8 +118,8 @@ class CellPage:
     page: int
     page_size: int
     cells: list[CellRow]
-    #: Completed cells of the whole search that kept no daily equity: recorded before cells kept one.
-    without_curve: int = 0
+    #: Completed cells of the whole search that kept no daily equity.
+    without_curve: int
 
 
 # ── Spec ─────────────────────────────────────────────────────────────────

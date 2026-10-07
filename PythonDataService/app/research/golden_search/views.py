@@ -10,8 +10,9 @@ stored stage output and attaches the closed copy of ``guidance``; no number
 is computed in the browser.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Compare
   candidates and weaknesses"; the series math is
-  ``app/research/golden_search/evidence.py``.
-Canonical implementation: this file (shapes); evidence.py (series math);
+  ``app/research/sweep/daily_equity.py`` and the months are ``evidence.py``.
+Canonical implementation: this file (shapes); sweep/daily_equity.py (series
+  math); evidence.py (the months);
   compare_measures.py (the Compare charts' measures); concentration.py (the
   concentration curve); trade_charts.py (the trade charts); final_measures.py
   (the final test against development).
