@@ -1648,6 +1648,23 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option approval level** — the level, 0 to 3, the broker approved the account for. **Option trading level** is the level in force, which the owner may have set lower. Unknown when the broker does not say; zero is options turned off.
 - **Option buying power** — the broker's account-wide figure for what option orders may still use. It is not what one order costs.
   _Avoid_: reading a change in it as one trade's cost.
+- **Preview (option structure)** — what a structure's rules would pick right now from the quotes a Clerk holds, with its money and what it leans. It needs no bot and changes nothing, and the bot picks again at every entry.
+  _Avoid_: quote (that is a bid and an ask), simulation, estimate of the fill.
+- **Quote-line lease** — how a page holds quote lines: for a minute, renewed by each ask. A bot's request stands until the bot takes it away.
+- **The money (in a preview)** — the underlying's live mid quote. A bot's is the close of the bar it decided on.
+- **Gain at expiry (estimate)** — the most a structure gains under the loss estimate's assumptions: one shared expiry, held to it, never exercised or assigned early, settled at exercise value, before fees. "No limit" when it keeps gaining as the price rises. "Not estimated" when the legs do not share an expiry.
+  _Avoid_: maximum profit, best case.
+- **Break-even (at expiry)** — an underlying price at which a structure held to expiry neither gains nor loses, before fees. An estimate under the same assumptions.
+- **Lean** — which way a structure gains for a small move of the underlying now, and the shares of the underlying it moves like: its net delta times the contract multiplier. Up, down, or about flat (a net delta under 0.05).
+  _Avoid_: direction of the trade, bullish or bearish (the signal stays ENTER and EXIT), exposure.
+- **Search (for option contracts)** — one run of the resolver: a plan's rules against the quotes held, to one contract for every leg or one refusal. It runs in a worker process, never in the Clerk's own.
+  _Avoid_: lookup (that is the rate and the dividends), scan.
+- **Search lane** — where the searches of one kind run, one at a time, in a worker process of their own. There are two: one for bots' entries and one for pages' previews.
+  _Avoid_: lane with no "search" (a lane is an account's Clerk in the fleet).
+- **Search not run** — a search that gave no answer because its worker could not be started, died, or did not answer in time. Not a refusal of the plan, and never a guess.
+- **Pricing inputs** — the rate and the cash dividends the option model is given, each with its source. Dividends that could not be looked up are unknown, never none. A process with its own Polygon and FRED keys reads them there; a fleet Clerk asks the coordinator.
+- **Declared dividend** — a cash dividend a company has announced, with its ex-date. Only a declared dividend can be known; none declared is not none paid.
+- **Option order terms** — the four settings an owner fixes for an option bot at Deploy: the widest bid-ask gap each leg may have, how long an entry waits for its fill, the structure cost limit, and how long before the close an expiring position is closed.
 
 ## Market-data readiness (resolved 2026-09-22)
 
