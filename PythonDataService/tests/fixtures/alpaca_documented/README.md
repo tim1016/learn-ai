@@ -19,10 +19,11 @@ From `PythonDataService/`:
 
 ```bash
 python -m scripts.fixture_generators.alpaca_documented_option_examples
+python -m scripts.fixture_generators.alpaca_documented_option_activities   # option_activities/
 ```
 
-It fetches the pages and rewrites the JSON files. It uses no Alpaca key and
-calls no Alpaca API. The `attribution.md` files are written by hand and carry
+Each fetches its pages and rewrites its JSON files. Neither uses an Alpaca key or
+calls an Alpaca API. The `attribution.md` files are written by hand and carry
 the date the pages were read.
 
 These are outside the numerical golden manifest

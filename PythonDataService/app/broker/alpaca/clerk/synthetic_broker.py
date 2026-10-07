@@ -52,6 +52,7 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.option_events import BrokerOptionEventEvidence
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -180,6 +181,13 @@ class SyntheticBroker:
     ) -> list[BrokerActivity]:
         del after_ms, limit, activity_type
         return []
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, page_token: str | None = None
+    ) -> BrokerOptionEventEvidence:
+        """None, and that is all of them: the simulation takes no option order, so it holds no option to end."""
+        del after_ms, page_token
+        return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
 
     async def list_assets(
         self,

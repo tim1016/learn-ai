@@ -1,0 +1,190 @@
+{
+  "trading_api": {
+    "option_exercise": [
+      {
+        "id": "20190801011955195::5f596936-6f23-4cef-bdf1-3806aae57dbf",
+        "activity_type": "OPEXC",
+        "date": "2023-07-21",
+        "net_amount": "0",
+        "description": "Option Exercise",
+        "symbol": "AAPL230721C00150000",
+        "qty": "-2",
+        "status": "executed"
+      },
+      {
+        "id": "20190801011955195::5f596936-6f23-4cef-bdf1-3806aae57dbf",
+        "activity_type": "OPTRD",
+        "date": "2023-07-21",
+        "net_amount": "-30000",
+        "description": "Option Trade",
+        "symbol": "AAPL",
+        "qty": "200",
+        "price": "90",
+        "status": "executed"
+      }
+    ],
+    "option_assignment": [
+      {
+        "id": "20190801011955195::5f596936-6f23-4cef-bdf1-3806aae57dbf",
+        "activity_type": "OPASN",
+        "date": "2023-07-01",
+        "net_amount": "0",
+        "description": "Option Assignment",
+        "symbol": "AAPL230721C00150000",
+        "qty": "2",
+        "status": "executed"
+      },
+      {
+        "activity_type": "OPTRD",
+        "id": "20190801011955195::5f596936-6f23-4cef-bdf1-3806aae57dbf",
+        "date": "2023-07-01",
+        "net_amount": "30000",
+        "description": "Option Trade",
+        "symbol": "AAPL",
+        "qty": "-200",
+        "price": "150",
+        "status": "executed"
+      }
+    ],
+    "otm_option_expiry": [
+      {
+        "id": "20190801011955195::5f596936-6f23-4cef-bdf1-3806aae57dbf",
+        "activity_type": "OPEXP",
+        "date": "2023-07-21",
+        "net_amount": "0",
+        "description": "Option Expiry",
+        "symbol": "AAPL230721C00150000",
+        "qty": "-2",
+        "status": "executed"
+      }
+    ]
+  },
+  "broker_api": {
+    "exercising_call": [
+      {
+        "id": "20240227000000000::197118f0-afd8-4adb-b154-167f4a87b1f5",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPEXC",
+        "date": "2024-02-27",
+        "net_amount": "0",
+        "description": "Option Exercise",
+        "symbol": "QS240301C00006500",
+        "qty": "-1",
+        "status": "executed"
+      },
+      {
+        "id": "20240227000000000::aa97cbc4-5163-49ab-b832-682a3a3e85bb",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPTRD",
+        "date": "2024-02-27",
+        "net_amount": "-650",
+        "description": "Option Trade",
+        "symbol": "QS",
+        "qty": "100",
+        "price": "6.5",
+        "status": "executed"
+      }
+    ],
+    "exercising_put": [
+      {
+        "id": "20240227000000000::f62ee8f5-0279-4e81-9bd1-4ef197c7b2f3",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPEXC",
+        "date": "2024-02-27",
+        "net_amount": "0",
+        "description": "Option Exercise",
+        "symbol": "QS240301P00006500",
+        "qty": "-1",
+        "status": "executed"
+      },
+      {
+        "id": "20240227000000000::74e1db8e-9316-4dcf-b69c-50f51427b7c1",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPTRD",
+        "date": "2024-02-27",
+        "net_amount": "650",
+        "description": "Option Trade",
+        "symbol": "QS",
+        "qty": "-100",
+        "price": "6.5",
+        "status": "executed"
+      }
+    ],
+    "call_assignment": [
+      {
+        "id": "20240301000000000::001140db-3947-456b-aefc-253861fb65df",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPASN",
+        "date": "2024-03-01",
+        "net_amount": "0",
+        "description": "",
+        "symbol": "QS240301C00004500",
+        "qty": "1",
+        "status": "executed"
+      },
+      {
+        "id": "20240301000000000::a88c089f-a8c3-4672-9b68-2f6f2d05e914",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPTRD",
+        "date": "2024-03-01",
+        "net_amount": "450",
+        "description": "Option Trade",
+        "symbol": "QS",
+        "qty": "-100",
+        "price": "4.5",
+        "status": "executed"
+      }
+    ],
+    "put_assignment": [
+      {
+        "id": "20240301000000000::fcd92e5c-46e4-4c6e-8866-d56cd7d2bde2",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPASN",
+        "date": "2024-03-01",
+        "net_amount": "0",
+        "description": "",
+        "symbol": "QS240301P00009000",
+        "qty": "1",
+        "status": "executed"
+      },
+      {
+        "id": "20240301000000000::1e1c2804-ce68-4516-9fa4-62d49b14c334",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPTRD",
+        "date": "2024-03-01",
+        "net_amount": "-900",
+        "description": "Option Trade",
+        "symbol": "QS",
+        "qty": "100",
+        "price": "9",
+        "status": "executed"
+      }
+    ],
+    "call_expiration": [
+      {
+        "id": "20240301000000000::31ff5d4c-a608-43bb-8e59-678a96a4a42c",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPEXP",
+        "date": "2024-03-01",
+        "net_amount": "0",
+        "description": "Option Expiry",
+        "symbol": "QS240301C00010500",
+        "qty": "-1",
+        "status": "executed"
+      }
+    ],
+    "put_expiration": [
+      {
+        "id": "20240301000000000::4bd8c683-0b2c-489f-9df9-1243ff621648",
+        "account_id": "21c36b57-2304-4e5b-8364-8effbcba853e",
+        "activity_type": "OPEXP",
+        "date": "2024-03-01",
+        "net_amount": "0",
+        "description": "Option Expiry",
+        "symbol": "QS240301P00000500",
+        "qty": "-1",
+        "status": "executed"
+      }
+    ]
+  }
+}

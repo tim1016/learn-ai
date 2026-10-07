@@ -23,6 +23,8 @@ from collections.abc import Callable, Mapping
 from itertools import pairwise
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.broker.alpaca import adapter
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
@@ -41,6 +43,12 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.option_events import (
+    BrokerOptionActivityUnreadable,
+    BrokerOptionEventActivity,
+    BrokerOptionEventEvidence,
+    BrokerOptionShareTradeActivity,
+)
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -49,11 +57,13 @@ from app.broker.contract.options import (
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 from app.options.contract import OptionContract
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
 
 _ACTIVITY_MAX_PAGES = 3
+# Alpaca's reference allows an activity page of 1 to 100 rows.
+_ACTIVITY_PAGE_SIZE = 100
 _CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
 
 
@@ -210,6 +220,59 @@ def _activity_page_oldest_ms(
             detail="Activity pagination cannot prove the window's start boundary.",
         )
     return dated[-1]
+
+
+def _why_unreadable(exc: Exception) -> str:
+    """The adapter's refusal in plain words, without a validation library's framing."""
+    if isinstance(exc, ValidationError):
+        return "; ".join(str(error["msg"]).removeprefix("Value error, ") for error in exc.errors())
+    return str(exc)
+
+
+def _read_option_activity(
+    payload: Mapping[str, Any], row: BrokerActivity
+) -> BrokerOptionEventActivity | BrokerOptionShareTradeActivity | BrokerOptionActivityUnreadable:
+    """Read one option activity whole, or say that it could not be read and why.
+
+    ``row`` is the same payload as every activity read maps it, which has
+    already given it an id and a place in time. An unreadable row keeps
+    those and no figure: it is not a partial event.
+    """
+    try:
+        return adapter.from_alpaca_option_activity(payload, observed_at_ms=row.observed_at_ms)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "An Alpaca option activity could not be read whole",
+            extra={
+                "action": "alpaca_option_activity_unreadable",
+                "activity_id": row.activity_id,
+                "activity_type": row.activity_type,
+                "cause": f"{type(exc).__name__}: {exc}",
+            },
+            exc_info=True,
+        )
+        return BrokerOptionActivityUnreadable(
+            broker=BROKER_ID,
+            activity_id=row.activity_id,
+            activity_type=row.activity_type,
+            activity_date_ms=(
+                None if row.occurred_at_ms is None else et_midnight_ms(et_date_at_ms(row.occurred_at_ms))
+            ),
+            reason=_why_unreadable(exc),
+        )
+
+
+def _keep_once[T: (BrokerOptionEventActivity, BrokerOptionShareTradeActivity, BrokerOptionActivityUnreadable)](
+    kept: dict[str, T], activity: T
+) -> None:
+    """Keep an activity under its id; the same id carrying something else is evidence that cannot be used."""
+    previous = kept.setdefault(activity.activity_id, activity)
+    if previous.model_dump(exclude={"observed_at_ms"}) != activity.model_dump(exclude={"observed_at_ms"}):
+        raise BrokerEvidenceUnavailable(
+            "Alpaca option activity history contains a conflicting duplicate.",
+            broker=BROKER_ID,
+            detail="One activity id carried two different option activities.",
+        )
 
 
 def _the_order_asked_about(
@@ -540,6 +603,75 @@ class AlpacaBroker:
                 return BrokerActivityEvidence(activities=activities, history_complete=False)
             page_token = next_token
         return BrokerActivityEvidence(activities=activities, history_complete=False, next_page_token=page_token)
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, page_token: str | None = None
+    ) -> BrokerOptionEventEvidence:
+        """Read the account's assignments, exercises and expiries, with the share trades they created.
+
+        Alpaca does not send these over the trade-updates stream ("Options
+        assignments are not delivered through websocket events"), so they are
+        polled from the account's non-trade activities. The walk asks for
+        that whole category and keeps the option activities: it names no
+        activity type, so the exercise is read under either code Alpaca's
+        pages give it.
+
+        An activity carries a date and no time, so the window is whole New
+        York dates: everything dated on or after the date ``after_ms`` falls
+        on. The walk is ``read_activity_evidence``'s: newest first or it
+        raises ``BrokerEvidenceUnavailable``, a bounded number of pages a
+        call, complete on a short page or on the dated page after the one
+        that crossed the window's start, and otherwise resumed from
+        ``next_page_token``.
+
+        Each option activity is read whole or listed under ``unreadable``
+        with the reason, never read in part. A row whose id or date cannot be
+        read at all refuses the whole read, as it does for every activity.
+        """
+        since = et_date_at_ms(after_ms)
+        events: dict[str, BrokerOptionEventActivity] = {}
+        share_trades: dict[str, BrokerOptionShareTradeActivity] = {}
+        unreadable: dict[str, BrokerOptionActivityUnreadable] = {}
+
+        def evidence(*, history_complete: bool, next_page_token: str | None = None) -> BrokerOptionEventEvidence:
+            return BrokerOptionEventEvidence(
+                events=tuple(events.values()),
+                share_trades=tuple(share_trades.values()),
+                unreadable=tuple(unreadable.values()),
+                history_complete=history_complete,
+                next_page_token=next_page_token,
+            )
+
+        previous_page_oldest_ms: int | None = None
+        boundary_crossed_on_previous_page = False
+        for _ in range(_ACTIVITY_MAX_PAGES):
+            payloads = await self._client.list_non_trade_activities(limit=_ACTIVITY_PAGE_SIZE, page_token=page_token)
+            page = _mapped_activities(payloads)
+            page_oldest_ms = _activity_page_oldest_ms(page, previous_page_oldest_ms=previous_page_oldest_ms)
+            for payload, row in zip(payloads, page, strict=True):
+                if adapter.alpaca_option_activity_type(payload) is None:
+                    continue
+                if row.occurred_at_ms is not None and et_date_at_ms(row.occurred_at_ms) < since:
+                    continue
+                activity = _read_option_activity(payload, row)
+                if isinstance(activity, BrokerOptionEventActivity):
+                    _keep_once(events, activity)
+                elif isinstance(activity, BrokerOptionShareTradeActivity):
+                    _keep_once(share_trades, activity)
+                else:
+                    _keep_once(unreadable, activity)
+            window_proven = boundary_crossed_on_previous_page and page_oldest_ms is not None
+            boundary_crossed_on_previous_page = page_oldest_ms is not None and _activity_page_crossed_window(
+                page, after_ms=after_ms,
+            )
+            previous_page_oldest_ms = page_oldest_ms
+            if window_proven or len(payloads) < _ACTIVITY_PAGE_SIZE:
+                return evidence(history_complete=True)
+            next_token = page[-1].activity_id
+            if next_token == page_token:
+                return evidence(history_complete=False)
+            page_token = next_token
+        return evidence(history_complete=False, next_page_token=page_token)
 
     async def list_assets(
         self,

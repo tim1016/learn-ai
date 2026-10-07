@@ -40,6 +40,11 @@ from app.broker.contract.models import (
     BrokerPosition,
     OrderSide,
 )
+from app.broker.contract.option_events import (
+    BrokerOptionEventActivity,
+    BrokerOptionShareTradeActivity,
+    OptionActivityStatus,
+)
 from app.broker.contract.options import (
     BrokerOptionAccountSnapshot,
     BrokerOptionContract,
@@ -52,6 +57,7 @@ from app.broker.contract.options import (
     SingleOptionOrderRequest,
 )
 from app.options.contract import OptionContract
+from app.options.event_allocation import OptionEventKind
 from app.options.exact import require_everyday
 from app.options.expiry import option_expiry_anchor_ms
 from app.utils.timestamps import now_ms_utc
@@ -1056,3 +1062,132 @@ def from_alpaca_option_account(
         options_trading_level=_opt_option_level(payload.get("options_trading_level"), field="options_trading_level"),
         observed_at_ms=account.observed_at_ms,
     )
+
+
+# ── Option events: assignment, exercise and expiry (ADR 0076) ───────────────
+#
+# Every code, field and value below is Alpaca's own, from its documents as
+# read on 2026-10-06:
+#   the events  https://docs.alpaca.markets/docs/non-trade-activities-for-option-events
+#   the codes   https://docs.alpaca.markets/reference/getaccountactivities-2
+#               https://docs.alpaca.markets/docs/account-activities
+#   an activity https://docs.alpaca.markets/reference/getaccountactivities-2 (``NonTradeActivities``)
+
+# Alpaca's pages spell the exercise two ways. The reference's list of
+# activity types and the page of examples write ``OPEXC``; the Account
+# Activities page's table writes ``OPXRC``. Both are read until an account
+# shows which one it sends (#2913).
+_ALPACA_OPTION_EVENT_KIND: dict[str, OptionEventKind] = {
+    "OPASN": OptionEventKind.ASSIGNED,
+    "OPEXC": OptionEventKind.EXERCISED,
+    "OPXRC": OptionEventKind.EXERCISED,
+    "OPEXP": OptionEventKind.EXPIRED,
+}
+# The trade in the underlying's shares an exercise or an assignment creates. It is not the option's own fill.
+_ALPACA_OPTION_SHARE_TRADE = "OPTRD"
+# Every option activity code on Alpaca's pages begins so. That lets a code
+# this does not read be named as unread, where it would otherwise pass unseen.
+_ALPACA_OPTION_ACTIVITY_PREFIX = "OP"
+_ALPACA_ACTIVITY_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# Money here is dollars and cents. Alpaca does not offer options in another currency.
+_ALPACA_OPTION_ACTIVITY_CURRENCY = "USD"
+
+
+def alpaca_option_activity_type(payload: Any) -> str | None:
+    """Alpaca's code for the row when it is an option activity, else ``None``.
+
+    An option activity is any whose code begins ``OP``: the three events, the
+    share trade, and the kinds this app does not read (``OPCA``, an option
+    corporate action, and ``OPCSH``, a cash deliverable). The prefix is this
+    repo's guard, not a statement of Alpaca's: a new code, or a third
+    spelling of the exercise, is then refused by name and not skipped.
+    """
+    if not isinstance(payload, Mapping):
+        return None
+    code = payload.get("activity_type")
+    return code if isinstance(code, str) and code.startswith(_ALPACA_OPTION_ACTIVITY_PREFIX) else None
+
+
+def _signed_whole(value: Any, *, field: str) -> int:
+    """Parse a required signed count of contracts or shares: a whole number, never zero."""
+    number = _exact_decimal(value, field=field)
+    if number == 0 or number != number.to_integral_value():
+        raise ValueError(f"Alpaca field {field!r} must be a whole number other than zero; got {value!r}")
+    return int(number)
+
+
+def _option_activity_date_ms(value: Any) -> int:
+    text = to_str(value, field="date")
+    if _ALPACA_ACTIVITY_DATE.fullmatch(text) is None:
+        raise ValueError(f"Alpaca field 'date' must be a date written YYYY-MM-DD, got {text!r}")
+    return et_date_to_ms(text)
+
+
+def _option_activity_status(value: Any) -> OptionActivityStatus:
+    text = to_str(value, field="status")
+    if text not in OptionActivityStatus:
+        raise ValueError(f"Alpaca field 'status' is not a status its reference lists: {text!r}")
+    return OptionActivityStatus(text)
+
+
+def _option_activity_header(payload: Mapping[str, Any], code: str) -> dict[str, Any]:
+    """What an event and its share trade both carry: who, when, and whether the broker stands by it."""
+    currency = _opt_text(payload.get("currency"), field="currency")
+    if currency not in (None, _ALPACA_OPTION_ACTIVITY_CURRENCY):
+        raise ValueError(f"Alpaca field 'currency' is {currency!r}; an option activity is read in dollars only")
+    return {
+        "broker": BROKER_ID,
+        "activity_id": to_str(payload.get("id"), field="id"),
+        "activity_type": code,
+        "status": _option_activity_status(payload.get("status")),
+        "activity_date_ms": _option_activity_date_ms(payload.get("date")),
+        "group_id": _opt_text(payload.get("group_id"), field="group_id"),
+        "created_at_ms": opt_rfc3339_to_ms(payload.get("created_at")),
+    }
+
+
+def from_alpaca_option_activity(
+    payload: Any,
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerOptionEventActivity | BrokerOptionShareTradeActivity:
+    """Map one raw Alpaca option activity to the event, or the share trade, it reports.
+
+    Read whole or not at all, like ``from_alpaca_option_order``: a value that
+    is missing or will not parse raises ``TypeError`` or ``ValueError``. So
+    does a status outside the reference's three, a contract symbol that is
+    not one, a quantity that is not whole, and a quantity whose sign the kind
+    cannot have. A quantity that could not be read never becomes no contracts.
+
+    An event (``OPASN``, ``OPEXC`` or ``OPXRC``, ``OPEXP``) names its
+    contract by OCC symbol and carries the change to the account's position
+    in contracts. Its share trade (``OPTRD``) names the underlying and carries
+    signed shares, the price a share and the cash. The date becomes 00:00 New
+    York time on it, here, once.
+
+    An option activity of another code (``OPCA``, ``OPCSH``) is refused by
+    name: this app reads no such kind. A row that is not an option activity
+    at all is the caller's mistake and raises too.
+    """
+    code = alpaca_option_activity_type(payload)
+    if code is None:
+        raise ValueError("Alpaca's row is not an option activity")
+    if code in _ALPACA_OPTION_EVENT_KIND:
+        return BrokerOptionEventActivity(
+            **_option_activity_header(payload, code),
+            kind=_ALPACA_OPTION_EVENT_KIND[code],
+            contract=OptionContract.from_occ_symbol(to_str(payload.get("symbol"), field="symbol")),
+            position_change=_signed_whole(payload.get("qty"), field="qty"),
+            net_amount=_opt_exact_decimal(payload.get("net_amount"), field="net_amount"),
+            observed_at_ms=_observed(observed_at_ms),
+        )
+    if code == _ALPACA_OPTION_SHARE_TRADE:
+        return BrokerOptionShareTradeActivity(
+            **_option_activity_header(payload, code),
+            underlying_symbol=to_str(payload.get("symbol"), field="symbol"),
+            shares=_signed_whole(payload.get("qty"), field="qty"),
+            price=_exact_decimal(payload.get("price"), field="price"),
+            net_amount=_exact_decimal(payload.get("net_amount"), field="net_amount"),
+            observed_at_ms=_observed(observed_at_ms),
+        )
+    raise ValueError(f"Alpaca activity type {code!r} is an option activity this app does not read")
