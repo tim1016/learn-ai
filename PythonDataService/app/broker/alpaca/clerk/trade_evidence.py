@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_execution_price_conflict,
     fold_order_acknowledgement,
     fold_order_evidence,
+    fold_uncertain,
     withhold_fill_the_order_cannot_hold,
     withhold_unnamed_order,
 )
@@ -161,6 +162,13 @@ class SqliteTradeUpdateEvidenceSink:
         recovery_window_limit: int | None,
     ) -> TradeUpdateDisposition:
         del recovery_window_limit
+        # A stream may name a leg before the parent's submit answer supplies its venue id (ADR 0076).
+        # Recover that answer outside intake before judging the order foreign.
+        if (
+            order is not None and resolve_captured_order(self._repo, order) is None
+            and self._repo.option_parents_awaiting_leg_ids(order.symbol)
+        ):
+            await self._reconciler.reconcile_account(trigger="AUTOMATIC")
         async with self._intake:
             # A frame's exact execution slice is its own order's execution:
             # credited below, and -- for a manual order's replacement -- the
@@ -180,6 +188,16 @@ class SqliteTradeUpdateEvidenceSink:
                 else None
             )
             if captured is None and order is not None:
+                owed = self._repo.option_parents_awaiting_leg_ids(order.symbol)
+                if owed:
+                    for parent_ref in owed:
+                        parent = self._repo.order(parent_ref)
+                        assert parent is not None
+                        fold_uncertain(
+                            self._repo, effect_operation_id=parent.effect_operation_id, order_ref=parent_ref,
+                            why="A contract order arrived before its parent's leg identities could be read.",
+                        )
+                    return "withheld_order"
                 # This broker identity is not captured by any bot-owned
                 # order.  Persist it separately from bot economics; the
                 # observation fold raises its own atomic account hold; an
@@ -221,6 +239,14 @@ class SqliteTradeUpdateEvidenceSink:
                 owner = self._repo.effect_operation(captured.row.effect_operation_id)
             if owner is None:
                 raise RuntimeError(f"SQLite order {order_ref!r} has no owning effect operation")
+
+            if self._repo.order_legs(order_ref):
+                # A parent has no execution of its own. The exact option lookup supplies every leg.
+                fold_uncertain(
+                    self._repo, effect_operation_id=owner.effect_operation_id, order_ref=order_ref,
+                    why="The stream stated a multi-leg parent without its exact per-leg answer.",
+                )
+                return "withheld_order"
 
             # Before the exact slice and the ack: a frame missing our order's
             # id, status, symbol or side, or naming values it could not read,

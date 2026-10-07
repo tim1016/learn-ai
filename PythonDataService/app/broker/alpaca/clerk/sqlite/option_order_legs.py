@@ -205,6 +205,27 @@ def leg_parent(conn: sqlite3.Connection, order_ref: str) -> str | None:
     return None if row is None else row[0]
 
 
+def leg_by_broker_id(conn: sqlite3.Connection, broker_order_id: str) -> str | None:
+    """A captured leg named by its venue identity, never by our internal client reference."""
+    row = conn.execute(
+        "SELECT leg.order_ref FROM option_order_legs leg JOIN orders o ON o.order_ref = leg.order_ref "
+        "WHERE o.broker_order_id = ?", (broker_order_id,),
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def parents_awaiting_leg_ids(conn: sqlite3.Connection, symbol: str) -> tuple[str, ...]:
+    """Parents whose answer is still owed and could name an unrecognised contract order."""
+    rows = conn.execute(
+        "SELECT DISTINCT leg.parent_order_ref FROM option_order_legs leg "
+        "WHERE leg.symbol = ? AND EXISTS (SELECT 1 FROM option_order_legs missing "
+        "JOIN orders o ON o.order_ref = missing.order_ref "
+        "WHERE missing.parent_order_ref = leg.parent_order_ref AND o.broker_order_id IS NULL) "
+        "ORDER BY leg.parent_order_ref", (symbol.upper(),),
+    ).fetchall()
+    return tuple(row[0] for row in rows)
+
+
 def is_multi_leg_parent(conn: sqlite3.Connection, order_ref: str) -> bool:
     """Whether ``order_ref`` is the parent of an order of several legs: it has legs on the books."""
     return (
@@ -248,10 +269,12 @@ __all__ = [
     "SCHEMA_V24_STATEMENTS",
     "OrderLeg",
     "is_multi_leg_parent",
+    "leg_by_broker_id",
     "leg_order_ref",
     "leg_parent",
     "multi_leg_parent_line",
     "order_leg",
     "order_legs",
+    "parents_awaiting_leg_ids",
     "record_order_legs",
 ]

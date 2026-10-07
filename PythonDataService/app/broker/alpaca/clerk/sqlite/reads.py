@@ -779,12 +779,16 @@ def terminal_entry_orders_with_fills(
     rows = conn.execute(
         "SELECT o.order_ref, e.strategy_instance_id FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
+        "WHERE (o.role = 'ENTRY' OR EXISTS (SELECT 1 FROM option_order_legs leg "
+        "JOIN orders parent ON parent.order_ref = leg.parent_order_ref "
+        "WHERE leg.order_ref = o.order_ref AND parent.role = 'ENTRY')) "
+        "AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
         "AND e.strategy_instance_id IS NOT NULL "
-        "AND (? IS NULL OR o.order_ref = ?) "
+        "AND (? IS NULL OR o.order_ref = ? OR EXISTS (SELECT 1 FROM option_order_legs leg "
+        "WHERE leg.order_ref = o.order_ref AND leg.parent_order_ref = ?)) "
         "AND EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = o.order_ref) "
         "ORDER BY o.order_ref ASC",
-        (order_ref, order_ref),
+        (order_ref, order_ref, order_ref),
     ).fetchall()
     return [(row["order_ref"], row["strategy_instance_id"]) for row in rows]
 
@@ -1085,7 +1089,9 @@ def _failed_operation_orders_unproven_at_broker(
         f"{also}"
         "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
         f"({_TERMINAL_BROKER_STATES_SQL})) "
-        f"AND UPPER(json_extract(t.facts_json, ?)) IN ({symbol_marks}) "
+        f"AND (UPPER(json_extract(t.facts_json, ?)) IN ({symbol_marks}) "
+        "OR EXISTS (SELECT 1 FROM option_order_legs leg WHERE leg.parent_order_ref = o.order_ref "
+        f"AND UPPER(leg.symbol) IN ({symbol_marks}))) "
         f"{exclude_clause}"
         ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
         "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
@@ -1097,6 +1103,7 @@ def _failed_operation_orders_unproven_at_broker(
             *also_params,
             symbol_path,
             *sorted(symbols),
+            *sorted(symbols),
             *excluded,
             rested_since_ms,
             limit,
@@ -1107,7 +1114,7 @@ def _failed_operation_orders_unproven_at_broker(
 
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     """Every immutable broker identity captured by this authority."""
-    rows = conn.execute("SELECT order_ref FROM orders").fetchall()
+    rows = conn.execute(f"SELECT o.order_ref FROM orders o WHERE {NOT_A_LEG_SQL}").fetchall()
     return frozenset(row["order_ref"] for row in rows)
 
 

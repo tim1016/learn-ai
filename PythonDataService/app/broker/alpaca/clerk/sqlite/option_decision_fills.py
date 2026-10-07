@@ -75,6 +75,7 @@ def option_fills_of_decision(
     }
     if not own:
         return ()
+    own.update(leg.order_ref for parent in tuple(own) for leg in repo.order_legs(parent))
     with repo._write_lock:
         records = effective_fill_records(
             repo._conn, account_id=repo.account_id, strategy_instance_ids=(strategy_instance_id,)

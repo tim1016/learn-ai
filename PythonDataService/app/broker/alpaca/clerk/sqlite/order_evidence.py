@@ -149,6 +149,9 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     takes one for the whole would act on a part of a structure. Such a
     caller asks :func:`entry_order_symbols`.
     """
+    parent_ref = repo.leg_parent(order_ref)
+    if parent_ref is not None:
+        return next(leg.symbol for leg in repo.order_legs(parent_ref) if leg.order_ref == order_ref)
     transition = repo.first_order_transition(order_ref=order_ref, transition_kind="ENTER_ACCEPTED")
     if transition is None:
         # The shares an option event left have no ENTER: they are in the symbol their bot is
@@ -386,6 +389,16 @@ def fold_order_evidence(
     with the anomaly recorded in ``why`` — a later resolution will retry
     with (hopefully) complete evidence.
     """
+    from app.broker.alpaca.clerk.sqlite.option_order_evidence import MultiLegOrderEvidence
+
+    if isinstance(order, MultiLegOrderEvidence):
+        from app.broker.alpaca.clerk.sqlite.multi_leg_evidence import fold_multi_leg_order_evidence
+
+        fold_multi_leg_order_evidence(
+            repo, effect_operation_id=effect_operation_id, evidence=order, order_ref=order_ref,
+            simulated_authority=simulated_authority, append_stale_ack=append_stale_ack,
+        )
+        return
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     order_ref = _evidence_order_ref(order, order_ref)
@@ -1062,6 +1075,11 @@ def fold_enter_unfilled_if_proven(
       landed) proves nothing: folding there would end an ENTER that bought
       shares, and nothing would ever look at them again (#2306 review).
     """
+    if repo.leg_parent(order_ref) is not None:
+        return
+    for leg in repo.order_legs(order_ref):
+        if repo.fills_for_order(leg.order_ref) or (repo.latest_reported_filled_quantity(leg.order_ref) or 0.0) >= FILL_QTY_EPSILON:
+            return
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     owning = repo.order(order_ref)
@@ -1117,6 +1135,15 @@ def fold_order_submission_acknowledgement(
     than being acknowledged as if the accounting evidence were complete.
     Exact REST recovery and reconciliation use :func:`fold_order_evidence`.
     """
+    from app.broker.alpaca.clerk.sqlite.option_order_evidence import MultiLegOrderEvidence
+
+    if isinstance(order, MultiLegOrderEvidence):
+        from app.broker.alpaca.clerk.sqlite.multi_leg_evidence import fold_multi_leg_order_evidence
+
+        fold_multi_leg_order_evidence(
+            repo, effect_operation_id=effect_operation_id, evidence=order, acknowledgement_only=True,
+        )
+        return
     order_ref = _evidence_order_ref(order, None)
     if order.filled_quantity > 0 and order.filled_avg_price is None:
         fold_uncertain(
@@ -1254,6 +1281,9 @@ def withhold_unnamed_order(
     foreign order is contained by the external-order fold. Returns whether
     the answer was withheld.
     """
+    from app.broker.alpaca.clerk.sqlite.option_order_evidence import MultiLegOrderEvidence
+
+    parent = isinstance(order, MultiLegOrderEvidence)
     missing = [
         name
         for name, value in (
@@ -1262,7 +1292,7 @@ def withhold_unnamed_order(
             ("symbol", order.symbol),
             ("side", order.side),
         )
-        if not value.strip()
+        if not value.strip() and not (parent and name in ("symbol", "side"))
     ]
     unreadable = list(order.unreadable_fields)
     if not missing and not unreadable:
@@ -1488,6 +1518,11 @@ def order_never_reached_broker(repo: ClerkSqliteRepository, order: OrderResource
     if repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_ACKED"):
         return False
     if repo.fills_for_order(order.order_ref):
+        return False
+    if any(
+        repo.order(leg.order_ref).broker_order_id is not None or repo.fills_for_order(leg.order_ref)
+        for leg in repo.order_legs(order.order_ref)
+    ):
         return False
     return repo.clock() - _uncertain_since_ms(repo, order.order_ref) >= submit_absence_grace_ms()
 

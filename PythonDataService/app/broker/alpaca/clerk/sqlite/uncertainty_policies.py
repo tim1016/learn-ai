@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
     OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
     OPTION_EVENT_HOLD_REASON_CODES,
+    OPTION_LEGS_OUT_OF_STEP_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -44,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FailedEnterFilledCause,
     LossHoldCause,
     OptionEventHoldCause,
+    OptionLegsOutOfStepCause,
     PositionDriftCause,
     ScheduledCloseMissedCause,
     StreamHealthHoldCause,
@@ -191,6 +193,14 @@ def _failed_enter_filled_cause_is_valid(value: Any) -> bool:
 def _scheduled_close_missed_cause_is_valid(value: Any) -> bool:
     try:
         ScheduledCloseMissedCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _legs_out_of_step_cause_is_valid(value: Any) -> bool:
+    try:
+        OptionLegsOutOfStepCause.from_mapping(value)
     except ValueError:
         return False
     return True
@@ -466,6 +476,11 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
     # quantity, so it takes no clock: it ends when the bot no longer holds a
     # contract past its close, which the scheduled-close step reads from the
     # books on every round and every pass.
+    OPTION_LEGS_OUT_OF_STEP_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT", blocks_new_exposure=True, allows_reduction=True,
+        admits_safe_flatten=True, cause_is_valid=_legs_out_of_step_cause_is_valid,
+        age=CauseCleared(), blocks_lane_quiet=True, residue_discharge="strands",
+    ),
     SCHEDULED_CLOSE_MISSED_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,

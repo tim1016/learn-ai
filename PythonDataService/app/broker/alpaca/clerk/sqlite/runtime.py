@@ -1206,20 +1206,12 @@ class SqliteAlpacaClerkFacade:
             taken = option_plan_taken(action_plan, real_account=self._is_a_real_account)
         except OptionPlanRefused:
             return None
-        if len(taken.legs) != 1:
-            # A real account's entry of several legs needs every leg's listing read, which is not
-            # built yet. Refused by name, so nothing is ever sent on a listing nobody read.
-            return OptionEntryRefused(
-                OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
-                f"This entry opens {len(taken.legs)} option legs on a real account. Alpaca's listing of each "
-                "leg's contract is not read for a structure of several legs yet, so no contract was confirmed and "
-                "the entry was not taken.",
-            )
-        (leg,) = taken.legs
         picked = option_entry.picked
-        contract = picked.get(leg.leg_id) if isinstance(picked, Mapping) else None
-        if not isinstance(contract, OptionContract):
+        contracts = tuple(picked.get(leg.leg_id) for leg in taken.legs) if isinstance(picked, Mapping) else ()
+        if len(contracts) != len(taken.legs) or any(not isinstance(contract, OptionContract) for contract in contracts):
             return None
+        contract = contracts[0]
+        named = ", ".join(each.occ_symbol for each in contracts)
         if self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}") is not None:
             return None
         if (
@@ -1228,23 +1220,58 @@ class SqliteAlpacaClerkFacade:
         ):
             return _LISTING_NOT_ASKED
         try:
-            listing = await self._listing_beside_the_first_reading(
-                contract, entry=(strategy_instance_id, durable_decision_id)
-            )
+            if len(contracts) == 1:
+                listings = (await self._listing_beside_the_first_reading(
+                    contract, entry=(strategy_instance_id, durable_decision_id)
+                ),)
+            else:
+                listings = await self._listings_beside_the_first_reading(
+                    contracts, entry=(strategy_instance_id, durable_decision_id)
+                )
         except TimeoutError:
             return OptionEntryRefused(
                 OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
-                f"Alpaca's listing of {contract.occ_symbol} did not answer within "
+                f"Alpaca's listing of {named} did not answer within "
                 f"{CONTRACT_REFERENCE_READ_BOUND_MS:,} ms, so the contract was not confirmed and the entry was not taken.",
             )
         except BrokerError as exc:
             return OptionEntryRefused(
                 OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
-                f"Alpaca's listing of {contract.occ_symbol} could not be read ({exc}), so the contract was not "
+                f"Alpaca's listing of {named} could not be read ({exc}), so the contract was not "
                 "confirmed and the entry was not taken.",
             )
-        refused = option_contract_refusal(contract, listing)
-        return None if refused is None else OptionEntryRefused(refused.reason.value, str(refused))
+        for contract, listing in zip(contracts, listings, strict=True):
+            if isinstance(listing, BrokerError):
+                return OptionEntryRefused(
+                    OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
+                    f"Alpaca's listing of {contract.occ_symbol} could not be read ({listing}), so the contract was not "
+                    "confirmed and the entry was not taken.",
+                )
+            if isinstance(listing, BaseException):
+                raise listing
+            refused = option_contract_refusal(contract, listing)
+            if refused is not None:
+                return OptionEntryRefused(refused.reason.value, str(refused))
+        return None
+
+    async def _listings_beside_the_first_reading(
+        self, contracts: tuple[OptionContract, ...], *, entry: tuple[str, str]
+    ) -> tuple[BrokerOptionContract | None | BaseException, ...]:
+        """Read all listings inside one bound, alongside one account reading (ADR 0076)."""
+        reading = None if self._buying_power is None else self._buying_power.begin_first()
+        try:
+            answers = await asyncio.wait_for(
+                asyncio.gather(*(self._read.get_option_contract(contract) for contract in contracts), return_exceptions=True),
+                timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
+            )
+        except BaseException:
+            if reading is not None:
+                reading.cancel()
+            raise
+        if self._buying_power is not None and reading is not None:
+            await self._buying_power.finish_first(entry, reading)
+        return tuple(answers)
+
 
     async def _listing_beside_the_first_reading(
         self, contract: OptionContract, *, entry: tuple[str, str]

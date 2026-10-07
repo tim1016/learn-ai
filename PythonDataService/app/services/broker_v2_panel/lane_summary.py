@@ -65,6 +65,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
     FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    OPTION_LEGS_OUT_OF_STEP_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -121,6 +122,7 @@ _EPISODE_LINES: dict[str, tuple[LaneAttentionKind, LaneAttentionAction]] = {
     EXIT_STUCK_REASON_CODE: ("exit", _OPEN_BOT),
     # An option position its scheduled close did not close (ADR 0076): an exit that has not flattened.
     SCHEDULED_CLOSE_MISSED_REASON_CODE: ("exit", _OPEN_BOT),
+    OPTION_LEGS_OUT_OF_STEP_REASON_CODE: ("exit", _OPEN_BOT),
 }
 
 #: A bot's closing order whose outcome is unknown is settled on the bot's own

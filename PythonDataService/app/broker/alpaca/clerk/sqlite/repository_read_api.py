@@ -713,6 +713,11 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return option_order_legs.leg_parent(self._conn, order_ref)
 
+    def option_parents_awaiting_leg_ids(self: ClerkSqliteRepository, symbol: str) -> tuple[str, ...]:
+        """Parents that could own a contract order whose venue identity is not captured yet."""
+        with self._write_lock:
+            return option_order_legs.parents_awaiting_leg_ids(self._conn, symbol)
+
     def active_execution_price_conflicts(self: ClerkSqliteRepository):
         """Every open ``EXECUTION_PRICE_CONFLICT`` episode (#2460).
 

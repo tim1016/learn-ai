@@ -65,6 +65,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk.option_effects import OptionPlanRefused, option_plan_taken
 from app.broker.alpaca.option_fees import OptionRateNotPinnedError, entry_fee_provision_cents
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import LineUse, WatchRequest
@@ -785,10 +786,18 @@ class _Asked:
         said.append(
             {1: "The exit closes it.", 2: "The exit closes both legs."}.get(len(legs), f"The exit closes all {len(legs)} legs.")
         )
+        can_be_deployed, deploy_reason = True, None
+        try:
+            option_plan_taken(plan, real_account=False)
+            if len(legs) > 1:
+                said.append("Paper and Live accounts also need several-leg option orders enabled.")
+        except OptionPlanRefused as refused:
+            can_be_deployed, deploy_reason = False, refused.reason.value
+            said = [self.said(refused.detail)]
         return OptionPreviewVerdict(
-            can_be_deployed=True,
+            can_be_deployed=can_be_deployed,
             deploy_sentence=" ".join(said),
-            deploy_reason_code=None,
+            deploy_reason_code=deploy_reason,
             resolves_as_built=resolves_as_built,
             resolves_sentence=resolves_sentence,
             resolves_reason_code=resolves_reason_code,

@@ -436,7 +436,7 @@ class MultiLegOptionEntryFacts(BaseModel):
         Reference: ADR 0076 decisions 2 and 5.
         Canonical implementation: ``app/options/requirement.py`` (the two
           figures); this property only divides them by the units.
-        Validated against: tests/broker/alpaca/clerk/sqlite/test_several_legs_entry.py.
+        Validated against: tests/broker/alpaca/clerk/sqlite/test_several_legs_admission.py.
 
         This is what the entry's reservation keeps where an entry in shares
         keeps a price a share. It is not a price: nothing multiplies it by a

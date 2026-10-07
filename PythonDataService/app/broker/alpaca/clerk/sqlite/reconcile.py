@@ -58,6 +58,7 @@ from app.broker.alpaca.clerk.sqlite.option_events import (
     poll_option_events_in_a_pass,
 )
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
+    MultiLegOrderEvidence,
     asked_of_a_real_option_order,
     look_up_by_client_order_id,
 )
@@ -1178,6 +1179,13 @@ def _fold_snapshot_evidence(
         if captured is None:
             continue
         captured_ids.add(broker_order.order_id)
+        # An account snapshot's loose parent row carries no per-leg fill evidence (ADR 0076).
+        # The exact option lookup supplies the nested answer during operation recovery.
+        if (
+            (repo.order_legs(captured.order_ref) or repo.leg_parent(captured.order_ref))
+            and not isinstance(broker_order, MultiLegOrderEvidence)
+        ):
+            continue
         owner = repo.active_exit_for_order(captured.order_ref) or repo.effect_operation(
             captured.row.effect_operation_id
         )
@@ -1436,6 +1444,17 @@ def _finalize_reconciliation_verdict(
     captured_broker_order_ids = _fold_snapshot_evidence(
         repo, broker_orders, simulated_authority=simulated_authority
     )
+    deferred = tuple(
+        order for order in broker_orders
+        if order.order_id not in captured_broker_order_ids
+        and order.client_order_id not in repo.all_order_refs()
+        and repo.option_parents_awaiting_leg_ids(order.symbol)
+    )
+    if deferred:
+        _raise_stale_snapshot_uncertainty(
+            repo, "A contract order cannot be attributed until its multi-leg parent's exact answer names its legs.",
+        )
+        return AccountReconciliationResult(verdict="stale", resolved_count=resolved_count)
     # An exact slice that arrived after its order's final REST fold is proven
     # here, on recorded evidence, or its episode would never close (#2346).
     repo.resolve_order_total_covered_coverage_conflicts()
@@ -1445,6 +1464,9 @@ def _finalize_reconciliation_verdict(
     # Independent of the coverage proof above: that proof resolves only its
     # own episode and moves no fill, so it can neither clear nor hide a fence.
     fence_fills_on_terminal_enters(repo)
+    from app.broker.alpaca.clerk.sqlite.legs_out_of_step import refresh_legs_out_of_step_notices
+
+    refresh_legs_out_of_step_notices(repo)
     # #2460: same re-derivation discipline -- a terminal order's totals are
     # never re-folded, so the price conflict's correction-explained exit runs
     # here from recorded evidence on every pass that reaches a verdict.
