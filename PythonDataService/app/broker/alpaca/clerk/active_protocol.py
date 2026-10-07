@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
+    from app.broker.alpaca.clerk.sqlite.entry_outcome import SettledEntry
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
     from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill
     from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
@@ -133,6 +134,21 @@ class ActiveAlpacaClerk(Protocol):
         option_entry: OptionEntryEvidence | None = None,
         option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt: ...
+
+    async def await_entry_outcome(
+        self, *, strategy_instance_id: str, decision_id: str, until_ms: int
+    ) -> SettledEntry:
+        """What the option entry of one decision came to, and how the strategy is settled on it (ADR 0076).
+
+        ``execute_for_instance`` returns once an option entry is sent: the
+        order then rests at the broker. A runner asks this next, and settles
+        its Signal Program on the answer. It waits until the outcome is
+        proven, or the authority's clock reaches ``until_ms`` (the close of
+        the bot's next decision bar), or the run stops. It holds no lock
+        while it waits and may be cancelled. Only for a decision whose
+        receipt was not a refusal; a stock decision is never asked.
+        """
+        ...
 
     def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
         """The option contracts one bot holds now, by OCC symbol: what its EXIT closes (ADR 0076)."""

@@ -7,7 +7,8 @@ money. Here the Clerk asks, in order, and the first "no" refuses the entry:
 1. Is the plan one the Clerk takes today: one bought call or put?
 2. Did the facts come, do they cover the plan's leg, and is each of them
    what it must be: two limits that are percents, a generation and a read
-   time that are whole numbers?
+   time that are whole numbers, and the owner's order terms, each inside
+   its bounds (an entry wait of a second to five minutes)?
 3. Is the picked contract a standard one, of a hundred shares?
 4. Has the picked contract's last session ended, and is each quote usable at
    the Clerk's own clock: one generation, both sides, live, not crossed, and
@@ -26,8 +27,14 @@ money. Here the Clerk asks, in order, and the first "no" refuses the entry:
    more just before the order is sent.
 
 What comes back is the entry as the books keep it: the order, the contract,
-the quotes and the money. Admission against the budget is asked next, of the
-commitment worked out here (``envelope_admission``).
+the quotes, the money, and when the Clerk cancels what has not filled (its
+own clock now, plus the owner's entry wait). Admission against the budget is
+asked next, of the commitment worked out here (``envelope_admission``).
+
+The order's limit price is written to the cent, with two decimals, whatever
+way the quote wrote it: ``1.9`` and ``1.90`` are one price, and must make one
+order and one identity hash. Nothing is rounded: a quote finer than a cent
+was refused before.
 
 Every refusal here names what the caller handed over. Anything else that goes
 wrong while the money is worked out is a fault of this code, and is raised as
@@ -47,7 +54,7 @@ Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.p
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -64,6 +71,7 @@ from app.broker.contract.models import OrderSide
 from app.broker.contract.options import SingleOptionOrderRequest, opening_order
 from app.options.deadlines import CloseTerms, entry_cutoff_on, past_last_session
 from app.options.entry import prepare_entry
+from app.options.exact import whole_units
 from app.options.quotes import quote_fault
 from app.options.requirement import StructureMoneyRefused
 from app.options.structure import ResolvedStructure
@@ -79,8 +87,16 @@ if TYPE_CHECKING:
 
 _CENT = Decimal("0.01")
 
-# The terms every entry is held to until a bot's own are handed over with its entries (#2913).
+# The terms an entry accepted before entries kept their own is held to (#2913).
 ENTRY_CLOSE_TERMS = CloseTerms()
+
+# What the owner's order terms may be, asked where the Clerk takes them (ADR 0076).
+# An entry wait: a second at least, since a wait of nothing cancels the order as it is sent;
+# five minutes at most, since the quotes it was priced from are seconds old.
+MIN_ENTRY_WAIT_MS = 1_000
+MAX_ENTRY_WAIT_MS = 5 * 60_000
+# Every other term: no longer than a whole regular session, which nothing could be counted back from.
+MAX_ORDER_TERM_MS = 390 * 60_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,13 +133,48 @@ def _evidence_fault(leg: OptionEntryLeg, evidence: OptionEntryEvidence) -> str |
         return f"The quotes' generation handed over is {evidence.generation!r}. It is a whole number."
     if type(evidence.rechecked_at_ms) is not int or not 0 <= evidence.rechecked_at_ms <= MAX_TIMESTAMP_MS:
         return f"The time the quotes were read is {evidence.rechecked_at_ms!r}. It is a time in milliseconds."
+    if not isinstance(evidence.terms, CloseTerms):
+        return f"The order terms handed over are {evidence.terms!r}. They are the owner's entry wait and close leads."
+    return _terms_fault(evidence.terms)
+
+
+def _terms_fault(terms: CloseTerms) -> str | None:
+    """What is out of bounds in the owner's order terms, in plain words; ``None`` when nothing is.
+
+    Asked here so that a wait of nothing, of hours, or too large to be a
+    time at all is a refusal by name, and never an error out of the entry's
+    own record further on.
+    """
+    if not MIN_ENTRY_WAIT_MS <= terms.entry_wait_ms <= MAX_ENTRY_WAIT_MS:
+        return (
+            f"The entry wait handed over is {terms.entry_wait_ms:,} ms. An entry waits for its fill between "
+            f"{MIN_ENTRY_WAIT_MS:,} and {MAX_ENTRY_WAIT_MS:,} ms."
+        )
+    for name, value in (
+        ("time allowed to prove a cancel", terms.cancel_allowance_ms),
+        ("entry margin", terms.entry_margin_ms),
+        ("lead of the close on an expiry day", terms.expiry_close_lead_ms),
+        ("lead of a sold leg's close", terms.sold_leg_close_lead_ms),
+    ):
+        if value > MAX_ORDER_TERM_MS:
+            return (
+                f"The {name} handed over is {value:,} ms. No order term is longer than a regular session, "
+                f"{MAX_ORDER_TERM_MS:,} ms."
+            )
     return None
 
 
-def entry_past_cutoff(
-    structure: ResolvedStructure, *, now_ms: int, terms: CloseTerms = ENTRY_CLOSE_TERMS
-) -> OptionEntryRefused | None:
+def _written_to_the_cent(price: Decimal) -> Decimal:
+    """``price`` in its one written form: whole cents, two decimals. Refuses a price finer than a cent."""
+    cents = whole_units(price, units_per_one=100, what="an option order's limit price", unit="cents")
+    return Decimal(cents).scaleb(-2)
+
+
+def entry_past_cutoff(structure: ResolvedStructure, *, now_ms: int, terms: CloseTerms) -> OptionEntryRefused | None:
     """Why no entry on ``structure`` is opened at the Clerk's clock ``now_ms``, or ``None`` when one still may be.
+
+    ``terms`` are the entry's own: the owner's wait, cancel allowance, margin
+    and close leads that came with it and are kept with it.
 
     An entry admitted seconds before its contract's last close could never
     be closed again: nothing is sold after a contract's last session. So an
@@ -163,9 +214,10 @@ def entry_quote_refusal(
     (``at_the_send``): by the same tests, each side's age counted at the
     clock then. The entry is worked out under the intake lock and sent after
     it, so a quote that passed can be older than the decision-data budget by
-    the time its order goes out, and a simulation fills from the quote it
-    was handed whatever its age. The refusal is the quote's own fault code
-    both times. ``generation`` is the one the quotes were read in.
+    the time its order goes out. A simulation fills from the quote it was
+    handed whatever its age, and a real account's limit order rests at the
+    price that quote gave. The refusal is the quote's own fault code both
+    times. ``generation`` is the one the quotes were read in.
     """
     fault = quote_fault(
         quote, at_ms=now_ms, generation=generation, max_age_ms=QUOTE_MAX_AGE_MS, needs_a_bid=position == "short"
@@ -193,8 +245,8 @@ def work_out_option_entry(
     if evidence is None:
         return OptionEntryRefused(
             OptionEffectRefusal.ENTRY_EVIDENCE_MISSING.value,
-            "This entry came with no picked contract and no quotes. A simulation fills only from the quotes kept "
-            "with an entry, so nothing was filled.",
+            "This entry came with no picked contract and no quotes. An option entry is priced from the quotes "
+            "handed over with it, so no order was made.",
         )
     malformed = _evidence_fault(leg, evidence)
     if malformed is not None:
@@ -256,9 +308,10 @@ def work_out_option_entry(
         )
     except (StructureRefused, StructureMoneyRefused) as exc:
         return OptionEntryRefused(exc.reason.value, str(exc))
-    too_late = entry_past_cutoff(prepared.structure, now_ms=now_ms)
+    too_late = entry_past_cutoff(prepared.structure, now_ms=now_ms, terms=evidence.terms)
     if too_late is not None:
         return too_late
+    prepared = replace(prepared, net_limit_price=_written_to_the_cent(prepared.net_limit_price))
     order = opening_order(prepared.structure, units=units, net_limit_price=prepared.net_limit_price)
     assert isinstance(order, SingleOptionOrderRequest)
     return OptionEntryFacts.of(
@@ -270,7 +323,17 @@ def work_out_option_entry(
         quote_generation=evidence.generation,
         rechecked_at_ms=evidence.rechecked_at_ms,
         admitted_at_ms=now_ms,
+        terms=evidence.terms,
     )
 
 
-__all__ = ["ENTRY_CLOSE_TERMS", "OptionEntryRefused", "entry_past_cutoff", "work_out_option_entry"]
+__all__ = [
+    "ENTRY_CLOSE_TERMS",
+    "MAX_ENTRY_WAIT_MS",
+    "MAX_ORDER_TERM_MS",
+    "MIN_ENTRY_WAIT_MS",
+    "OptionEntryRefused",
+    "entry_past_cutoff",
+    "entry_quote_refusal",
+    "work_out_option_entry",
+]

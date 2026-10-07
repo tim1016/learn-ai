@@ -3,10 +3,13 @@
 Formula: cents_i = floor(C * w_i / sum(w)); leftover cents go to the
 largest exact fractional remainders, ties ordered by custody subject ID.
 Reference: PRD #2540 fee attribution contract and Hamilton apportionment;
-  ADR 0059 fee attribution amendment. Weights come exclusively from
-  app.broker.alpaca.regulatory_fees (the pinned broker model).
+  ADR 0059 fee attribution amendment; ADR 0076 for option fills. A fill's
+  weight is what its own pinned broker model predicts, and nothing else:
+  app.broker.alpaca.regulatory_fees for a fill in shares,
+  app.broker.alpaca.option_fees for a fill of an option contract.
 Canonical implementation: this file.
-Validated against: tests/services/test_alpaca_fee_attribution.py and
+Validated against: tests/services/test_alpaca_fee_attribution.py,
+  tests/services/test_option_day_fee_rows.py and
   tests/fixtures/golden/alpaca-fee-attribution/ (exact integer-cent parity).
 
 Amounts remain Decimal inside the authority. The largest-remainder split is
@@ -15,11 +18,50 @@ global Decimal precision cannot decide who gets a cent.
 Missing population, linkage or overlap evidence is an unresolved account charge,
 never a guessed deployment debit. Simulations never consume broker activities.
 
-A simulated account's option fills are charged by the option fee model
-(``attribute_simulated_option_fees``, ADR 0076): each of its five fee types
-summed over the day's option fills, rounded up to the cent, and shared among
-the bots by this file's one rule. A real account's option fills are not
-attributed here: none of Alpaca's own option fee activities has been seen.
+A fill of an option contract is one more fee-bearing fill of its day (ADR
+0076). The option fee model prices it and the stock model never does. Until
+a fee row covers it, it is charged the option model's own figure: each of
+the five fee types summed over the day's option fills, rounded up to the
+cent, and shared among the bots by this file's one rule. On a simulated
+account that is the whole of it. On a real account it is an estimate until
+a fee row of its day is seen.
+
+A posted fee row is shared among every fill in its scope, stock and option
+alike, each weighted by what its own model predicts: for the row's fee type
+when the row names one, else for all of that model's types together. The
+stock model predicts no ORF and no OCC fee, so a row of either type falls on
+option fills alone. The row's total is kept to the cent, and each share is
+``observed`` as a stock fill's is: the total is Alpaca's, the split is the
+models'. An option fill is never by itself a reason to leave a row unowned.
+
+None of Alpaca's own option fee activities has been seen. Seven gaps are
+known and left open. ADR 0076 decision 19 names the same seven, by the same
+letters:
+
+- (a) A row is shared among the fills of the day it is dated. If Alpaca
+  dates an option fee by the day it posts, and that day has only stock
+  fills, those stock bots are charged it as ``observed`` and nothing reads
+  unresolved. The option fill it was for keeps its estimate, which no row
+  then replaces and which goes on being held back from cash: the fee is
+  counted twice, once on each bot. If that day has no fill at all the row
+  has no weight to follow and is unowned, as any such row always was.
+- (b) An option order placed outside the Clerk fills with no multiplier on
+  the books, so the stock model prices its fills.
+- (c) An estimate whose rows never come goes on being held back from cash,
+  as a stock fill's does. Nothing bounds it.
+- (d) No real row's fee type is read: the Clerk's activity record does not
+  carry it, so every real row is shared by all types together.
+- (e) Any untyped row, of any size, ends every estimate of its day. A row
+  of one cent is shared out and leaves no estimate beside it. A row of
+  nothing charges nothing and leaves none either.
+- (f) A row dated to a New York day that has not ended is nobody's until
+  midnight, and the account's fees read unresolved until then. Harmless for
+  stock fees, which post after the close. If Alpaca posts an option fee with
+  the fill, the first option fill of a day holds every bot's entries until
+  midnight.
+- (g) A negative row can never be linked to the charge it refunds: the
+  Clerk's fee evidence carries no such link. So a negative row on an option
+  day is nobody's and leaves the account's fees unresolved.
 """
 
 from __future__ import annotations
@@ -33,7 +75,8 @@ from typing import Any, Literal
 from app.broker.alpaca.clerk.money import apportion_units, money_context
 from app.broker.alpaca.option_fees import (
     OptionFeeComponent,
-    OptionRateNotPinnedError,
+    OptionFillFees,
+    OptionSessionFees,
     fees_for_option_fill,
     settle_option_session,
 )
@@ -79,13 +122,15 @@ class FeeCharge:
     ``covers_fill_ids`` is only populated by an explicitly linked source.
     Unlinked overlapping fill fees/activities cannot be added safely. A refund
     names its original activity; a missing original remains unresolved.
+    ``component`` is the fee type the charge names, one of the five the stock
+    and the option fee models know between them; ``None`` when it names none.
     """
 
     charge_id: str
     amount: Decimal | None
     observed_at_ms: int
     native_order_id: str | None = None
-    component: FeeComponent | None = None
+    component: OptionFeeComponent | None = None
     refund_of: str | None = None
     covers_fill_ids: tuple[str, ...] = ()
 
@@ -181,7 +226,6 @@ class FeeAttribution:
         )
 
 
-@money_context()
 def attribute_simulated_option_fees(
     *,
     trade_date: date,
@@ -198,54 +242,35 @@ def attribute_simulated_option_fees(
       of that type (``apportion_cents``).
     Reference: ADR 0076; the rates and the settlement rule are
       ``app/broker/alpaca/option_fees.py``'s, which cites Alpaca's fee schedule.
-    Canonical implementation: ``option_fees`` for the fees, this file for the split.
+    Canonical implementation: ``option_fees`` for the fees, and
+      :func:`attribute_session_fees` for the split, with no fee row to share.
     Validated against: tests/services/test_simulated_option_fee_attribution.py.
 
-    The option fills settle as a population of their own. A real day that
-    also traded stock rounds SEC, TAF and CAT once across both; how Alpaca
-    does that has not been seen, so a simulated day rounds the two apart,
-    which is never less than rounding them together. Every amount is the
-    model's: nothing is observed in a simulation.
+    ``fills`` are the day's fills of option contracts: each carries its
+    contract's multiplier. A fill with none is refused: the day is
+    unresolved and nothing is charged. The fills settle as a population of
+    their own. A real day that also traded stock rounds SEC, TAF and CAT
+    once across both; how Alpaca does that has not been seen, so a simulated
+    day rounds the two apart, which is never less than rounding them
+    together. Every amount is the model's: nothing is observed in a
+    simulation.
     """
     if not fills:
         return FeeAttribution((), ZERO, (), None, ZERO)
-    unresolved: list[str] = []
-    if not population_complete:
-        unresolved.append("The complete fee-bearing fill population is unavailable. Reconcile account executions.")
-    try:
-        priced = [
-            fees_for_option_fill(
-                trade_date=trade_date, side=fill.side, contracts=fill.quantity, premium=fill.price,
-                # A fill with no multiplier is not an option fill, and is refused as a ``ValueError``.
-                multiplier=fill.multiplier,
-            )
-            for fill in fills
+    # An option fill is never priced as shares (ADR 0076). The shared rule below reads a fill with no
+    # multiplier as a fill in shares, so one is refused here: unresolved, and nothing is charged.
+    if any(fill.multiplier is None for fill in fills):
+        unresolved = [] if population_complete else [
+            "The complete fee-bearing fill population is unavailable. Reconcile account executions."
         ]
-        with localcontext() as rounding:
-            rounding.traps[Inexact] = False
-            settled = settle_option_session(priced)
-    except OptionRateNotPinnedError:
-        unresolved.append("Option fee rates are not pinned for this day. Review the option fee model before deploying.")
+        unresolved.append(
+            "An option fill cannot be priced by the option fee model: an option fill needs its contract's multiplier."
+        )
         return FeeAttribution((), ZERO, tuple(unresolved), None, None)
-    except ValueError as exc:
-        unresolved.append(f"An option fill cannot be priced by the option fee model: {exc}.")
-        return FeeAttribution((), ZERO, tuple(unresolved), None, None)
-    shares: list[FeeShare] = []
-    if population_complete:
-        state: FeeState = "modelled_settled" if session_ended else "estimated"
-        for component in OPTION_COMPONENTS:
-            amount = getattr(settled, component)
-            if not amount:
-                continue
-            weights: dict[str, Decimal] = {}
-            for fill, price in zip(fills, priced, strict=True):
-                weights[fill.subject_id] = weights.get(fill.subject_id, ZERO) + getattr(price, component)
-            shares.extend(
-                FeeShare(f"model:{trade_date}:option:{component}", subject, cents, state, settlement_at_ms)
-                for subject, cents in sorted(apportion_cents(amount, weights).items())
-                if cents
-            )
-    return FeeAttribution(tuple(shares), ZERO, tuple(unresolved), None, settled.total)
+    return attribute_session_fees(
+        trade_date=trade_date, fills=fills, charges=(), population_complete=population_complete,
+        activities_complete=True, simulated=True, session_ended=session_ended, settlement_at_ms=settlement_at_ms,
+    )
 
 
 @dataclass(frozen=True)
@@ -304,12 +329,83 @@ def apportion_cents(amount: Decimal, weights: Mapping[str, Decimal]) -> dict[str
     return {key: Decimal(sign * cents) * CENT for key, cents in units.items()}
 
 
+@dataclass(frozen=True)
+class _ModelledFills:
+    """One day's fills of one kind, each priced by that kind's own fee model.
+
+    ``charge`` is what the model charges the day for them, each fee type
+    rounded up to the cent once; ``None`` when a rate is not pinned.
+    """
+
+    fills: Sequence[FeeFill]
+    priced: Sequence[FillFees | OptionFillFees]
+    components: tuple[OptionFeeComponent, ...]
+    charge: SessionFees | OptionSessionFees | None
+    # An estimate's share is filed under ``<estimate_id>:<fee type>``.
+    estimate_id: str
+    # What is said when no estimate can be made.
+    not_pinned: str
+
+
+def _day_charge[S](priced: Sequence[Any], settle: Callable[[Sequence[Any]], S]) -> S | None:
+    """What a model charges one day for ``priced``; ``None`` when a rate is not pinned."""
+    try:
+        with localcontext() as rounding:
+            rounding.traps[Inexact] = False
+            return settle(priced)
+    except RateNotPinnedError:
+        return None
+
+
+def _modelled_stock_fills(trade_date: date, fills: Sequence[FeeFill]) -> _ModelledFills:
+    priced = [
+        fees_for_fill(trade_date=trade_date, side=fill.side, quantity=fill.quantity, fill_price=fill.price)
+        for fill in fills
+    ]
+    return _ModelledFills(
+        fills, priced, COMPONENTS, _day_charge(priced, settle_session), f"model:{trade_date}",
+        "Fee rates are not pinned for this day. Review the fee model before deploying.",
+    )
+
+
+def _modelled_option_fills(trade_date: date, fills: Sequence[FeeFill]) -> _ModelledFills:
+    """Raises ``ValueError`` for a fill the option fee model refuses to price."""
+    priced = [
+        fees_for_option_fill(
+            trade_date=trade_date, side=fill.side, contracts=fill.quantity, premium=fill.price,
+            multiplier=fill.multiplier,
+        )
+        for fill in fills
+    ]
+    return _ModelledFills(
+        fills, priced, OPTION_COMPONENTS, _day_charge(priced, settle_option_session), f"model:{trade_date}:option",
+        "Option fee rates are not pinned for this day. Review the option fee model before deploying.",
+    )
+
+
+def _components(price: FillFees | OptionFillFees) -> tuple[OptionFeeComponent, ...]:
+    """The fee types the model that priced a fill predicts."""
+    return OPTION_COMPONENTS if isinstance(price, OptionFillFees) else COMPONENTS
+
+
 def _weights(
-    fills: Sequence[FeeFill], priced: Sequence[FillFees], component: FeeComponent | None
+    fills: Sequence[FeeFill], priced: Sequence[FillFees | OptionFillFees], component: OptionFeeComponent | None
 ) -> dict[str, Decimal]:
+    """Each subject's weight in one charge: what its fills' own models predict.
+
+    For the one fee type ``component`` names, else for all the types of each
+    fill's model together. A model with no fee of the named type predicts
+    nothing for it, so its fills carry no weight in that charge.
+    """
     weights: dict[str, Decimal] = {}
     for fill, price in zip(fills, priced, strict=True):
-        components = (component,) if component else COMPONENTS
+        known = _components(price)
+        if component is None:
+            components = known
+        elif component in known:
+            components = (component,)
+        else:
+            components = ()
         values = [getattr(price, name) for name in components]
         if any(value is None for value in values):
             raise ValueError("the fee component has no pinned rate")
@@ -317,21 +413,21 @@ def _weights(
     return weights
 
 
-def _provisions_by_fill(
-    fills: Sequence[FeeFill], priced: Sequence[FillFees], modelled: SessionFees,
-) -> dict[tuple[str, FeeComponent], Decimal]:
+def _provisions_by_fill(modelled: _ModelledFills) -> dict[tuple[str, OptionFeeComponent], Decimal]:
     """Partition existing subject cents for replacement, never re-round a scope.
 
     First preserve the canonical full-population subject allocation. Within
     each subject only, the same Hamilton rule partitions those cents by fill
     identity so settling one order cannot erase another order's provision.
     """
-    provisions: dict[tuple[str, FeeComponent], Decimal] = {}
-    grouped: dict[str, list[tuple[FeeFill, FillFees]]] = {}
-    for fill, price in zip(fills, priced, strict=True):
+    provisions: dict[tuple[str, OptionFeeComponent], Decimal] = {}
+    grouped: dict[str, list[tuple[FeeFill, FillFees | OptionFillFees]]] = {}
+    for fill, price in zip(modelled.fills, modelled.priced, strict=True):
         grouped.setdefault(fill.subject_id, []).append((fill, price))
-    for component in COMPONENTS:
-        subjects = apportion_cents(getattr(modelled, component), _weights(fills, priced, component))
+    for component in modelled.components:
+        subjects = apportion_cents(
+            getattr(modelled.charge, component), _weights(modelled.fills, modelled.priced, component)
+        )
         for subject, amount in subjects.items():
             weights = {fill.fill_id: getattr(price, component)
                        for fill, price in grouped[subject]}
@@ -375,22 +471,45 @@ def attribute_session_fees(
     superseded fills upstream. Duplicate activity identities collapse; conflicting
     copies fail closed. Real settlements replace only the corresponding
     fill/order and component provisions; unmatched obligations remain estimated.
+
+    A fill carrying a multiplier is a fill of an option contract and is priced
+    by the option fee model; every other fill by the stock model. A charge is
+    shared among the fills in its scope by those predictions, stock and
+    option fills together (``_weights``). What no charge has settled stays
+    each model's own estimate, the stock fills and the option fills each
+    rounded as a day of their own.
+
+    Formula: the module's, with w_i the fill's own model's prediction.
+    Reference: the module's; ADR 0076 for the option fills.
+    Canonical implementation: this function.
+    Validated against: tests/services/test_alpaca_fee_attribution.py and
+      tests/services/test_option_day_fee_rows.py.
     """
     shares: list[FeeShare] = []
     unresolved: list[str] = []
     unattributed = ZERO
     unattributed_charges: list[UnattributedCharge] = []
-    priced = [
-        fees_for_fill(trade_date=trade_date, side=fill.side, quantity=fill.quantity, fill_price=fill.price)
-        for fill in fills
-    ]
-    try:
-        with localcontext() as rounding:
-            rounding.traps[Inexact] = False
-            modelled = settle_session(priced)
-        predicted: Decimal | None = modelled.total
-    except RateNotPinnedError:
-        predicted = None
+    stock_fills = [fill for fill in fills if fill.multiplier is None]
+    option_fills = [fill for fill in fills if fill.multiplier is not None]
+    modelled = [_modelled_stock_fills(trade_date, stock_fills)]
+    if option_fills:
+        try:
+            modelled.append(_modelled_option_fills(trade_date, option_fills))
+        except ValueError as exc:
+            # No row can be weighed against a fill its model cannot price: the
+            # day is read as one whose fills are not all known, and says why.
+            unshared = attribute_session_fees(
+                trade_date=trade_date, fills=stock_fills, charges=charges, population_complete=False,
+                activities_complete=activities_complete, simulated=simulated, session_ended=session_ended,
+                settlement_at_ms=settlement_at_ms,
+            )
+            return replace(
+                unshared, predicted_total=None,
+                unresolved=(f"An option fill cannot be priced by the option fee model: {exc}.", *unshared.unresolved),
+            )
+    predicted: Decimal | None = None
+    if all(kind.charge is not None for kind in modelled):
+        predicted = sum((kind.charge.total for kind in modelled), ZERO)
     if not population_complete:
         unresolved.append("The complete fee-bearing fill population is unavailable. Reconcile account executions.")
     unique: dict[str, FeeCharge] = {}
@@ -406,9 +525,11 @@ def attribute_session_fees(
         if not activities_complete:
             unresolved.append("The broker activity read does not cover this fee day.")
     reported = {fill.fill_id: fill for fill in fills if fill.reported_fee is not None and not simulated}
-    settled = {(key, component) for key in reported for component in COMPONENTS}
+    price_by_id = {
+        fill.fill_id: price for kind in modelled for fill, price in zip(kind.fills, kind.priced, strict=True)
+    }
+    settled = {(key, component) for key in reported for component in _components(price_by_id[key])}
     replaced_reported: set[str] = set()
-    price_by_id = {fill.fill_id: price for fill, price in zip(fills, priced, strict=True)}
     observed = sum((charge.amount for charge in unique.values() if charge.amount is not None), ZERO)
     if not unique or any(charge.amount is None for charge in unique.values()):
         observed = None
@@ -451,8 +572,10 @@ def attribute_session_fees(
                     portions = {selected[0].subject_id: amount}
                 else:
                     portions = apportion_cents(amount, _weights(selected, [price_by_id[fill.fill_id] for fill in selected], charge.component))
-                settled.update((fill.fill_id, component) for fill in selected
-                               for component in ((charge.component,) if charge.component else COMPONENTS))
+                settled.update(
+                    (fill.fill_id, component) for fill in selected
+                    for component in ((charge.component,) if charge.component else _components(price_by_id[fill.fill_id]))
+                )
                 replaced_reported.update(reported_overlap)
             except ValueError as exc:
                 reason = str(exc)
@@ -474,19 +597,20 @@ def attribute_session_fees(
     for key, fill in sorted(reported.items()):
         if key not in replaced_reported:
             shares.append(FeeShare(f"fill:{key}", fill.subject_id, fill.reported_fee, "observed", fill.observed_at_ms, True))
-    pending = {(fill.fill_id, component) for fill in fills for component in COMPONENTS} - settled
-    if pending and predicted is None:
-        unresolved.append("Fee rates are not pinned for this day. Review the fee model before deploying.")
-    elif pending and population_complete:
-        provisions = _provisions_by_fill(fills, priced, modelled)
-        state: FeeState = "modelled_settled" if simulated and session_ended else "estimated"
-        for component in COMPONENTS:
-            portions: dict[str, Decimal] = {}
-            for fill in fills:
-                if (fill.fill_id, component) in pending:
-                    portions[fill.subject_id] = portions.get(fill.subject_id, ZERO) + provisions[fill.fill_id, component]
-            shares.extend(FeeShare(f"model:{trade_date}:{component}", subject, amount, state, settlement_at_ms)
-                          for subject, amount in sorted(portions.items()) if amount)
+    state: FeeState = "modelled_settled" if simulated and session_ended else "estimated"
+    for kind in modelled:
+        pending = {(fill.fill_id, component) for fill in kind.fills for component in kind.components} - settled
+        if pending and kind.charge is None:
+            unresolved.append(kind.not_pinned)
+        elif pending and population_complete:
+            provisions = _provisions_by_fill(kind)
+            for component in kind.components:
+                portions: dict[str, Decimal] = {}
+                for fill in kind.fills:
+                    if (fill.fill_id, component) in pending:
+                        portions[fill.subject_id] = portions.get(fill.subject_id, ZERO) + provisions[fill.fill_id, component]
+                shares.extend(FeeShare(f"{kind.estimate_id}:{component}", subject, amount, state, settlement_at_ms)
+                              for subject, amount in sorted(portions.items()) if amount)
     return FeeAttribution(
         tuple(shares), unattributed, tuple(dict.fromkeys(unresolved)), observed, predicted,
         unattributed_charges=tuple(unattributed_charges),

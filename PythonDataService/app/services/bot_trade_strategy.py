@@ -902,7 +902,7 @@ async def run_trade_bot(
     """
     if is_option_plan(binding.action_plan):
         raise OptionPlanRefused(
-            OptionEffectRefusal.ACCOUNT_NOT_SIMULATED,
+            OptionEffectRefusal.ACCOUNT_NOT_OPEN,
             "This bot trades option contracts. Only a Dry Run runs an option bot for now: option orders have "
             "not been checked against Alpaca on a Paper, Live Shadow or Live account.",
         )

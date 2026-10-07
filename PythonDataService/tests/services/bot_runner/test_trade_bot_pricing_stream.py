@@ -490,7 +490,7 @@ async def test_the_paper_runner_refuses_a_plan_that_trades_options_by_name_and_o
     try:
         with pytest.raises(OptionPlanRefused) as refused:
             await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger, pricing_feed=feed)
-        assert refused.value.reason is OptionEffectRefusal.ACCOUNT_NOT_SIMULATED
+        assert refused.value.reason is OptionEffectRefusal.ACCOUNT_NOT_OPEN
         assert feed.symbols_asked_for == []
     finally:
         set_alpaca_clerk(None)

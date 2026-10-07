@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AttributedResidueDischargedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
+    EntrySettledFacts,
     ExecutionCoverageQuarantinedFacts,
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
@@ -1644,6 +1645,14 @@ def _fold_order_cancel_requested(_conn: sqlite3.Connection, payload: dict[str, A
 
 
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", _fold_order_cancel_requested)
+
+
+def _fold_entry_settled(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Audit-only: how a strategy was settled on an option entry (ADR 0076). It moves no order and no effect."""
+    EntrySettledFacts.from_facts_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("ENTRY_SETTLED", _fold_entry_settled)
 
 
 def _fold_order_outcome_attested(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

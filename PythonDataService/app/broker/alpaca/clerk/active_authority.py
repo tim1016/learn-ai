@@ -64,6 +64,7 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationStore,
 )
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
@@ -331,6 +332,7 @@ async def select_active_clerk_runtime(
         hold_sync=composed.hold_sync,
         envelope_sync=composed.envelope_sync,
         fee_sync=composed.fee_sync,
+        deadline_keeper=composed.deadline_keeper,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=composed.repository,
             intake=composed.facade.intake,
@@ -430,6 +432,7 @@ async def select_synthetic_clerk_runtime(
     repository: ClerkSqliteRepository | None = None
     sweep: ReconciliationSweep | None = None
     envelope_sync: LiveEnvelopeSync | None = None
+    deadline_keeper: DeadlineKeeper | None = None
     option_books: FollowedBooks | None = None
     try:
         repository = await open_repository_after_lease_expiry(
@@ -463,6 +466,9 @@ async def select_synthetic_clerk_runtime(
         # waits on executions newer than the last one (#2623).
         envelope_sync = LiveEnvelopeSync(repo=repository, read=guarded_read, envelope=envelope,
             simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
+        # ADR 0076: a Dry Run has no periodic pass, so only a task of the
+        # Clerk's own can act at a deadline while its run is going.
+        deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade)
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
@@ -474,6 +480,7 @@ async def select_synthetic_clerk_runtime(
             account_mode="paper",
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
             entry_reading=envelope_sync.read_for_entry,
+            entry_deadline_nudge=deadline_keeper.nudge,
         )
         sweep = ReconciliationSweep(
             repo=repository,
@@ -510,11 +517,17 @@ async def select_synthetic_clerk_runtime(
         sweep.start_lease_heartbeat()
         if opening is not SyntheticOpening.READ_ONLY:
             await asyncio.wait_for(facade.recover(), timeout=startup_recovery_timeout_s)
+        if opening is SyntheticOpening.OPERATE:
+            # After recovery, which stopped every run: nothing rests that the
+            # boot pass has not already been asked to cancel.
+            deadline_keeper.start()
     except BaseException as exc:
         # A cancelled opening -- boot's Dry Run restoration interrupted by
         # shutdown (#2582) -- releases its lease and heartbeat like a failed one.
         if envelope_sync is not None:
             await envelope_sync.stop()
+        if deadline_keeper is not None:
+            await deadline_keeper.stop()
         if sweep is not None:
             await sweep.stop()
         if option_books is not None:
@@ -549,6 +562,7 @@ async def select_synthetic_clerk_runtime(
         clerk=facade,
         sweep=sweep,
         envelope_sync=envelope_sync,
+        deadline_keeper=deadline_keeper,
         option_books=option_books,
         _sqlite_repository=repository,
         account_id=account_id,

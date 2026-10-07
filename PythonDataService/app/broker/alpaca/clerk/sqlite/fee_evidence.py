@@ -53,9 +53,6 @@ if TYPE_CHECKING:
 
 FEE_EVIDENCE_KIND = "FEE_EVIDENCE_OBSERVED"
 FEE_EVIDENCE_MAX_AGE_MS = 90_000
-OPTION_FILL_FEES_NOT_ATTRIBUTED = (
-    "This account holds option fills, and fees on option fills are not worked out here yet."
-)
 
 
 class FeeEvidenceFacts(BaseModel):
@@ -484,27 +481,6 @@ def _effective_fills(
     return grouped, orders, complete and conflicts is None
 
 
-def _has_option_fill(conn: sqlite3.Connection) -> bool:
-    """Whether the books hold a fill of an order that trades an option contract.
-
-    The fee model and the settlement rule this projection applies to a real
-    account are the listed-stock ones (``regulatory_fees``): they would
-    charge a contract as one share. Until option fees are attributed here
-    from Alpaca's own fee activities, such a fill leaves a real account's
-    fees unresolved, never mispriced (ADR 0076 decision 13). A simulated
-    account observes no fee at all, so its option fills are charged by the
-    option fee model.
-
-    Asked from the bound orders: books that bind no order to a contract
-    hold no option fill, and are answered without reading a fill. Each
-    bound order is then looked up in the fills by its own index.
-    """
-    return conn.execute(
-        "SELECT 1 FROM order_contracts c"
-        " WHERE EXISTS (SELECT 1 FROM fills f WHERE f.order_ref = c.order_ref) LIMIT 1"
-    ).fetchone() is not None
-
-
 def _witnessed_executions(conn: sqlite3.Connection) -> tuple[frozenset[str], bool]:
     """Every broker execution custody names, and whether they explain every cumulative-recovery fill.
 
@@ -571,10 +547,21 @@ def custody_fee_attribution(
     Coverage is still checked against all current execution evidence; selecting
     a historical population never grants permission to ignore missing facts.
 
+    A fill of an option contract is priced by the option fee model on every
+    account, never by the stock model (ADR 0076). On a simulated account that
+    charge settles with its day. On a real account it is an estimate until a
+    fee row of its day is seen; the day's rows are then shared among all of
+    the day's fills, stock and option alike, each weighted by its own model's
+    prediction. An option fill is never by itself a reason the fees read
+    unresolved. A day with no option fill is projected exactly as before.
+
     Formula: existing session fee model/apportionment over selected effective fills.
-    Reference: ADR 0059 fee attribution amendment; PRD #2540.
-    Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees.
-    Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py.
+    Reference: ADR 0059 fee attribution amendment; PRD #2540; ADR 0076 for option fills.
+    Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees,
+      and ``attribute_simulated_option_fees`` for a simulation's option fills.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py,
+      tests/broker/alpaca/clerk/sqlite/test_option_custody.py and
+      tests/broker/alpaca/clerk/sqlite/test_paper_option_fees.py.
     """
     account = conn.execute("SELECT account_id FROM control_meta WHERE id = 1").fetchone()[0]
     simulated = account.startswith(("sim:", "shadow:"))
@@ -644,6 +631,9 @@ def custody_fee_attribution(
                 population_complete = False
                 continue
             witnessed_external.add(row.native_order_id)
+            # No contract is on the books for an outside order, so its fill
+            # carries no multiplier and the stock fee model prices it, an
+            # option's too (ADR 0076, a known gap).
             external = FeeFill(
                 fill_id=row.activity_id,
                 subject_id=outside_order_subject_id(row.native_order_id),
@@ -709,10 +699,10 @@ def custody_fee_attribution(
             for row in by_date[day].values()
             if row.activity_type == "FEE"
         ]
-        # A simulation charges its option fills by the option fee model; its
-        # fills in shares go through the one rule every account's do. A real
-        # account's fills all go through that rule, and one in an option
-        # contract leaves the whole projection unresolved below.
+        # A real account's day is one population: its fee rows are shared
+        # among all of its fills, each priced by its own fee model (ADR
+        # 0076). A simulation observes no fee row, and charges its option
+        # fills by the option model as a population of their own.
         option_fills = [fill for fill in grouped[day] if fill.multiplier is not None] if simulated else []
         result = attribute_session_fees(
             trade_date=day,
@@ -749,8 +739,6 @@ def custody_fee_attribution(
             observed += results[0].observed_total
     if not population_complete:
         unresolved.append("Account fill coverage is incomplete. Reconcile account executions before deploying.")
-    if not simulated and _has_option_fill(conn):
-        unresolved.append(OPTION_FILL_FEES_NOT_ATTRIBUTED)
     return FeeAttribution(
         tuple(shares),
         unattributed,

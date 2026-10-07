@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.money import normalize_money
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ContractTermsConflict,
+    require_fill_in_its_orders_contract,
+)
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     SIMULATED_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
@@ -1225,6 +1229,59 @@ def withhold_unnamed_order(
     )
     fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why)
     return True
+
+
+def withhold_fill_the_order_cannot_hold(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+    order_ref: str,
+    quantity: float,
+) -> bool:
+    """Withhold an answer about our own order whose fill the books would refuse to write (ADR 0076).
+
+    That is a fill in another symbol than the contract its order trades, a
+    fraction of a contract, or a fill in an option contract on an order in
+    shares (``contract_terms.require_fill_in_its_orders_contract``). The
+    write of such a fill raises, as it must: a fill counted against the
+    wrong contract would be counted with the wrong multiplier. Raised out of
+    the ``trade_updates`` sink it would end the stream, which reconnects and
+    is fed the same frame again, for good; raised out of a reconciliation
+    pass's fold of the account's order list it would fail every pass.
+
+    Those are the two routes that read an order loosely (an exact lookup of
+    an option order is held to the order asked for before it gets this
+    far). So each asks first, and an answer the books cannot hold is treated
+    exactly like a lost response, as an unnamed order's is
+    (:func:`withhold_unnamed_order`): nothing of it is recorded, its effect
+    folds ``unknown`` with what the answer said as the reason, and the
+    sweep's exact lookup of the order settles it or leaves it unknown.
+    Returns whether the answer was withheld.
+    """
+    try:
+        with repo.write_fence() as conn:
+            require_fill_in_its_orders_contract(conn, order_ref=order_ref, symbol=order.symbol, quantity=quantity)
+    except ContractTermsConflict as conflict:
+        logger.warning(
+            "A broker answer's fill does not fit the order it names and was withheld",
+            extra={
+                "action": "fill_in_another_contract_withheld",
+                "order_ref": order_ref,
+                "effect_operation_id": effect_operation_id,
+                "symbol": order.symbol,
+                "quantity": quantity,
+                "conflict": str(conflict),
+            },
+        )
+        fold_uncertain(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            why=f"broker reported {conflict}; withholding its evidence",
+        )
+        return True
+    return False
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ from typing import Any
 
 from app.broker.alpaca.clerk.live_arming import ARMING_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
+from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGET_ADMISSION_REASON_CODES
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
@@ -28,7 +29,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyResolvedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
-from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource, TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource, OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
@@ -1123,6 +1124,18 @@ def decide_capability(
                     "custody lifecycle for this strategy."
                 ),
             )
+        working_entry = _working_option_entry(repo, strategy_instance_id=strategy_instance_id)
+        if working_entry is not None:
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code=ENTRY_ORDER_WORKING_REASON_CODE,
+                why=(
+                    f"Entry order {working_entry.order_ref} of this bot is still working at the broker "
+                    f"({working_entry.broker_state}). A second entry would be a second buy for one signal, "
+                    "so the next entry waits until that order has ended."
+                ),
+            )
         if _has_attributed_exposure(repo, strategy_instance_id=strategy_instance_id):
             return CapabilityDecision(
                 allowed=False,
@@ -1150,6 +1163,26 @@ def decide_capability(
                 ),
             )
     return CapabilityDecision(allowed=True, capability=capability)
+
+
+ENTRY_ORDER_WORKING_REASON_CODE = "ENTRY_ORDER_WORKING"
+
+
+def _working_option_entry(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> OrderResource | None:
+    """An option entry order of this bot that the books show working at the broker, whatever its ENTER's state.
+
+    ``ENTER_IN_PROGRESS`` above reads the ENTER's own state, and an ENTER
+    voided as never sent has ended. When the broker later shows that
+    ENTER's order after all (the abandoned send landed, #2342), the order
+    can still fill, and a second entry beside it would be two buys for one
+    signal. So the order row is asked too (ADR 0076).
+
+    Option entries only, read from the orders the books bind to a contract:
+    an order in shares is never asked about here, and a bot that trades
+    shares is admitted exactly as before.
+    """
+    with repo.write_fence() as conn:
+        return reads.working_option_entry_for_strategy(conn, strategy_instance_id)
 
 
 class AdmissionBlockedError(Exception):
@@ -1290,6 +1323,7 @@ def require_manual_reduction(
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
+    "ENTRY_ORDER_WORKING_REASON_CODE",
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "EXIT_STUCK_REASON_CODE",

@@ -43,10 +43,11 @@ Every product, sum and conversion to cents is taken in the Clerk's exact money c
 (``clerk.money.money_context``), so no figure depends on the caller's decimal context. The one
 step that drops digits is the rule's own: each fee type's day total, rounded up to the cent.
 
-Nothing on the money path calls this yet. The fee attribution
-(``app/services/alpaca_fee_attribution.py``) settles fees per fee type across an account's whole
-day, stock and option fills together, which is where these accruals belong once Alpaca's own fee
-activities for an option trade have been seen.
+The money path calls it in two places. An option entry's fee provision is set aside from it
+(``clerk/sqlite/option_admission.py``). And the fee attribution
+(``app/services/alpaca_fee_attribution.py``) prices every option fill by it: as the fill's
+estimate, and as its weight when a fee row of its day is shared among the day's fills. None of
+Alpaca's own fee activities for an option trade has been seen.
 """
 
 from __future__ import annotations

@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.contract_terms import (
     contract_terms,
     order_contract_terms,
 )
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
@@ -36,21 +37,25 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
-from app.broker.alpaca.clerk.sqlite.fee_evidence import OPTION_FILL_FEES_NOT_ATTRIBUTED
+from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement, fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
+    ExecutionCoverageResolutionUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.simulated_account import _cash_after_fills
-from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerActivity, BrokerOrderLeg, OrderSide
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services.alpaca_fee_attribution import FeeAttribution
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
     _broker_order_fixture,
     _clock_at,
     _register_active,
     _TestClock,
+    _walk_clock_to,
     complete_fee_evidence,
     envelope_gate,
 )
@@ -68,6 +73,8 @@ from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_folds_execution import _append_slice, _coverage_conflict_transition
 
+# The New York date every fill here is on.
+DAY = et_date_at_ms(NOON)
 # Fees known and nil: the money below is before fees.
 _NO_FEES = FeeAttribution(shares=(), unattributed=Decimal(0), unresolved=(), observed_total=Decimal(0), predicted_total=Decimal(0))
 _MINUTE_MS = 60_000
@@ -493,7 +500,8 @@ def test_an_execution_in_another_symbol_cannot_take_the_place_of_a_contracts_rec
         _recover_total(repo, order, symbol=AAPL_CALL.symbol, wanted=2, filled=2, price=1.50)
         conflict = _hold_aside(repo, order, reported=reported)
 
-        with pytest.raises(ContractTermsConflict, match=f"which trades {AAPL_CALL.symbol}"):
+        # Refused as the operator's route can answer it, with the contract's own reason in it.
+        with pytest.raises(ExecutionCoverageResolutionUnavailable, match=f"which trades {AAPL_CALL.symbol}"):
             _put_in_the_recovered_fills_place(repo, conflict)
 
         (kept,) = repo.fills_for_order(order.order_ref or "")
@@ -854,24 +862,350 @@ def test_a_sale_cash_has_not_seen_yet_counts_its_proceeds_by_the_multiplier(tmp_
         repo.close()
 
 
-# ── Fees: the stock reconciler does not price a contract as a share ───────────
+# ── Fees: each fill by its own fee model, and a day's fee rows shared among all its fills ──
+
+_DAY_MS = 86_400_000
 
 
-def test_the_fee_reconciler_leaves_an_option_fill_unresolved_and_the_budget_refuses(tmp_path: Path) -> None:
+def _two_shares_bought(repo: ClerkSqliteRepository) -> None:
+    """Bot S buys two SPY shares at $500.00 on its budget, filled at noon."""
+    shares = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id="bot-s", decision_id="d1", lifecycle_run_id=RUN_ID,
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2), reference_price=500,
+        envelope=envelope_gate(cash=5_000.0, observed_at_ms=repo.clock(), fill_sequence=risk_fill_sequence(repo)),
+    )
+    fill(repo, shares, execution_id="x2", symbol="SPY", side="BUY", quantity=2, price=500.0)
+    _acknowledge_filled(repo, shares, symbol="SPY", side="buy", quantity=2, price=500.0, order_id="b2")
+
+
+def _option_and_stock_fills(repo: ClerkSqliteRepository) -> None:
+    """Bot S buys two SPY shares at $500.00 and bot A buys two AAPL calls at $1.50, both filled at noon."""
+    _two_shares_bought(repo)
+    _calls_bought(repo, "bot-a", contracts=2, price=1.50)
+
+
+def _calls_bought(repo: ClerkSqliteRepository, bot: str, *, contracts: int, price: float) -> str:
+    """``bot`` buys AAPL calls at ``price``, filled when the order is taken and shown as filled by Alpaca.
+
+    Returns Alpaca's id of the order.
+    """
+    broker_order_id = f"{bot}-buy-{repo.clock()}"
+    order = accept_option_order(
+        repo, terms=AAPL_CALL, side="buy", contracts=contracts, decision_id=f"buy-{repo.clock()}", strategy_instance_id=bot
+    )
+    fill(
+        repo, order, execution_id=f"{bot}-buy-{repo.clock()}", symbol=AAPL_CALL.symbol, side="BUY", quantity=contracts,
+        price=price, occurred_at_ms=repo.clock(),
+    )
+    fold_order_acknowledgement(
+        repo,
+        effect_operation_id=order.effect_operation_id or "",
+        order=_broker_order_fixture(
+            order.order_ref or "", order_id=broker_order_id, symbol=AAPL_CALL.symbol, status="filled", side="buy",
+            quantity=contracts, filled_quantity=contracts, filled_avg_price=price,
+        ).model_copy(update={"updated_at_ms": repo.clock(), "observed_at_ms": repo.clock()}),
+    )
+    return broker_order_id
+
+
+def _a_hundred_shares_bought_and_sold(repo: ClerkSqliteRepository) -> None:
+    """Bot S buys a hundred SPY shares at $50.00 at noon and sells them a minute later at the same price."""
+    shares = accept_enter(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id="bot-s", decision_id="d1", lifecycle_run_id=RUN_ID,
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=100), reference_price=50,
+        envelope=envelope_gate(cash=20_000.0, observed_at_ms=repo.clock(), fill_sequence=risk_fill_sequence(repo)),
+    )
+    fill(repo, shares, execution_id="s-buy", symbol="SPY", side="BUY", quantity=100, price=50.0)
+    # A stock bot sells through its EXIT; for the day's fees the sale's execution is enough.
+    fill(repo, shares, execution_id="s-sell", symbol="SPY", side="SELL", quantity=100, price=50.0, occurred_at_ms=NOON + _MINUTE_MS)
+    _acknowledge_filled(repo, shares, symbol="SPY", side="buy", quantity=100, price=50.0, order_id="s1")
+
+
+def _ten_calls_bought_and_sold(repo: ClerkSqliteRepository) -> None:
+    """Bot A buys ten AAPL calls at $1.94 at noon and sells them a minute later at $2.40."""
+    bought = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=10, decision_id="d1")
+    fill(repo, bought, execution_id="a-buy", symbol=AAPL_CALL.symbol, side="BUY", quantity=10, price=1.94)
+    _acknowledge_filled(repo, bought, symbol=AAPL_CALL.symbol, side="buy", quantity=10, price=1.94, order_id="a1")
+    sold = accept_option_order(repo, terms=AAPL_CALL, side="sell", contracts=10, decision_id="d2")
+    fill(
+        repo, sold, execution_id="a-sell", symbol=AAPL_CALL.symbol, side="SELL", quantity=10, price=2.40,
+        occurred_at_ms=NOON + _MINUTE_MS,
+    )
+    _acknowledge_filled(repo, sold, symbol=AAPL_CALL.symbol, side="sell", quantity=10, price=2.40, order_id="a2")
+
+
+def _fee_row(key: str, amount: float, *, day_of_ms: int = NOON, seen_at_ms: int = NOON) -> BrokerActivity:
+    """A fee row as Alpaca posts one for a day: only its date and what it took."""
+    return BrokerActivity(
+        broker="alpaca", activity_id=key, activity_type="FEE", category="non_trade_activity", symbol=None, side=None,
+        quantity=None, price=None, net_amount=amount, occurred_at_ms=et_midnight_ms(et_date_at_ms(day_of_ms)),
+        observed_at_ms=seen_at_ms,
+    )
+
+
+def _read_a_day_later(repo: ClerkSqliteRepository, *rows: BrokerActivity) -> None:
+    """A day passes, and the Clerk reads Alpaca's activities to their start: ``rows`` are the fee rows in them."""
+    _walk_clock_to(repo, repo.clock() + _DAY_MS)
+    record_fee_evidence(
+        repo, [row.model_copy(update={"observed_at_ms": repo.clock()}) for row in rows],
+        checked_at_ms=repo.clock(), history_complete=True,
+    )
+
+
+def test_a_real_accounts_option_fill_is_charged_by_the_option_model_as_an_estimate_and_its_budget_goes_on(
+    tmp_path: Path,
+) -> None:
     repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
     try:
-        assert repo.fee_attribution(now_ms=NOON).known
         order = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1")
-        # An option order that has not filled owes no fee and leaves the fees known.
-        assert repo.fee_attribution(now_ms=NOON).known
+        # An option order that has not filled owes no fee.
+        assert repo.fee_attribution(now_ms=NOON).shares == ()
         fill(repo, order, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=2, price=1.50)
         _acknowledge_filled(repo, order, symbol=AAPL_CALL.symbol, side="buy", quantity=2, price=1.50, order_id="b1")
 
         fees = repo.fee_attribution(now_ms=NOON)
-        assert not fees.known
-        assert OPTION_FILL_FEES_NOT_ATTRIBUTED in fees.unresolved
-        with pytest.raises(BudgetUnavailable, match="option fills"):
-            repo.account_budget(cash=5_000, seen_before_ms=NOON + 1)
+
+        assert fees.known
+        # Two contracts bought owe no SEC fee and no TAF. CAT is $0.0006, ORF $0.03 and OCC $0.05;
+        # each is rounded up to the cent: 1 + 3 + 5.
+        assert sorted((share.charge_id, share.amount, share.state) for share in fees.shares) == [
+            (f"model:{DAY}:option:cat", Decimal("0.01"), "estimated"),
+            (f"model:{DAY}:option:occ", Decimal("0.05"), "estimated"),
+            (f"model:{DAY}:option:orf", Decimal("0.03"), "estimated"),
+        ]
+        # $1,000.00 budgeted, $300.00 in the position and nine cents of estimated fees: the budget answers.
+        budget = repo.account_budget(cash=5_000, seen_before_ms=NOON + 1)
+        assert budget.deployments[0].fees == Decimal("0.09")
+    finally:
+        repo.close()
+
+
+def test_a_real_accounts_option_fee_estimate_is_still_an_estimate_after_its_day_while_no_fee_row_is_seen(
+    tmp_path: Path,
+) -> None:
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
+    try:
+        _calls_bought(repo, "bot-a", contracts=2, price=1.50)
+        _read_a_day_later(repo)
+
+        next_day = repo.fee_attribution(now_ms=repo.clock())
+
+        # Only Alpaca's own fee activity settles a real fee; the model's figure never calls itself settled.
+        assert next_day.known
+        assert {share.state for share in next_day.shares} == {"estimated"}
+        assert next_day.total_for(bot_subject_id("bot-a")) == Decimal("0.09")
+    finally:
+        repo.close()
+
+
+def test_an_option_fill_is_left_out_of_what_the_stock_fee_model_prices(tmp_path: Path) -> None:
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-s": "SPY"}, budget_cents=200_000)
+    alone = _budgeted_books(tmp_path / "stock-only", bots={"bot-s": "SPY"}, budget_cents=200_000)
+    try:
+        _option_and_stock_fills(repo)
+        _two_shares_bought(alone)
+
+        fees, stock_only = repo.fee_attribution(now_ms=NOON), alone.fee_attribution(now_ms=NOON)
+
+        # The shares are charged exactly what they are charged on books that never traded an option.
+        stock_rows = [share for share in fees.shares if ":option:" not in share.charge_id]
+        assert stock_rows == list(stock_only.shares) and stock_rows
+        assert {share.subject_id for share in stock_rows} == {bot_subject_id("bot-s")}
+        # And the option fill has the option model's rows, and no other.
+        assert fees.total_for(bot_subject_id("bot-a")) == Decimal("0.09")
+        assert fees.known
+    finally:
+        repo.close()
+        alone.close()
+
+
+def test_a_fee_row_of_a_day_with_only_option_fills_is_shared_among_their_bots_and_the_budget_goes_on(
+    tmp_path: Path,
+) -> None:
+    """Bot A buys ten AAPL calls and bot B one, on 2026-09-08. A buy owes no SEC fee and no TAF.
+
+    By the option model A's fill owes CAT $0.003, ORF $0.15 and OCC $0.25, $0.403 in all, and
+    B's a tenth of that, $0.0403. Alpaca posts $0.46 for the day. A's part is
+    46 x 0.403 / 0.4433 = 41.82 cents and B's 4.18: 41 and 4 whole cents, and the odd cent
+    goes to the larger remainder, A's. $0.42 and $0.04.
+    """
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-b": "AAPL"}, budget_cents=200_000)
+    try:
+        _calls_bought(repo, "bot-a", contracts=10, price=1.50)
+        _calls_bought(repo, "bot-b", contracts=1, price=1.50)
+        _read_a_day_later(repo, _fee_row("fee-of-the-day", -0.46))
+
+        fees = repo.fee_attribution(now_ms=repo.clock())
+
+        assert fees.known and fees.unattributed == 0
+        assert {(share.subject_id, share.charge_id, share.state): share.amount for share in fees.shares} == {
+            (bot_subject_id("bot-a"), "fee-of-the-day", "observed"): Decimal("0.42"),
+            (bot_subject_id("bot-b"), "fee-of-the-day", "observed"): Decimal("0.04"),
+        }
+        assert fees.observed_total == Decimal("0.46")
+        # No charge is nobody's, so the account's budget answers and each bot carries its own part.
+        budget = repo.account_budget(cash=5_000, seen_before_ms=repo.clock() + 1)
+        assert {bot.strategy_instance_id: bot.fees for bot in budget.deployments} == {
+            "bot-a": Decimal("0.42"), "bot-b": Decimal("0.04"),
+        }
+    finally:
+        repo.close()
+
+
+def test_a_fee_row_that_names_an_option_order_is_charged_to_that_orders_bot_whatever_the_models_weigh(
+    tmp_path: Path,
+) -> None:
+    """Bot A buys ten calls and bot B one. A row of $0.41 names A's order: it is A's whole.
+
+    B's fill is not in the row, so B keeps the option model's estimate of its part of the
+    day: 2 of the ORF's 17 cents and 3 of the OCC's 28. The CAT cent is A's.
+    """
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-b": "AAPL"}, budget_cents=200_000)
+    try:
+        order_of_a = _calls_bought(repo, "bot-a", contracts=10, price=1.50)
+        _calls_bought(repo, "bot-b", contracts=1, price=1.50)
+        _read_a_day_later(repo, _fee_row("fee-of-an-order", -0.41).model_copy(update={"native_order_id": order_of_a}))
+
+        fees = repo.fee_attribution(now_ms=repo.clock())
+
+        assert fees.known
+        assert {(share.subject_id, share.state): share.amount for share in fees.shares if share.state == "observed"} == {
+            (bot_subject_id("bot-a"), "observed"): Decimal("0.41"),
+        }
+        assert (fees.total_for(bot_subject_id("bot-a")), fees.total_for(bot_subject_id("bot-b"))) == (
+            Decimal("0.41"), Decimal("0.05"),
+        )
+    finally:
+        repo.close()
+
+
+def test_a_day_with_stock_and_option_fills_shares_its_fee_row_among_all_of_them_each_by_its_own_fee_model(
+    tmp_path: Path,
+) -> None:
+    """The worked example of a mixed day, 2026-09-08, in dollars.
+
+    The fills, and what each one's own fee model predicts for it:
+
+        bot S  buys 100 SPY at $50.00     SEC 0        TAF 0       CAT 0.0003
+               sells 100 SPY at $50.00    SEC 0.103    TAF 0.0195  CAT 0.0003
+               in all 0.1231              (a share: SEC 0.0000206 a dollar sold, TAF 0.000195
+                                           a share sold, CAT 0.000003 a share)
+        bot A  buys 10 calls at $1.94     SEC 0        TAF 0       CAT 0.003  ORF 0.15  OCC 0.25
+               sells 10 calls at $2.40    SEC 0.04944  TAF 0.0329  CAT 0.003  ORF 0.15  OCC 0.25
+               in all 0.88834             (a contract: SEC 0.0000206 a dollar of premium sold,
+                                           TAF 0.00329 sold, CAT 0.000003 x 100, ORF 0.015, OCC 0.025)
+
+    Before a row is seen each bot carries its own model's estimate, each fee type rounded up
+    to the cent: S 11 + 2 + 1 = $0.14, and A 5 + 4 + 1 + 30 + 50 = $0.90.
+
+    Alpaca posts one row for the day, $1.03, naming no fee type. The weights are all each
+    model predicts, 0.1231 and 0.88834, 1.01144 together. S's part of the 103 cents is
+    103 x 0.1231 / 1.01144 = 12.54 and A's 90.46: 12 and 90 whole cents, and the odd cent goes
+    to the larger remainder, S's. S owes $0.13 and A $0.90: $1.03, what Alpaca took.
+
+    On books that never traded an option the same row is all S's: sharing the day with the
+    option fills is what changes S's figure.
+    """
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-s": "SPY"}, budget_cents=1_000_000)
+    alone = _budgeted_books(tmp_path / "stock-only", bots={"bot-s": "SPY"}, budget_cents=1_000_000)
+    bot_a, bot_s = bot_subject_id("bot-a"), bot_subject_id("bot-s")
+    try:
+        _a_hundred_shares_bought_and_sold(repo)
+        _ten_calls_bought_and_sold(repo)
+        _a_hundred_shares_bought_and_sold(alone)
+        estimate = repo.fee_attribution(now_ms=NOON)
+        for books in (repo, alone):
+            _read_a_day_later(books, _fee_row("fee-of-the-day", -1.03))
+
+        fees, stock_only = repo.fee_attribution(now_ms=repo.clock()), alone.fee_attribution(now_ms=alone.clock())
+
+        assert {share.state for share in estimate.shares} == {"estimated"}
+        assert (estimate.total_for(bot_s), estimate.total_for(bot_a)) == (Decimal("0.14"), Decimal("0.90"))
+        assert fees.known and fees.unattributed == 0
+        assert {(share.subject_id, share.charge_id, share.state): share.amount for share in fees.shares} == {
+            (bot_s, "fee-of-the-day", "observed"): Decimal("0.13"),
+            (bot_a, "fee-of-the-day", "observed"): Decimal("0.90"),
+        }
+        assert sum((share.amount for share in fees.shares), Decimal(0)) == fees.observed_total == Decimal("1.03")
+        assert stock_only.total_for(bot_s) == Decimal("1.03")
+    finally:
+        repo.close()
+        alone.close()
+
+
+def test_a_stock_only_day_beside_an_option_day_is_charged_to_the_cent_what_it_is_on_books_with_no_option(
+    tmp_path: Path,
+) -> None:
+    """Bot S trades shares on the 8th; bot A buys two calls on the 9th. Alpaca posts $0.15 for the 8th and $0.09 for the 9th."""
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-s": "SPY"}, budget_cents=1_000_000)
+    alone = _budgeted_books(tmp_path / "stock-only", bots={"bot-s": "SPY"}, budget_cents=1_000_000)
+    bot_a, bot_s = bot_subject_id("bot-a"), bot_subject_id("bot-s")
+    try:
+        for books in (repo, alone):
+            _a_hundred_shares_bought_and_sold(books)
+            _read_a_day_later(books)
+        _calls_bought(repo, "bot-a", contracts=2, price=1.50)
+        while_estimated = [repo.fee_attribution(now_ms=repo.clock()), alone.fee_attribution(now_ms=alone.clock())]
+        rows = [_fee_row("fee-of-the-8th", -0.15), _fee_row("fee-of-the-9th", -0.09, day_of_ms=NOON + _DAY_MS)]
+        _read_a_day_later(repo, *rows)
+        _read_a_day_later(alone, rows[0])
+
+        fees, stock_only = repo.fee_attribution(now_ms=repo.clock()), alone.fee_attribution(now_ms=alone.clock())
+
+        for with_options, without in (while_estimated, (fees, stock_only)):
+            assert [share for share in with_options.shares if share.subject_id == bot_s] == list(without.shares)
+            assert with_options.known and without.known
+        assert stock_only.total_for(bot_s) == Decimal("0.15")
+        assert {(share.charge_id, share.state): share.amount for share in fees.shares if share.subject_id == bot_a} == {
+            ("fee-of-the-9th", "observed"): Decimal("0.09"),
+        }
+    finally:
+        repo.close()
+        alone.close()
+
+
+def test_an_option_fills_fee_estimate_is_held_back_from_cash_until_cash_is_read_after_its_days_row(
+    tmp_path: Path,
+) -> None:
+    """Two calls bought: nine cents of estimated fees (CAT 1, ORF 3, OCC 5), then a row of nine cents for the day."""
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL"}, budget_cents=100_000)
+    try:
+        _calls_bought(repo, "bot-a", contracts=2, price=1.50)
+        _read_a_day_later(repo)
+        # No row yet: the estimate is held back however late cash was read.
+        unsettled = repo.account_budget(cash=5_000, seen_before_ms=repo.clock() + 1).fee_claims
+        _read_a_day_later(repo, _fee_row("fee-of-the-day", -0.09))
+        row_seen_at_ms = repo.clock()
+
+        cash_read_before_the_row = repo.account_budget(cash=5_000, seen_before_ms=row_seen_at_ms).fee_claims
+        cash_read_after_the_row = repo.account_budget(cash=5_000, seen_before_ms=row_seen_at_ms + 1).fee_claims
+
+        assert (unsettled, cash_read_before_the_row, cash_read_after_the_row) == (
+            Decimal("0.09"), Decimal("0.09"), Decimal(0),
+        )
+    finally:
+        repo.close()
+
+
+def test_an_option_order_shown_filled_with_no_execution_on_the_books_still_leaves_the_fees_unresolved(
+    tmp_path: Path,
+) -> None:
+    repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-b": "AAPL"}, budget_cents=200_000)
+    try:
+        _calls_bought(repo, "bot-a", contracts=2, price=1.50)
+        lost = accept_option_order(
+            repo, terms=AAPL_CALL, side="buy", contracts=1, decision_id="d1", strategy_instance_id="bot-b"
+        )
+        _acknowledge_filled(repo, lost, symbol=AAPL_CALL.symbol, side="buy", quantity=1, price=1.50, order_id="b9")
+        _read_a_day_later(repo, _fee_row("fee-of-the-day", -0.15))
+
+        fees = repo.fee_attribution(now_ms=repo.clock())
+
+        # A day whose fills are not all on the books shares no row: the row is nobody's and the budget waits.
+        assert not fees.known and fees.unattributed == Decimal("0.15")
+        assert fees.shares == ()
+        with pytest.raises(BudgetUnavailable):
+            repo.account_budget(cash=5_000, seen_before_ms=repo.clock() + 1)
     finally:
         repo.close()
 
@@ -944,7 +1278,10 @@ def test_a_stock_store_from_before_the_contract_tables_reads_the_same_after_the_
         assert _contract_rows(reopened) == {"option_contracts": [], "order_contracts": []}
         assert _records(reopened) == before
         assert (before[0].symbol, before[0].multiplier) == ("SPY", None)
-        # Books that never traded an option are not told they hold option fills.
-        assert OPTION_FILL_FEES_NOT_ATTRIBUTED not in reopened.fee_attribution(now_ms=NOON, require_fresh_evidence=False).unresolved
+        # Books that never traded an option are told nothing about option fills.
+        assert not [
+            said for said in reopened.fee_attribution(now_ms=NOON, require_fresh_evidence=False).unresolved
+            if "option" in said
+        ]
     finally:
         reopened.close()

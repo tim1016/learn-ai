@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -105,6 +105,16 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     accept_option_enter,
     submit_accepted_enter,
 )
+from app.broker.alpaca.clerk.sqlite.entry_outcome import (
+    ENTRY_OUTCOME_LIMIT_PAST,
+    ENTRY_OUTCOME_LIMIT_TOO_FAR,
+    MAX_ENTRY_OUTCOME_WAIT_MS,
+    EntryOutcomeWaitRefused,
+    SettledEntry,
+    entry_outcome,
+    recorded_settlement,
+    settled_now,
+)
 from app.broker.alpaca.clerk.sqlite.exit import (
     OPTION_CLOSE_TAKES_NO_LIMIT,
     accept_exit,
@@ -157,8 +167,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ExecutionCoverageResolutionReceipt,
     ManualOrderTicketResource,
     OrderResource,
+    TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.option_admission import (
+    ENTRY_CLOSE_TERMS,
     OptionEntryRefused,
     entry_past_cutoff,
     entry_quote_refusal,
@@ -221,10 +233,11 @@ from app.broker.alpaca.clerk.stream_health import (
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
-from app.broker.contract.options import BrokerOptionOrder, OptionOrderRequest
+from app.broker.contract.options import BrokerOptionOrder, OptionOrderRequest, option_contract_refusal
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.options.contract import OptionContract
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 from app.services.market_liveness import (
     MarketEntryPolicy,
@@ -264,6 +277,20 @@ _MARKET_ENTRY_AFTER_THE_CLOSE: Final = (
 _OPTION_ORDER_OUTSIDE_THE_SESSION: Final = (
     "The regular session has closed, or closes within seconds. An option order is sent only inside "
     "the regular session."
+)
+# How often a wait for an option entry's outcome reads the books again (ADR 0076).
+_ENTRY_OUTCOME_POLL_S: Final = 0.2
+# The longest a Paper entry waits for the broker's listing of its contract. The entry's
+# quotes are good for five seconds and age while the read is out: longer than this and
+# the entry is refused for the listing, by name, not for quotes the wait itself made stale.
+CONTRACT_REFERENCE_READ_BOUND_MS = 3_000
+# What comes back for an entry the broker's listing was not asked about, because the entry
+# was to be refused without it: the session was closed, or a channel unhealthy, when it came.
+# Returned as the entry's refusal only if neither is so by the time the entry is judged.
+_LISTING_NOT_ASKED: Final = OptionEntryRefused(
+    OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
+    "Alpaca's listing of the contract was not read: when the entry reached the account Clerk the session was "
+    "closed or a channel was unhealthy, and an entry is not taken in a contract whose listing was not read.",
 )
 logger = logging.getLogger(__name__)
 
@@ -500,6 +527,7 @@ class SqliteAlpacaClerkFacade:
         live_envelope: LiveEnvelopeGate | None = None,
         quote_source: QuoteSource | None = None,
         entry_reading: EntryReading | None = None,
+        entry_deadline_nudge: Callable[[], None] | None = None,
     ) -> None:
         if authority_kind == "synthetic":
             require_synthetic_account_id(repo.account_id)
@@ -546,6 +574,13 @@ class SqliteAlpacaClerkFacade:
         # ``None`` where no sync reads the account, and such an ENTER is
         # dropped as before.
         self._entry_reading = entry_reading
+        # ADR 0076: wakes the deadline keeper when an option entry is accepted,
+        # so its cancel time is known to the keeper at once. It carries no
+        # meaning: lost, the keeper's own wake and the next pass still find
+        # the entry. ``None`` where no keeper is composed.
+        self._entry_deadline_nudge = entry_deadline_nudge
+        # The pause between two reads of an option entry's outcome.
+        self._outcome_pause: Callable[[float], Awaitable[None]] = asyncio.sleep
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
         # states the quote directly.
@@ -995,24 +1030,107 @@ class SqliteAlpacaClerkFacade:
         """The symbol a bot is registered under, or a typed refusal of a plan this account cannot take.
 
         A bot in shares: the symbol its orders are in. A bot in option
-        contracts: their underlying, and only on a Dry Run's account and only
-        as one bought call or put (``OptionPlanRefused`` otherwise).
+        contracts: their underlying, and only on a Dry Run's or a Paper
+        account and only as one bought call or put (``OptionPlanRefused``
+        otherwise).
         """
         if not is_option_plan(action_plan):
             return _entry_leg(action_plan).instrument.underlying
         refusal = self._option_plan_account_refusal()
         if refusal is not None:
-            raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_SIMULATED, refusal)
+            raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
         return the_one_bought_option_leg(action_plan).instrument.underlying
 
     def _option_plan_account_refusal(self) -> str | None:
-        """Why this account takes no option plan, or ``None`` when it does: only a Dry Run's does for now."""
+        """Why this account takes no option plan, or ``None`` when it does: a Dry Run's and a Paper account do.
+
+        A Live Shadow and a Live account are each refused by name. Nothing
+        about an option order has been sent to Alpaca yet, so real money
+        waits for what Paper shows (ADR 0076).
+        """
         if self.authority_kind == "synthetic":
             return None
+        if self.authority_kind == "sqlite" and self._account_mode == "paper":
+            return None
+        account = "A Live Shadow" if self.authority_kind == "shadow" else "A Live account"
         return (
-            "This bot trades option contracts. Only a Dry Run takes an option bot for now: option orders "
-            "have not been checked against Alpaca on a Paper, Live Shadow or Live account."
+            f"This bot trades option contracts. {account} does not take an option bot yet: a Dry Run and a "
+            "Paper account do. Option orders have not been checked against Alpaca with real money at stake."
         )
+
+    @property
+    def _sends_to_a_simulation(self) -> bool:
+        """Whether this authority's orders are filled by a simulation, never sent to a broker."""
+        return trade_port_folds_simulated_evidence(self._trade)
+
+    async def _contract_reference_refusal(
+        self,
+        *,
+        strategy_instance_id: str,
+        durable_decision_id: str,
+        action_plan: ActionPlan,
+        option_entry: OptionEntryEvidence | None,
+    ) -> OptionEntryRefused | None:
+        """Why Alpaca's own listing refuses the contract picked for a real account's entry, or ``None``.
+
+        Asked of the broker's contract reference, outside the intake lock,
+        before the entry is judged: the contract must be listed, be the one
+        asked about, be active and tradable, be American, and be a standard
+        contract of a hundred shares, which is also the only multiplier an
+        entry is taken with. A listing that could not be read refuses the
+        entry too: nothing is bought on a caller's word that the broker
+        could not confirm.
+
+        The read has a bound of its own, well inside the budget the entry's
+        quotes are held to (``CONTRACT_REFERENCE_READ_BOUND_MS``): the quotes
+        age while it is out, and a listing that takes longer refuses the
+        entry by name instead of spending the quotes.
+
+        The broker is not asked about an entry that is refused here without
+        it. A simulation is not asked: it sends nothing to a broker. Nor is
+        a decision sent again, which is answered from its own entry, or
+        evidence that does not name a contract for the plan's leg, which is
+        refused by name where the entry is worked out. And nor is an entry
+        that arrives with the session closed or a channel unhealthy: it is
+        refused for that, where it always was, and ``_LISTING_NOT_ASKED``
+        comes back so that it is never taken without its listing if those
+        answers have changed by then.
+        """
+        if self._sends_to_a_simulation or option_entry is None:
+            return None
+        try:
+            leg = the_one_bought_option_leg(action_plan)
+        except OptionPlanRefused:
+            return None
+        picked = option_entry.picked
+        contract = picked.get(leg.leg_id) if isinstance(picked, Mapping) else None
+        if not isinstance(contract, OptionContract):
+            return None
+        if self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}") is not None:
+            return None
+        if (
+            stream_health_refusal(self._stream_health, symbol=leg.instrument.underlying) is not None
+            or not market_leg_sendable(self._repo.clock())
+        ):
+            return _LISTING_NOT_ASKED
+        try:
+            listing = await asyncio.wait_for(
+                self._read.get_option_contract(contract), timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000
+            )
+        except TimeoutError:
+            return OptionEntryRefused(
+                OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
+                f"Alpaca's listing of {contract.occ_symbol} did not answer within "
+                f"{CONTRACT_REFERENCE_READ_BOUND_MS:,} ms, so the contract was not confirmed and the entry was not taken.",
+            )
+        except BrokerError as exc:
+            return OptionEntryRefused(
+                OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
+                f"Alpaca's listing of {contract.occ_symbol} could not be read ({exc}), so the contract was not "
+                "confirmed and the entry was not taken.",
+            )
+        refused = option_contract_refusal(contract, listing)
+        return None if refused is None else OptionEntryRefused(refused.reason.value, str(refused))
 
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id."""
@@ -1581,9 +1699,13 @@ class SqliteAlpacaClerkFacade:
         is made. The fences are the ones an effect in shares passes, in the
         same order.
 
-        Only a Dry Run's account takes either today. Every other plan and
-        every other account is refused here by name, before anything is
-        written but the refusal.
+        A Dry Run's account and a Paper account take either. Every other
+        plan and every other account is refused here by name, before
+        anything is written but the refusal. On a Paper account the picked
+        contract is first asked of Alpaca's own contract reference
+        (:meth:`_contract_reference_refusal`), and the entry then rests at
+        Alpaca as a limit order: this call returns once it is sent, and what
+        it came to is asked for with :meth:`await_entry_outcome`.
         """
 
         def receipt(state: str, order_refs: tuple[str, ...]) -> EffectOperationReceipt:
@@ -1606,6 +1728,15 @@ class SqliteAlpacaClerkFacade:
         accepted_enter: EnterSubmission | None = None
         accepted_exit: ExitSubmission | None = None
         entry: OptionEntryFacts | None = None
+        durable_decision_id = _durable_decision_id(decision_id)
+        not_listed = (
+            None
+            if purpose is not EffectPurpose.ENTER or self._option_plan_account_refusal() is not None
+            else await self._contract_reference_refusal(
+                strategy_instance_id=strategy_instance_id, durable_decision_id=durable_decision_id,
+                action_plan=action_plan, option_entry=option_entry,
+            )
+        )
         async with self._intake:
             dropped = self._entry_wait_dropped(
                 reading_outcome, strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id
@@ -1617,11 +1748,10 @@ class SqliteAlpacaClerkFacade:
             not_this_account = self._option_plan_account_refusal()
             if not_this_account is not None:
                 return rejected(
-                    reason_code=OptionEffectRefusal.ACCOUNT_NOT_SIMULATED.value,
+                    reason_code=OptionEffectRefusal.ACCOUNT_NOT_OPEN.value,
                     explanation=not_this_account,
                     next_step="No order was sent.",
                 )
-            durable_decision_id = _durable_decision_id(decision_id)
             atomic_receipt = _atomic_decision_receipt(decision_evidence)
             if purpose is EffectPurpose.ENTER:
                 # A decision sent again is answered from its own entry, before
@@ -1637,6 +1767,22 @@ class SqliteAlpacaClerkFacade:
                         # the price may differ on an honest retry: its quotes are newer.
                         raise DurableConflictError(already)
                     return receipt(already.state, () if existing is None else (existing.order_ref,))
+                if not_listed is not None and not_listed is not _LISTING_NOT_ASKED:
+                    logger.info(
+                        "an option entry was refused on the broker's contract reference",
+                        extra={
+                            "action": "option_entry_contract_refused",
+                            "account_id": self._repo.account_id,
+                            "strategy_instance_id": strategy_instance_id,
+                            "decision_id": decision_id,
+                            "reason_code": not_listed.reason_code,
+                        },
+                    )
+                    return rejected(
+                        reason_code=not_listed.reason_code,
+                        explanation=not_listed.explanation,
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
                 worked_out = work_out_option_entry(
                     action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock()
                 )
@@ -1668,6 +1814,14 @@ class SqliteAlpacaClerkFacade:
                     return rejected(
                         reason_code=MARKET_CLOSED,
                         explanation=_OPTION_ORDER_OUTSIDE_THE_SESSION,
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
+                if not_listed is _LISTING_NOT_ASKED:
+                    # The session opened, or the channel recovered, between the two looks: nothing
+                    # is bought in a contract whose listing was never read.
+                    return rejected(
+                        reason_code=_LISTING_NOT_ASKED.reason_code,
+                        explanation=_LISTING_NOT_ASKED.explanation,
                         next_step=_ENTRY_NOT_RETRIED,
                     )
                 try:
@@ -1787,6 +1941,8 @@ class SqliteAlpacaClerkFacade:
             priced_from, quote_generation = entry.the_leg, entry.quote_generation
             clock = self._repo.clock
             opened = entry.structure
+            # The entry's own terms. One accepted before entries kept theirs is held to the defaults.
+            entry_terms = entry.terms.close_terms if entry.terms is not None else ENTRY_CLOSE_TERMS
 
             def before_submit() -> EntrySubmissionRefusal | None:
                 now_ms = clock()
@@ -1794,11 +1950,12 @@ class SqliteAlpacaClerkFacade:
                     return EntrySubmissionRefusal(summary_code=MARKET_CLOSED, why=_OPTION_ORDER_OUTSIDE_THE_SESSION)
                 # Asked again at the clock the order is sent at: the entry was worked out under
                 # the intake lock, and the cutoff may have passed since (ADR 0076).
-                too_late = entry_past_cutoff(opened, now_ms=now_ms)
+                too_late = entry_past_cutoff(opened, now_ms=now_ms, terms=entry_terms)
                 if too_late is not None:
                     return EntrySubmissionRefusal(summary_code=too_late.reason_code, why=too_late.explanation)
-                # The quote was tested as the entry was worked out. The order goes out later, and
-                # is filled from that quote: it is tested again by the same rule, at this clock.
+                # The quote was tested as the entry was worked out. The order goes out later: a
+                # simulation fills it from that quote, and a real account's limit rests at the price
+                # that quote gave. So it is tested again by the same rule, at this clock.
                 unusable = entry_quote_refusal(
                     priced_from.contract, priced_from.quote.held, position=priced_from.position,
                     generation=quote_generation, now_ms=now_ms, at_the_send=True,
@@ -1807,12 +1964,21 @@ class SqliteAlpacaClerkFacade:
                     return EntrySubmissionRefusal(summary_code=unusable.reason_code, why=unusable.explanation)
                 return None
 
+            if accepted_enter.created and self._entry_deadline_nudge is not None:
+                # The entry's cancel time is on the books: the keeper sleeps no longer than to it.
+                self._entry_deadline_nudge()
             submitted_enter = await submit_accepted_enter(
                 self._repo,
                 accepted=accepted_enter,
                 leg=entry.order,
-                trade=_OptionQuoteBoundTradePort(
-                    self._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held
+                # A simulation fills from the quote the entry was admitted on. A real
+                # account's order rests at the broker, which needs no quote of ours.
+                trade=(
+                    _OptionQuoteBoundTradePort(
+                        self._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held
+                    )
+                    if self._sends_to_a_simulation
+                    else self._trade
                 ),
                 before_submit=before_submit,
             )
@@ -1836,6 +2002,141 @@ class SqliteAlpacaClerkFacade:
                 ref for ref in (submitted_exit.entry_order_ref, submitted_exit.reducing_order_ref) if ref is not None
             ),
         )
+
+    async def await_entry_outcome(
+        self, *, strategy_instance_id: str, decision_id: str, until_ms: int
+    ) -> SettledEntry:
+        """Wait for the option entry of one decision to be proven, and say how the strategy is settled on it (ADR 0076).
+
+        ``execute_for_instance`` returns once the order is sent. This is the
+        second question a runner asks of an option entry: what did it come
+        to? The books are read every 200 ms until one of these, and the
+        first that holds answers:
+
+        - the entry was settled before: the answer is that record's;
+        - the outcome is proven: filled, filled in part and ended, ended
+          with nothing filled, or never sent;
+        - the bot's run is no longer active: the answer is the books' as
+          they stand, and nothing is recorded, so a later replay settles
+          from the books as they then are;
+        - the Clerk's clock has reached ``until_ms``, the close of the
+          bot's next decision bar: still unproven, the strategy is in.
+
+        The settlement is recorded once, as ``ENTRY_SETTLED`` on the ENTER's
+        own timeline, in the same locked read it was worked out in: what is
+        recorded is what was answered, and asked again the record answers.
+
+        No lock is held between reads, so no other bot waits behind this
+        one, and the caller may cancel the wait at any moment: the cancel at
+        the entry's deadline is the keeper's, whoever is or is not waiting.
+
+        Raises ``LookupError`` when the decision has no option entry on the
+        books: it was refused before the Clerk accepted it. An entry the
+        Clerk accepted and the broker then refused is on the books, and is
+        answered: never sent, the decision dropped.
+
+        Raises ``EntryOutcomeWaitRefused``, by name, for a limit the Clerk
+        does not take, for an entry still unproven with no answer recorded.
+        One more than a week ahead of its clock: no decision bar closes
+        that far on. And one already past when the wait is asked for:
+        "still unproven at the limit" is a judgment made by waiting to the
+        limit, and is not handed out for a limit that was never waited for.
+        The books are read first, so an entry already settled, or already
+        proven, is answered whatever the limit says.
+        """
+        if isinstance(until_ms, bool) or not isinstance(until_ms, int) or until_ms < 0:
+            raise ValueError(f"until_ms is a time in milliseconds; got {until_ms!r}")
+        asked_at_ms = self._repo.clock()
+        command_id = f"cmd:{strategy_instance_id}:{_durable_decision_id(decision_id)}"
+        waited = False
+        while True:
+            async with self._intake:
+                settled = self._settle_entry_if_answerable(
+                    command_id, until_ms=until_ms,
+                    limit_was_past_when_asked=not waited and until_ms <= asked_at_ms,
+                    limit_was_too_far_when_asked=not waited and until_ms - asked_at_ms > MAX_ENTRY_OUTCOME_WAIT_MS,
+                )
+            if settled is not None:
+                return settled
+            await self._outcome_pause(_ENTRY_OUTCOME_POLL_S)
+            waited = True
+
+    def _settle_entry_if_answerable(
+        self, command_id: str, *, until_ms: int, limit_was_past_when_asked: bool = False,
+        limit_was_too_far_when_asked: bool = False,
+    ) -> SettledEntry | None:
+        """One read of an option entry's outcome: its settlement when one can be given now, else ``None``.
+
+        The recorded answer and a proven outcome are read before the limit
+        is judged: a limit is refused only for an entry that would have to
+        be waited for (ADR 0076 decision 19).
+        """
+        with self._repo.write_fence():
+            command = self._repo.get_command(command_id)
+            order = (
+                None
+                if command is None or command.action != "ENTER" or command.effect_operation_id is None
+                else self._repo.order_for_effect_operation(command.effect_operation_id)
+            )
+            if command is None or order is None or option_entry_of_order(self._repo, order.order_ref) is None:
+                raise LookupError(f"no entry in an option contract is on the books for {command_id!r}")
+            assert command.effect_operation_id is not None
+            recorded = recorded_settlement(self._repo, order.order_ref)
+            if recorded is not None:
+                return recorded
+            outcome = entry_outcome(self._repo, order.order_ref)
+            now_ms = self._repo.clock()
+            if not outcome.proven and limit_was_too_far_when_asked:
+                raise EntryOutcomeWaitRefused(
+                    ENTRY_OUTCOME_LIMIT_TOO_FAR,
+                    f"The wait for this entry's outcome was asked to run {until_ms - now_ms:,} ms, and the entry is "
+                    f"not proven yet. No wait is longer than {MAX_ENTRY_OUTCOME_WAIT_MS:,} ms.",
+                )
+            run = None if command.run_id is None else self._repo.active_run(command.strategy_instance_id or "")
+            run_active = run is not None and run.run_id == command.run_id
+            if not outcome.proven and not run_active:
+                return SettledEntry.of(
+                    settled_now(outcome, until_ms=until_ms, now_ms=now_ms), order_ref=order.order_ref, recorded=False
+                )
+            if not outcome.proven and limit_was_past_when_asked:
+                raise EntryOutcomeWaitRefused(
+                    ENTRY_OUTCOME_LIMIT_PAST,
+                    f"The wait for this entry's outcome was asked with a limit {now_ms - until_ms:,} ms in the past, "
+                    "and the entry is not proven yet. Ask again with a limit after the account Clerk's clock.",
+                )
+            if not outcome.proven and now_ms < until_ms:
+                return None
+            facts = settled_now(outcome, until_ms=until_ms, now_ms=now_ms)
+            effect = self._repo.effect_operation(command.effect_operation_id)
+            assert effect is not None
+            self._repo.append_transition(
+                TransitionInput(
+                    strategy_instance_id=effect.strategy_instance_id,
+                    run_id=effect.run_id,
+                    command_id=effect.command_id,
+                    effect_operation_id=effect.effect_operation_id,
+                    transition_kind="ENTRY_SETTLED",
+                    custody_owner="ACCOUNT_CLERK",
+                    execution_authority="ACCOUNT_CLERK",
+                    operation_state=effect.state,
+                    clerk_observed_at_ms=now_ms,
+                    summary_code="ENTRY_SETTLED",
+                    facts_json=facts.to_facts_json(),
+                )
+            )
+            logger.info(
+                "an option entry was settled",
+                extra={
+                    "action": "option_entry_settled",
+                    "account_id": self._repo.account_id,
+                    "strategy_instance_id": effect.strategy_instance_id,
+                    "order_ref": order.order_ref,
+                    "settlement": facts.settlement,
+                    "standing": facts.standing,
+                    "units_filled": facts.units_filled,
+                },
+            )
+            return SettledEntry.of(facts, order_ref=order.order_ref, recorded=True)
 
     async def _execute_effect_once(
         self,

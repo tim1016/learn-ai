@@ -51,12 +51,17 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
+from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
+    asked_of_a_real_option_order,
+    look_up_by_client_order_id,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fence_fills_on_terminal_enters,
     fold_order_evidence,
     reconcile_execution_price_conflicts,
     resolve_order_submission,
     trade_port_folds_simulated_evidence,
+    withhold_fill_the_order_cannot_hold,
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -66,6 +71,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.resting_entries import cancel_entries_past_their_wait
 from app.broker.alpaca.clerk.sqlite.run_ownership import (
     RunOwnership,
     retire_runs_whose_runner_is_gone,
@@ -777,7 +783,9 @@ async def _recover_fills_on_failed_operations(
 
     for order_ref, lookup_failed in await to_thread(_worklist):
         try:
-            observed = await trade.get_order_by_client_order_id(order_ref)
+            # An order in an option contract is read by the option port's strict reader (ADR 0076).
+            asked = await to_thread(lambda ref=order_ref: asked_of_a_real_option_order(repo, trade, ref))
+            observed = await look_up_by_client_order_id(trade, order_ref, asked=asked)
         except BrokerError as exc:
             logger.warning(
                 lookup_failed.message,
@@ -1161,6 +1169,21 @@ def _fold_snapshot_evidence(
             raise ReconciliationInvariantError(
                 f"captured order {captured.order_ref!r} has no owning effect"
             )
+        # The account's order list is read loosely, so a row can name another symbol than the
+        # contract its order trades. Its fill is then one the books refuse to write: withheld
+        # like a lost answer, so the pass goes on and the exact lookup settles it (ADR 0076).
+        if (
+            not simulated_authority
+            and broker_order.filled_quantity > 0
+            and withhold_fill_the_order_cannot_hold(
+                repo,
+                effect_operation_id=owner.effect_operation_id,
+                order=broker_order,
+                order_ref=captured.order_ref,
+                quantity=broker_order.filled_quantity,
+            )
+        ):
+            continue
         fold_order_evidence(
             repo,
             effect_operation_id=owner.effect_operation_id,
@@ -1281,6 +1304,12 @@ async def _reconcile_account_serialized(
     # re-driven every pass, so a crash, a Stop that lost a claim race, or a
     # POST that landed after Stop is cancelled within one sweep.
     await cancel_entries_of_inactive_runs(repo, trade=trade, off_loop=to_thread)
+
+    # No option entry rests past its owner's wait (ADR 0076). The deadline
+    # keeper runs this same step on time; run here too, a keeper that died
+    # or was late costs one pass and never a deadline. On books with no
+    # option entry it reads an empty worklist and writes nothing.
+    await cancel_entries_past_their_wait(repo, trade=trade, off_loop=to_thread)
 
     # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``
     # authority, whatever an ended run left is closed at the last price it saw.

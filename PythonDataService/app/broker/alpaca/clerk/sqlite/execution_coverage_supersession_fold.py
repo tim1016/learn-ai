@@ -105,12 +105,21 @@ def fold_execution_coverage_superseded(
             facts.prior_exact_observations
         ):
             raise ValueError("coverage supersession prior exact evidence is stale or unreadable")
+    # An order bound to an option contract trades that contract: an execution in
+    # any other symbol is refused by its contract's own rule, before the owner is
+    # asked. Its bot is registered under the underlying, so the owner's symbol for
+    # such an order is the contract's, never the bot's (ADR 0076).
+    require_fill_in_its_orders_contract(
+        conn, order_ref=facts.order_ref, symbol=facts.symbol, quantity=exact.slice_qty
+    )
     owner = conn.execute(
         "SELECT candidate_effect.command_id, candidate_effect.strategy_instance_id, "
-        "COALESCE(strategy.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
+        "COALESCE(bound.symbol, strategy.symbol, "
+        "json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM orders order_row JOIN effect_operations order_effect "
         "ON order_effect.effect_operation_id = order_row.effect_operation_id "
         "JOIN effect_operations candidate_effect ON candidate_effect.effect_operation_id = ? "
+        "LEFT JOIN order_contracts bound ON bound.order_ref = order_row.order_ref "
         "LEFT JOIN strategy_instances strategy "
         "ON strategy.strategy_instance_id = order_effect.strategy_instance_id "
         "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("

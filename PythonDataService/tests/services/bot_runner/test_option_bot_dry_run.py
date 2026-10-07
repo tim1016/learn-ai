@@ -1619,7 +1619,7 @@ async def test_with_a_real_search_worker_process_the_bot_buys_the_call_and_sells
     "refusal",
     [
         OptionEffectRefusal.WINDOW_OVER_LINE_BUDGET,
-        OptionEffectRefusal.ACCOUNT_NOT_SIMULATED,
+        OptionEffectRefusal.ACCOUNT_NOT_OPEN,
         OptionEffectRefusal.NO_OPTION_QUOTES_HERE,
     ],
     ids=str,
