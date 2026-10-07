@@ -867,7 +867,9 @@ async def test_where_the_owners_close_falls_against_alpacas_hour_is_said_three_w
         seen = await desk.preview(_BULL_CALL_SPREAD.model_copy(update={"expiry_close_lead_minutes": minutes}))
         said.append(seen.order_terms.expiry_close_sentence)
 
-    assert len(set(said)) == 3 and all(str(minutes) in words for minutes, words in zip((45, 60, 90), said, strict=True))
+    assert all(str(minutes) in words for minutes, words in zip((45, 60, 90), said, strict=True))
+    # Inside the hour, as it begins, and before it: three things said, whatever the number in each.
+    assert len({words.replace(str(minutes), "N") for minutes, words in zip((45, 60, 90), said, strict=True)}) == 3
 
 
 async def test_how_the_orders_go_is_said_in_one_line_with_the_owners_own_gap_and_wait(monkeypatch: pytest.MonkeyPatch) -> None:

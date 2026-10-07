@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport
 from pydantic import TypeAdapter
 
@@ -28,6 +29,7 @@ from app.schemas.action_plan import ActionPlan, ExpirySelector, StrikeSelector
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
 from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_search import get_option_searches
+from app.utils.error_handlers import request_validation_exception_handler
 from tests.broker.v2panel.fixtures import ACCT
 
 # A Clerk's option quotes on a stand-in Gateway, and a bull call spread to ask about.
@@ -378,6 +380,10 @@ _OUT_OF_RANGE = "OPTION_PREVIEW_VALUE_OUT_OF_RANGE"
             {"legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "absolute", "expiration_ms": 1_791_302_400_001}}]},
             id="a fixed date that is inside its range and is no expiry",
         ),
+        pytest.param(
+            {"legs": [_SPREAD["legs"][0] | {"expiry": {"selector": "absolute", "expiration_ms": True}}]},
+            id="a truth value where a date belongs, which reads as the first millisecond there is",
+        ),
         # One fault that is a range's and one that is not: the request is malformed, and stays so.
         pytest.param({"structures": 0, "what_else": 1}, id="a number out of range beside a field nobody defined"),
     ],
@@ -388,6 +394,27 @@ async def test_a_request_that_is_not_a_preview_request_is_refused_as_malformed(d
     response = await _post(app, {**_SPREAD, **broken})
 
     assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize("no_number", ["NaN", "Infinity", "-Infinity"])
+async def test_a_number_that_is_no_number_is_malformed_wherever_it_is_typed_and_is_never_an_error(
+    deploy_app, no_number: str
+) -> None:
+    """A page can send what JSON has no word for. It is not a number outside a range: it is no number. The
+    service's own handler answers such a request, as it does on every route, and is given it untouched."""
+    app, _registry = deploy_app
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+    as_sent = (
+        '{"preview_key": "page-0001", "underlying": "SPY", "legs": [{"leg_id": "only", "position": "long", '
+        '"qty_ratio": 1, "right": "call", "strike": {"selector": "delta", "target": %s}, '
+        '"expiry": {"selector": "nearest_weekly"}}]}' % no_number
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(_PREVIEW, content=as_sent, headers={"content-type": "application/json"})
+    as_text = await _post(app, {**_SPREAD, "gap_limit_percent": no_number})
+
+    assert (response.status_code, as_text.status_code) == (422, 422), (response.text, as_text.text)
 
 
 @pytest.mark.parametrize(
@@ -644,6 +671,48 @@ async def test_a_number_just_inside_each_range_the_catalogue_serves_is_taken_and
     # Fourteen boxes: seven of the strike rules', one of the expiry rules', a leg's quantity, the structures, four terms.
     assert len(boxes) == 14
     assert tried["inside"] >= 20 and tried["outside"] >= 25
+
+
+_A_SPREAD_OF_NUMBERS = [
+    Decimal(number)
+    for number in (
+        "-1000000000000", "-100000", "-99999.999", "-99999.9985", "-100", "-1", "-0.5", "0", "0.0000001", "0.0005",
+        "0.5", "1", "1.5", "45", "100", "100.5", "300", "301", "390", "391", "1000", "1000.5", "1001", "99999.998",
+        "99999.9985", "99999.999", "100000", "1000000000000",
+    )
+]
+
+
+def _as_served(bounds: dict[str, Any]) -> Bounds:
+    def exact(end: str | None) -> Decimal | None:
+        return None if end is None else Decimal(end)
+
+    return Bounds(exact(bounds["min"]), bounds["min_included"], exact(bounds["max"]), bounds["max_included"], exact(bounds["step"]))
+
+
+async def test_what_the_catalogue_says_of_a_number_is_what_the_server_does_with_it_whatever_the_number(deploy_app) -> None:
+    """Twenty-eight numbers, from far below nothing to far above any strike, typed into each of the fourteen
+    boxes. Where the range the catalogue served takes the number, the server takes it. Where the range refuses
+    it, the server refuses it in words. A bound the server holds and the catalogue left out would show here
+    as a request refused with nothing to read; one the catalogue made up, as a number taken that it called
+    refused."""
+    app, _registry = deploy_app
+    taken = refused = 0
+
+    for what, bounds, typed in await _boxes(app):
+        served = _as_served(bounds)
+        for number in _A_SPREAD_OF_NUMBERS:
+            response = await _post(app, typed(number))
+            assert response.status_code == 200, (what, number, response.text)
+            seen = response.json()
+            if served.fault(number) is None:
+                assert (seen["state"], seen["verdict"]["can_be_deployed"]) == ("no_quote_source", True), (what, number, seen["notice"])
+                taken += 1
+            else:
+                assert (seen["state"], seen["reason_code"]) == ("plan_refused", _OUT_OF_RANGE), (what, number, seen["notice"])
+                refused += 1
+
+    assert taken + refused == 14 * len(_A_SPREAD_OF_NUMBERS) and taken >= 100 and refused >= 100
 
 
 async def test_a_fixed_date_is_taken_from_the_first_to_the_last_a_contract_symbol_can_carry(deploy_app) -> None:
