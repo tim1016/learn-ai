@@ -221,6 +221,10 @@ class RuleOffered:
     tolerance_field: str | None = None
     tolerance_unit: RuleUnit | None = None
     tolerance_label: str | None = None
+    # The field that names the other leg the rule is measured from, by its ``leg_id``, and the word a screen
+    # writes for it: the builder's "From". None: the rule is measured from no other leg.
+    other_leg_field: str | None = None
+    other_leg_label: str | None = None
 
     @property
     def selector(self) -> str:
@@ -239,7 +243,16 @@ STRIKE_RULES: tuple[RuleOffered, ...] = (
     RuleOffered(DeltaStrike, "Delta target", "target", "delta", "delta", "tolerance_delta", "delta", "delta"),
     RuleOffered(AtmOffsetStrike, "Steps from the money", "offset", "strikes", "strikes"),
     RuleOffered(
-        LegDistanceStrike, "Distance from another leg", "dollars", "dollars", "dollars", "tolerance_dollars", "dollars", "dollars"
+        LegDistanceStrike,
+        "Distance from another leg",
+        "dollars",
+        "dollars",
+        "dollars",
+        "tolerance_dollars",
+        "dollars",
+        "dollars",
+        other_leg_field="leg_id",
+        other_leg_label="leg",
     ),
     RuleOffered(PercentStrike, "Percent from price", "percent", "percent", "percent", "tolerance_percent", "percent", "percent"),
 )

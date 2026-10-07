@@ -35133,6 +35133,31 @@
         "title": "OptionPreviewWatchedRange",
         "type": "object"
       },
+      "OptionRuleOtherLeg": {
+        "additionalProperties": false,
+        "description": "The other leg a rule is measured from: the builder's \"From\".",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "unit": {
+            "const": "leg",
+            "title": "Unit"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "unit",
+          "unit_label"
+        ],
+        "title": "OptionRuleOtherLeg",
+        "type": "object"
+      },
       "OptionRuleTolerance": {
         "additionalProperties": false,
         "description": "How far from its target a rule's pick may be: the builder's \"Within\".",
@@ -35203,11 +35228,21 @@
       },
       "OptionStrikeRule": {
         "additionalProperties": false,
-        "description": "One way of choosing a leg's strike, as the builder offers it.",
+        "description": "One way of choosing a leg's strike, as the builder offers it. ``value``, ``measured_from`` and\n``tolerance`` between them name every field the Action Plan's rule has beside its ``selector``.",
         "properties": {
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "measured_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionRuleOtherLeg"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "selector": {
             "enum": [
@@ -35237,6 +35272,7 @@
           "selector",
           "label",
           "value",
+          "measured_from",
           "tolerance"
         ],
         "title": "OptionStrikeRule",

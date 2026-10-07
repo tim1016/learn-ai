@@ -31,6 +31,7 @@ from app.schemas.option_preview import (
     OptionLegRules,
     OptionOrderTermDefaults,
     OptionPercentTerm,
+    OptionRuleOtherLeg,
     OptionRuleTolerance,
     OptionRuleValue,
     OptionStrikeRule,
@@ -103,6 +104,12 @@ def _value(offered: RuleOffered) -> OptionRuleValue | None:
     return OptionRuleValue(field=offered.value_field, unit=offered.value_unit, unit_label=offered.value_label)
 
 
+def _measured_from(offered: RuleOffered) -> OptionRuleOtherLeg | None:
+    if offered.other_leg_field is None:
+        return None
+    return OptionRuleOtherLeg(field=offered.other_leg_field, unit="leg", unit_label=offered.other_leg_label)
+
+
 def _tolerance(offered: RuleOffered) -> OptionRuleTolerance | None:
     if offered.tolerance_field is None:
         return None
@@ -145,7 +152,13 @@ async def option_structure_catalogue(broker: str, account_id: str) -> OptionStru
         custom_description=f"Start from no legs and add up to {MAX_OPTION_LEGS}.",
         max_legs=MAX_OPTION_LEGS,
         strike_rules=[
-            OptionStrikeRule(selector=offered.selector, label=offered.label, value=_value(offered), tolerance=_tolerance(offered))
+            OptionStrikeRule(
+                selector=offered.selector,
+                label=offered.label,
+                value=_value(offered),
+                measured_from=_measured_from(offered),
+                tolerance=_tolerance(offered),
+            )
             for offered in STRIKE_RULES
         ],
         expiry_rules=[

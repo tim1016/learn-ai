@@ -393,8 +393,21 @@ class OptionRuleTolerance(BaseModel):
     default: float
 
 
+class OptionRuleOtherLeg(BaseModel):
+    """The other leg a rule is measured from: the builder's "From"."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The field of the rule's selector that names the other leg, by that leg's ``leg_id``.
+    field: str
+    unit: Literal["leg"]
+    # The unit as a screen writes it beside the box.
+    unit_label: str
+
+
 class OptionStrikeRule(BaseModel):
-    """One way of choosing a leg's strike, as the builder offers it."""
+    """One way of choosing a leg's strike, as the builder offers it. ``value``, ``measured_from`` and
+    ``tolerance`` between them name every field the Action Plan's rule has beside its ``selector``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -402,6 +415,8 @@ class OptionStrikeRule(BaseModel):
     selector: Literal["delta", "atm_offset", "leg_distance", "percent"]
     label: str
     value: OptionRuleValue
+    # None: the rule is measured from no other leg.
+    measured_from: OptionRuleOtherLeg | None
     # None: the rule names its strike exactly, and has no "Within".
     tolerance: OptionRuleTolerance | None
 
