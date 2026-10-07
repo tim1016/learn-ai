@@ -30,12 +30,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_HALF_EVEN, Decimal, localcontext
+from decimal import Decimal
 from enum import StrEnum
-from fractions import Fraction
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -44,11 +43,9 @@ from app.broker.alpaca.option_fees import OptionRateNotPinnedError, fees_for_opt
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import LineUse, WatchRequest
-from app.options.at_expiry import PriceRange
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
-from app.options.lean import ABOUT_FLAT_BELOW_DELTA, LeanDirection
-from app.options.preview import PickedLeg, StructureFigures, structure_figures
+from app.options.preview import StructureFigures, structure_figures
 from app.options.quotes import HeldQuote, quote_fault
 from app.options.requirement import EntrySize, LegQuote
 from app.options.resolver import (
@@ -66,23 +63,24 @@ from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, NoLine, WindowContract, expiries_wanted, watched_window
 from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg
 from app.schemas.option_preview import (
-    OptionContractView,
-    OptionPreviewAtExpiry,
-    OptionPreviewDividend,
-    OptionPreviewLean,
-    OptionPreviewLeg,
-    OptionPreviewMoney,
-    OptionPreviewPricingInputs,
-    OptionPreviewQuote,
     OptionPreviewVerdict,
     OptionPreviewWatched,
     OptionPreviewWatchedRange,
     OptionStructurePreview,
     OptionStructurePreviewRequest,
     PreviewState,
-    PriceRangeView,
 )
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
+from app.services.option_preview_views import (
+    at_expiry_view,
+    contract_view,
+    lean_view,
+    leg_view,
+    money_view,
+    pricing_inputs_view,
+    quote_view,
+    sentence,
+)
 from app.services.option_watch import OptionWatchList
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
@@ -107,7 +105,6 @@ _KEY_PREFIX = "preview:"
 # The refusals that say the picked contracts are another shape than the one named, as against money that
 # cannot be set aside for them.
 _SHAPE_REFUSALS = frozenset(str(reason) for reason in StructureRefusal)
-_CENT = Decimal("0.01")
 
 # (underlying, the moment, the latest expiry the plan comes to) -> the rate and the dividends, with sources.
 ModelInputsReader = Callable[[str, int, date], ModelInputsRead]
@@ -157,25 +154,9 @@ def plan_of(request: OptionStructurePreviewRequest) -> ActionPlan:
 # ---- words ------------------------------------------------------------------
 
 
-def _sentence(text: str) -> str:
-    text = text.strip()
-    return text[:1].upper() + text[1:] + ("" if text.endswith((".", "?", "!")) else ".")
-
-
-def _usd(cents: int) -> str:
-    return f"{'-' if cents < 0 else ''}${abs(cents) // 100:,}.{abs(cents) % 100:02d}"
-
-
-def _rounded(value: Fraction, places: Decimal = _CENT) -> Decimal:
-    """An exact fraction as a decimal for the eye, half to even. Never used to judge a limit."""
-    with localcontext() as exact:
-        exact.prec = 60
-        return (Decimal(value.numerator) / Decimal(value.denominator)).quantize(places, rounding=ROUND_HALF_EVEN)
-
-
 def _the_plans_own_words(refused: ValidationError) -> str:
     said = [str(error["msg"]).removeprefix("Value error, ") for error in refused.errors(include_url=False)]
-    return " ".join(_sentence(text) for text in said)
+    return " ".join(sentence(text) for text in said)
 
 
 def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
@@ -193,185 +174,7 @@ def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
             "IBKR refused a quote line for this preview: the account's allowance is in use, here or in another "
             f"IBKR session. {cannot_see}"
         )
-    return PreviewReason.LINE_REFUSED, _sentence(f"No quote line could be had for this preview: {reason}")
-
-
-# ---- the answer's parts -------------------------------------------------------
-
-
-def _contract_view(contract: OptionContract) -> OptionContractView:
-    return OptionContractView(
-        occ_symbol=contract.occ_symbol,
-        underlying=contract.root,
-        expiry_ms=contract.expiry_ms,
-        right=contract.right,
-        strike=contract.strike,
-    )
-
-
-def _quote_view(quote: HeldQuote, now: int) -> OptionPreviewQuote:
-    assert quote.bid is not None and quote.ask is not None
-    return OptionPreviewQuote(
-        bid=quote.bid.price,
-        bid_age_ms=now - quote.bid.received_ms,
-        ask=quote.ask.price,
-        ask_age_ms=now - quote.ask.received_ms,
-    )
-
-
-def _leg_view(leg: PickedLeg, now: int) -> OptionPreviewLeg:
-    return OptionPreviewLeg(
-        leg_id=leg.leg_id,
-        position=leg.position,
-        ratio=leg.ratio,
-        contract=_contract_view(leg.contract),
-        quote=_quote_view(leg.quote, now),
-        gap_percent_of_mid=_rounded(leg.gap_percent_of_mid),
-        delta=None if leg.priced is None else leg.priced.delta,
-        implied_volatility=None if leg.priced is None else leg.priced.implied_volatility,
-        delta_status="inputs_not_known" if leg.priced is None else str(leg.priced.status),
-        ibkr_delta=leg.vendor_delta,
-    )
-
-
-def _money_view(figures: StructureFigures, cost_limit_percent: Decimal) -> OptionPreviewMoney | None:
-    money, size = figures.money, figures.size
-    if money is None or size is None:
-        return None
-    assert figures.net_price is not None and figures.fee_provision_cents is not None
-    assert figures.round_trip_cost_cents is not None and figures.round_trip_cost_percent is not None
-    assert figures.over_cost_limit is not None
-    percent = _rounded(figures.round_trip_cost_percent)
-    cost = (
-        f"Opening and closing at once would cost {_usd(figures.round_trip_cost_cents)}, which is {percent}% of the "
-        f"{_usd(money.entry_commitment_cents)} set aside. Your limit is {cost_limit_percent}%."
-    )
-    return OptionPreviewMoney(
-        structures=size.units,
-        multiplier=size.multiplier,
-        net_price=figures.net_price,
-        premium_is="paid" if figures.net_price > 0 else "received" if figures.net_price < 0 else "nothing",
-        net_entry_premium_cents=money.net_entry_premium_cents,
-        net_entry_premium_per_structure_cents=money.net_entry_premium_cents // size.units,
-        broker_requirement_cents=money.broker_requirement_cents,
-        fee_estimate_cents=figures.fee_provision_cents,
-        entry_commitment_cents=money.entry_commitment_cents,
-        round_trip_cost_cents=figures.round_trip_cost_cents,
-        round_trip_cost_percent=percent,
-        cost_limit_percent=cost_limit_percent,
-        over_cost_limit=figures.over_cost_limit,
-        cost_sentence=cost + (" An entry would be skipped right now." if figures.over_cost_limit else ""),
-        fees_sentence="Fees are an estimate until Alpaca reports them.",
-    )
-
-
-def _where(holds: Sequence[PriceRange]) -> str:
-    """Stretches of underlying price, in words: "at 585 or below", "from 575 to 595", "at 600 or above"."""
-    said = []
-    for held in holds:
-        if held.high is None:
-            said.append(f"at {held.low:f} or above")
-        elif held.high == 0:
-            said.append("at zero")
-        elif held.low == 0:
-            said.append(f"at {held.high:f} or below")
-        elif held.low == held.high:
-            said.append(f"at {held.low:f}")
-        else:
-            said.append(f"from {held.low:f} to {held.high:f}")
-    return ", or ".join(said)
-
-
-def _at_expiry_view(figures: StructureFigures, underlying: str) -> OptionPreviewAtExpiry | None:
-    if figures.money is None:
-        return None
-    warning = "A market exit before expiry can do worse than this."
-    seen = figures.at_expiry
-    if seen is None:
-        return OptionPreviewAtExpiry(
-            estimated=False,
-            loss_cents=None,
-            loss_holds=[],
-            gain_cents=None,
-            gain_has_no_limit=False,
-            gain_holds=[],
-            break_even_prices=[],
-            loss_sentence=None,
-            gain_sentence=None,
-            break_even_sentence=None,
-            assumptions_sentence="Not estimated: the legs do not share an expiry.",
-            warning_sentence=warning,
-        )
-    loss_cents = figures.money.loss_at_expiry_cents
-    assert loss_cents is not None
-    even_at = [_rounded(price) for price in seen.break_evens]
-    return OptionPreviewAtExpiry(
-        estimated=True,
-        loss_cents=loss_cents,
-        loss_holds=[PriceRangeView(from_price=held.low, to_price=held.high) for held in seen.loss_holds],
-        gain_cents=seen.gain_cents,
-        gain_has_no_limit=seen.gain_cents is None,
-        gain_holds=[PriceRangeView(from_price=held.low, to_price=held.high) for held in seen.gain_holds],
-        break_even_prices=even_at,
-        loss_sentence=f"Lose up to {_usd(loss_cents)}, with {underlying} {_where(seen.loss_holds)}.",
-        gain_sentence=(
-            f"The gain has no limit as {underlying} rises."
-            if seen.gain_cents is None
-            else f"Gain up to {_usd(seen.gain_cents)}, with {underlying} {_where(seen.gain_holds)}."
-        ),
-        break_even_sentence=(
-            f"Even with {underlying} at {' and at '.join(str(price) for price in even_at)}."
-            if even_at
-            else "It is even at no price."
-        ),
-        assumptions_sentence=(
-            "At expiry, if held, before fees. An estimate: it takes every leg as held to expiry and never "
-            "exercised or assigned early."
-        ),
-        warning_sentence=warning,
-    )
-
-
-def _lean_view(figures: StructureFigures, underlying: str, listens_to: str | None) -> OptionPreviewLean | None:
-    leaning, size = figures.lean, figures.size
-    if leaning is None or size is None:
-        return None
-    about = f"{abs(leaning.shares):,.0f} {underlying} shares"
-    flat_below = ABOUT_FLAT_BELOW_DELTA * size.multiplier
-    if leaning.direction is LeanDirection.UP:
-        sentence = f"Leans up. It moves like about {about}."
-    elif leaning.direction is LeanDirection.DOWN:
-        sentence = f"Leans down. It moves like about {about} sold short."
-    else:
-        sentence = f"About flat. It moves like fewer than {flat_below * size.units:,.0f} {underlying} shares either way."
-    falls = leaning.direction is LeanDirection.DOWN
-    warning = None
-    if falls:
-        warning = f"This structure gains when {underlying} falls."
-        if listens_to is not None:
-            warning += f" The strategy's signal is a buy signal on {listens_to}."
-    return OptionPreviewLean(
-        net_delta=leaning.net_delta,
-        shares_per_structure=leaning.shares_per_structure,
-        shares=leaning.shares,
-        direction=leaning.direction.value,
-        about_flat_below_shares_per_structure=flat_below,
-        sentence=sentence,
-        gains_when_underlying_falls=falls,
-        warning_sentence=warning,
-    )
-
-
-def _pricing_inputs_view(inputs: ModelInputsRead) -> OptionPreviewPricingInputs:
-    return OptionPreviewPricingInputs(
-        rate=inputs.rate,
-        rate_source=inputs.rate_source,
-        rate_is_default=inputs.rate_is_default,
-        dividends_known=inputs.dividends is not None,
-        dividends=[OptionPreviewDividend(ex_ms=paid.ex_ms, cash_per_share=paid.cash) for paid in inputs.dividends or ()],
-        dividends_source=inputs.dividends_source,
-        dividends_read_ms=inputs.dividends_read_ms,
-    )
+    return PreviewReason.LINE_REFUSED, sentence(f"No quote line could be had for this preview: {reason}")
 
 
 def _fee_provision(trade_date: date, structure: ResolvedStructure, markets: dict[str, LegQuote], size: EntrySize) -> int | None:
@@ -480,7 +283,7 @@ def _read(
         return _NoFigures(
             "feed_not_up",
             PreviewReason.FEED_NOT_UP,
-            _sentence(f"The quote feed is not up: {feed.unhealthy}"),
+            sentence(f"The quote feed is not up: {feed.unhealthy}"),
             passes_by_itself=True,
         )
     if use.budget == 0:
@@ -588,7 +391,7 @@ def _not_resolved(refused: ContractsNotResolved, reading: _Reading, arriving: bo
     return _NoFigures(
         "not_resolved",
         str(refused.reason),
-        _sentence(str(refused)),
+        sentence(str(refused)),
         fault=fault,
         leg_ids=refused.leg_ids,
         contract=contract,
@@ -656,7 +459,7 @@ class _Asked:
         return {
             "quotes_read_ms": reading.now,
             "feed_generation": reading.feed.generation,
-            "underlying_quote": _quote_view(reading.underlying_quote, reading.now),
+            "underlying_quote": quote_view(reading.underlying_quote, reading.now),
             "the_money": reading.money,
             "the_money_sentence": (
                 f"Strikes are counted from {underlying}'s live mid quote, {reading.money}. "
@@ -691,7 +494,7 @@ class _Asked:
             notice=why.notice,
             fault=why.fault,
             leg_ids=list(why.leg_ids),
-            contract=None if why.contract is None else _contract_view(why.contract),
+            contract=None if why.contract is None else contract_view(why.contract),
             ask_again_in_ms=_ASK_AGAIN_MS if why.passes_by_itself else None,
             verdict=OptionPreviewVerdict(
                 **self._deployable(plan),
@@ -705,7 +508,7 @@ class _Asked:
                 leg_ids=[],
                 red=False,
             ),
-            pricing_inputs=None if inputs is None else _pricing_inputs_view(inputs),
+            pricing_inputs=None if inputs is None else pricing_inputs_view(inputs),
             **({} if why.reading is None else self._of_the_reading(why.reading)),
         )
 
@@ -721,9 +524,9 @@ class _Asked:
                 else f"Right now it resolves to a {name.in_words}."
             )
         elif name is not None and broken.reason in _SHAPE_REFUSALS:
-            resolves = _sentence(f"Right now this is not a {name.in_words}: {broken.detail}")
+            resolves = sentence(f"Right now this is not a {name.in_words}: {broken.detail}")
         else:
-            resolves = _sentence(f"Right now this cannot be entered as built: {broken.detail}")
+            resolves = sentence(f"Right now this cannot be entered as built: {broken.detail}")
         lean_unknown = None
         if figures.lean is None and figures.size is not None:
             lean_unknown = (
@@ -741,17 +544,17 @@ class _Asked:
                 leg_ids=[] if broken is None else list(broken.leg_ids),
                 red=broken is not None,
             ),
-            legs=[_leg_view(leg, reading.now) for leg in figures.legs],
-            money=_money_view(figures, request.cost_limit_percent),
-            at_expiry=_at_expiry_view(figures, request.underlying),
+            legs=[leg_view(leg, reading.now) for leg in figures.legs],
+            money=money_view(figures, request.cost_limit_percent),
+            at_expiry=at_expiry_view(figures, request.underlying),
             oldest_quote_age_ms=max(
                 age
                 for quote in (reading.underlying_quote, *(leg.quote for leg in figures.legs))
                 for age in (reading.now - side.received_ms for side in (quote.bid, quote.ask) if side is not None)
             ),
-            lean=_lean_view(figures, request.underlying, request.listens_to),
+            lean=lean_view(figures, request.underlying, request.listens_to),
             lean_unknown_sentence=lean_unknown,
-            pricing_inputs=_pricing_inputs_view(inputs),
+            pricing_inputs=pricing_inputs_view(inputs),
             **self._of_the_reading(reading),
         )
 
