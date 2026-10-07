@@ -60,9 +60,33 @@ A per-leg limit on the bid-ask gap does not bound what a structure costs to trad
 - The **round-trip cost** is the sum over the legs of ask minus bid, times ratio and multiplier. It is always worked out.
 - An entry is to be refused when it is more than the **structure cost limit**: a percent of the entry commitment, 10 by default, set at Deploy. The owner chose this on 2026-10-06. The comparison is built; the setting arrives with Deploy. The commitment is the measure because it is always above zero; a percent of the structure's mid value breaks down when that value is near zero.
 
+### 7. A structure is checked after its contracts are picked
+
+A plan's legs are rules, and independent rules can land on a shape nobody meant. A bounded loss does not prove the result is the structure the owner named. So the picked contracts are checked before an order is built from them, and wherever a plan is previewed.
+
+- **Every structure.** One contract per leg of the plan, of the leg's kind, on the plan's underlying. No contract in two legs. Every sold leg has a bought leg of its kind, contract for contract, that does not expire before it. A resolved structure takes each leg's side and ratio from the plan, so it cannot differ from what was declared.
+- **A named structure, also its own shape.** One expiry, and:
+
+  | Structure | Must hold |
+  |---|---|
+  | Bull call spread | bought strike below sold strike; premium paid |
+  | Bear put spread | bought strike above sold strike; premium paid |
+  | Bull put spread | bought strike below sold strike; premium received, and less than the width |
+  | Bear call spread | bought strike above sold strike; premium received, and less than the width |
+  | Long straddle | one strike |
+  | Long strangle | put strike below call strike |
+  | Iron condor | bought put, sold put, sold call, bought call, strikes rising; premium received |
+  | Iron butterfly | the sold put and sold call share a strike, with the bought put below it and the bought call above; premium received |
+  | Call or put butterfly | lower wing, body, upper wing, strikes rising; wings the same width |
+
+- **The name is part of the plan** (ADR 0012's amendment). A plan with no name is Custom and gets the first check only.
+- **A failure is a typed refusal** that names the rule and the legs. At an entry it skips the entry; in a preview it is the verdict.
+- **Not asked here:** whether the loss is bounded, which the requirement answers (decision 3), and whether Alpaca lists each contract as standard and tradable, which waits for its contract reference.
+- **Where a named structure starts** is a separate list: the legs and rules the builder fills in. Each hangs on one leg picked by delta (0.50 at the money, 0.30 out of it) with the others $5 away, all on the nearest weekly expiry. Those are starting values the owner changes; a deployed plan carries its own.
+
 ## Where it lives
 
-`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
+`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share), `named_structures.py`, `structure_check.py` and `structure_catalogue.py` (decision 7). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
 
 Nothing on the money path calls these yet.
 
