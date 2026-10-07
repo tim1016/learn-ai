@@ -273,7 +273,8 @@ class OptionRun:
                 OptionEffectRefusal.WINDOW_OVER_LINE_BUDGET,
                 f"This bot's option plan can need {needed} IBKR quote lines, and this Clerk's budget of option "
                 f"quote lines is {self._market.line_budget}. Its contracts could not all be quoted, so every "
-                "entry would be refused. Raise the Clerk's option line budget, or deploy a narrower structure.",
+                "entry would be refused. Raise this Clerk's IBKR_OPTION_LINE_BUDGET, or deploy a narrower "
+                "structure.",
             )
 
     # ---- what is watched --------------------------------------------------------

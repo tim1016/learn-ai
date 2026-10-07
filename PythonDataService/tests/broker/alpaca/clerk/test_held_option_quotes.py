@@ -401,3 +401,22 @@ async def test_books_that_cannot_be_read_leave_what_was_held_a_moment_ago(
 def test_a_quote_is_kept_every_so_often_never_every_zero_seconds() -> None:
     with pytest.raises(ValueError, match="every so often"):
         HeldOptionQuotes(keep_every_ms=0)
+
+
+async def test_a_handle_closed_after_its_account_was_opened_again_does_not_stop_the_new_opening(
+    held: HeldOptionQuotes, tmp_path: Path
+) -> None:
+    """An opening that failed part way gives its handle back late. The books now read are the later opening's."""
+    stale = _Account(held, tmp_path)
+    current = _Account(held, tmp_path)
+    current.holds = [CALL.occ_symbol]
+
+    stale.followed.close()
+    await held.read_books()
+
+    assert stale.reads == 0
+    assert [request.held for request in held.requests()] == [(CALL,)]
+    current.holds = []
+    current.followed.close()
+    current.followed.close()
+    assert (held.requests(), current.reads) == ((), 2), "and closing twice reads the books once"

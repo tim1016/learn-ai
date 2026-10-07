@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import AsyncIterator, Callable
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -25,13 +27,18 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
+from app.broker.alpaca.market_liveness import set_market_liveness_consumer
 from app.broker.ibkr.config import reset_settings_for_testing
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.options.requirement import StructureMoneyRefusal
 from app.options.simulated_fill import SimulatedFillModel
 from app.options.watch import LineClass
-from app.services import market_liveness
-from app.services.option_search import OptionSearchLane
+from app.services import bot_option_run, market_liveness, option_search
+from app.services.option_search import OptionSearches, OptionSearchLane
+from app.services.option_watch import get_option_watch_list
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.doubles import _FakeFeed
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 # The resolver's own scenes, for a contract by its strike.
 from tests.options import test_resolver as scenes
@@ -47,6 +54,8 @@ from ._option_floor import (
     ENTER_MS,
     EXIT_MS,
     FIRST_GREEN_MS,
+    FRIDAY,
+    KNOWN,
     LEG,
     MINUTE,
     SID,
@@ -59,6 +68,7 @@ from ._option_floor import (
     one_call,
     red,
 )
+from ._support import _bar, _wait_for
 
 CALL = CALL_585.occ_symbol
 
@@ -124,6 +134,7 @@ async def test_an_option_bot_buys_the_call_its_rules_pick_at_its_ask_and_sells_i
 
     def look(floor: Floor) -> None:
         held_meanwhile["position"] = floor.holds()
+        held_meanwhile["the_bot_holds"] = floor.clerk.held_option_contracts(SID)
         held_meanwhile["clerk_asks_for"] = floor.held.requests()
 
     ran = await floor.run(_round_trip(after_the_entry=look))
@@ -147,6 +158,8 @@ async def test_an_option_bot_buys_the_call_its_rules_pick_at_its_ask_and_sells_i
     assert held_meanwhile["position"] == {CALL: 1.0}
     assert floor.holds() == {}
     assert floor.transitions("EXIT_ATTRIBUTED_FLAT") == 1
+    # What the EXIT closed was the Clerk's own answer to "what does this bot hold".
+    assert (held_meanwhile["the_bot_holds"], floor.clerk.held_option_contracts(SID)) == ((CALL,), ())
     assert ran.outcomes() == [
         ("no_action", FIRST_GREEN_MS),
         ("enter_intent", ENTER_MS),
@@ -238,6 +251,9 @@ async def test_the_watched_window_is_asked_for_from_the_start_and_follows_the_un
     assert seen["lines before any bar"] == seen["lines before the move"] == calls(583, 584, 585, 586, 587)
     assert seen["lines before the quiet minute"] == seen["lines before the end"] == calls(586, 587, 588, 589, 590)
     assert floor.worker.asked == [], "no bar here was an entry"
+    # No decision here read the rate and dividends. They were read as the first bar closed all the same,
+    # so that a decision, when one comes, finds them kept.
+    assert floor.inputs_read_as_of[0] == FIRST_GREEN_MS
 
 
 async def test_options_on_another_symbol_take_the_money_from_that_symbols_own_bar(
@@ -447,16 +463,20 @@ async def test_a_leg_picked_by_delta_is_bought_when_the_dividends_are_known(on_t
 async def test_an_entry_whose_time_runs_out_while_the_rate_is_read_is_refused_as_late_and_searches_nothing(
     floor: Floor,
 ) -> None:
-    """The vendors took twenty-five seconds. A decision is on time for twenty."""
-    def a_slow_vendor() -> None:
-        if floor.clock.value >= ENTER_MS:
+    """The vendors took twenty-five seconds over the decision's own read. A decision is on time for twenty."""
+
+    def a_slow_vendor(asked_as_of_ms: int) -> None:
+        # The read the decision itself waits for, not the one made in the background as the bar closed.
+        if asked_as_of_ms > ENTER_MS:
             floor.clock.value += 25_000
 
     floor.while_inputs_are_read = a_slow_vendor
 
     ran = await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
 
-    assert [code for code, _ in ran.blocked()] == ["DECISION_LATE"]
+    [(reason_code, why)] = ran.blocked()
+    assert reason_code == "DECISION_LATE"
+    assert why.strip(), "a decision that ran out of time on the way says so in words"
     assert floor.worker.asked == []
     _nothing_was_sent(floor, ran)
 
@@ -496,6 +516,36 @@ async def test_an_entry_is_sent_when_the_search_leaves_it_just_on_time(floor: Fl
     assert ran.blocked() == []
     (bought,) = floor.simulated_fills()
     assert (bought.fill_price, bought.quote_age_ms) == (Decimal("4.12"), 4_900)
+    # The quotes were tested again when the search answered, not as of when it began.
+    assert floor.entry_as_the_clerk_kept_it().rechecked_at_ms == ENTER_MS + 15_100 + 4_900
+
+
+async def test_quotes_that_went_stale_while_the_search_ran_are_refused_by_the_recheck(floor: Floor) -> None:
+    """The search took 5.1 seconds and nothing ticked meanwhile. The picks were made on quotes a decision
+    could use; by the time the order would go they are too old, and the recheck says so before the Clerk is
+    asked."""
+
+    def the_search_takes_a_while() -> None:
+        floor.clock.value += 5_100
+
+    floor.worker.during = the_search_takes_a_while
+
+    ran = await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
+
+    assert floor.what_the_resolver_picks().picked == {LEG: CALL_585}
+    assert [code for code, _ in ran.blocked()] == ["OPTION_CONTRACT_UNDERLYING_QUOTE_UNUSABLE"]
+    _nothing_was_sent(floor, ran)
+
+
+async def test_the_entry_is_priced_from_the_quote_as_it_stood_when_the_search_answered(floor: Floor) -> None:
+    """The call was offered at 4.12 when the search began and at 4.14 when it answered. The Clerk is handed
+    the later quote, and the simulation fills at it."""
+    floor.worker.during = lambda: floor.quote(585, "4.10", "4.14")
+
+    await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
+
+    assert floor.what_the_resolver_picks().quotes[LEG].ask.price == Decimal("4.12")
+    assert floor.fills() == [(CALL, "buy", 1.0, 4.14, 100, Decimal("414.00"))]
 
 
 # ---- The start of a run -----------------------------------------------------------------
@@ -723,3 +773,132 @@ async def test_with_a_real_search_worker_process_the_bot_buys_the_call_and_sells
         (CALL, "sell", 1.0, 4.30, 100, Decimal("430.00")),
     ]
     assert floor.holds() == {}
+
+
+# ---- A run refused by name is recorded by that name -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "refusal", [OptionEffectRefusal.WINDOW_OVER_LINE_BUDGET, OptionEffectRefusal.ACCOUNT_NOT_SIMULATED], ids=str
+)
+async def test_a_run_whose_option_plan_is_refused_is_recorded_under_the_refusals_own_reason(
+    tmp_path: Path, refusal: OptionEffectRefusal
+) -> None:
+    """Through the registry's own supervision: the bot's page says why the run could not trade its plan, in
+    the refusal's code, not the name of a Python exception, and the bot is left stopped."""
+    feed = _FakeFeed([_bar(_T0)], mode="crash", error=OptionPlanRefused(refusal, "its option plan cannot be traded here"))
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.duty_outcome is not None
+    assert (view.duty_outcome.kind, view.duty_outcome.reason_code) == ("CRASHED", refusal.value)
+    assert view.desired_state == "STOPPED"
+
+
+async def test_an_exit_decided_after_the_close_is_held_for_the_open_and_the_journal_lists_no_sale(floor: Floor) -> None:
+    """The EXIT's bar reached the bot a second after the session closed. An EXIT is never refused for being
+    late, and an option order is sent only in the regular session: the Clerk holds it for the next open. No
+    sale has happened, so the journal lists none, least of all the purchase a second time."""
+
+    async def after_the_close(floor: Floor) -> None:
+        await floor.hours_pass_to(session_close_ms_utc(TUESDAY) + 1_000)
+
+    script = _round_trip()
+    script[-1] = Step(red(EXIT_MS), before=after_the_close)
+
+    ran = await floor.run(script)
+
+    assert ran.outcomes()[-1] == ("exit_intent", EXIT_MS)
+    assert floor.holds() == {CALL: 1.0}
+    assert [(row.intent, row.side, row.fill_price) for row in ran.journal] == [("ENTER", "buy", 4.12)]
+    assert [fill[1] for fill in floor.fills()] == ["buy"]
+
+
+async def test_a_close_of_options_on_another_symbol_waits_for_no_bar_of_that_symbol(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    """The bot listens to QQQ and holds a SPY call. SPY has no bar for the EXIT's minute, and the second
+    stream would wait a minute for one. An option close is priced from quotes: it goes at once."""
+    floor = await on_the_floor(plan=one_call(underlying="SPY"), listens_to="QQQ").open()
+    started = time.monotonic()
+
+    await floor.run(
+        [
+            Step(green(FIRST_GREEN_MS, "480.00", symbol="QQQ")),
+            Step(green(ENTER_MS, "585.00", symbol="SPY")),
+            Step(green(ENTER_MS, "480.40", symbol="QQQ")),
+            Step(red(ENTER_MS + MINUTE, "480.00", symbol="QQQ")),
+            Step(red(ENTER_MS + 2 * MINUTE, "479.80", symbol="QQQ")),
+            Step(red(EXIT_MS, "479.60", symbol="QQQ")),
+        ],
+        pricing_bar_wait_ms=60_000,
+    )
+
+    assert time.monotonic() - started < 20, "the close waited for a bar of the underlying"
+    assert [fill[:3] for fill in floor.fills()] == [(CALL, "buy", 1.0), (CALL, "sell", 1.0)]
+    assert floor.holds() == {}
+
+
+# ---- With nothing handed in, the process's own -------------------------------------------
+
+
+async def test_with_no_market_handed_in_the_runner_reads_the_process_own_supervisor_list_lane_and_settings(
+    on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production hands the runner nothing. The Clerk's supervisor, the watch list, the entry lane, the reader
+    of the rate and dividends and the line budget are then the process's own."""
+    # Five lines: just what one call leg watched two strikes either side needs, and no wider window would fit.
+    floor = await on_the_floor(watch=get_option_watch_list(), line_budget=5).open()
+    searches = OptionSearches(executor=lambda: floor.worker)
+    asked_for: list[tuple[str, date]] = []
+
+    def read(underlying: str, *, at_ms: int, latest_expiry: date) -> Any:
+        del at_ms
+        asked_for.append((underlying, latest_expiry))
+        return KNOWN
+
+    monkeypatch.setattr(option_search, "_searches", searches)
+    monkeypatch.setattr(bot_option_run, "read_option_model_inputs", read)
+    set_market_liveness_consumer(floor.consumer)
+    try:
+        ran = await floor.run(_round_trip(), the_process_own_market=True)
+        lanes_started = (searches.entry.worker_pid, searches.preview.lane.worker_pid)
+    finally:
+        set_market_liveness_consumer(None)
+        searches.close()
+
+    assert ran.blocked() == []
+    assert lanes_started == (os.getpid(), None), "the search ran in the entry lane, and no page's lane was started"
+    assert [fill[:4] for fill in floor.fills()] == [(CALL, "buy", 1.0, 4.12), (CALL, "sell", 1.0, 4.30)]
+    assert set(asked_for) == {("SPY", FRIDAY)}
+    assert len(floor.worker.asked) == 1, "the entry's search went to the process's entry lane"
+    assert get_option_watch_list().requests() == ()
+
+
+async def test_with_no_market_handed_in_the_line_budget_is_the_clerks_own_setting(
+    on_the_floor: Callable[..., Floor],
+) -> None:
+    floor = await on_the_floor(line_budget=4).open()
+
+    with pytest.raises(OptionPlanRefused) as refused:
+        await floor.run([Step(green(FIRST_GREEN_MS))], the_process_own_market=True)
+
+    assert refused.value.reason is OptionEffectRefusal.WINDOW_OVER_LINE_BUDGET
+
+
+async def test_a_bar_handed_over_a_moment_before_this_machines_clock_says_it_closed_is_still_decided_on(
+    floor: Floor,
+) -> None:
+    """The host's clock is two tenths of a second behind the feed's. The bar that closed at 10:31:00 arrives
+    at 10:30:59.8 by this machine. The entry is searched for and bought, its selection stamped at the bar's
+    close and never before it."""
+    ran = await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS), delay_ms=-200)])
+
+    (search,) = floor.worker.asked
+    assert ran.blocked() == []
+    assert (search.decision_bar_close_ms, search.selection_ms) == (ENTER_MS, ENTER_MS)
+    assert floor.entry_as_the_clerk_kept_it().rechecked_at_ms == ENTER_MS
+    assert floor.fills() == [(CALL, "buy", 1.0, 4.12, 100, Decimal("412.00"))]

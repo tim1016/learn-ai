@@ -44,6 +44,7 @@ from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, get_cle
 from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order
 from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOptionFill, SynthesizedOrderLedger
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.market_liveness import AlpacaMarketLivenessConsumer
@@ -247,6 +248,7 @@ class Floor:
         line_budget: int = 40,
         reach: int = 2,
         starts_at_ms: int = FIRST_GREEN_MS - MINUTE,
+        watch: OptionWatchList | None = None,
     ) -> None:
         self.tmp_path = tmp_path
         self.clock = Clock(starts_at_ms)
@@ -260,7 +262,7 @@ class Floor:
         monkeypatch.setenv("IBKR_OPTION_LINE_BUDGET", str(line_budget))
         monkeypatch.setenv("IBKR_OPTION_WINDOW_STRIKES_EACH_SIDE", str(reach))
         self.line_budget, self.reach = line_budget, reach
-        self.watch = OptionWatchList()
+        self.watch = watch or OptionWatchList()
         self.held = get_held_option_quotes()
         # The supervisor exactly as a Clerk's process builds it, on the stand-in connection.
         self.consumer = AlpacaMarketLivenessConsumer.for_alpaca(
@@ -278,8 +280,11 @@ class Floor:
         self.worker = SearchesHere()
         self.lane = OptionSearchLane("entry", executor=lambda: self.worker)
         self.inputs: ModelInputsRead = KNOWN
-        # Runs while the rate and dividends are read: what that read costs in time.
-        self.while_inputs_are_read: Callable[[], None] | None = None
+        # Runs while the rate and dividends are read, and is told the moment they were asked for: what
+        # that read costs in time. A read made in the background as a bar closes asks as of the bar's close.
+        self.while_inputs_are_read: Callable[[int], None] | None = None
+        # The moment each read of the rate and dividends asked as of, in the order they were made.
+        self.inputs_read_as_of: list[int] = []
         # A two-cent market around the model's own price for each strike, unless a test sets one: by strike.
         self.markets: dict[int, tuple[str, str]] = {585: ("4.08", "4.12")}
         self.spy_quote: tuple[float, float] = (585.10, 585.12)
@@ -354,9 +359,10 @@ class Floor:
         )
         return replace(market, **changes)
 
-    def _read_inputs(self, _underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+    def _read_inputs(self, _underlying: str, at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+        self.inputs_read_as_of.append(at_ms)
         if self.while_inputs_are_read is not None:
-            self.while_inputs_are_read()
+            self.while_inputs_are_read(at_ms)
         return self.inputs
 
     # ---- time, and what happens as it passes -------------------------------------
@@ -450,8 +456,14 @@ class Floor:
 
     # ---- a run ------------------------------------------------------------------
 
-    async def run(self, script: list[Step], **runner: Any) -> Ran:
-        """Run the bot over ``script`` to the end of its Signal stream."""
+    async def run(
+        self, script: list[Step], *, pricing_bar_wait_ms: int = 20, the_process_own_market: bool = False
+    ) -> Ran:
+        """Run the bot over ``script`` to the end of its Signal stream.
+
+        ``the_process_own_market`` hands the runner no market, as production
+        does: it reads the process's own supervisor, list, lane and settings.
+        """
         feed = self.feed = ScriptedFeed(self, script, signal=self.binding.symbol)
         instance_dir = self.tmp_path / "instance"
         bars = self.authority.source_bars()
@@ -459,7 +471,8 @@ class Floor:
             await asyncio.wait_for(
                 bot_trade_strategy.run_dry_run_bot(
                     self.binding, feed, DryRunActivityJournal(instance_dir), source_bars=bars, pricing_feed=feed,
-                    pricing_bar_wait_ms=20, option_market=runner.pop("option_market", None) or self.market(), **runner,
+                    pricing_bar_wait_ms=pricing_bar_wait_ms,
+                    option_market=None if the_process_own_market else self.market(),
                 ),
                 timeout=120,
             )
@@ -503,6 +516,12 @@ class Floor:
             return self.repo._conn.execute(
                 "SELECT COUNT(*) FROM custody_transitions WHERE transition_kind = ?", (kind,)
             ).fetchone()[0]
+
+    def entry_as_the_clerk_kept_it(self) -> Any:
+        """The bot's one option entry, as its acceptance recorded what it was admitted on."""
+        with self.repo._write_lock:
+            (order_ref,) = self.repo._conn.execute("SELECT order_ref FROM orders WHERE role = 'ENTRY'").fetchone()
+        return option_entry_of_order(self.repo, order_ref)
 
     def kept_quotes(self) -> KeptOptionQuotes:
         return KeptOptionQuotes.of_account(artifacts_root=self.tmp_path, account_id=ACCOUNT)

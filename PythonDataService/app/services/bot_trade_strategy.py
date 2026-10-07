@@ -1668,6 +1668,7 @@ def _journal_option_fill(
     accepted and holds for the session's open has no fill yet, and no row.
     """
     from app.broker.alpaca.clerk.sqlite.option_entry import order_contract
+    from app.broker.contract.options import OptionPositionIntent
     from app.services.bot_dry_run import DryRunActivity
     from app.services.bot_option_run import IBKR_LISTING
 
@@ -1675,6 +1676,12 @@ def _journal_option_fill(
     # An ENTER's receipt names its order. An EXIT's names the entry it closes, then the order that closed it.
     order_ref = receipt.child_order_refs[0 if entering else -1] if receipt.child_order_refs else None
     fill = None if order_ref is None else clerk.synthesized_option_fills().get(order_ref)
+    if fill is not None and fill.request.intent is not (
+        OptionPositionIntent.OPEN if entering else OptionPositionIntent.CLOSE
+    ):
+        # An EXIT with no closing order yet names only the entry it will close. That order's fill
+        # is the purchase, and is not this decision's.
+        fill = None
     contract = None if order_ref is None else order_contract(repository, order_ref)
     if order_ref is None or fill is None or fill.fill_price is None or fill.fill_model is None or contract is None:
         if entering:

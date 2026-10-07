@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     # contract never loads them.
     from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
     from app.broker.ibkr.option_quotes import WatchRequest
+    from app.options.resolver import FeedState
 
 logger = logging.getLogger(__name__)
 
@@ -88,14 +89,18 @@ class _Account:
 
 
 class FollowedBooks:
-    """One Clerk's books while they are followed. Closed once, before the Clerk's repository is."""
+    """One Clerk's books while they are followed. Closed before the Clerk's repository is."""
 
-    def __init__(self, held: HeldOptionQuotes, account: _Account) -> None:
-        self._held, self._account = held, account
+    def __init__(self, held: HeldOptionQuotes, account: _Account, books: Books) -> None:
+        self._held, self._account, self._books = held, account, books
 
     def close(self) -> None:
-        """Read the books a last time, and stop reading them. What they said then stands."""
-        self._held._stop_following(self._account)
+        """Read the books a last time, and stop reading them. What they said then stands.
+
+        Closing twice, or after the account was opened again, does nothing:
+        the books now followed are a later opening's.
+        """
+        self._held._stop_following(self._account, self._books)
 
 
 class HeldOptionQuotes:
@@ -128,21 +133,20 @@ class HeldOptionQuotes:
             account = self._accounts[account_id] = _Account(account_id, kept, books)
         else:
             account.books, account.kept = books, kept
-        return FollowedBooks(self, account)
+        return FollowedBooks(self, account, books)
 
-    def _stop_following(self, account: _Account) -> None:
-        books, account.books = account.books, None
-        if books is not None:
-            try:
-                self._hold(account, books())
-            except Exception:
-                # What the books said a moment ago stands: a held contract keeps its line.
-                logger.exception(
-                    "Could not read a closing Clerk's held option contracts a last time",
-                    extra={"action": "held_option_books_last_read_failed", "account_id": account.account_id},
-                )
-        if not account.held and self._accounts.get(account.account_id) is account:
-            del self._accounts[account.account_id]
+    def _stop_following(self, account: _Account, books: Books) -> None:
+        if account.books is not books:
+            return
+        account.books = None
+        try:
+            self._hold(account, books())
+        except Exception:
+            # What the books said a moment ago stands: a held contract keeps its line.
+            logger.exception(
+                "Could not read a closing Clerk's held option contracts a last time",
+                extra={"action": "held_option_books_last_read_failed", "account_id": account.account_id},
+            )
 
     async def read_books(self) -> None:
         """Read every followed Clerk's books again, off the event loop.
@@ -234,35 +238,18 @@ class HeldOptionQuotes:
         feed = source.option_feed()
         due: dict[str, tuple[_Account, dict[str, HeldQuote]]] = {}
         for underlying, held in still_trading.items():
-            chain = None if feed is None or feed.unhealthy is not None else source.option_chain(underlying)
+            chain = None if feed is None else source.option_chain(underlying)
             for account, contract in held:
                 symbol = contract.occ_symbol
                 last = account.kept_at_ms.get(symbol)
                 if last is not None and now_ms - last < self._keep_every_ms:
                     continue
-                if feed is None:
-                    why = "this process has no IBKR quote source for options"
-                elif feed.unhealthy is not None:
-                    why = f"the quote feed is not healthy: {feed.unhealthy}"
+                watched = None if chain is None else chain.watched.get(symbol)
+                usable = self._usable(feed, None if watched is None else watched.quote, now_ms)
+                if isinstance(usable, HeldQuote):
+                    due.setdefault(account.account_id, (account, {}))[1][symbol] = usable
                 else:
-                    watched = None if chain is None else chain.watched.get(symbol)
-                    quote = None if watched is None else watched.quote
-                    fault = (
-                        None
-                        if quote is None
-                        else quote_fault(
-                            quote,
-                            at_ms=now_ms,
-                            generation=feed.generation,
-                            max_age_ms=self._max_quote_age_ms,
-                            needs_a_bid=False,
-                        )
-                    )
-                    if quote is not None and fault is None:
-                        due.setdefault(account.account_id, (account, {}))[1][symbol] = quote
-                        continue
-                    why = "no quote is held for it" if quote is None else f"its quote fails as {fault}"
-                self._say_once(account, symbol, why)
+                    self._say_once(account, symbol, usable)
         handed_over = 0
         for account, quotes in due.values():
             try:
@@ -283,6 +270,19 @@ class HeldOptionQuotes:
                     )
             handed_over += len(quotes)
         return handed_over
+
+    def _usable(self, feed: FeedState | None, quote: HeldQuote | None, now_ms: int) -> HeldQuote | str:
+        """``quote`` when it is one a decision could use at ``now_ms``, or why it is not handed over."""
+        if feed is None:
+            return "this process has no IBKR quote source for options"
+        if feed.unhealthy is not None:
+            return f"the quote feed is not healthy: {feed.unhealthy}"
+        if quote is None:
+            return "no quote is held for it"
+        fault = quote_fault(
+            quote, at_ms=now_ms, generation=feed.generation, max_age_ms=self._max_quote_age_ms, needs_a_bid=False
+        )
+        return quote if fault is None else f"its quote fails as {fault}"
 
     def _say_once(self, account: _Account, symbol: str, why: str) -> None:
         key = (account.account_id, symbol)
