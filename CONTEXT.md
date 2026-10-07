@@ -1633,6 +1633,15 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
   _Avoid_: maximum loss, risk.
 - **Round-trip cost** — what opening a structure and closing it at once would cost: every leg's bid-ask gap, by its ratio.
 - **Structure cost limit** — the most round-trip cost an entry may carry, as a percent of its entry commitment.
+- **Contract multiplier** — the shares one option contract's per-share price stands for. A recorded fact of the contract, kept with the contract in the Clerk's books; never read off the symbol and never assumed to be 100.
+  _Avoid_: lot size, contract size (the shares a contract delivers is a different fact).
+- **Contract terms** — what the books record about an option contract when it first enters them: its symbol and its multiplier.
+- **Premium** — an option's price per share. A fill's cash is contracts × premium × the contract multiplier.
+  _Avoid_: price per contract.
+- **Position (option)** — what a bot holds in one contract, in contracts, signed: bought is positive, sold is negative. One position per contract; never netted with another contract or with the underlying's shares.
+- **Option fees** — the five fees Alpaca passes through on a stock or ETF option trade: the SEC fee and the TAF on sales; the ORF, the OCC clearing fee and the CAT fee on both sides. Alpaca charges no commission on these.
+  _Avoid_: commission.
+- **Option fee provision** — what an option entry sets aside for its own fees, in whole cents: its fills settled as a day of their own. An estimate; the fee activities Alpaca posts are the truth.
 
 ## Market-data readiness (resolved 2026-09-22)
 
