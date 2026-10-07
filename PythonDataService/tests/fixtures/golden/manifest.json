@@ -2114,6 +2114,97 @@
       "validated_by": [
         "tests/fixtures/test_american_option_fixtures.py::test_a_price_quantlib_computed_is_solved_back_to_the_volatility_it_was_computed_at"
       ]
+    },
+    {
+      "id": "AM-004",
+      "name": "American option daily time decay, no dividend: the difference of two QuantLib Leisen-Reimer prices a day apart",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/options/american.py",
+      "canonical_callable": "american_daily_decay",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "QuantLib 1.42.1 BinomialLRVanillaEngine (AmericanExercise), priced now and with 24 hours less to expiry",
+        "citation": "QuantLib 1.42.1 BinomialLRVanillaEngine; Leisen & Reimer (1996), Applied Mathematical Finance 3(4). See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/american_options.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Strict default, on the decay and on each of the two prices it is worked from. Each price is the same construction as the reference engine's, so each differs by rounding only, and the difference of the two stays inside the default; measured maximum 4.7e-10 in the decay, 6.2e-11 in the price now and 4.4e-10 in the price a day later over 400 cases. The cases whose later price is a day or less from expiry take 1 - exp(-x) of a very small x, as the reference does: a failure of those cases alone on another platform is that, and expm1 is not the cure. Not covered: a later price under fifteen minutes from expiry, where the gap measured at one minute is 1.7e-9."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "916d6328e70f90c0c8318e83f6bbcd1d2d0c640f2adb2068b1505bbffc16238f",
+            "output.json": "13d2991adf735a3a0e1f30fa0a8e15f40d192aeeaabeb5cd60af6816116a3997",
+            "attribution.md": "4de8c6a5c62a16881991fc8bdcd6df0c7b2ea19d9223918b533e7efadd3a97ce"
+          },
+          "file_sha256": {
+            "input.json": "f02a06b94e3cc8e724b2a6b74faa98b80ff566f087247e06c20dd9e0fba811c9",
+            "output.json": "29749702593d0b463b2101ca108fa13da443d10889b3ab8cee7542f2ab178ca5",
+            "attribution.md": "4de8c6a5c62a16881991fc8bdcd6df0c7b2ea19d9223918b533e7efadd3a97ce"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_without_dividends_matches_the_difference_of_two_quantlib_tree_prices"
+      ]
+    },
+    {
+      "id": "AM-005",
+      "name": "American option daily time decay from a second engine, with and without cash dividends: the difference of two QuantLib escrowed finite-difference prices a day apart",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/options/american.py",
+      "canonical_callable": "american_daily_decay",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "QuantLib 1.42.1 FdBlackScholesVanillaEngine, CashDividendModel.Escrowed, Douglas scheme, 2000 x 2000 grid, priced now and 24 hours on",
+        "citation": "QuantLib 1.42.1 FdBlackScholesVanillaEngine with escrowed cash dividends; Hull, Options, Futures, and Other Derivatives, known dollar dividend. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/american_options.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.01,
+        "rtol": 0.0,
+        "note": "The one figure here is the looser of the two a test of this fixture accepts (the decay at the default 401 steps). An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so the decay is checked against a finite-difference grid good to about 2e-5 in the decay (under 1.7e-5 from its own doubling) and agrees to the tree's discretization error. A difference of two prices is held to twice what AM-002 holds one price to: atol 2e-3 with the canonical tree at 2,003 steps and 1e-2 at the default 401; measured maxima 9.4e-4 and 5.0e-3 over 84 cases. The 5.0e-3 is one call deep in the money whose stock goes ex a day out; the other 83 cases are within 1.3e-3 at 401 steps. A stock that goes ex inside the day is priced a day later at its price less the dividend in full; the tolerance tells that apart from holding the quoted price (6.4e-2 to 1.75 away) but not from taking off the dividend's present value (2.2e-4 away), which a direct test pins. The test file states every tolerance."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "a9dc085ec3528858d0711ba652328b40d4a604fa315ad382162cd40476a9d5f8",
+            "output.json": "cfef5e498afa3425cb6b391b80d597cbfd0b95c200e87bebbc5deb47dc49cd29",
+            "attribution.md": "8eead46e21dbf34780cd6b48ddeac6073ef7e8e8dc54a7c0f7d66c3c65adc3ae"
+          },
+          "file_sha256": {
+            "input.json": "4db668821bb0bad512d19ed9e6aa6124f795e86e220ed2bb0d150429365dfaa2",
+            "output.json": "0819a7f9676629aceebb646f807978159549a59c30c3a58c43cbb12765e6a3cd",
+            "attribution.md": "8eead46e21dbf34780cd6b48ddeac6073ef7e8e8dc54a7c0f7d66c3c65adc3ae"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_with_cash_dividends_matches_the_second_engines_difference",
+        "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_at_the_default_step_count_stays_within_a_cent_of_the_second_engine"
+      ]
     }
   ]
 }
