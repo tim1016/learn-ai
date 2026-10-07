@@ -1,5 +1,24 @@
 """The contracts an option plan's rules come to at one entry, and the evidence for each pick.
 
+Formula: on the ladder ``K_1 < ... < K_n`` of a leg's right and expiry, with
+  ``M`` the decision bar's close:
+    the money         the K_i nearest M, the lower of two as near
+    steps from it     the strike ``offset`` places along the ladder from the money
+    percent           target = M·(100 + p)/100,   tolerance = M·t/100
+    distance          target = K_other + d,       tolerance = t dollars
+    a rule by strike  the usable K_i within the tolerance, nearest the target
+    a rule by delta   the usable contract whose |Δ_i| is nearest the target, where
+                      Δ_i is the American delta at the volatility implied by its mid
+                      quote (bid + ask)/2, against the underlying's mid quote, over
+                      (session close on the expiry date - selection time) / one year
+  Strikes, targets and tolerances are exact: thousandths of a dollar, as
+  rationals. Only the model's delta is a float.
+Reference: ADR 0076 decision 8. The rules, their ties and their tolerances
+  are this repo's own definitions (#2913). The delta and the implied
+  volatility are ``app/options/american.py``'s, which carries their sources.
+Canonical implementation: this file.
+Validated against: tests/options/test_resolver.py.
+
 One job: given a plan's option legs, the chain's definition, the quotes held,
 the underlying's price and the calendar, return one contract for every leg or
 one typed refusal. It reads no feed and no clock. Every fact is handed in,
@@ -72,6 +91,7 @@ that: it fails as stale, and the contract is passed over.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -187,6 +207,17 @@ class ModelInputs:
     dividends_source: str
     tree_steps: int = DEFAULT_TREE_STEPS
 
+    def __post_init__(self) -> None:
+        # What the pricer has no meaning for is refused here, as the caller's mistake. Left to reach it, a
+        # delta rule would report it as a fault of every quote.
+        if not math.isfinite(self.rate):
+            raise ValueError(f"the model's rate must be a finite number; got {self.rate}")
+        if self.tree_steps < 3 or self.tree_steps % 2 == 0:
+            raise ValueError(f"the model's tree takes an odd number of steps, three or more; got {self.tree_steps}")
+        for dividend in self.dividends:
+            if not (math.isfinite(dividend.cash) and dividend.cash > 0):
+                raise ValueError(f"a cash dividend is a finite amount above zero; got {dividend}")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolverLimits:
@@ -196,6 +227,12 @@ class ResolverLimits:
     entry_cutoff_lead_ms: int
     # How far apart the receipt times of the legs' quotes and the underlying's may lie.
     coherence_window_ms: int = DEFAULT_COHERENCE_WINDOW_MS
+
+    def __post_init__(self) -> None:
+        # A lead below zero would put the cutoff after the contract's last trade.
+        for name in ("max_quote_age_ms", "entry_cutoff_lead_ms", "coherence_window_ms"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} cannot be below zero; got {getattr(self, name)}")
 
 
 class ResolverRefusal(StrEnum):

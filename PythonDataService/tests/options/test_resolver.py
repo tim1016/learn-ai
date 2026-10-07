@@ -1159,6 +1159,34 @@ def test_a_bar_close_that_is_no_price_is_the_callers_mistake_not_a_refusal(close
         replace(scene, underlying=replace(scene.underlying, pricing_bar_close=Decimal(close))).resolve(_one("call", _AT_THE_MONEY))
 
 
+@pytest.mark.parametrize("limit", ["max_quote_age_ms", "entry_cutoff_lead_ms", "coherence_window_ms"])
+def test_a_limit_below_zero_is_the_callers_mistake(limit: str) -> None:
+    """A cutoff lead below zero would put the cutoff after the contract's last trade, and offer it expired."""
+    limits = {"max_quote_age_ms": 5_000, "entry_cutoff_lead_ms": 60 * 60_000, "coherence_window_ms": 2_000}
+
+    with pytest.raises(ValueError, match=limit):
+        ResolverLimits(**limits | {limit: -1})
+    assert getattr(ResolverLimits(**limits | {limit: 0}), limit) == 0
+
+
+@pytest.mark.parametrize(
+    "wrong",
+    [
+        pytest.param({"tree_steps": 100}, id="an even number of steps"),
+        pytest.param({"tree_steps": 1}, id="one step"),
+        pytest.param({"rate": float("nan")}, id="a rate that is no number"),
+        pytest.param({"rate": float("inf")}, id="a rate without end"),
+        pytest.param({"dividends": (DividendOn(ex_ms=0, cash=0.0),)}, id="a dividend of nothing"),
+        pytest.param({"dividends": (DividendOn(ex_ms=0, cash=float("nan")),)}, id="a dividend that is no number"),
+    ],
+)
+def test_model_inputs_the_pricer_has_no_meaning_for_are_the_callers_mistake_not_a_fault_of_every_quote(
+    wrong: dict,
+) -> None:
+    with pytest.raises(ValueError):
+        replace(_MODEL, **wrong)
+
+
 def test_a_selection_cannot_come_before_the_close_of_the_bar_it_was_decided_on() -> None:
     scene = _scene()
 
