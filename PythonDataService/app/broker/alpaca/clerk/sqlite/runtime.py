@@ -73,6 +73,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     QuoteSource,
     RecoveryPricing,
     RecoveryReductionPricing,
+    RegularSessionReduction,
     flatten_send_verdict,
     market_leg_sendable,
     price_recovery_reduction,
@@ -89,6 +90,7 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_start_run,
     submit_stop_run,
 )
+from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTermsConflict, is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.enter import (
     MARKET_CLOSED,
@@ -99,8 +101,19 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     accept_option_enter,
     submit_accepted_enter,
 )
-from app.broker.alpaca.clerk.sqlite.exit import accept_exit, newest_reducible_entry, resolve_accepted_exit
-from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
+from app.broker.alpaca.clerk.sqlite.exit import (
+    OPTION_CLOSE_TAKES_NO_LIMIT,
+    accept_exit,
+    newest_reducible_entry,
+    resolve_accepted_exit,
+)
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    cancel_and_prove_owned_entry,
+    expired_option_close,
+    note_expired_option_position,
+    option_close_unpriced,
+    option_flatten_waits_for_open,
+)
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -110,7 +123,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     prepare_historical_execution_recovery,
     replay_historical_execution_recovery,
 )
-from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
+from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError, UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import (
     IntakeFencePoisonedError,
     IntakeFenceYieldError,
@@ -142,7 +155,11 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OrderResource,
 )
 from app.broker.alpaca.clerk.sqlite.option_admission import OptionEntryRefused, work_out_option_entry
-from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts, option_entry_contracts
+from app.broker.alpaca.clerk.sqlite.option_entry import (
+    OptionEntryFacts,
+    option_entry_contracts,
+    option_entry_of_order,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     is_working_order,
     trade_port_folds_simulated_evidence,
@@ -152,6 +169,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedUnknownExitOrder,
     SafeFlattenPlan,
+    SafeFlattenPlanLeg,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
@@ -1051,6 +1069,9 @@ class SqliteAlpacaClerkFacade:
         if len(plan.legs) != 1:
             return None
         (leg,) = plan.legs
+        if is_option_contract_symbol(leg.symbol):
+            # Never priced from the stock quote source, which is not asked about a contract (ADR 0076).
+            return self._option_flatten_refusal(leg, confirmed_limit=None) or RegularSessionReduction()
         if not self._trade.recovery_price_available(leg.symbol):
             return SIMULATED_RECOVERY_PRICE_UNAVAILABLE
         now_ms = self._repo.clock()
@@ -1115,6 +1136,24 @@ class SqliteAlpacaClerkFacade:
                 )
             return None
         (leg,) = plan.legs
+        if is_option_contract_symbol(leg.symbol):
+            option_refusal = self._option_flatten_refusal(leg, confirmed_limit=confirmed_limit)
+            if option_refusal is not None:
+                logger.info(
+                    "operator safe flatten of an option position refused before any EXIT was accepted",
+                    extra={
+                        "action": "safe_flatten_option_refused",
+                        "account_id": self.account_id,
+                        "strategy_instance_id": leg.strategy_instance_id,
+                        "symbol": leg.symbol,
+                        "reason_code": option_refusal.reason_code,
+                    },
+                )
+                raise SafeFlattenExecutionError(
+                    f"{option_refusal.explanation} {option_refusal.next_step}", refusal=option_refusal
+                )
+            # The market DAY leg: the one order that closes an option position.
+            return None
         if not self._trade.recovery_price_available(leg.symbol):
             # A no-submit world with nothing to fill at refuses here, before
             # an EXIT is accepted that could never be sent.
@@ -1148,6 +1187,32 @@ class SqliteAlpacaClerkFacade:
             raise SafeFlattenExecutionError(
                 f"{exc.explanation} {exc.next_step}", refusal=exc.refusal
             ) from exc
+
+    def _option_flatten_refusal(
+        self, leg: SafeFlattenPlanLeg, *, confirmed_limit: ConfirmedRecoveryLimit | None
+    ) -> LegRefusal | None:
+        """Why an operator's Flatten of a position in an option contract cannot go out now, or ``None`` (ADR 0076).
+
+        Asked before any EXIT is accepted, so a Flatten that cannot be sent
+        leaves nothing on the books to be sent later. In order: the contract
+        has expired and no order can close it; the regular session is not
+        open, and an option position is closed nowhere else; a limit price
+        came with it, and it is closed by a market order only; nothing kept
+        for the contract can price its close. That last is asked of the
+        trade port: a simulation answers from the quotes kept for the
+        contract, never from the stock quote source.
+        """
+        now_ms = self._repo.clock()
+        expired = expired_option_close(leg.symbol, now_ms)
+        if expired is not None:
+            return expired
+        if not market_leg_sendable(now_ms):
+            return option_flatten_waits_for_open(now_ms)
+        if confirmed_limit is not None:
+            return OPTION_CLOSE_TAKES_NO_LIMIT
+        if not self._trade.recovery_price_available(leg.symbol, side=leg.side):
+            return option_close_unpriced(leg.symbol, side=leg.side)
+        return None
 
     async def execute_for_instance(
         self,
@@ -1487,9 +1552,10 @@ class SqliteAlpacaClerkFacade:
                 reason_code=reason_code, explanation=explanation, next_step=next_step,
             )
 
-        if isinstance(quantity, bool) or not 1 <= quantity <= 100:
-            # Checked before anything is written: a receipt cannot carry a quantity outside these.
-            raise ValueError(f"an option effect is for 1 to 100 structures; got {quantity!r}")
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or not 1 <= quantity <= 100:
+            # Checked before anything is written: a receipt cannot carry a quantity outside these,
+            # and a contract is not traded in parts.
+            raise ValueError(f"an option effect is for a whole number of structures, 1 to 100; got {quantity!r}")
         accepted_enter: EnterSubmission | None = None
         accepted_exit: ExitSubmission | None = None
         entry: OptionEntryFacts | None = None
@@ -1517,6 +1583,12 @@ class SqliteAlpacaClerkFacade:
                 already = self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}")
                 if already is not None and already.action == "ENTER" and already.effect_operation_id is not None:
                     existing = self._repo.order_for_effect_operation(already.effect_operation_id)
+                    first = None if existing is None else option_entry_of_order(self._repo, existing.order_ref)
+                    if first is not None and _asks_for_another_entry(first, units=quantity, evidence=option_entry):
+                        # The same decision asking for another contract or another size is a second
+                        # request under the first one's name, as it is for an entry in shares. Only
+                        # the price may differ on an honest retry: its quotes are newer.
+                        raise DurableConflictError(already)
                     return receipt(already.state, () if existing is None else (existing.order_ref,))
                 worked_out = work_out_option_entry(
                     action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock()
@@ -1564,6 +1636,14 @@ class SqliteAlpacaClerkFacade:
                     )
                 except AdmissionBlockedError as exc:
                     return self._entry_admission_blocked(exc, decision_evidence=decision_evidence, rejected=rejected)
+                except ContractTermsConflict as exc:
+                    # The books hold this contract with another multiplier. Nothing was written:
+                    # the entry's acceptance and its contract's terms are one transaction.
+                    return rejected(
+                        reason_code=OptionEffectRefusal.CONTRACT_TERMS_CONFLICT.value,
+                        explanation=f"{exc}. An entry is not counted with a multiplier its contract is not recorded with.",
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
             else:
                 in_progress = self._answer_from_active_exit(
                     strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id,
@@ -1580,8 +1660,10 @@ class SqliteAlpacaClerkFacade:
                     if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
                 ]
                 if len(held) > 1:
-                    logger.warning(
-                        "an option bot holds several contracts; this EXIT closes the newest entry's",
+                    # One EXIT closes one contract. Closing the newest and answering FLAT
+                    # would leave the others open behind a receipt that says nothing is.
+                    logger.error(
+                        "an option bot holds several contracts; its EXIT was refused",
                         extra={
                             "action": "option_exit_several_contracts_held",
                             "account_id": self._repo.account_id,
@@ -1590,8 +1672,42 @@ class SqliteAlpacaClerkFacade:
                             "held": held,
                         },
                     )
+                    return rejected(
+                        reason_code=OptionEffectRefusal.SEVERAL_CONTRACTS_HELD.value,
+                        explanation=(
+                            f"This bot holds {len(held)} option contracts ({', '.join(held)}). One EXIT closes "
+                            "one contract, so answering it would leave the others open. Nothing was sent."
+                        ),
+                        next_step="Stop the bot and flatten each contract from its page.",
+                    )
                 closing = held[0] if held else (opened[0] if opened else None)
                 target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
+                not_closed = (
+                    () if option_exit is None or closing is None else option_exit.for_other_contracts_than(closing)
+                )
+                if not_closed:
+                    # A quote is taken only for the contract this EXIT closes. One of another
+                    # contract could price nothing here, and is the caller's mistake to hear of.
+                    return rejected(
+                        reason_code=OptionEffectRefusal.EXIT_QUOTES_FOR_ANOTHER_CONTRACT.value,
+                        explanation=(
+                            f"This EXIT closes {closing}. A quote was handed with it for {', '.join(not_closed)}, "
+                            "which this bot's EXIT does not close. Nothing was sent."
+                        ),
+                        next_step="Hand over the quote of the contract the bot holds, named by that contract's symbol.",
+                    )
+                expired = None if not held else expired_option_close(held[0], self._repo.clock())
+                if expired is not None and target is not None:
+                    # Refused by name before any EXIT is accepted: no order can close an expired
+                    # contract. The notice goes up with it, once, so the bot's page says so too.
+                    note_expired_option_position(
+                        self._repo, strategy_instance_id=strategy_instance_id, entry_order_ref=target.order_ref,
+                        symbol=held[0], attributed_qty=self._repo.position(strategy_instance_id, held[0]),
+                        expired=expired,
+                    )
+                    return rejected(
+                        reason_code=expired.reason_code, explanation=expired.explanation, next_step=expired.next_step
+                    )
                 if target is None:
                     return rejected(
                         reason_code="EXIT_CUSTODY_UNPROVEN",
@@ -2738,6 +2854,19 @@ def _strategy_display_name(strategy_key: str) -> str:
     raise StrategyRegistrationConflictError(
         f"strategy {strategy_key!r} has no registered immutable display name"
     )
+
+
+def _asks_for_another_entry(first: OptionEntryFacts, *, units: int, evidence: OptionEntryEvidence | None) -> bool:
+    """Whether an option ENTER sent again under one decision asks for something the first did not.
+
+    Another number of structures, or another contract for the leg the first
+    entry opened. The quotes and so the price are expected to differ: a
+    retry reads them again. A retry that names no contract asks for none.
+    """
+    if units != first.units:
+        return True
+    picked = None if evidence is None else evidence.picked.get(first.the_leg.leg_id)
+    return picked is not None and picked != first.the_leg.contract
 
 
 def _effect_receipt(

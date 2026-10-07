@@ -366,6 +366,23 @@ class KeptOptionQuotes:
         ]
         return max(candidates, key=lambda row: (row.received_ms, row.seq), default=None)
 
+    def prices_a_close(self, symbol: str, *, side: Literal["buy", "sell"], at_ms: int) -> bool:
+        """Whether a close of ``symbol`` made at ``at_ms`` has a price in what is kept.
+
+        A sale to close is filled at the bid and a purchase to close at the
+        ask, of the newest quote received by then that has that side. It has
+        a price when that quote has something there: above zero. An older
+        quote with a bid prices nothing once a newer one says nothing is bid.
+
+        The one answer both the simulation and the recovery catalog give to
+        "can this contract be closed now", so an owner is never offered a
+        Flatten the simulation would then refuse for want of a price.
+        """
+        wanted: _Side = "bid" if side == "sell" else "ask"
+        newest = self.newest(symbol, at_or_before_ms=at_ms, with_side=wanted)
+        price = None if newest is None else getattr(newest.quote, wanted)
+        return price is not None and price > 0
+
     def last_stated(
         self,
         symbol: str,

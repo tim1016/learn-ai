@@ -78,7 +78,7 @@ class OptionEntryFacts(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # The order as it was asked (slice 8's request). Read back from JSON, never from a decoded dict.
+    # The order as it was asked: one option order (ADR 0076). Read back from JSON, never from a decoded dict.
     order: SingleOptionOrderRequest
     legs: tuple[OptionEntryLegFacts, ...] = Field(min_length=1)
     # Structures opened.
@@ -208,7 +208,7 @@ class OptionEntryFacts(BaseModel):
 
 
 class OptionExitFacts(BaseModel):
-    """The quotes read at an exit decision for the contracts the bot holds, by leg id."""
+    """The quotes read at an exit decision for the contract the EXIT closes, by OCC symbol."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -217,9 +217,20 @@ class OptionExitFacts(BaseModel):
     read_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @classmethod
-    def of(cls, evidence: OptionExitEvidence) -> OptionExitFacts:
+    def of(cls, evidence: OptionExitEvidence, *, closing: str) -> OptionExitFacts:
+        """What an EXIT of the contract ``closing`` keeps of the quotes handed with it.
+
+        A quote of any other contract is the caller's mistake: it could
+        never price this close, and kept under this EXIT it would look as
+        though it had been read for it.
+        """
+        others = evidence.for_other_contracts_than(closing)
+        if others:
+            raise ValueError(
+                f"this EXIT closes {closing}; a quote was handed for {', '.join(others)}, which it does not close"
+            )
         return cls(
-            quotes={leg_id: RecordedQuote.of(quote) for leg_id, quote in evidence.quotes.items()},
+            quotes={symbol: RecordedQuote.of(quote) for symbol, quote in evidence.quotes.items()},
             generation=evidence.generation,
             read_at_ms=evidence.read_at_ms,
         )
@@ -231,8 +242,9 @@ class OptionExitFacts(BaseModel):
     def from_facts(cls, option_exit: Mapping[str, Any]) -> OptionExitFacts:
         return cls.model_validate_json(canonicalize(option_exit))
 
-    def quote_for(self, leg_id: str) -> HeldQuote | None:
-        recorded = self.quotes.get(leg_id)
+    def quote_for(self, symbol: str) -> HeldQuote | None:
+        """The quote handed for the contract ``symbol``, or ``None`` when none was."""
+        recorded = self.quotes.get(symbol)
         return None if recorded is None else recorded.held
 
 

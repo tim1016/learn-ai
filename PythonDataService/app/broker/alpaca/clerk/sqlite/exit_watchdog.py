@@ -60,6 +60,14 @@ stands, as behind any other work in flight, and escalates on the same clock.
 What that bot is told names the bot whose order it is and points at that
 bot's page. Its next step is its own safe flatten, which needs nothing of
 that order.
+
+ADR 0076: an episode whose position is in an option contract is known by the
+symbol the episode names. It is re-driven only by the market leg inside the
+regular session, as a scheduled end's is, and outside it holds for the next
+open. Once the contract's last session has ended no order can close it, so
+every pass holds under ``OPTION_CONTRACT_EXPIRED``: nothing is accepted, no
+attempt is spent, and the episode never escalates for want of a fill that
+cannot come.
 """
 
 from __future__ import annotations
@@ -78,8 +86,10 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     next_redrive_at_ms,
     reducing_send_verdict,
 )
+from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
+    OptionCloseTakesNoPricedLeg,
     accept_recovery_exit,
     newest_reducible_entry,
     resolve_accepted_exit,
@@ -93,7 +103,8 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     recovery_stopped_because,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
-    option_close_waits_for_open,
+    expired_option_close,
+    option_retry_waits_for_open,
     redrive_decision_prefix,
     redrive_episode_token,
     regular_session_sale_waits_for_open,
@@ -176,8 +187,6 @@ class EpisodeAttempt:
     # Its EXIT sells only inside the regular session
     # (``ExitAcceptedFacts.regular_session_only``, #2607).
     regular_session_only: bool = False
-    # Its EXIT closes an option contract (``ExitAcceptedFacts.option_contract``, ADR 0076).
-    closes_an_option: bool = False
 
 
 type OppositeSide = Literal["open", "ended"]
@@ -211,13 +220,17 @@ class _StaleExit:
 
     @property
     def regular_session_only(self) -> bool:
-        """The episode's EXIT sells only inside the regular session, so every re-drive of it does too."""
-        return any(a.regular_session_only for a in self.attempts)
+        """The episode's EXIT sells only inside the regular session, so every re-drive of it does too.
+
+        An option position's close always does (ADR 0076), whatever raised
+        its episode and whether or not any order of it was ever made.
+        """
+        return self.closes_an_option or any(a.regular_session_only for a in self.attempts)
 
     @property
     def closes_an_option(self) -> bool:
-        """The episode's EXIT closes an option contract: its wait for the open is told as that, not as a scheduled end."""
-        return any(a.closes_an_option for a in self.attempts)
+        """The position the episode names is in an option contract, read from the symbol it names."""
+        return is_option_contract_symbol(self.cause.symbol.upper())
 
 
 @dataclass(frozen=True)
@@ -260,7 +273,6 @@ def episode_attempts(
             repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"),
             effect.state == "failed", created.extended_hours, bound, redrive,
             regular_session_only=accepted is not None and accepted.regular_session_only,
-            closes_an_option=accepted is not None and accepted.option_contract is not None,
         ))
     return redrives, tuple(attempts)
 
@@ -340,6 +352,11 @@ def evaluate_recovery_wait(
     policy: ProgramLegPolicy, liveness: MarketLivenessFact | None,
 ) -> RecoveryResult | None:
     """Decide from the episode and current market evidence; never record or send."""
+    if stale.closes_an_option:
+        # Asked first: nothing below can change what an expired contract is.
+        expired = expired_option_close(stale.cause.symbol, now_ms)
+        if expired is not None:
+            return RecoveryResult("hold", expired.reason_code, expired.explanation)
     if stale.stopped:
         return RecoveryResult("hold", "EXIT_STUCK", stale.stopped_because)
     if own_exit_working:
@@ -348,7 +365,7 @@ def evaluate_recovery_wait(
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
     if stale.regular_session_only and verdict != "send":
-        waits = option_close_waits_for_open(now_ms) if stale.closes_an_option else regular_session_sale_waits_for_open(now_ms)
+        waits = option_retry_waits_for_open(now_ms) if stale.closes_an_option else regular_session_sale_waits_for_open(now_ms)
         return RecoveryResult("hold", waits.reason_code, waits.explanation, waits.available_at_ms)
     if stale.opposite_side == "open" and (now_ms < stale.settled_at_ms or verdict != "send"):
         # Past the settle age in the regular session the ordinary failure path
@@ -456,6 +473,9 @@ async def _recover_stale_exit(
             repo, accepted=accepted, trade=trade, pricing=pricing, read=None, off_loop=run
         )
         return await run(lambda: _redrive_result(repo, stale, resolved))
+    except OptionCloseTakesNoPricedLeg as exc:
+        # Refused before anything was accepted: an option position is closed by a market order only.
+        return RecoveryResult("hold", exc.refusal.reason_code, exc.refusal.explanation)
     except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
         return RecoveryResult("hold", "RECOVERY_CUSTODY_BUSY", "Another custody operation owns this exit; the Clerk will check again.")
 

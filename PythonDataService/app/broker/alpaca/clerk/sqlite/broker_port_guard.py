@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.errors import BrokerEvidenceUnavailable
+from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOptionsNotSupported
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -245,11 +245,18 @@ class GuardedBrokerTradePort:
             raise RuntimeError("Synthetic Clerk trade port cannot bind an evaluated source bar.")
         bind(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
-    def recovery_price_available(self, symbol: str) -> bool:
-        """Whether a no-submit port can price a recovery EXIT now; a vendor always can."""
+    def recovery_price_available(self, symbol: str, *, side: Literal["buy", "sell"] | None = None) -> bool:
+        """Whether a no-submit port can price a recovery EXIT now; a vendor always can.
+
+        ``side`` is named for a position in an option contract, whose close
+        is priced from one side of a quote kept for it (ADR 0076). A
+        reduction in shares names none and is asked as it always was.
+        """
         self._assert_unfenced("recovery_price_available")
         probe = getattr(self._inner, "recovery_price_available", None)
-        return True if not callable(probe) else bool(probe(symbol))
+        if not callable(probe):
+            return True
+        return bool(probe(symbol) if side is None else probe(symbol, side=side))
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
         """Bind recovery-only synthetic evidence when the inner port requires it."""
@@ -272,7 +279,13 @@ class GuardedBrokerTradePort:
         self._assert_unfenced("bind_option_entry_quote")
         bind = getattr(self._inner, "bind_option_entry_quote", None)
         if not callable(bind):
-            raise RuntimeError("This trade port cannot bind a quote to an option order; it is not a simulation.")
+            # A port that fills no option order from a quote: a Live Shadow's, or a real broker's.
+            # Definitive, as any refusal before contact is: nothing was sent and no order exists.
+            raise BrokerOptionsNotSupported(
+                "This account's trade port takes no option order filled from a quote; only a Dry Run's does.",
+                broker=self._inner.broker_id,
+                detail="Nothing was sent and no order exists.",
+            )
         bind(client_order_id, symbol=symbol, quote=quote)
 
     def bind_option_close_quotes(

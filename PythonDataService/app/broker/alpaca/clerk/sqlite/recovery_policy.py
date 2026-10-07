@@ -19,12 +19,19 @@ from app.broker.alpaca.clerk.account_authority import (
     is_shadow_account_id,
     is_synthetic_account_id,
 )
+from app.broker.alpaca.clerk.recovery_reduction import market_leg_sendable
+from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.execution_coverage_policy import (
     ExecutionCoverageRecoveryDecision,
     coverage_resolution_decision,
     historical_exact_recovery_decision,
 )
-from app.broker.alpaca.clerk.sqlite.exit_resolution import RESEND_WAIT_CEILING_MS
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    RESEND_WAIT_CEILING_MS,
+    expired_option_close,
+    option_close_unpriced,
+    option_flatten_waits_for_open,
+)
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AccountCheckKind,
@@ -159,6 +166,10 @@ class RecoveryPolicyContext:
     # This bot's closing orders whose outcome is unknown and that an operator
     # may settle (#2854); empty for an account-scoped context.
     unknown_exit_orders: tuple[ProjectedUnknownExitOrder, ...] = ()
+    # A Dry Run's positions in option contracts that nothing kept can price a
+    # close of now, each as its contract and the side that closes it
+    # (ADR 0076). Empty on every other account, which keeps no option quotes.
+    unpriced_option_closes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -855,6 +866,29 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     # What to do about an unconfirmed closing order, by whether the settle
     # action is available for it (#2854); ``None`` when that is not the refusal.
     settle_first: str | None = None
+    # A position in an option contract that has expired (ADR 0076): no order
+    # can close it, so no plan to close it is offered.
+    expired = next(
+        (found for position in positions if (found := expired_option_close(position.symbol, ctx.now_ms)) is not None),
+        None,
+    )
+    # One met outside the regular session: an option position is closed by a
+    # market order in regular hours and nowhere else.
+    holds_an_option = any(is_option_contract_symbol(position.symbol.upper()) for position in positions)
+    after_hours = (
+        option_flatten_waits_for_open(ctx.now_ms) if holds_an_option and not market_leg_sendable(ctx.now_ms) else None
+    )
+    # One the simulation could not price a close of now: a Flatten of it would
+    # be refused as it is pressed, so it is not offered until a quote can.
+    held_symbols = {position.symbol.upper() for position in positions}
+    unpriced = next(
+        (
+            option_close_unpriced(symbol, side=side)
+            for symbol, side in ctx.unpriced_option_closes
+            if symbol.upper() in held_symbols
+        ),
+        None,
+    )
     if non_finite_positions:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = (
@@ -863,6 +897,12 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif not positions:
         reason_code = "NO_ATTRIBUTED_EXPOSURE"
         reason = "No attributed exposure requires a flatten plan."
+    elif expired is not None:
+        reason_code, reason = expired.reason_code, expired.explanation
+    elif after_hours is not None:
+        reason_code, reason = after_hours.reason_code, after_hours.explanation
+    elif unpriced is not None:
+        reason_code, reason = unpriced.reason_code, unpriced.explanation
     elif working_orders:
         reason_code = "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
         reason = "Cancel and prove every working order terminal before preparing reduction."
@@ -956,7 +996,13 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             "no order was submitted."
             if available
             else (
-                "Cancel verified working orders first."
+                expired.next_step
+                if expired is not None and reason_code == expired.reason_code
+                else after_hours.next_step
+                if after_hours is not None and reason_code == after_hours.reason_code
+                else unpriced.next_step
+                if unpriced is not None and reason_code == unpriced.reason_code
+                else "Cancel verified working orders first."
                 if working_orders
                 else settle_first
                 if settle_first is not None
@@ -1090,7 +1136,9 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif _reconciliation_confirms_residue(ctx.latest_account_reconciliation, positions, episodes):
         reason_code = "BROKER_AGREES_WITH_CUSTODY"
         reason = "The latest reconciliation found the broker holding this exposure."
-        next_step = "Flatten the exposure instead of discharging it."
+        expired = expired_option_close(positions[0].symbol, ctx.now_ms)
+        # An expired option contract cannot be flattened either (ADR 0076): the step says what is true of it.
+        next_step = "Flatten the exposure instead of discharging it." if expired is None else expired.next_step
     available = reason_code is None
     evidence = tuple(
         _evidence(

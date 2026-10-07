@@ -8,7 +8,8 @@ facts the pick stands on, and the Clerk works out the money from them itself:
   its listed multiplier, the quote read just before the hand-over, and the
   bot's two limits;
 - with an EXIT, ``OptionExitEvidence``: the quotes read at the exit decision
-  for what the bot holds. An EXIT may come without it.
+  for what the bot holds, each named by its contract. An EXIT may come
+  without it.
 
 Neither carries a price, a commitment or a fee. Those are the Clerk's to
 compute (``app.options.entry.prepare_entry``, ``app.broker.alpaca.option_fees``).
@@ -42,14 +43,29 @@ class OptionEffectRefusal(StrEnum):
     STRUCTURE_NOT_SUPPORTED = "OPTION_STRUCTURE_NOT_SUPPORTED"
     # An ENTER came with no picked contracts and no quotes.
     ENTRY_EVIDENCE_MISSING = "OPTION_ENTRY_QUOTES_NOT_KEPT"
-    # What came does not cover the plan's legs.
+    # What came does not cover the plan's legs, or a part of it is not what it must be:
+    # a limit that is no percent, a price finer than a cent.
     ENTRY_EVIDENCE_INCOMPLETE = "OPTION_ENTRY_EVIDENCE_INCOMPLETE"
-    # The picked contract's expiry date is already past.
+    # The picked contract's multiplier is not the standard one. A bot trades standard contracts only.
+    CONTRACT_NOT_STANDARD = "OPTION_CONTRACT_NOT_STANDARD"
+    # The books already hold this contract with another multiplier than the one handed over.
+    CONTRACT_TERMS_CONFLICT = "OPTION_CONTRACT_TERMS_CONFLICT"
+    # The contract's last session has ended: nothing is bought or sold in it.
     CONTRACT_EXPIRED = "OPTION_CONTRACT_EXPIRED"
     # The fee model has no rate for the day, so the entry's fees cannot be set aside.
     FEE_RATE_NOT_PINNED = "OPTION_FEE_RATE_NOT_PINNED"
     # A simulated close has no quote kept to price it from.
     EXIT_UNPRICED = "OPTION_EXIT_UNPRICED"
+    # The bot holds more than one contract, and one EXIT closes one.
+    SEVERAL_CONTRACTS_HELD = "OPTION_EXIT_SEVERAL_CONTRACTS_HELD"
+    # An EXIT came with a quote of a contract the bot does not hold.
+    EXIT_QUOTES_FOR_ANOTHER_CONTRACT = "OPTION_EXIT_QUOTES_NOT_THE_HELD_CONTRACT"
+
+
+# Shares one standard contract's price stands for. A listing with any other
+# multiplier is an adjusted or a non-standard contract, which the resolver
+# never picks and the Clerk never takes on a caller's word.
+STANDARD_CONTRACT_MULTIPLIER = 100
 
 
 class OptionPlanRefused(ValueError):
@@ -128,11 +144,22 @@ class OptionEntryEvidence:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OptionExitEvidence:
-    """The quotes read at an exit decision for the legs the bot holds. A leg with none is left out."""
+    """The quotes read at an exit decision for the contracts the bot holds. A contract with none is left out.
 
+    Each quote is named by its contract's OCC symbol, as the quotes kept are
+    (``keep_option_quotes``). A leg id would say which rule of the plan the
+    quote was read for, never which contract it is of; the Clerk closes a
+    contract, and takes a quote only for the one it closes.
+    """
+
+    # By the contract's OCC symbol.
     quotes: Mapping[str, HeldQuote]
     generation: int
     read_at_ms: int
+
+    def for_other_contracts_than(self, symbol: str) -> tuple[str, ...]:
+        """The contracts quoted here that are not ``symbol``, in order."""
+        return tuple(sorted(quoted for quoted in self.quotes if quoted != symbol))
 
 
 def is_option_plan(action_plan: ActionPlan) -> bool:
@@ -175,6 +202,7 @@ def the_one_bought_option_leg(action_plan: ActionPlan) -> OptionEntryLeg:
 
 
 __all__ = [
+    "STANDARD_CONTRACT_MULTIPLIER",
     "OptionEffectRefusal",
     "OptionEntryEvidence",
     "OptionExitEvidence",

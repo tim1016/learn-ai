@@ -121,8 +121,10 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     reducing_leg_session_end_ms,
     reducing_send_verdict,
     reduction_touch,
+    send_arrival_ms,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
+from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
@@ -196,6 +198,8 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.options import SingleOptionOrderRequest
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
+from app.options.contract import OptionContract
+from app.options.deadlines import past_last_session
 from app.options.quotes import HeldQuote
 from app.schemas.market_liveness import MarketLivenessFact
 
@@ -209,6 +213,15 @@ _REDRIVE_NEXT_STEP = (
 A leg that could not be sent, a broker refusal, or an unfilled extended-hours
 limit stays visible. The separate observed recovery status explains current
 eligibility; the failed order itself promises no future send time."""
+
+_OPTION_CLOSE_NOT_TAKEN_NEXT_STEP = (
+    "The Clerk tries the close again in regular hours after a fresh recovery check. Or flatten it yourself "
+    "once a quote of the contract with something bid has been kept."
+)
+"""What the operator can do about an option position a refused close left open (ADR 0076).
+
+Never "flatten with a priced limit": an option position is closed by a market
+order in the regular session, and takes no limit."""
 
 PROGRAM_EXIT_SESSION_ENDED = LegRefusal(
     reason_code="PROGRAM_EXIT_SESSION_ENDED",
@@ -282,20 +295,126 @@ OPTION_CLOSE_WAITS_FOR_OPEN = "OPTION_CLOSE_WAITS_FOR_OPEN"
 
 
 def option_close_waits_for_open(now_ms: int) -> LegRefusal:
-    """Why the close of an option position is held, and when it can go out: the next regular open.
+    """Why an order that closes an option position is held, and when it can go out: the next regular open.
 
     A hold, not a failure, exactly as a scheduled end's sale is held: the
     EXIT keeps custody and the pass re-drives it until the session opens.
+
+    The words are about this one order. They do not say that nothing closes
+    an option position after hours: a Dry Run's simulation closes what an
+    ended run left at whatever hour the run ended, as it does for shares
+    (``_send_verdict``).
     """
     return LegRefusal(
         reason_code=OPTION_CLOSE_WAITS_FOR_OPEN,
         explanation=(
-            "This closes a position in an option contract. An option order is sent only in regular hours, "
-            "and the market is closed. It waits for the next regular session and goes out at the open as a "
-            "market order; it never goes out after hours."
+            "This order closes a position in an option contract, and the market is closed. It waits for the "
+            "next regular session and goes out at the open as a market order."
         ),
         next_step="Nothing to do: the Clerk sends it at the next regular open.",
         available_at_ms=next_redrive_at_ms(not_before_ms=now_ms, policy=ProgramLegPolicy.regular_only()),
+    )
+
+
+def option_retry_waits_for_open(now_ms: int) -> LegRefusal:
+    """Why the Clerk does not try again, now, to close an option position a failed exit left open.
+
+    What the watchdog records while the market is closed. It speaks of the
+    Clerk's own retry only: an ended Dry Run's simulation may still close
+    the position before the open, and the words must stay true when it does.
+    """
+    return LegRefusal(
+        reason_code=OPTION_CLOSE_WAITS_FOR_OPEN,
+        explanation=(
+            "This position is in an option contract, and the market is closed. The Clerk tries its close "
+            "again only in regular hours: at the next open, as a market order. A Dry Run's simulation may "
+            "close what an ended run left before then, at the newest quote kept for the contract."
+        ),
+        next_step="Nothing to do: the Clerk tries again at the next regular open.",
+        available_at_ms=next_redrive_at_ms(not_before_ms=now_ms, policy=ProgramLegPolicy.regular_only()),
+    )
+
+
+def option_flatten_waits_for_open(now_ms: int) -> LegRefusal:
+    """Why an operator's Flatten of an option position is not sent outside the regular session.
+
+    Refused before any EXIT is accepted, as a Flatten in shares is refused
+    when no session is open, so nothing waits on the books to be sent later.
+    """
+    return LegRefusal(
+        reason_code=OPTION_CLOSE_WAITS_FOR_OPEN,
+        explanation=(
+            "A position in an option contract is closed by a market order in regular hours, and the market "
+            "is closed, so nothing was sent."
+        ),
+        next_step="Flatten again once the regular session opens.",
+        available_at_ms=next_redrive_at_ms(not_before_ms=now_ms, policy=ProgramLegPolicy.regular_only()),
+    )
+
+
+#: A simulated close of an option contract that nothing kept can price (ADR 0076).
+OPTION_EXIT_UNPRICED = OptionEffectRefusal.EXIT_UNPRICED.value
+
+
+def option_close_unpriced(symbol: str, *, side: str) -> LegRefusal:
+    """Why a Dry Run's Flatten of an option position cannot be priced: nothing kept for the contract can.
+
+    A simulated close is priced from the newest quote kept for its contract:
+    the bid for a sale. No quote kept, or a newest one with nothing on that
+    side, prices nothing, and the simulation invents no price.
+    """
+    wanted = "bid" if side == "sell" else "offered"
+    return LegRefusal(
+        reason_code=OPTION_EXIT_UNPRICED,
+        explanation=(
+            f"No quote kept for {symbol.upper()} has anything {wanted}, so this Dry Run's simulated close "
+            "of it cannot be priced honestly. Nothing was sold or bought."
+        ),
+        next_step=(
+            "The contract is simulated and holds no real money. It can be closed once a quote of it with "
+            f"something {wanted} is handed to this Dry Run's account Clerk; flatten again then."
+        ),
+    )
+
+
+#: No order can close this: the option contract's last session has ended
+#: (ADR 0076). The entry refuses a contract in that state under the same code.
+OPTION_CONTRACT_EXPIRED = OptionEffectRefusal.CONTRACT_EXPIRED.value
+
+_EXPIRED_CONTRACT_HEADLINE = "An option contract expired while the bot still held it"
+
+
+def expired_option_close(symbol: str, now_ms: int) -> LegRefusal | None:
+    """Why no order can close a position in ``symbol``, or ``None`` when one still can.
+
+    A refusal only for an option contract whose last session is over when an
+    order sent now would reach the market (``send_arrival_ms``, as the
+    session rule is judged). The last session is the calendar's, on the
+    contract's expiry date (``app.options.deadlines``). From then on nothing
+    trades in the contract: what it is worth is its exercise value, which no
+    kept quote states, so nothing is priced from one. Any other symbol, and
+    a contract still trading, is ``None``.
+
+    The position stays on the books. Settling an expired contract at its
+    exercise value is not built; the words say so.
+    """
+    contract_symbol = symbol.upper()
+    if not is_option_contract_symbol(contract_symbol):
+        return None
+    expiry = OptionContract.from_occ_symbol(contract_symbol).expiry_date
+    if not past_last_session(expiry, send_arrival_ms(now_ms)):
+        return None
+    return LegRefusal(
+        reason_code=OPTION_CONTRACT_EXPIRED,
+        explanation=(
+            f"{contract_symbol} expired on {expiry.isoformat()}. Its last session is over, or ends within "
+            "seconds, so no order can close it and none was sent. The position is still on the books: a "
+            "Dry Run does not yet settle an expired contract at its exercise value."
+        ),
+        next_step=(
+            "No order can close an expired contract, so there is nothing to send. The position stays on "
+            "this bot's books until expired contracts are settled, which is not built yet."
+        ),
     )
 
 
@@ -994,6 +1113,11 @@ def _leg_to_create(
     """
     facts = _accepted_facts(repo, effect_operation_id)
     now_ms = repo.clock()
+    if _fold_expired_option_close(
+        repo, facts, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=symbol,
+        remaining_qty=remaining_qty, now_ms=now_ms,
+    ):
+        return None
     reducing_side = OrderSide.SELL if remaining_qty > 0 else OrderSide.BUY
     recorded = facts.reducing_shape()
     shape = _resolved_reducing_shape(recorded, reducing_side=reducing_side)
@@ -1071,6 +1195,86 @@ def _leg_to_create(
     return resent
 
 
+def _fold_expired_option_close(
+    repo: ClerkSqliteRepository,
+    facts: ExitAcceptedFacts,
+    *,
+    effect_operation_id: str,
+    order_ref: str,
+    symbol: str,
+    remaining_qty: float,
+    now_ms: int,
+) -> bool:
+    """End an EXIT whose option contract has expired, with nothing sent; ``False`` for every other EXIT.
+
+    Asked before the session rule and before anything is priced, by whatever
+    made the EXIT: a deciding program, an ended run's close, the watchdog's
+    re-drive, an operator's Flatten, or an EXIT held since before the
+    contract expired. The EXIT fails under the refusal's own code and the
+    ``EXIT_NOT_FLAT`` notice names the contract and says that it expired.
+    The watchdog then holds it: it sends nothing for a contract that can
+    never trade again (``exit_watchdog.evaluate_recovery_wait``).
+    """
+    if facts.option_contract is None:
+        return False
+    expired = expired_option_close(symbol, now_ms)
+    if expired is None:
+        return False
+    logger.warning(
+        "an EXIT was not sent: the option contract it closes has expired",
+        extra={
+            "action": "exit_option_contract_expired",
+            "account_id": repo.account_id,
+            "effect_operation_id": effect_operation_id,
+            "symbol": symbol,
+            "attributed_qty": remaining_qty,
+        },
+    )
+    _fold_exit_not_flat(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        symbol=symbol,
+        attributed_qty=remaining_qty,
+        summary_code=expired.reason_code,
+        reason=expired.explanation,
+        headline=_EXPIRED_CONTRACT_HEADLINE,
+        explanation=expired.explanation,
+        next_step=expired.next_step,
+    )
+    return True
+
+
+def note_expired_option_position(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    entry_order_ref: str,
+    symbol: str,
+    attributed_qty: float,
+    expired: LegRefusal,
+) -> None:
+    """Tell the operator that a bot holds an expired option contract, without making an EXIT of it.
+
+    For a close refused before anything is accepted. The notice is the one
+    an EXIT ended by :func:`_fold_expired_option_close` raises, so the bot's
+    page reads the same whichever met the expiry first, and raising it again
+    writes nothing.
+    """
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=strategy_instance_id,
+        **_exit_not_flat_notice(
+            order_ref=entry_order_ref,
+            symbol=symbol,
+            attributed_qty=attributed_qty,
+            headline=_EXPIRED_CONTRACT_HEADLINE,
+            explanation=expired.explanation,
+            next_step=expired.next_step,
+        ),
+    )
+
+
 def _send_verdict(
     facts: ExitAcceptedFacts, *, extended_hours: bool, valid_until_ms: int | None, now_ms: int,
     liveness: MarketLivenessFact | None,
@@ -1079,6 +1283,10 @@ def _send_verdict(
 
     That close fills at a price its run already saw, never at the market, so
     no session, halt or missing quote can hold it (owner decision 2026-09-29).
+    A run that ended holding an option contract is closed the same way, at
+    the newest quote kept for the contract and at whatever hour the run
+    ended (ADR 0076). Only the contract's expiry stops that close, and it is
+    asked before this rule (:func:`_fold_expired_option_close`).
     A regular-session-only EXIT (the sale at a scheduled end, and its
     re-drives) sends only its market leg: where any other EXIT would be
     re-priced for the session open now, it holds for the next regular
@@ -1129,8 +1337,14 @@ def _created_leg_may_be_sent(
         return False
     valid_until_ms = _created_leg_valid_until_ms(repo, effect_operation_id, created)
     now_ms = repo.clock()
+    accepted = _accepted_facts(repo, effect_operation_id)
+    if _fold_expired_option_close(
+        repo, accepted, effect_operation_id=effect_operation_id, order_ref=order_ref, symbol=created.symbol,
+        remaining_qty=remaining_qty, now_ms=now_ms,
+    ):
+        return False
     verdict = _send_verdict(
-        _accepted_facts(repo, effect_operation_id),
+        accepted,
         extended_hours=created.extended_hours,
         valid_until_ms=valid_until_ms,
         now_ms=now_ms, liveness=liveness,
@@ -2294,8 +2508,8 @@ async def _submit_reducing_order(
                 usable_generation=option_close.usable_generation,
             )
             why = (
-                f"{OptionEffectRefusal.EXIT_UNPRICED.value}: the simulation has no quote kept for "
-                f"{facts.symbol} to close it at; no order was sent."
+                f"{OPTION_EXIT_UNPRICED}: the simulation would not price a close of {facts.symbol}. Nothing "
+                "kept for it by now can be closed at; no order was sent."
             )
         else:
             match _exit_intent(_accepted_facts(repo, effect_operation_id)):
@@ -2409,7 +2623,7 @@ def _option_close(
             f"opened is a {request.side.value}"
         )
     decided = option_exit_facts(_accepted_facts(repo, effect_operation_id))
-    handed = None if decided is None else decided.quote_for(entry.the_leg.leg_id)
+    handed = None if decided is None else decided.quote_for(entry.contract_terms.symbol)
     return _OptionClose(
         request=request,
         quotes=tuple(quote for quote in (handed, entry.the_leg.quote.held) if quote is not None),
@@ -2849,7 +3063,10 @@ def _fold_submit_refused(
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     held = repo.position(effect.strategy_instance_id, created.symbol)
-    reason = "The reducing order did not reach the broker."
+    closes_an_option = is_option_contract_symbol(created.symbol.upper())
+    # No broker is named for an option order: it is refused by the Clerk
+    # itself or by a simulation (ADR 0076), and the recorded reason says which.
+    reason = "The closing order was not taken." if closes_an_option else "The reducing order did not reach the broker."
     if not position_quantity_is_nonzero(held):
         fold_failed(
             repo,
@@ -2871,13 +3088,24 @@ def _fold_submit_refused(
         reason=reason,
         why=refusal.why,
         refusal=refusal,
-        headline="The broker refused this exit's order; the position is still open",
-        explanation=(
-            f"The broker refused the order to {created.side.lower()} {created.quantity:g} "
-            f"{created.symbol}, so nothing was sent; {held:g} {created.symbol} is still "
-            "held. The broker's reason is on the order's evidence."
+        headline=(
+            "An order to close an option position was not taken; the position is still open"
+            if closes_an_option
+            else "The broker refused this exit's order; the position is still open"
         ),
-        next_step=_REDRIVE_NEXT_STEP,
+        explanation=(
+            (
+                f"The order to {created.side.lower()} {created.quantity:g} {created.symbol} was not taken, so "
+                f"nothing was closed; {held:g} {created.symbol} is still held. {refusal.why}"
+            )
+            if closes_an_option
+            else (
+                f"The broker refused the order to {created.side.lower()} {created.quantity:g} "
+                f"{created.symbol}, so nothing was sent; {held:g} {created.symbol} is still "
+                "held. The broker's reason is on the order's evidence."
+            )
+        ),
+        next_step=_OPTION_CLOSE_NOT_TAKEN_NEXT_STEP if closes_an_option else _REDRIVE_NEXT_STEP,
     )
 
 

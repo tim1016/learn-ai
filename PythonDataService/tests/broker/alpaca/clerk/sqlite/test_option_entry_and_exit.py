@@ -139,7 +139,7 @@ class _DryRun:
 
     def exit_quotes(self, bid: str, ask: str, *, age_ms: int = 300) -> OptionExitEvidence:
         return OptionExitEvidence(
-            quotes={LEG: _quote(bid, ask, received_ms=self.clock() - age_ms)}, generation=GENERATION,
+            quotes={SYMBOL: _quote(bid, ask, received_ms=self.clock() - age_ms)}, generation=GENERATION,
             read_at_ms=self.clock() - 100,
         )
 

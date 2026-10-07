@@ -103,6 +103,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandExistingConflict,
     CommandExistingSame,
     CommandResource,
+    RunResource,
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
@@ -249,22 +250,9 @@ def accept_enter(
     )
 
     def build_transition() -> TransitionInput:
-        # See commands.py's submit_start_run for why these checks run here,
-        # under commit_first_transition's lock, rather than before it.
-        require_strategy_instance(repo, strategy_instance_id)
-        active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
-        require_admission(repo, strategy_instance_id=strategy_instance_id)
-        budget = repo.deployment_budget(strategy_instance_id)
-        if repo.budget_authority_version() >= 2 and budget is None:
-            raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
-                why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
-            ))
-        if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:
-            raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
-                why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
-            ))
+        active = _require_enter_fences(
+            repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope
+        )
         reservation = (
             None
             if envelope is None
@@ -316,6 +304,42 @@ def accept_enter(
         decision_receipt=decision_receipt,
     )
     return _accepted_submission(repo, outcome)
+
+
+def _require_enter_fences(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+    envelope: LiveEnvelopeGate | None,
+) -> RunResource:
+    """The fences every ENTER passes before the envelope is asked, in their one order; returns the active run.
+
+    The bot is registered. The caller's run is the bot's active one. No hold
+    or uncertainty blocks new exposure for it. A budgeted account has a
+    budget commitment for it. A budgeted deployment has its envelope to be
+    admitted against. An entry in shares and one in an option contract pass
+    the same five, so neither can lose one the other keeps.
+
+    Called from inside a ``build_transition`` closure: see commands.py's
+    submit_start_run for why these checks run there, under
+    commit_first_transition's lock, rather than before it.
+    """
+    require_strategy_instance(repo, strategy_instance_id)
+    active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
+    require_admission(repo, strategy_instance_id=strategy_instance_id)
+    budget = repo.deployment_budget(strategy_instance_id)
+    if repo.budget_authority_version() >= 2 and budget is None:
+        raise AdmissionBlockedError(CapabilityDecision(
+            allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
+            why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
+        ))
+    if envelope is None and repo.deployment_budget(strategy_instance_id) is not None:
+        raise AdmissionBlockedError(CapabilityDecision(
+            allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
+            why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
+        ))
+    return active
 
 
 def _accepted_submission(
@@ -384,11 +408,11 @@ def accept_option_enter(
 ) -> EnterSubmission:
     """Reserve + accept one entry in an option contract, entirely local (no broker call).
 
-    The sibling of :func:`accept_enter`, with its fences in its order: the
-    bot is registered, the run is the active one, admission is open, the
-    deployment has its budget, and the envelope admits the entry. What the
-    envelope is asked to admit is the entry commitment the Clerk worked out
-    (``entry.money``), not a quantity times a price.
+    The sibling of :func:`accept_enter`. It passes the same fences, which
+    are one function (:func:`_require_enter_fences`), and then the envelope
+    admits the entry. What the envelope is asked to admit is the entry
+    commitment the Clerk worked out (``entry.money``), not a quantity times
+    a price.
 
     ``entry`` rides the ``ENTER_ACCEPTED`` facts whole: the order as asked,
     the contract each leg resolved to with its multiplier, and the quotes and
@@ -411,20 +435,9 @@ def accept_option_enter(
     limit_price = entry.order.limit_price
 
     def build_transition() -> TransitionInput:
-        require_strategy_instance(repo, strategy_instance_id)
-        active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
-        require_admission(repo, strategy_instance_id=strategy_instance_id)
-        budget = repo.deployment_budget(strategy_instance_id)
-        if repo.budget_authority_version() >= 2 and budget is None:
-            raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
-                why="This deployment has no budget commitment. Stop and review a fresh Deploy.",
-            ))
-        if envelope is None and budget is not None:
-            raise AdmissionBlockedError(CapabilityDecision(
-                allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="LIVE_ENVELOPE_UNOBSERVED",
-                why="The deployment budget authority is unavailable. Restore account evidence before a new entry.",
-            ))
+        active = _require_enter_fences(
+            repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope
+        )
         reservation = (
             None
             if envelope is None

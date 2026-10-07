@@ -25,6 +25,19 @@ at once and in full at the natural price (``app.options.simulated_fill``),
 and the order's record keeps the quote, the model and the quote's age. An
 order with no quote bound is refused: the simulation invents no fill. An
 option order of several legs is not taken.
+
+Three more things this simulation refuses of an option order, each before
+it records a fill. A contract past its last session: nothing trades in it
+any more, and no kept quote says what it is then worth. A closing order
+for more than it holds, or for a contract it does not hold: that would
+open the other side. A quote stamped later than its own clock: that is no
+price the order could have been filled at.
+
+An operator's Flatten of an option position is priced as every other
+close of one is, from the newest quote kept. ``recovery_price_available``
+answers for a contract from those quotes. The stock quote source is never
+asked about a contract's symbol, so a contract never joins the shares the
+IBKR supervisor watches.
 """
 
 from __future__ import annotations
@@ -38,9 +51,14 @@ from typing import Literal, NamedTuple
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.fill_models import immediate_fill_price
-from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
+from app.broker.alpaca.clerk.kept_option_quotes import (
+    KeptOptionQuote,
+    KeptOptionQuotes,
+    KeptOptionQuotesUnavailable,
+)
 from app.broker.alpaca.clerk.money import normalize_money
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -80,6 +98,7 @@ from app.broker.contract.options import (
 )
 from app.marketdata.feed import MarketDataBar
 from app.options.contract import OptionContract
+from app.options.deadlines import past_last_session
 from app.options.quotes import HeldQuote
 from app.options.simulated_fill import SimulatedFillModel, simulated_entry_fills, simulated_exit_fills
 from app.options.structure import LegPosition, ResolvedLeg, ResolvedStructure
@@ -312,9 +331,7 @@ class SyntheticBroker:
         """
         if self._kept_quotes is None:
             return
-        now_ms = self._clock()
-        for symbol, quote in quotes.items():
-            self._kept_quotes.keep(symbol, quote, kept_at_ms=now_ms)
+        self._kept_quotes.keep_all(quotes, kept_at_ms=self._clock())
 
     def bind_option_entry_quote(self, client_order_id: str, *, symbol: str, quote: HeldQuote) -> None:
         """Bind an opening order to the one quote its limit price was worked out from, and keep that quote."""
@@ -344,14 +361,19 @@ class SyntheticBroker:
         account's kept quotes have lost them, so a close is priced from the
         newest of everything the account was ever handed for the contract. ``usable_generation`` is the generation the exit
         decision read its quotes in; None says it read none, and the close is
-        then priced from an older quote. ``False`` (nothing kept has the side
-        this close fills at) leaves the close unsent.
+        then priced from an older quote. ``False`` leaves the close unsent:
+        nothing kept by now has the side this close fills at, or the
+        contract is past its last session and nothing trades in it.
         """
         if self._ledger is None or self._kept_quotes is None:
             return False
-        for quote in quotes:
-            self._kept_quotes.restore(symbol, quote)
-        newest = self._kept_quotes.newest(symbol, with_side="bid" if side == "sell" else "ask")
+        try:
+            for quote in quotes:
+                self._kept_quotes.restore(symbol, quote)
+            newest = self._closing_quote(symbol, side=side)
+        except KeptOptionQuotesUnavailable:
+            self._log_kept_quotes_unreadable(symbol, client_order_id=client_order_id)
+            return False
         if newest is None:
             return False
         with self._option_binding_lock:
@@ -370,14 +392,54 @@ class SyntheticBroker:
             )
         self._ledger.bind_evaluated_bar(client_order_id, retained_bar, fill_at_ms=fill_at_ms)
 
-    def recovery_price_available(self, symbol: str) -> bool:
-        """Whether a recovery EXIT for ``symbol`` sent now has a live price to fill at.
+    def _closing_quote(self, symbol: str, *, side: Literal["buy", "sell"]) -> KeptOptionQuote | None:
+        """The newest quote kept for a contract that a close of it made now may be priced from, or None.
 
-        Asked before any reduction is accepted, so a Dry Run with no live IBKR
-        quote refuses its flatten instead of recording an EXIT that can never
-        be sent. Reading the quote writes nothing.
+        None for a contract past its last session. Otherwise the quote whose
+        sides were received last among those with the side the close fills
+        at, the bid for a sale. A quote stamped later than this simulation's
+        clock is left out: it is not a price the close could have met.
         """
+        if self._kept_quotes is None:
+            return None
+        now_ms = self._clock()
+        if past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms):
+            return None
+        return self._kept_quotes.newest(
+            symbol, at_or_before_ms=now_ms, with_side="bid" if side == "sell" else "ask"
+        )
+
+    def recovery_price_available(self, symbol: str, *, side: Literal["buy", "sell"] = "sell") -> bool:
+        """Whether a recovery EXIT for ``symbol`` sent now has a price to fill at.
+
+        Asked before any reduction is accepted, so a Dry Run with no price
+        refuses its flatten instead of recording an EXIT that can never be
+        sent. Reading it writes nothing.
+
+        Shares are priced from the live IBKR quote. An option contract is
+        priced from the newest quote kept for it, and only when that quote
+        has something on the side the close fills at: a bid above zero for a
+        sale. The stock quote source is not asked about a contract.
+        """
+        if is_option_contract_symbol(symbol):
+            now_ms = self._clock()
+            if self._kept_quotes is None or past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms):
+                return False
+            try:
+                return self._kept_quotes.prices_a_close(symbol, side=side, at_ms=now_ms)
+            except KeptOptionQuotesUnavailable:
+                self._log_kept_quotes_unreadable(symbol, client_order_id=None)
+                return False
         return self._recovery_quote(symbol) is not None
+
+    def _log_kept_quotes_unreadable(self, symbol: str, *, client_order_id: str | None) -> None:
+        """An unreadable file of kept quotes prices nothing: the close is left unsent, and this says why."""
+        logger.error(
+            "the option quotes kept for a Dry Run cannot be read; a close of the contract cannot be priced",
+            exc_info=True,
+            extra={"action": "kept_option_quotes_unreadable", "account_id": self._account_id,
+                   "symbol": symbol, "client_order_id": client_order_id},
+        )
 
     def bind_latest_recovery_bar(self, client_order_id: str, *, symbol: str, side: str) -> bool:
         """Bind a recovery EXIT to the live IBKR quote read now, retained as its evidence bar.
@@ -388,6 +450,10 @@ class SyntheticBroker:
         today's price, never at a bar from an earlier session. ``False`` (no
         fresh quote in an open session) leaves the reduction unsent.
         """
+        if is_option_contract_symbol(symbol):
+            # A contract is closed from a quote kept for it (``bind_option_close_quotes``), never from the
+            # stock quote source, which is not asked about it.
+            return False
         quote = self._recovery_quote(symbol)
         if self._ledger is None or self._source_bars is None or quote is None:
             return False
@@ -571,12 +637,20 @@ class SyntheticBroker:
                         "That client order id already names a stock order in this simulation.", broker=self.broker_id
                     )
                 return _option_order_view(existing, observed_at_ms=self._clock())
+            at_ms = self._clock()
+            if past_last_session(order.contract.expiry_date, at_ms):
+                raise BrokerOrderRejected(
+                    f"{symbol} expired on {order.contract.expiry_date.isoformat()} and its last session is over. "
+                    "Nothing trades in it, and the simulation invents no fill.",
+                    broker=self.broker_id,
+                )
+            if order.intent is OptionPositionIntent.CLOSE:
+                self._refuse_a_close_of_more_than_is_held(order, self._ledger.latest_orders_from_records(records))
             if bound is None or bound.symbol != symbol:
                 raise BrokerOrderRejected(
                     f"The simulation was handed no quote of {symbol} to fill this order from, and it invents no fill.",
                     broker=self.broker_id,
                 )
-            at_ms = self._clock()
             fill = self._simulated_option_fill(order, bound, at_ms=at_ms)
             within_limit = order.limit_price is None or (
                 fill.price <= order.limit_price if order.side is OrderSide.BUY else fill.price >= order.limit_price
@@ -598,6 +672,23 @@ class SyntheticBroker:
                 ),
             )
             return _option_order_view(record, observed_at_ms=at_ms)
+
+    def _refuse_a_close_of_more_than_is_held(self, order: SingleOptionOrderRequest, orders: list[BrokerOrder]) -> None:
+        """Refuse a closing order this simulation's own position does not cover.
+
+        A sale to close needs that many contracts held long, and a purchase
+        to close that many held short. Filled beyond that, a closing order
+        would open the other side, which no close may do.
+        """
+        symbol = order.contract.occ_symbol
+        held, _notional = project_positions(orders).get(symbol, (0.0, 0.0))
+        closable = held if order.side is OrderSide.SELL else -held
+        if order.quantity > closable:
+            raise BrokerOrderRejected(
+                f"This closing order would {order.side.value} {order.quantity} of {symbol}, and the simulation "
+                f"holds {held:g}. A closing order never opens a position.",
+                broker=self.broker_id,
+            )
 
     def _simulated_option_fill(
         self, order: SingleOptionOrderRequest, bound: _BoundOptionQuote, *, at_ms: int

@@ -19,7 +19,10 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes, KeptOptionQuotesUnavailable
 from app.broker.alpaca.clerk.sqlite import projection_helpers, reads
+from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ActiveExecutionCoverageConflict,
     cumulative_recovery_fills_for_order,
@@ -31,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     recovery_stopped_because,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     OrderProjectionReadError,
@@ -578,6 +582,7 @@ class SqliteClerkProjectionReader:
             if published_pass is None or strategy_instance_id is None
             else reads.last_custody_sequence(self._conn, strategy_instance_id)
         )
+        positions = self._positions(strategy_instance_id)
         return RecoveryPolicyContext(
             account_id=self._account_id,
             strategy_instance_id=strategy_instance_id,
@@ -589,7 +594,7 @@ class SqliteClerkProjectionReader:
             now_ms=now_ms,
             runs=self._runs(strategy_instance_id),
             current_orders=self._current_orders(strategy_instance_id),
-            positions=self._positions(strategy_instance_id),
+            positions=positions,
             uncertainties=self._uncertainties(strategy_instance_id, now_ms),
             execution_coverage_conflicts=self._execution_coverage_conflicts(strategy_instance_id),
             latest_account_reconciliation=self._latest_reconciliation(
@@ -605,7 +610,35 @@ class SqliteClerkProjectionReader:
                 if strategy_instance_id is None
                 else read_unknown_exit_orders(self._conn, strategy_instance_id)
             ),
+            unpriced_option_closes=self._unpriced_option_closes(positions, now_ms),
         )
+
+    def _unpriced_option_closes(
+        self, positions: tuple[ProjectedPosition, ...], now_ms: int
+    ) -> tuple[tuple[str, str], ...]:
+        """A Dry Run's option positions that nothing kept can price a close of now (ADR 0076).
+
+        Asked of the quotes kept beside this account's custody, by the rule
+        the simulation itself fills a close by
+        (``KeptOptionQuotes.prices_a_close``). Any other account keeps no
+        option quotes and has none. Quotes that cannot be read price nothing.
+        """
+        if not is_synthetic_account_id(self._account_id):
+            return ()
+        kept = KeptOptionQuotes.beside(self._db_path)
+        unpriced: list[tuple[str, str]] = []
+        for position in positions:
+            symbol = position.symbol.upper()
+            if not is_option_contract_symbol(symbol) or not position_quantity_is_nonzero(position.attributed_qty):
+                continue
+            side = "sell" if position.attributed_qty > 0 else "buy"
+            try:
+                priced = kept.prices_a_close(symbol, side=side, at_ms=now_ms)
+            except KeptOptionQuotesUnavailable:
+                priced = False
+            if not priced:
+                unpriced.append((symbol, side))
+        return tuple(unpriced)
 
     def timeline_page(
         self,

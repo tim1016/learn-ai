@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape, RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import (
+    OptionCloseTakesNoPricedLeg,
     RecoveryRunActiveError,
     accept_recovery_exit,
     newest_reducible_entry,
@@ -165,6 +166,12 @@ async def execute_safe_flatten_plan(
                 raise SafeFlattenExecutionError(
                     f"A run re-activated for {leg.strategy_instance_id!r} after "
                     "the flatten was presented; stop the bot and prepare a fresh plan."
+                ) from exc
+            except OptionCloseTakesNoPricedLeg as exc:
+                # A confirmed limit for a position in an option contract:
+                # refused by name before any EXIT exists (ADR 0076).
+                raise SafeFlattenExecutionError(
+                    f"{exc.refusal.explanation} {exc.refusal.next_step}", refusal=exc.refusal
                 ) from exc
         resolved = await resolve_accepted_exit(
             repo, accepted=accepted, trade=trade, pricing=pricing, read=read

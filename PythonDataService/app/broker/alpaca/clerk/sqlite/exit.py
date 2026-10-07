@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from app.broker.alpaca.clerk.option_effects import OptionExitEvidence
-from app.broker.alpaca.clerk.program_leg import ProgramLeg, regular_session_shape
+from app.broker.alpaca.clerk.program_leg import LegRefusal, ProgramLeg, regular_session_shape
 from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryShape,
     RecoveryPricing,
@@ -52,6 +52,31 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 logger = logging.getLogger(__name__)
 
 ACTION_EXIT = "EXIT"
+
+OPTION_CLOSE_TAKES_NO_LIMIT = LegRefusal(
+    reason_code="OPTION_CLOSE_TAKES_NO_LIMIT",
+    explanation=(
+        "A position in an option contract is closed by a market order in the regular session. It takes "
+        "no limit price, so nothing was sent."
+    ),
+    next_step="Flatten it without a limit price while the regular session is open.",
+)
+
+
+class OptionCloseTakesNoPricedLeg(ValueError):
+    """An EXIT of a position in an option contract was handed a priced leg (ADR 0076).
+
+    Raised before anything is written. ``refusal`` is what an operator whose
+    confirmed limit was that leg is told.
+    """
+
+    refusal = OPTION_CLOSE_TAKES_NO_LIMIT
+
+    def __init__(self) -> None:
+        super().__init__(
+            "a position in an option contract is closed by a market order in the regular session; "
+            "it takes no priced leg"
+        )
 
 
 def exit_effect_operation_id(*, strategy_instance_id: str, decision_id: str) -> str:
@@ -213,10 +238,7 @@ def _accept_exit_capture(
         option_entry = option_entry_of_order(repo, target.order_ref)
         closes_an_option = option_entry is not None
         if closes_an_option and recorded is not None and recorded.shape != regular_session_shape(recorded.shape.side):
-            raise ValueError(
-                "a position in an option contract is closed by a market order in the regular session; "
-                "it takes no priced leg"
-            )
+            raise OptionCloseTakesNoPricedLeg
         entry_order_refs: list[str] = []
         for candidate in _exit_cancellable_entries(
             repo,
@@ -248,7 +270,9 @@ def _accept_exit_capture(
             regular_session_only=regular_session_only or closes_an_option,
             option_contract=None if option_entry is None else option_entry.contract_terms.symbol,
             option_exit=(
-                OptionExitFacts.of(option_exit).to_facts() if closes_an_option and option_exit is not None else None
+                None
+                if option_entry is None or option_exit is None
+                else OptionExitFacts.of(option_exit, closing=option_entry.contract_terms.symbol).to_facts()
             ),
         ).with_reducing_shape(
             None if recorded is None else recorded.shape,
@@ -524,7 +548,9 @@ def _reducing_order_ref(
 
 
 __all__ = [
+    "OPTION_CLOSE_TAKES_NO_LIMIT",
     "ExitSubmission",
+    "OptionCloseTakesNoPricedLeg",
     "ReducibleEntry",
     "accept_exit",
     "newest_reducible_entry",
