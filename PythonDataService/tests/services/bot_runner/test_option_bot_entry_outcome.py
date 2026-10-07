@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.held_option_quotes import reset_held_option_quotes_
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite import decision_receipts as decision_receipts_module
+from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -542,6 +543,56 @@ async def test_a_later_start_names_no_exit_of_a_position_an_unfilled_entry_never
         for evaluation in replayed
         if evaluation.crash_recovered
     ] == named
+
+
+async def test_a_later_run_on_paper_writes_down_no_exit_of_a_position_its_unfilled_entry_never_opened(
+    paper: PaperFloor,
+) -> None:
+    """The same, through the trade runner itself. The first run's entry ended unfilled, it decided two more
+    bars flat, and the 10:34 bar was retained as the process died. The owner starts the bot again. The new
+    run warms up on what the first retained, and names no crash evidence."""
+    await paper.run([*_two_greens(), Step(red(ENTER_MS + MINUTE)), Step(red(ENTER_MS + 2 * MINUTE))])
+    assert paper.entry().standing is EntryStanding.UNFILLED
+    paper.ledger().append(red(EXIT_MS), run_id=paper.binding.run_id)
+    await paper.the_clerk_restarts()
+
+    ran = await paper.run([Step(red(EXIT_MS + MINUTE))], as_a_later_run="run-later")
+
+    assert [outcome for outcome, _ in ran.outcomes()] == [
+        "no_action", "enter_intent", "no_action", "no_action", "no_action",
+    ]
+    assert ran.outcomes()[-1] == ("no_action", EXIT_MS + MINUTE)
+
+
+async def test_a_later_dry_run_writes_down_no_exit_of_a_position_an_entry_refused_at_the_send_never_opened(
+    dry_run: Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Dry Run's Clerk took the entry and then refused it as its order was sent: its quote had grown old.
+    The receipt reads accepted, and the run went on flat. A later run of the Dry Run replays that entry as
+    discarded too."""
+    take = clerk_runtime.accept_option_enter
+
+    def take_and_stand_still(*args: Any, **kwargs: Any) -> Any:
+        taken = take(*args, **kwargs)
+        dry_run.clock.value += 5_001
+        return taken
+
+    monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_stand_still)
+    await dry_run.run([*_two_greens(), Step(red(ENTER_MS + MINUTE)), Step(red(ENTER_MS + 2 * MINUTE))])
+    assert dry_run.transitions("ENTER_SUBMISSION_REFUSED") == 1 and dry_run.holds() == {}
+    retained = dry_run.authority.source_bars()
+    try:
+        retained.append(red(EXIT_MS), run_id=dry_run.binding.run_id)
+    finally:
+        retained.close()
+    dry_run.binding = dry_run.binding.model_copy(update={"run_id": "run-later"})
+    dry_run._evaluations_finished = 0
+
+    ran = await dry_run.run([Step(red(EXIT_MS + MINUTE))])
+
+    assert [outcome for outcome, _ in ran.outcomes()] == [
+        "no_action", "enter_intent", "no_action", "no_action", "no_action",
+    ]
 
 
 @pytest.mark.parametrize(

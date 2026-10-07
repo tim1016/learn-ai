@@ -338,10 +338,23 @@ class PaperFloor(Floor):
         )
 
     async def run(
-        self, script: list[Step], *, pricing_bar_wait_ms: int = 20, the_process_own_market: bool = False
+        self,
+        script: list[Step],
+        *,
+        pricing_bar_wait_ms: int = 20,
+        the_process_own_market: bool = False,
+        as_a_later_run: str | None = None,
     ) -> Ran:
-        """Run the bot over ``script`` to the end of its Signal stream."""
+        """Run the bot over ``script`` to the end of its Signal stream.
+
+        ``as_a_later_run`` names a new run of the same bot over the same
+        books and retained bars: a Start after the run before it ended. Its
+        warm-up replays what that run retained.
+        """
         del the_process_own_market
+        if as_a_later_run is not None:
+            self.binding = self.binding.model_copy(update={"run_id": as_a_later_run})
+            self._evaluations_finished = 0
         await asyncio.wait_for(self.running_the_bot(script, pricing_bar_wait_ms=pricing_bar_wait_ms), timeout=120)
         await self.clerk.drain_effects()
         assert self.feed is not None
