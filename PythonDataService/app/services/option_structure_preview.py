@@ -325,9 +325,10 @@ def _read(
     assert held.bid is not None and held.ask is not None
     money = (held.bid.price + held.ask.price) / 2
     today = et_date_at_ms(now)
+    named = chain.expiry_dates
     listed = (
-        chain.expiries
-        if chain.expiries is not None
+        named
+        if named is not None
         else tuple(sorted({listing.contract.expiry_date for listing in chain.listings if listing.is_standard}))
     )
     come_to = expiries_wanted(plan, listed, today)

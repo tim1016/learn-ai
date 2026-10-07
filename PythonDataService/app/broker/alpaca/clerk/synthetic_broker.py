@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     project_positions,
 )
 from app.broker.contract.capabilities import BrokerCapabilities
+from app.broker.contract.errors import BrokerOptionsNotSupported
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -51,7 +52,14 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+)
 from app.marketdata.feed import MarketDataBar
+from app.options.contract import OptionContract
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.market_liveness import prepared_top_of_book
 from app.services.session_authority import order_session_state_at_ms, session_state_at_ms
@@ -75,6 +83,9 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     supports_extended_hours=True,
     extended_hours_window=ALPACA_EXTENDED_HOURS_WINDOW,
     supported_order_types=("market", "limit"),
+    # The simulation fills stock legs from retained bars and takes no option order yet (#2913).
+    supports_option_orders=False,
+    supports_multi_leg_option_orders=False,
     data_feed="retained_source_bars",
     bars_may_gap=False,
     max_stream_symbols=0,
@@ -87,7 +98,40 @@ class SimulatedPriceUnavailableError(RuntimeError):
     """No retained bar exists from which a synthetic fill may be derived."""
 
 
-class SyntheticBroker:
+class OptionOrdersNotTaken:
+    """The option methods of a trade port that takes no option order and holds none (#2913).
+
+    Each refuses by type. "Absent" would be an answer about an order, and
+    such a port never held one to answer about.
+    """
+
+    broker_id: str
+    # How a refusal names the port: "The simulated broker".
+    _named_in_option_refusals: str
+
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder:
+        del order, client_order_id
+        raise self._option_orders_not_taken("takes no option orders")
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        del client_order_id
+        raise self._option_orders_not_taken("holds no option orders")
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        del order_id
+        raise self._option_orders_not_taken("holds no option orders")
+
+    def _option_orders_not_taken(self, what: str) -> BrokerOptionsNotSupported:
+        return BrokerOptionsNotSupported(
+            f"{self._named_in_option_refusals} {what}.",
+            broker=self.broker_id,
+            detail="Its capabilities say so; nothing was sent and no order exists.",
+        )
+
+
+class SyntheticBroker(OptionOrdersNotTaken):
     """Durable immediate-fill port that derives prices only from retained bars.
 
     A market leg, or a limit leg marketable against the decision bar's close,
@@ -103,6 +147,7 @@ class SyntheticBroker:
     """
 
     broker_id = SYNTHETIC_BROKER_ID
+    _named_in_option_refusals = "The simulated broker"
 
     def __init__(
         self, *, account_id: str, source_bars: SourceBarLedger | None = None, clock: Clock = now_ms_utc,
@@ -182,6 +227,27 @@ class SyntheticBroker:
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         del symbol
         return None
+
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        # "Not listed" would be a claim about a listing; the simulation has none to consult.
+        del contract
+        raise BrokerOptionsNotSupported(
+            "The simulated broker has no option contract reference.",
+            broker=self.broker_id,
+            detail="It holds no listing of option contracts, so it cannot say whether this one is listed.",
+        )
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        """The simulated account states no option buying power and no approval level."""
+        return BrokerOptionAccountSnapshot(
+            broker=self.broker_id,
+            account_id=self._account_id,
+            account_mode="paper",
+            options_buying_power=None,
+            options_approved_level=None,
+            options_trading_level=None,
+            observed_at_ms=self._clock(),
+        )
 
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         observed_at_ms = self._clock()

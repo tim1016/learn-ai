@@ -181,6 +181,7 @@ from app.broker.alpaca.clerk.stream_health import (
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
+from app.broker.contract.options import BrokerOptionOrder, OptionOrderRequest
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
@@ -314,6 +315,19 @@ class _PricingBarBoundTradePort:
 
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return await self._inner.get_order_by_broker_order_id(order_id)
+
+    # No bar is bound to an option order: the simulated ports price none yet
+    # and refuse one by type (#2913). The wrapped port's answer is passed on
+    # as it is, so that refusal never becomes a missing method here.
+
+    async def submit_option_order(self, order: OptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
+        return await self._inner.submit_option_order(order, client_order_id=client_order_id)
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        return await self._inner.get_option_order_by_client_order_id(client_order_id)
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        return await self._inner.get_option_order_by_broker_order_id(order_id)
 
 
 class StrategyRegistrationConflictError(RuntimeError):

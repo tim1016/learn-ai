@@ -22,13 +22,18 @@ import math
 from collections.abc import Callable, Mapping
 from itertools import pairwise
 from typing import Any
+from uuid import UUID
 
 from app.broker.alpaca import adapter
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
-from app.broker.contract.errors import BrokerEvidenceUnavailable
+from app.broker.contract.errors import (
+    BrokerEvidenceUnavailable,
+    BrokerOrderAnswerUnreadable,
+    BrokerRequestInvalid,
+)
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -41,7 +46,14 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+)
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
+from app.options.contract import OptionContract
 from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
@@ -205,6 +217,101 @@ def _activity_page_oldest_ms(
     return dated[-1]
 
 
+def _option_order_body(order: OptionOrderRequest, *, client_order_id: str) -> dict[str, Any]:
+    """The body to send for one option order, or a refusal of an order that cannot be written as one.
+
+    Refused before anything is sent, so it is ``BrokerRequestInvalid`` and
+    definitive: no order exists, and none is of unknown outcome.
+    """
+    try:
+        return adapter.to_alpaca_option_order_request(order, client_order_id=client_order_id)
+    except (TypeError, ValueError) as exc:
+        raise BrokerRequestInvalid(
+            "This option order was not sent to Alpaca.",
+            broker=BROKER_ID,
+            detail=f"Nothing was asked of Alpaca: {exc}.",
+        ) from exc
+
+
+def _order_uuid(order_id: object) -> UUID | None:
+    """``order_id`` as the UUID an Alpaca order id is, or ``None`` when it is not one."""
+    if not isinstance(order_id, str):
+        return None
+    try:
+        return UUID(order_id)
+    except ValueError:
+        return None
+
+
+def _same_order_id(left: object, right: object) -> bool:
+    """Whether two broker order ids name one order.
+
+    One UUID has several spellings (upper case, without hyphens, in braces,
+    as a URN), and the SDK asks Alpaca for the same order under each. An id
+    that is no UUID names no Alpaca order and equals nothing.
+    """
+    one, other = _order_uuid(left), _order_uuid(right)
+    return one is not None and one == other
+
+
+def _order_id_of_an_unread_answer(
+    payload: Any, *, client_order_id: str | None, order_id: str | None
+) -> str | None:
+    """The broker order id an answer carries, when the answer is plainly about the order asked for.
+
+    It is what a cancel or a read by id names. So it is given only when it
+    is a UUID and every id the answer was asked by is the id it carries:
+    another order's id is never handed on as this one's.
+    """
+    if not isinstance(payload, Mapping) or _order_uuid(payload.get("id")) is None:
+        return None
+    if client_order_id is not None and payload.get("client_order_id") != client_order_id:
+        return None
+    if order_id is not None and not _same_order_id(payload["id"], order_id):
+        return None
+    return payload["id"]
+
+
+def _a_different_order(asked: str, got: str) -> BrokerEvidenceUnavailable:
+    return BrokerEvidenceUnavailable(
+        "Alpaca answered about a different option order from the one asked about.",
+        broker=BROKER_ID,
+        detail=f"Asked about {asked}; the answer names {got}.",
+    )
+
+
+def _option_order_asked_about(
+    payload: Any, *, client_order_id: str | None = None, order_id: str | None = None
+) -> BrokerOptionOrder:
+    """Read Alpaca's answer about one option order, once it is the order that was asked about.
+
+    The order is asked about by its client order id, its broker order id,
+    or both, and the answer is held to each one given. An answer that
+    cannot be read whole raises ``BrokerOrderAnswerUnreadable``, with the
+    order's broker id when that much is plain. One that names another id
+    is about some other order, whose fills must not be counted as this
+    one's. Either way the outcome stays unknown.
+    """
+    if client_order_id is None and order_id is None:
+        raise ValueError("an option order's answer is held to the id it was asked by, and none was given")
+    try:
+        answered = _mapped_evidence("option order", lambda: adapter.from_alpaca_option_order(payload))
+    except BrokerEvidenceUnavailable as unreadable:
+        raise BrokerOrderAnswerUnreadable(
+            unreadable.message,
+            broker=BROKER_ID,
+            detail=unreadable.detail,
+            broker_order_id=_order_id_of_an_unread_answer(
+                payload, client_order_id=client_order_id, order_id=order_id
+            ),
+        ) from unreadable
+    if client_order_id is not None and answered.client_order_id != client_order_id:
+        raise _a_different_order(f"client order id {client_order_id!r}", f"{answered.client_order_id!r}")
+    if order_id is not None and not _same_order_id(answered.order_id, order_id):
+        raise _a_different_order(f"order id {order_id!r}", f"{answered.order_id!r}")
+    return answered
+
+
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
 # Extended Hours Trading, verified 2026-09-08).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
@@ -227,6 +334,11 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     # so advertising them was a false "yes" to a caller gating on capability.
     # Re-add each here in lockstep with its OrderType member + leg Literal.
     supported_order_types=("market", "limit"),
+    # Alpaca takes an option order and a multi-leg one, on paper and live
+    # ("Options Trading", "Options Level 3 Trading", read 2026-10-06). Whether
+    # this account is approved for them is the account's fact, not the broker's.
+    supports_option_orders=True,
+    supports_multi_leg_option_orders=True,
     data_feed="iex",
     bars_may_gap=True,
     max_stream_symbols=30,
@@ -525,6 +637,31 @@ class AlpacaBroker:
             return None
         return _mapped_evidence("asset", lambda: adapter.from_alpaca_asset(payload))
 
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        """Return Alpaca's listing of one option contract, or ``None`` when it lists none.
+
+        Asked by the contract's own symbol, from the Trading API's contract
+        reference; no market-data subscription is involved.
+        """
+        payload = await self._client.get_option_contract(contract.occ_symbol)
+        if payload is None:
+            return None
+        return _mapped_evidence("option contract", lambda: adapter.from_alpaca_option_contract(payload))
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        """Return the account's option buying power and approval levels.
+
+        Read from the same ``/v2/account`` answer as :meth:`get_account`, in
+        a request of its own, into a model of its own: the account snapshot a
+        route serves is unchanged.
+        """
+        payload = await self._client.get_account()
+        account_mode = self._resolved_settings().mode
+        return _mapped_evidence(
+            "account",
+            lambda: adapter.from_alpaca_option_account(payload, account_mode=account_mode),
+        )
+
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
         return _mapped_evidence("market clock", lambda: adapter.from_alpaca_clock(payload))
@@ -599,6 +736,137 @@ class AlpacaBroker:
         if payload is None:
             return None
         return adapter.from_alpaca_order(payload)
+
+    # ── Option orders (ADR 0076) ────────────────────────────────────────────
+
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder:
+        """Submit one option order, of one leg or several, and map Alpaca's answer.
+
+        The body goes out through the same ``submit_order`` a stock leg
+        uses: one ``POST /v2/orders``, retried only on a throttle, with an
+        unknown outcome marked for the lookup's visibility grace.
+
+        Once Alpaca has accepted the order, nothing here may say it was
+        refused. An answer that cannot be read, a multi-leg one without its
+        legs included, or one naming another order raises
+        ``BrokerEvidenceUnavailable``: an unknown outcome, which the caller
+        settles through :meth:`get_option_order_by_client_order_id`. An
+        unreadable one raises it as ``BrokerOrderAnswerUnreadable``, with
+        the order's broker id when the answer plainly gave it. No second
+        request is made here, because its failure could read as the order's.
+
+        That unknown outcome gets the lookup's visibility grace too, started
+        here: Alpaca's 200 ended the one the client keeps, and an order it
+        took a moment ago can still answer 404 to a lookup. The same holds
+        for a read by the broker order id an unreadable answer handed on.
+
+        An order that cannot be written as one, or a client order id Alpaca
+        could not keep as given, is ``BrokerRequestInvalid``: nothing was
+        sent.
+        """
+        body = _option_order_body(order, client_order_id=client_order_id)
+        payload = await self._client.submit_order(body)
+        try:
+            return _option_order_asked_about(payload, client_order_id=client_order_id)
+        except Exception as not_taken:
+            self._answered_and_not_taken(not_taken, client_order_id=client_order_id)
+            raise
+
+    def _answered_and_not_taken(
+        self, not_taken: Exception, *, client_order_id: str | None = None, order_id: str | None = None
+    ) -> None:
+        """Alpaca answered for an order, and the answer was not taken as that order's.
+
+        ``client_order_id`` and ``order_id`` are the ids Alpaca was asked by.
+        Whatever stopped the answer, a 404 in the next seconds is not
+        "absent": not to the lookup by the client order id, not to a read
+        by the broker order id that was asked for, and not to a read by the
+        one an unreadable answer handed on. Each gets the visibility grace,
+        counted from this answer.
+
+        Holding a grace under the id asked by hands nothing on: the only
+        id a caller is given is the one an unreadable answer can vouch for.
+        """
+        if client_order_id is not None:
+            self._client.hold_submission_uncertain(client_order_id)
+        asked_by = _order_uuid(order_id)
+        if asked_by is not None:
+            self._client.hold_submission_uncertain(str(asked_by))
+        handed_on = _order_uuid(not_taken.broker_order_id) if isinstance(not_taken, BrokerOrderAnswerUnreadable) else None
+        if handed_on is not None:
+            self._client.hold_submission_uncertain(str(handed_on))
+
+    async def get_option_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOptionOrder | None:
+        """Look an option order up by the ``client_order_id`` it was sent under.
+
+        The parent is read as a stock order is, with the same 404
+        discipline: ``None`` is Alpaca saying no such order exists, except
+        inside the visibility grace after an unknown submit, where a 404
+        stays unknown. Unlike the stock read, a found order does not end
+        that grace by being found. It ends once the answer has been read
+        whole and is about the order asked for; an answer refused here
+        starts it again, so the 404 that follows is still not "absent".
+
+        Alpaca documents no way to ask this read for nested legs, so a
+        multi-leg parent that comes back without them is read again by its
+        broker order id, which has one. When that second read is answered
+        and its answer is not taken, the grace is held under the parent's
+        id too, as it is for any read by broker order id.
+        """
+        payload = await self._client.get_order_by_client_order_id(client_order_id, found_settles_submission=False)
+        if payload is None:
+            return None
+        order_id = None
+        try:
+            if adapter.alpaca_multi_leg_order_lacks_legs(payload):
+                # The second answer is held to both ids: the one first asked by, and the one it was read again by.
+                order_id, payload = await self._nested_order(payload, client_order_id=client_order_id)
+            accepted = _option_order_asked_about(payload, client_order_id=client_order_id, order_id=order_id)
+        except Exception as not_taken:
+            self._answered_and_not_taken(not_taken, client_order_id=client_order_id, order_id=order_id)
+            raise
+        self._client.settle_submission(client_order_id)
+        return accepted
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        """Look an option order up by its broker-assigned id, legs nested under a multi-leg parent.
+
+        ``order_id`` is the parent's. ``None`` only on a definitive 404:
+        for the visibility grace after an answer about this order that could
+        not be read, which is where a caller gets the id from, a 404 stays
+        unknown. So it does after any answer to this read that is not taken
+        as the order's, an answer naming another order included: Alpaca
+        answered for this id, so its not-found a moment later proves
+        nothing. The grace ends once an answer is read whole here.
+        """
+        payload = await self._client.get_nested_order_by_broker_order_id(order_id)
+        if payload is None:
+            return None
+        try:
+            accepted = _option_order_asked_about(payload, order_id=order_id)
+        except Exception as not_taken:
+            self._answered_and_not_taken(not_taken, order_id=order_id)
+            raise
+        self._client.settle_submission(str(UUID(order_id)))
+        return accepted
+
+    async def _nested_order(self, parent: Mapping[str, Any], *, client_order_id: str) -> tuple[str, Any]:
+        """Read a multi-leg parent again, by its own id, with its legs nested: that id, and the answer."""
+        order_id = _mapped_evidence("option order", lambda: adapter.parse_order_link_id(parent.get("id")))
+        nested = None if order_id is None else await self._client.get_nested_order_by_broker_order_id(order_id)
+        if order_id is None or nested is None:
+            # Alpaca just answered for this order; that it now has no id, or none Alpaca knows, proves nothing.
+            raise BrokerOrderAnswerUnreadable(
+                "Alpaca answered for a multi-leg order but would not show its legs.",
+                broker=BROKER_ID,
+                detail="The order was found by its client order id and not by its own broker order id.",
+                broker_order_id=_order_id_of_an_unread_answer(parent, client_order_id=client_order_id, order_id=None),
+            )
+        return order_id, nested
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

@@ -1620,9 +1620,9 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Resolved structure** — the contracts a structure's rules picked at one entry, leg by leg. The exit closes these contracts and never asks the rules again.
 - **Watched window** — the contracts a quote line is open for. A rule can pick only inside it; a contract that could be the pick and is outside it, or whose quote has not arrived yet, makes the search incomplete, never "nothing close enough". A rule by delta that finds every watched contract's quote faulty is refused for the quotes, not the window.
 - **Quote line** — one contract's standing request for quotes at the provider. The provider grants the account a number of them, shared by every session under it.
-- **Line budget** — the most option quote lines one Clerk asks for beyond the contracts its bots hold. The Clerk's own count; it cannot see what other sessions use, and it is zero until the owner sets it.
+- **Line budget** — the most option quote lines one Clerk asks for at once. Contracts its bots hold count toward it and are asked for even past it. The Clerk's own count; it cannot see what other sessions use, and it is zero until the owner sets it.
   _Avoid_: capacity (that is the provider's, and no session can see it).
-- **Feed generation** — one number for the quote connection's epoch. It moves on every reconnect and every recovery from a data loss, and no quote from before it is used.
+- **Feed generation** — one number for the quote connection's epoch. It moves on every reconnect and every recovery from a data loss, and no quote from before it is used: after it each side waits for a price of its own.
 - **Entry cutoff** — how long before a contract's last trade an entry on it must be selected. Nothing is opened inside it, half days included.
 - **Named structure** — one of twelve structures an option structure may be named for, such as a bull call spread. The name fixes what the legs are and what shape the picked contracts must have; strikes and expiries stay the owner's.
 - **Custom (structure)** — an option structure with no name. Its picked contracts are checked as any structure's are, and for no shape.
@@ -1637,6 +1637,17 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
   _Avoid_: maximum loss, risk.
 - **Round-trip cost** — what opening a structure and closing it at once would cost: every leg's bid-ask gap, by its ratio.
 - **Structure cost limit** — the most round-trip cost an entry may carry, as a percent of its entry commitment.
+- **Multi-leg order** — one order that carries two to four option legs and fills them together. A structure of one leg is a plain option order, never a multi-leg order of one.
+  _Avoid_: combo, spread order, mleg (Alpaca's word, kept to the wire).
+- **Net limit price** — the one price a multi-leg order carries, a share, for one structure: positive is paid, negative is received. The same number and sign as the net entry premium before it is multiplied out.
+  _Avoid_: debit, credit as separate figures; limit (a one-leg order's price, which is unsigned).
+- **Position intent** — whether a leg opens a position or closes one. Every leg of an exit closes.
+- **Contract listing** — what the broker's contract reference says about one option contract: that it exists, is active and tradable, its style, and what it delivers. Read from the Trading API, never from market data.
+  _Avoid_: chain (IBKR's quotes), contract details.
+- **Standard contract** — one that is American, has a multiplier of 100 and delivers 100 shares of its underlying. A bot trades no other.
+- **Option approval level** — the level, 0 to 3, the broker approved the account for. **Option trading level** is the level in force, which the owner may have set lower. Unknown when the broker does not say; zero is options turned off.
+- **Option buying power** — the broker's account-wide figure for what option orders may still use. It is not what one order costs.
+  _Avoid_: reading a change in it as one trade's cost.
 
 ## Market-data readiness (resolved 2026-09-22)
 

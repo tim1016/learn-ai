@@ -24,6 +24,13 @@ from app.broker.contract.models import (
     BrokerPosition,
     PortfolioHistoryRange,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+)
+from app.options.contract import OptionContract
 
 
 @runtime_checkable
@@ -83,6 +90,18 @@ class BrokerReadPort(Protocol):
 
     async def get_asset(self, symbol: str) -> BrokerAsset | None:
         """Return one broker asset, or ``None`` when the symbol is absent."""
+        ...
+
+    async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+        """The broker's listing of one option contract, or ``None`` when it lists none.
+
+        A read of the broker's own reference, never of market data. Whether a
+        bot may trade what comes back is ``option_contract_refusal``'s to say.
+        """
+        ...
+
+    async def get_option_account(self) -> BrokerOptionAccountSnapshot:
+        """The account's option buying power and approval levels, each absent when the broker gives none."""
         ...
 
     async def get_clock_evidence(self) -> BrokerClockEvidence: ...
@@ -153,6 +172,39 @@ class BrokerTradePort(Protocol):
     follows a manual order the owner replaced on the broker's own website
     (#2656): the replacement is a new broker order that carries no client id
     of ours, so only its broker id can answer for it.
+
+    ``submit_option_order`` sends one option order, of one leg or of two to
+    four (ADR 0076), under the ``client_order_id`` the caller minted, and
+    returns it as the vendor reports it. The discipline is ``submit``'s: the
+    port mints no identity and sends the order once; a ``BrokerUnavailable``
+    is an unknown outcome, resolved through
+    ``get_option_order_by_client_order_id``, and any other ``BrokerError``
+    means the order does not exist. An accepted order whose answer cannot be
+    read, or names a different order, is unknown too, never refused. An
+    order refused before anything was sent is ``BrokerRequestInvalid``. A
+    broker that takes no such order raises ``BrokerOptionsNotSupported``.
+    ``cancel`` cancels an option order by its parent's broker order id.
+
+    The two option lookups answer with the parent order and, under a
+    multi-leg parent, its legs: each with its own order id, filled quantity,
+    average price and status. ``None`` is the vendor saying no such order
+    exists. An answer that cannot be read whole, or that names a different
+    order from the one asked about, raises rather than state an outcome.
+
+    From the submit or a lookup, an answer that cannot be read whole raises
+    ``BrokerOrderAnswerUnreadable``. It carries the order's broker order id
+    when the answer plainly gave it, so the order can still be cancelled or
+    read by that id.
+
+    After any unknown submit, the port's own refusal of an accepted answer
+    included, the lookup by client order id keeps the stock lookup's grace:
+    "no such order" stays unknown until the vendor has had time to show the
+    order. Only an answer taken as that order's ends the grace early; one
+    the lookup refuses starts it again. A read by the broker order id that
+    an unreadable answer carried keeps the same grace, counted from that
+    answer. So does a read by any broker order id, after an answer to it
+    that was not taken as that order's. Outside a grace, ``None`` from
+    either lookup is the vendor saying no such order exists.
     """
 
     broker_id: str
@@ -168,6 +220,16 @@ class BrokerTradePort(Protocol):
     ) -> BrokerOrder | None: ...
 
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None: ...
+
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder: ...
+
+    async def get_option_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOptionOrder | None: ...
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None: ...
 
 
 @runtime_checkable
