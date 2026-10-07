@@ -416,18 +416,51 @@ async def test_a_lot_still_open_after_its_contract_expired_is_set_against_the_br
         repo.close()
 
 
-async def test_a_contract_held_on_both_sides_that_gets_no_row_is_held_for_once_it_has_expired(tmp_path: Path) -> None:
-    """Bought by one bot and sold by another, it nets to nothing at the broker and may never get a row."""
+@pytest.mark.parametrize(
+    "at_the_broker",
+    [
+        pytest.param({}, id="the broker shows nothing, as a contract held both ways nets to"),
+        pytest.param({CALL: 1}, id="the broker shows another net than the books"),
+    ],
+)
+async def test_a_contract_held_on_both_sides_that_gets_no_row_is_held_for_once_it_has_expired(
+    tmp_path: Path, at_the_broker: dict[str, float]
+) -> None:
+    """Bought by one bot and sold by another, it nets to nothing at the broker and may never get a row.
+
+    The broker showing nothing is then no agreement: both lots are still
+    open on the books. Each holder is held by name, and the bot that sold
+    is told its side is not ended at a word.
+    """
     repo = _one_bot(tmp_path)
     holds_option(repo, "bot-b", CALL, contracts=-1)
     later(repo, 2 * 86_400_000)
-    account = _FakeReadPort(positions=broker_holds(**{CALL: 1}))
+    account = _FakeReadPort(positions=broker_holds(**at_the_broker))
     try:
         await _read(repo, account)
 
         assert option_holds(repo).keys() == {
             ("bot-a", "OPTION_EXPIRED_NOT_SETTLED"), ("bot-b", "OPTION_EXPIRED_NOT_SETTLED"),
         }
+        [bought], [sold] = (_cause(repo, bot, "OPTION_EXPIRED_NOT_SETTLED") for bot in ("bot-a", "bot-b"))
+        assert "+1 for this bot" in bought["detail"] and "-1 for this bot" in sold["detail"]
+        assert "sold" in sold["detail"] and "not ended at the owner's word" in sold["detail"]
+        assert "not ended at the owner's word" not in bought["detail"]
+    finally:
+        repo.close()
+
+
+async def test_while_the_broker_still_shows_an_expired_contract_as_the_books_hold_it_nobody_is_held(
+    tmp_path: Path,
+) -> None:
+    """Two bots bought it. The broker still shows two: its record of the end is yet to come, and nothing differs."""
+    repo = _one_bot(tmp_path)
+    holds_option(repo, "bot-b", CALL, contracts=1)
+    later(repo, 2 * 86_400_000)
+    try:
+        await _read(repo, _FakeReadPort(positions=broker_holds(**{CALL: 2})))
+
+        assert option_holds(repo) == {}
     finally:
         repo.close()
 

@@ -1321,14 +1321,20 @@ def _hold_what_expired_and_is_still_held(
 
     A contract held on both sides nets to nothing at the broker and may never
     get a row. So may one whose row is yet to come. Either way the books
-    still hold what the broker does not, and the bot is held by name.
+    still hold what the broker does not, and the bot is held by name. So
+    each holder is held when the broker shows none of the contract, or
+    another net than the books': nothing at the broker is no agreement
+    while a lot is still open here. While the broker still shows what the
+    books hold there is nothing to say yet.
     ``not_settled`` is a simulation's own answer: each contract it holds
     past its last session and could not settle, with why.
     """
     totals: dict[str, int] = {}
+    sides: dict[str, set[bool]] = {}
     positions = held_option_positions(conn)
     for _sid, symbol, quantity in positions:
         totals[symbol] = totals.get(symbol, 0) + quantity
+        sides.setdefault(symbol, set()).add(quantity > 0)
     for sid, symbol, quantity in positions:
         contract = OptionContract.from_occ_symbol(symbol)
         if not past_last_session(contract.expiry_date, now_ms):
@@ -1340,15 +1346,25 @@ def _hold_what_expired_and_is_still_held(
                 OPTION_EXPIRED_NOT_SETTLED_REASON_CODE, [sid], ref=ref, symbol=symbol, date_ms=None,
                 detail=f"{symbol} expired on {expired_on}. {not_settled[symbol]}",
             )
-        elif read.broker_positions is not None and read.broker_positions.get(symbol, 0.0) != totals[symbol]:
-            holds.add(
-                OPTION_EXPIRED_NOT_SETTLED_REASON_CODE, [sid], ref=ref, symbol=symbol, date_ms=None,
-                detail=(
-                    f"{symbol} expired on {expired_on}. The broker shows {read.broker_positions.get(symbol, 0.0):g} "
-                    f"of it, these books hold {totals[symbol]:+d} ({quantity:+d} for this bot), and no activity "
-                    "read explains the difference."
-                ),
-            )
+            continue
+        if read.broker_positions is None:
+            continue
+        at_broker = read.broker_positions.get(symbol, 0.0)
+        if at_broker != 0 and at_broker == totals[symbol]:
+            continue
+        on_the_books = (
+            f"these books hold it bought by one bot and sold by another, {totals[symbol]:+d} in all "
+            f"({quantity:+d} for this bot), and no activity read ends either side"
+            if len(sides[symbol]) > 1
+            else f"these books hold {totals[symbol]:+d} ({quantity:+d} for this bot), and no activity read "
+            "explains the difference"
+        )
+        # Only a bought contract is ended at the owner's word (``option_owner_ending``).
+        sold = " This bot holds it sold, and a sold contract is not ended at the owner's word." if quantity < 0 else ""
+        holds.add(
+            OPTION_EXPIRED_NOT_SETTLED_REASON_CODE, [sid], ref=ref, symbol=symbol, date_ms=None,
+            detail=f"{symbol} expired on {expired_on}. The broker shows {at_broker:g} of it, {on_the_books}.{sold}",
+        )
 
 
 def _sync_shares_held(
