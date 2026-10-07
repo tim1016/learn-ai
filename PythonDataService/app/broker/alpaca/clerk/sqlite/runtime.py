@@ -2016,29 +2016,25 @@ class SqliteAlpacaClerkFacade:
         answered: never sent, the decision dropped.
 
         Raises ``EntryOutcomeWaitRefused``, by name, for a limit the Clerk
-        does not take. One more than a day ahead of its clock: an option
-        order is for the day. And one already past when the wait is asked
-        for, for an entry still unproven with no answer recorded: "still
-        unproven at the limit" is a judgment made by waiting to the limit,
-        and is not handed out for a limit that was never waited for. An
-        entry already settled, or already proven, is answered whatever the
-        limit says.
+        does not take, for an entry still unproven with no answer recorded.
+        One more than a week ahead of its clock: no decision bar closes
+        that far on. And one already past when the wait is asked for:
+        "still unproven at the limit" is a judgment made by waiting to the
+        limit, and is not handed out for a limit that was never waited for.
+        The books are read first, so an entry already settled, or already
+        proven, is answered whatever the limit says.
         """
         if isinstance(until_ms, bool) or not isinstance(until_ms, int) or until_ms < 0:
             raise ValueError(f"until_ms is a time in milliseconds; got {until_ms!r}")
         asked_at_ms = self._repo.clock()
-        if until_ms - asked_at_ms > MAX_ENTRY_OUTCOME_WAIT_MS:
-            raise EntryOutcomeWaitRefused(
-                ENTRY_OUTCOME_LIMIT_TOO_FAR,
-                f"The wait for this entry's outcome was asked to run {until_ms - asked_at_ms:,} ms. An option "
-                f"order is for the day, and no wait is longer than {MAX_ENTRY_OUTCOME_WAIT_MS:,} ms.",
-            )
         command_id = f"cmd:{strategy_instance_id}:{_durable_decision_id(decision_id)}"
         waited = False
         while True:
             async with self._intake:
                 settled = self._settle_entry_if_answerable(
-                    command_id, until_ms=until_ms, limit_was_past_when_asked=not waited and until_ms <= asked_at_ms
+                    command_id, until_ms=until_ms,
+                    limit_was_past_when_asked=not waited and until_ms <= asked_at_ms,
+                    limit_was_too_far_when_asked=not waited and until_ms - asked_at_ms > MAX_ENTRY_OUTCOME_WAIT_MS,
                 )
             if settled is not None:
                 return settled
@@ -2046,9 +2042,15 @@ class SqliteAlpacaClerkFacade:
             waited = True
 
     def _settle_entry_if_answerable(
-        self, command_id: str, *, until_ms: int, limit_was_past_when_asked: bool = False
+        self, command_id: str, *, until_ms: int, limit_was_past_when_asked: bool = False,
+        limit_was_too_far_when_asked: bool = False,
     ) -> SettledEntry | None:
-        """One read of an option entry's outcome: its settlement when one can be given now, else ``None``."""
+        """One read of an option entry's outcome: its settlement when one can be given now, else ``None``.
+
+        The recorded answer and a proven outcome are read before the limit
+        is judged: a limit is refused only for an entry that would have to
+        be waited for (ADR 0076 decision 19).
+        """
         with self._repo.write_fence():
             command = self._repo.get_command(command_id)
             order = (
@@ -2064,6 +2066,12 @@ class SqliteAlpacaClerkFacade:
                 return recorded
             outcome = entry_outcome(self._repo, order.order_ref)
             now_ms = self._repo.clock()
+            if not outcome.proven and limit_was_too_far_when_asked:
+                raise EntryOutcomeWaitRefused(
+                    ENTRY_OUTCOME_LIMIT_TOO_FAR,
+                    f"The wait for this entry's outcome was asked to run {until_ms - now_ms:,} ms, and the entry is "
+                    f"not proven yet. No wait is longer than {MAX_ENTRY_OUTCOME_WAIT_MS:,} ms.",
+                )
             run = None if command.run_id is None else self._repo.active_run(command.strategy_instance_id or "")
             run_active = run is not None and run.run_id == command.run_id
             if not outcome.proven and not run_active:
