@@ -150,6 +150,8 @@ class AccountReading:
 
     began_ms: int
     ended_ms: int
+    # The newest record on the custody log as the read began: what was written after it came later.
+    began_after_sequence: int
     # Dollars, exact as the broker wrote them. None when the read failed or stated none.
     buying_power: Decimal | None
     # Whether the read raised or did not answer inside its bound.
@@ -163,6 +165,7 @@ class ReadingBegun:
     """One reading of the account, started and not yet waited for."""
 
     began_ms: int
+    began_after_sequence: int
     transfers_from_ms: int
     account: asyncio.Future[BrokerOptionAccountSnapshot]
     transfers: asyncio.Future[list[BrokerActivity]]
@@ -338,6 +341,7 @@ class EntryBuyingPowerWatch:
         began_ms = self._repo.clock()
         return ReadingBegun(
             began_ms=began_ms,
+            began_after_sequence=self._repo.last_custody_sequence(),
             transfers_from_ms=transfers_from_ms,
             account=asyncio.Task(
                 asyncio.wait_for(self._read.get_option_account(), timeout=bound_ms / 1000),
@@ -381,6 +385,7 @@ class EntryBuyingPowerWatch:
         return AccountReading(
             began_ms=begun.began_ms,
             ended_ms=ended_ms,
+            began_after_sequence=begun.began_after_sequence,
             buying_power=None if isinstance(account, Exception) else account.options_buying_power,
             failed=isinstance(account, Exception),
             cash_transfers=None if listed is None else frozenset(activity.activity_id for activity in listed),
@@ -516,7 +521,7 @@ def _compare(
     reason = forced or _why_not_compared(
         conn, watched=watched, outcome=outcome, contracts_filled=contracts_filled, first_cents=first_cents,
         second_cents=second_cents, cost_cents=cost_cents, set_aside_cents=set_aside_cents,
-        effect_operation_id=effect_operation_id, broker_order_id=broker_order_id, judged=judged, now_ms=now_ms,
+        effect_operation_id=effect_operation_id, broker_order_id=broker_order_id, judged=judged,
     )
     result = BuyingPowerCheckResult.UNKNOWN
     if reason is None:
@@ -561,7 +566,6 @@ def _why_not_compared(
     effect_operation_id: str,
     broker_order_id: str | None,
     judged: bool,
-    now_ms: int,
 ) -> NotComparedReason | None:
     """The first reason this pair of readings cannot be judged, or ``None`` when it can."""
     first, second = watched.first, watched.second
@@ -589,7 +593,7 @@ def _why_not_compared(
         return NotComparedReason.CASH_MOVED
     if _another_order_moved(
         conn, order_ref=watched.order_ref, effect_operation_id=effect_operation_id, broker_order_id=broker_order_id,
-        from_ms=first.began_ms, to_ms=now_ms,
+        after_sequence=first.began_after_sequence,
     ):
         return NotComparedReason.OTHER_ORDER_MOVED
     if not judged:
@@ -619,22 +623,27 @@ def _premium_paid_cents(
 
 def _another_order_moved(
     conn: sqlite3.Connection, *, order_ref: str, effect_operation_id: str, broker_order_id: str | None,
-    from_ms: int, to_ms: int,
+    after_sequence: int,
 ) -> bool:
-    """Whether any other order of the account was working, or was recorded about, from ``from_ms`` to ``to_ms``.
+    """Whether any other order of the account is working, or was recorded about after ``after_sequence``.
 
-    A record about another order is one that names another effect, another
-    order, or another broker order: another bot's entry or exit, a manual
-    order, an order from outside the Clerk as it was seen. The window runs
-    to the judgment: the Clerk knows when it saw an outside order, never
-    when that order traded.
+    ``after_sequence`` is the newest record on the custody log as the first
+    reading began, so what is asked is everything the Clerk has learned of
+    another order from then to now, the moment of judgment. It is asked by
+    the log's own order and not by a clock: two records of one millisecond
+    are still one before the other. A record about another order is one
+    that names another effect, another order, or another broker order:
+    another bot's entry or exit, this bot's own exit, a manual order, an
+    order from outside the Clerk as it was seen. The Clerk knows when it
+    saw an outside order, never when that order traded, which is why
+    nothing here ends at the second reading.
     """
     about_another = conn.execute(
-        "SELECT 1 FROM custody_transitions WHERE recorded_at_ms BETWEEN ? AND ? AND ("
+        "SELECT 1 FROM custody_transitions WHERE sequence > ? AND ("
         "(effect_operation_id IS NOT NULL AND effect_operation_id != ?) "
         "OR (order_ref IS NOT NULL AND order_ref != ?) "
         "OR (broker_order_id IS NOT NULL AND broker_order_id != ?)) LIMIT 1",
-        (from_ms, to_ms, effect_operation_id, order_ref, broker_order_id or ""),
+        (after_sequence, effect_operation_id, order_ref, broker_order_id or ""),
     ).fetchone()
     if about_another is not None:
         return True

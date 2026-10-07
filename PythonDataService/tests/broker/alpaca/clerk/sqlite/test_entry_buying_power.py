@@ -36,8 +36,10 @@ from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
     PASS_AFTER_SECOND_READING_BOUND_MS,
     REVIEWED_SUMMARY_CODE,
     NotComparedReason,
+    _another_order_moved,
     under_reserved_cause,
 )
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import EntryBuyingPowerComparedFacts
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
@@ -490,6 +492,29 @@ async def test_another_bots_order_working_between_the_readings_makes_the_pair_un
     assert paper.notices() == []
 
 
+async def test_an_order_still_working_counts_as_another_order_though_nothing_was_recorded_about_it(paper: Paper) -> None:
+    # Bot b's entry rests at Alpaca, unchanged, while a's entry fills.
+    other = await paper.resting("b")
+    paper.wait(1_000)
+    order_ref = await paper.filled(shows="99806.00", sid="a")
+    order = paper.repo.order(order_ref)
+    assert order is not None
+
+    def another_order_moved() -> bool:
+        """Asked from the newest record on the books, so no record of any order comes after it."""
+        with paper.repo.write_fence() as conn:
+            return _another_order_moved(
+                conn, order_ref=order_ref, effect_operation_id=order.effect_operation_id,
+                broker_order_id=order.broker_order_id, after_sequence=paper.repo.last_custody_sequence(),
+            )
+
+    assert paper.order_state(other) == "new" and another_order_moved() is True
+    # Once b's order has ended, nothing else of the account is working.
+    paper.venue.option_order_ends(other)
+    await paper.pass_()
+    assert paper.order_state(other) == "canceled" and another_order_moved() is False
+
+
 @pytest.mark.usefixtures("judged")
 async def test_another_bots_order_that_came_and_went_between_the_readings_makes_the_pair_unknown(paper: Paper) -> None:
     order_ref = await paper.resting("a")
@@ -904,3 +929,46 @@ async def test_the_owners_review_over_http_ends_the_hold_and_answers_with_the_bo
     assert (again.status_code, again.json()["reviewed"]) == (200, False)
     assert nobody.status_code == 404 and unknown.status_code == 404
     assert len([row for row in paper.log() if row[1] == REVIEWED_SUMMARY_CODE]) == 1
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_part_fill_is_compared_with_what_filled_and_with_its_share_of_the_set_aside(paper: Paper) -> None:
+    order_ref = await paper.resting(units=2)
+    paper.wait(1_000)
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    # The other contract never fills: the keeper cancels it at the entry's deadline.
+    paper.wait(WAIT_MS)
+    await paper.round()
+    assert paper.outcome(order_ref).standing is EntryStanding.PART_FILLED
+    paper.account.buying_power = Decimal("99806.00")
+
+    found = await paper.compared(order_ref)
+
+    # Two contracts set aside $388.00 and nine cents of fees. One of the two is $194.045, up to the cent.
+    assert (found.contracts_asked, found.contracts_filled, found.commitment_cents) == (2, 1, 38_809)
+    assert (found.set_aside_for_filled_cents, found.premium_paid_cents, found.fall_cents) == (19_405, 19_400, 19_400)
+    assert (found.result, found.holds) == ("consistent", False)
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_bots_second_entry_is_compared_on_its_own_fills_and_not_on_the_first_entrys(paper: Paper) -> None:
+    first = await paper.filled(shows="99806.00")
+    assert (await paper.compared(first)).result == "consistent"
+    sold = await paper.exit()
+    closing_ref = next(ref for ref in sold.child_order_refs if ref != first)
+    await paper.stream_fill(closing_ref, contracts=1, filled_in_all=1, price="1.90", execution_id="x-close")
+    await paper.pass_()
+    assert paper.held() == {}
+    # The sale gave $190.00 back; the second entry starts from there.
+    paper.account.buying_power = Decimal("99996.00")
+    assert await paper.sync.tick() == "observed"
+
+    second = await paper.filled(shows="99802.00")
+    found = await paper.compared(second)
+
+    # The first entry's close was recorded in the same millisecond the second entry's reading began,
+    # and before it: it is not "another order" to the second entry.
+    assert second != first
+    assert (found.result, found.premium_paid_cents, found.fall_cents) == ("consistent", 19_400, 19_400)
+    assert (found.first_buying_power, found.second_buying_power) == ("99996.00", "99802.00")
+    assert len(paper.comparisons(first)) == 1 and len(paper.comparisons(second)) == 1
