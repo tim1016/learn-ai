@@ -1,0 +1,335 @@
+"""The scheduled close on a Dry Run, and what it costs an account that trades shares only (#2913).
+
+**A Dry Run.** Its Clerk has no pass on a timer, so its keeper is what closes
+a running bot's contract on its expiry day. The simulation prices that close
+as it prices every close: from the newest quote kept for the contract, saying
+how old it is. The scene is ``test_option_entry_and_exit``'s: one SPY call
+expiring Friday 2026-09-18, bought on the 8th at $1.94 a share.
+
+**A stock-only account.** The keeper's round and the pass's step read what is
+held once, find no recorded contract, and stop there: nothing is written, no
+lock is taken, and no row of the custody log is read however long it is.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.sqlite import reads, reconcile
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS, DeadlineKeeper
+from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.scheduled_close import (
+    CloseStanding,
+    ScheduledCloseRound,
+    drive_scheduled_closes,
+    held_contracts,
+    scheduled_close_state,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXIT_NOT_FLAT_REASON_CODE,
+    SCHEDULED_CLOSE_MISSED_REASON_CODE,
+)
+from app.broker.contract.models import OrderSide
+from app.options.simulated_fill import SimulatedFillModel
+from app.services.session_authority import et_minute_of_day_ms
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
+    _broker_leg,
+    _FakeReadPort,
+    _FakeTradePort,
+    _make_held_position,
+    _TestClock,
+    _walk_clock_to,
+)
+from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
+    PaperOptions,
+    paper,  # noqa: F401 -- pytest fixture, used by name
+)
+from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import (
+    RUN,
+    SID,
+    SYMBOL,
+    _DryRun,
+    _quote,
+    dry_run,  # noqa: F401 -- pytest fixture, used by name
+)
+
+EXPIRY = date(2026, 9, 18)
+# 45 minutes before the four o'clock close of a full day.
+DUE = et_minute_of_day_ms(EXPIRY, 15 * 60 + 15)
+CLOSE = et_minute_of_day_ms(EXPIRY, 16 * 60)
+
+
+def _keeper(account: _DryRun) -> DeadlineKeeper:
+    """The Dry Run account's own keeper, as its composition built it. A test asks it for each round."""
+    runtime = get_clerk_runtime(account.binding.sealed_account_id or "")
+    assert runtime is not None and isinstance(runtime.deadline_keeper, DeadlineKeeper)
+    return runtime.deadline_keeper
+
+
+def _until(account: _DryRun, at_ms: int) -> None:
+    """Days pass. The Clerk's hold on its account is taken up again where it left it."""
+    assert at_ms >= account.clock()
+    account.clock.value = at_ms
+    account.repo.revive_execution_lease()
+
+
+def _hand_over(account: _DryRun, bid: str, ask: str, *, age_ms: int = 200) -> None:
+    """The runner passes the Clerk the newest quote it holds for the contract."""
+    account.clerk.keep_option_quotes({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
+
+
+def _notice(account: _DryRun, reason_code: str = SCHEDULED_CLOSE_MISSED_REASON_CODE) -> dict | None:
+    return account.repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code=reason_code, strategy_instance_id=SID)
+
+
+# ── a Dry Run ────────────────────────────────────────────────────────────
+
+
+async def test_a_running_dry_runs_contract_is_closed_at_its_time_from_the_newest_quote_kept_saying_its_age(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE - 60_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    keeper = _keeper(dry_run)
+
+    early = await keeper.tick()
+    assert early.closes.taken == () and early.wake_in_ms == IDLE_WAKE_MS and dry_run.held() == {SYMBOL: 1.0}
+
+    _until(dry_run, DUE)
+    done = await keeper.tick()
+
+    # Sold while the run is still the bot's, at the bid kept a minute before: one contract at $2.10.
+    assert dry_run.repo.active_run(SID) is not None
+    assert len(done.closes.taken) == 1 and dry_run.held() == {}
+    assert dry_run.fills()[-1] == (SYMBOL, "sell", 1.0, 2.10, 100)
+    [sale] = [fill for fill in dry_run.clerk.synthesized_option_fills().values() if fill.request.side is OrderSide.SELL]
+    assert (sale.fill_model, sale.fill_price, sale.quote_age_ms) == (
+        SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("2.10"), 60_200
+    )
+    [state] = scheduled_close_state(dry_run.repo, SID)
+    assert (state.standing, state.taken_at_ms, state.late) == (CloseStanding.FLAT, DUE, False)
+
+
+async def test_a_dry_runs_keeper_sleeps_to_the_close_that_comes_due_and_to_the_end_of_its_session(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+
+    _until(dry_run, DUE - 1_300)
+    before = await keeper.tick()
+    _until(dry_run, CLOSE - 700)
+    after = await keeper.tick()
+
+    # To the due time while the close is still to come; to the session's close once it is due and not made.
+    assert before.wake_in_ms == 1_300 and after.wake_in_ms == 700
+
+
+async def test_a_second_round_never_sells_a_dry_runs_contract_twice(dry_run: _DryRun) -> None:  # noqa: F811
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    keeper = _keeper(dry_run)
+    await keeper.tick()
+    sold = [fill for fill in dry_run.fills() if fill[1] == "sell"]
+
+    again = await keeper.tick()
+    await dry_run.clerk.reconcile_once()
+
+    assert len(sold) == 1 and [fill for fill in dry_run.fills() if fill[1] == "sell"] == sold
+    assert again.closes.taken == () and dry_run.orders() == 2
+
+
+async def test_with_nothing_bid_a_dry_runs_close_fails_and_the_sessions_end_records_it_as_missed(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+
+    done = await keeper.tick()
+
+    # Taken, and not priced: the simulation sells nothing for nothing. The position is still open.
+    assert len(done.closes.taken) == 1 and dry_run.held() == {SYMBOL: 1.0}
+    assert _notice(dry_run, EXIT_NOT_FLAT_REASON_CODE) is not None and _notice(dry_run) is None
+    [failed] = scheduled_close_state(dry_run.repo, SID)
+    assert failed.standing is CloseStanding.FAILED
+
+    _until(dry_run, CLOSE)
+    ended = await keeper.tick()
+
+    assert ended.closes.missed == ((SID, SYMBOL),) and dry_run.held() == {SYMBOL: 1.0}
+    notice = _notice(dry_run)
+    assert notice is not None and SYMBOL in notice["explanation"] and "Dry Run" in notice["explanation"]
+    [missed] = scheduled_close_state(dry_run.repo, SID)
+    assert (missed.standing, missed.taken_at_ms) == (CloseStanding.MISSED, DUE)
+    assert [fill for fill in dry_run.fills() if fill[1] == "sell"] == []
+
+
+async def test_a_stopped_dry_run_whose_run_end_close_sold_its_contract_owes_no_close(dry_run: _DryRun) -> None:  # noqa: F811
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE - 60 * 60_000)
+    _hand_over(dry_run, "2.10", "2.16")
+    await dry_run.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN)
+    await dry_run.clerk.reconcile_once()
+    assert dry_run.held() == {}
+
+    _until(dry_run, DUE)
+    done = await _keeper(dry_run).tick()
+    await dry_run.clerk.reconcile_once()
+
+    assert done.closes == ScheduledCloseRound() and dry_run.orders() == 2
+    assert scheduled_close_state(dry_run.repo, SID) == ()
+
+
+# ── an account that trades shares only ───────────────────────────────────
+
+
+async def _a_stock_account_holding_shares(root: Path, *, transitions: int) -> ClerkSqliteRepository:
+    """A stock-only account whose one bot holds ten shares, and ``transitions`` more records in its log."""
+    clock = _TestClock(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=root, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+    order_ref = await _make_held_position(
+        repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", run_id="run-1", quantity=10.0
+    )
+    assert repo.position("spy-bot", "SPY") == 10.0
+    order = repo.order(order_ref)
+    assert order is not None
+    for number in range(transitions):
+        fold_uncertain(repo, effect_operation_id=order.effect_operation_id, order_ref=order.order_ref, why=f"n{number}")
+    return repo
+
+
+class _StepsCounted:
+    """How many steps SQLite's machine took on a store's connection: it grows with every row a query reads."""
+
+    def __init__(self, repo: ClerkSqliteRepository) -> None:
+        self._repo = repo
+        self.steps = 0
+
+    def __enter__(self) -> _StepsCounted:
+        self._repo._conn.set_progress_handler(self._count, 1)
+        return self
+
+    def __exit__(self, *_raised: object) -> None:
+        self._repo._conn.set_progress_handler(None, 1)
+
+    def _count(self) -> int:
+        self.steps += 1
+        return 0
+
+
+async def test_a_stock_only_accounts_books_are_never_read_for_a_close_however_long_their_log(tmp_path: Path) -> None:
+    """The keeper's round with its close step, the pass's step and the worklist read cost a stock account the same
+    few steps whether its log holds a handful of records or three thousand more."""
+    costs: dict[int, tuple[int, int, int]] = {}
+    for transitions in (0, 3_000):
+        repo = await _a_stock_account_holding_shares(tmp_path / str(transitions), transitions=transitions)
+        try:
+            written = repo.last_custody_sequence()
+            venue, intake = _FakeTradePort(), ReentrantAsyncLock()
+            keeper = DeadlineKeeper(repo=repo, trade=venue, off_loop=run_inline)
+            keeper.keep_scheduled_closes(intake=intake, pricing=UNPRICEABLE_RECOVERY)
+            with _StepsCounted(repo) as the_round:
+                done = await keeper.tick()
+            with _StepsCounted(repo) as the_step:
+                stepped = await drive_scheduled_closes(repo, trade=venue, intake=intake, pricing=UNPRICEABLE_RECOVERY)
+            with _StepsCounted(repo) as the_read:
+                read = held_contracts(repo, repo.clock())
+            assert done.closes == stepped == ScheduledCloseRound() and done.wake_in_ms == IDLE_WAKE_MS
+            assert read.held == () and read.noticed == () and repo.last_custody_sequence() == written
+            costs[transitions] = (the_round.steps, the_step.steps, the_read.steps)
+        finally:
+            repo.close()
+
+    assert costs[0] == costs[3_000]
+    # A few dozen steps each: one look at the one position, one at the empty table of contracts, one at the notices.
+    assert all(0 < steps < 200 for steps in costs[0]), costs[0]
+
+
+def _plan(repo: ClerkSqliteRepository, sql: str, params: tuple[object, ...] = ()) -> list[str]:
+    with repo.write_fence() as conn:
+        return [row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params).fetchall()]
+
+
+def test_what_is_held_is_read_from_the_positions_and_never_scans_the_custody_log(paper: PaperOptions) -> None:  # noqa: F811
+    plan = _plan(paper.repo, reads.HELD_OPTION_CONTRACTS_SQL)
+
+    # It starts at the positions, and reaches the recorded contracts by their key. No other table is read.
+    read = [step for step in plan if step.startswith(("SCAN", "SEARCH"))]
+    assert [step.split()[1] for step in read] == ["p", "contract"]
+    assert read[1].startswith("SEARCH contract USING") and not any(step.startswith("SCAN contract") for step in plan)
+
+
+async def test_on_books_holding_no_option_contract_the_step_takes_no_lock(tmp_path: Path) -> None:
+    repo = await _a_stock_account_holding_shares(tmp_path, transitions=0)
+
+    class _LockThatMustNotBeTaken(ReentrantAsyncLock):
+        async def off_loop(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("the intake lock was taken on books that hold no option contract")
+
+    try:
+        done = await drive_scheduled_closes(
+            repo, trade=_FakeTradePort(), intake=_LockThatMustNotBeTaken(), pricing=UNPRICEABLE_RECOVERY
+        )
+
+        assert done == ScheduledCloseRound()
+    finally:
+        repo.close()
+
+
+async def _a_stopped_stock_run_with_a_working_entry(root: Path) -> list[tuple[str, str, str]]:
+    """One pass over a stock-only account whose stopped run left an entry working; the log it wrote."""
+    clock = _TestClock(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=root, clock=clock)
+    try:
+        repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+        submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+        venue = _FakeTradePort()
+        await submit_enter(
+            repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", decision_id="d-1", lifecycle_run_id="run-1",
+            leg=_broker_leg(), trade=venue,
+        )
+        submit_stop_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+        _walk_clock_to(repo, clock() + 60_000)
+        await reconcile_account(repo, read=_FakeReadPort(), trade=venue, pricing=UNPRICEABLE_RECOVERY)
+        with repo.write_fence() as conn:
+            rows = conn.execute(
+                "SELECT transition_kind, summary_code, facts_json FROM custody_transitions ORDER BY sequence"
+            ).fetchall()
+        return [(row[0], row[1], row[2]) for row in rows]
+    finally:
+        repo.close()
+
+
+async def test_a_stock_only_account_is_recorded_the_same_with_the_step_and_without_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_the_step = await _a_stopped_stock_run_with_a_working_entry(tmp_path / "with")
+
+    async def no_step(*_args: object, **_kwargs: object) -> ScheduledCloseRound:
+        return ScheduledCloseRound()
+
+    monkeypatch.setattr(reconcile, "drive_scheduled_closes", no_step)
+    without_it = await _a_stopped_stock_run_with_a_working_entry(tmp_path / "without")
+
+    assert with_the_step == without_it
+    # The scenario is not an empty one: the pass cancelled the stopped run's working entry.
+    assert "ORDER_CANCEL_REQUESTED" in [kind for kind, _summary, _facts in with_the_step]
