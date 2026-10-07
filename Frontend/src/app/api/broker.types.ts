@@ -153,6 +153,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-buying-power-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bot Option Buying Power Checks
+         * @description Each option entry of one bot beside Alpaca's option buying power, newest first (ADR 0076 decision 26).
+         *
+         *     Reads the Clerk's books only. A bot in a simulation is answered as
+         *     that: no comparison is made there, and none is implied.
+         */
+        get: operations["get_bot_option_buying_power_checks_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_buying_power_checks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-buying-power-hold/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review Bot Option Buying Power Hold
+         * @description The owner has reviewed one bot's under-reserved notice: end it, and let the bot enter again.
+         *
+         *     The only way that notice ends. Asked again, or for a bot with no notice
+         *     open, it changes nothing and says so.
+         */
+        post: operations["review_bot_option_buying_power_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_buying_power_hold_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/option-event-holds/acknowledge": {
         parameters: {
             query?: never;
@@ -2399,6 +2445,46 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare (custody_command).
          */
         post: operations["fleet_custody_historical_recovery_prepare_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/option-buying-power-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Custody Option Buying Power Checks
+         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/option-buying-power-checks (custody_read).
+         */
+        get: operations["fleet_custody_option_buying_power_checks_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_buying_power_checks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/option-buying-power-hold/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Custody Option Buying Power Hold Review
+         * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/option-buying-power-hold/review (custody_command).
+         */
+        post: operations["fleet_custody_option_buying_power_hold_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_buying_power_hold_review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -19975,6 +20061,118 @@ export interface components {
             /** Target */
             target?: string | null;
         };
+        /**
+         * OptionBuyingPowerAmount
+         * @description One amount: whole cents, and the dollars a page shows for it.
+         */
+        OptionBuyingPowerAmount: {
+            /** Cents */
+            cents: number;
+            /** Dollars */
+            dollars: string;
+        };
+        /**
+         * OptionBuyingPowerCheck
+         * @description One option entry's comparison, as a page shows it.
+         */
+        OptionBuyingPowerCheck: {
+            /** Compared At Ms */
+            compared_at_ms?: number | null;
+            /** Contract */
+            contract: string;
+            /** Contracts Asked */
+            contracts_asked: number;
+            /** Contracts Filled */
+            contracts_filled: number | null;
+            fall: components["schemas"]["OptionBuyingPowerAmount"] | null;
+            first_reading: components["schemas"]["OptionBuyingPowerReading"] | null;
+            /** Holds */
+            holds: boolean;
+            /** Order Ref */
+            order_ref: string;
+            premium_paid: components["schemas"]["OptionBuyingPowerAmount"] | null;
+            /** Reason Code */
+            reason_code: ("JUDGMENT_NOT_SWITCHED_ON" | "FIRST_READING_FAILED" | "FIRST_READING_NOT_READY" | "FIRST_READING_WITHOUT_FIGURE" | "FIRST_READING_STALE" | "SECOND_READING_FAILED" | "SECOND_READING_WITHOUT_FIGURE" | "READING_NOT_WHOLE_CENTS" | "PREMIUM_NOT_WHOLE_CENTS" | "OTHER_ORDER_MOVED" | "CASH_MOVED" | "CASH_MOVEMENT_UNREAD" | "ACCOUNT_NOT_CHECKED_AFTER" | "ACCOUNT_NOT_CLEAN_AFTER" | "ENTRY_BOUGHT_NOTHING" | "UNFILLED_PART_RELEASE_NOT_VERIFIED" | "OUTCOME_NOT_PROVEN" | "CLERK_RESTARTED" | "COMPARISON_FAILED" | "SIMULATION" | "NOT_COMPARED_YET") | null;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "consistent" | "unknown" | "over_reserved" | "under_reserved_unexplained";
+            /** Result Label */
+            result_label: string;
+            second_reading: components["schemas"]["OptionBuyingPowerReading"] | null;
+            /** Sent At Ms */
+            sent_at_ms?: number | null;
+            /** Sentence */
+            sentence: string;
+            set_aside: components["schemas"]["OptionBuyingPowerAmount"];
+            set_aside_for_filled: components["schemas"]["OptionBuyingPowerAmount"] | null;
+        };
+        /**
+         * OptionBuyingPowerChecksResponse
+         * @description A bot's option entries, newest first, each with its comparison, and the notice that holds the bot if one does.
+         */
+        OptionBuyingPowerChecksResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Checks */
+            checks: components["schemas"]["OptionBuyingPowerCheck"][];
+            hold: components["schemas"]["OptionBuyingPowerHold"] | null;
+            /** Judged */
+            judged: boolean;
+            /** Simulation */
+            simulation: boolean;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * OptionBuyingPowerHold
+         * @description The notice that holds a bot's new entries until the owner has reviewed it.
+         */
+        OptionBuyingPowerHold: {
+            /** Entries */
+            entries: components["schemas"]["OptionBuyingPowerHoldEntry"][];
+            /** Explanation */
+            explanation: string;
+            /** Headline */
+            headline: string;
+            /** Impact */
+            impact: string;
+            /** Next Step */
+            next_step: string;
+            /** Raised At Ms */
+            raised_at_ms: number;
+        };
+        /**
+         * OptionBuyingPowerHoldEntry
+         * @description One entry a bot's notice names, with the notice's two figures.
+         */
+        OptionBuyingPowerHoldEntry: {
+            fall: components["schemas"]["OptionBuyingPowerAmount"];
+            /** Order Ref */
+            order_ref: string;
+            set_aside: components["schemas"]["OptionBuyingPowerAmount"];
+        };
+        /**
+         * OptionBuyingPowerHoldReviewResponse
+         * @description What a review did, and the bot's comparisons as they now stand.
+         */
+        OptionBuyingPowerHoldReviewResponse: {
+            /** Reviewed */
+            reviewed: boolean;
+            state: components["schemas"]["OptionBuyingPowerChecksResponse"];
+        };
+        /**
+         * OptionBuyingPowerReading
+         * @description One read of the account's option buying power, with the Clerk's clock as the read began and ended.
+         */
+        OptionBuyingPowerReading: {
+            /** Began Ms */
+            began_ms: number;
+            buying_power: components["schemas"]["OptionBuyingPowerAmount"] | null;
+            /** Ended Ms */
+            ended_ms: number;
+        };
         /** OptionContractView */
         OptionContractView: {
             /**
@@ -25739,7 +25937,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "OPTION_POSITION_ENDED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_BUYING_POWER_COMPARED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "OPTION_POSITION_ENDED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -27414,6 +27612,74 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_bot_option_buying_power_checks_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_buying_power_checks_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionBuyingPowerChecksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_bot_option_buying_power_hold_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__option_buying_power_hold_review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionBuyingPowerHoldReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
@@ -31864,6 +32130,82 @@ export interface operations {
         };
     };
     fleet_custody_historical_recovery_prepare_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__historical_execution_recovery_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_option_buying_power_checks_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_buying_power_checks_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_custody_option_buying_power_hold_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__option_buying_power_hold_review_post: {
         parameters: {
             query?: never;
             header?: {

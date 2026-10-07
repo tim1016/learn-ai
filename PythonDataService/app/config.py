@@ -287,6 +287,14 @@ class Settings(BaseSettings):
     # limit. A starting value, to be set from how late the second stream's
     # minute actually arrives; a change applies to runs that start afterwards.
     PRICING_BAR_WAIT_MS: int = Field(default=5_000, ge=0, le=20_000)
+    # The comparison of an option entry with Alpaca's option buying power (ADR
+    # 0076 decision 26). Off: both readings, the fall and what was set aside are
+    # recorded for every option entry on a real account, each comparison reads
+    # "unknown: not switched on", and no bot is ever held. On: a clean pair of
+    # readings is judged, and a fall of more than the bot set aside holds that
+    # bot's new entries until the owner has reviewed it. Stays off until Alpaca
+    # has been seen, on the account, to move the figure by an order's cost.
+    ALPACA_OPTION_BUYING_POWER_JUDGED: bool = False
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
     # live/production path — it exists to rehearse reject/throttle/conflict/

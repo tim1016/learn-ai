@@ -25,6 +25,10 @@ EXECUTION_PRICE_CONFLICT_REASON_CODE = "EXECUTION_PRICE_CONFLICT"
 # A fill recorded on an ENTER the Clerk had already folded terminal (#2348):
 # contradicting evidence, never absorbed silently.
 FAILED_ENTER_FILLED_REASON_CODE = "FAILED_ENTER_FILLED"
+# An option entry across which the broker's option buying power fell by more than
+# the bot had set aside, between two readings nothing else explains (ADR 0076
+# decision 26). One bot's new entries wait for the owner's review; its exits do not.
+OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE = "OPTION_BUYING_POWER_UNDER_RESERVED"
 # A broker order the trade-update fold cannot state truthfully (#2363), e.g. a
 # multi-leg parent whose ``side`` is null. Contained to that order: recorded
 # and surfaced, never folded, never allowed to wedge the execution stream.
@@ -460,6 +464,76 @@ class ScheduledCloseMissedCause:
         if symbols != sorted(set(symbols)):
             raise ValueError("scheduled-close-missed contracts must have unique sorted symbols")
         return cls(closes=closes)
+
+
+@dataclass(frozen=True)
+class UnderReservedEntry:
+    """One option entry the broker took more for than the bot had set aside, both in whole cents."""
+
+    order_ref: str
+    fall_cents: int
+    set_aside_cents: int
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "order_ref": self.order_ref,
+            "fall_cents": self.fall_cents,
+            "set_aside_cents": self.set_aside_cents,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> UnderReservedEntry:
+        if not isinstance(value, dict):
+            raise ValueError("under-reserved entry must be an object")
+        _require_exact_keys(value, {"order_ref", "fall_cents", "set_aside_cents"})
+        order_ref = value["order_ref"]
+        if not isinstance(order_ref, str) or not order_ref:
+            raise ValueError("under-reserved order_ref must be a non-empty string")
+        for name in ("fall_cents", "set_aside_cents"):
+            cents = value[name]
+            if isinstance(cents, bool) or not isinstance(cents, int) or cents < 0:
+                raise ValueError(f"under-reserved {name} must be whole cents, zero or more")
+        if value["fall_cents"] <= value["set_aside_cents"]:
+            raise ValueError("an under-reserved entry's fall is more than what was set aside")
+        return cls(
+            order_ref=order_ref, fall_cents=value["fall_cents"], set_aside_cents=value["set_aside_cents"]
+        )
+
+
+@dataclass(frozen=True)
+class BuyingPowerUnderReservedCause:
+    """Every option entry of one bot still under review for an unexplained fall (ADR 0076 decision 26).
+
+    Entries accumulate while the notice is open, so a second one found
+    before the owner's review widens the notice instead of replacing the
+    first.
+    """
+
+    entries: tuple[UnderReservedEntry, ...]
+
+    def with_entry(self, entry: UnderReservedEntry) -> BuyingPowerUnderReservedCause:
+        """Name ``entry``, replacing any earlier record of the same order."""
+        others = (existing for existing in self.entries if existing.order_ref != entry.order_ref)
+        return BuyingPowerUnderReservedCause(
+            entries=tuple(sorted((*others, entry), key=lambda item: item.order_ref))
+        )
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"entries": [entry.to_mapping() for entry in self.entries]}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> BuyingPowerUnderReservedCause:
+        if not isinstance(value, dict):
+            raise ValueError("under-reserved cause must be an object")
+        _require_exact_keys(value, {"entries"})
+        raw = value["entries"]
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("under-reserved cause must name at least one entry")
+        entries = tuple(UnderReservedEntry.from_mapping(item) for item in raw)
+        refs = [entry.order_ref for entry in entries]
+        if refs != sorted(set(refs)):
+            raise ValueError("under-reserved entries must have unique sorted order_refs")
+        return cls(entries=entries)
 
 
 @dataclass(frozen=True)
@@ -953,6 +1027,7 @@ __all__ = [
     "HOLD_REASON_CODE_SQL_PARAMS",
     "HOLD_REASON_CODE_SQL_PLACEHOLDERS",
     "LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE",
+    "OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE",
     "OPTION_EVENTS_NOT_READ_REASON_CODE",
     "OPTION_EVENT_AFTER_A_LOT_CLOSED_REASON_CODE",
     "OPTION_EVENT_CASH_NOT_WHOLE_CENTS_REASON_CODE",
@@ -978,6 +1053,7 @@ __all__ = [
     "STREAM_HEALTH_HOLD_REASON_CODE",
     "UNEXPLAINED_ORDER_HOLD_REASON_CODE",
     "UNFOLDABLE_BROKER_ORDER_REASON_CODE",
+    "BuyingPowerUnderReservedCause",
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "ExitStuckCause",
@@ -990,6 +1066,7 @@ __all__ = [
     "PositionDriftCause",
     "PositionDriftObservation",
     "StreamHealthHoldCause",
+    "UnderReservedEntry",
     "UnexplainedOrderCause",
     "UnfoldableBrokerOrder",
     "UnfoldableBrokerOrderCause",
