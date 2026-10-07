@@ -44,6 +44,10 @@ ended. Only so many answers are kept; the oldest go first.
 Both lookups block. A caller on an event loop runs a read through
 ``off_the_loop``, in threads kept for it: never the loop's default ones,
 where the Clerk's execution-lease heartbeat runs.
+
+The threads are started when first needed and stopped with the app
+(``close_lookup_threads``). A lookup given up on while it still waited for a
+thread is never begun: nobody is waiting for what it would learn.
 """
 
 from __future__ import annotations
@@ -86,11 +90,36 @@ MOST_KEPT = 256
 # one: a role added later holds neither until it says so, and asks the coordinator.
 _ROLES_THAT_READ_THE_VENDORS = frozenset({"combined", "fleet_coordinator"})
 
+class _Threads:
+    """The threads kept for one kind of work: started when first needed, and stopped with the app. A process
+    that looks nothing up starts none."""
+
+    def __init__(self, most: int, named: str) -> None:
+        self._most, self._named = most, named
+        self._guard = threading.Lock()
+        self._pool: ThreadPoolExecutor | None = None
+
+    def submit[T](self, work: Callable[..., T], /, *args: Any) -> Future[T]:
+        with self._guard:
+            if self._pool is None:
+                self._pool = ThreadPoolExecutor(max_workers=self._most, thread_name_prefix=self._named)
+            return self._pool.submit(work, *args)
+
+    def close(self) -> None:
+        """Stop the threads: each ends once the work already handed over is done, and none idles on. That
+        work is not cancelled, since a read may be waiting on it with no bound of its own. The next thing
+        handed over starts them again."""
+        with self._guard:
+            pool, self._pool = self._pool, None
+        if pool is not None:
+            pool.shutdown(wait=False)
+
+
 # The threads the lookups and the reads run in. A lookup that hangs holds one of its own vendor's threads and
 # no other's, so a slow FRED cannot keep Polygon from being asked.
-_RATE_THREADS = ThreadPoolExecutor(max_workers=4, thread_name_prefix="option-rate-lookup")
-_DIVIDEND_THREADS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="option-dividend-lookup")
-_READ_THREADS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="option-model-inputs-read")
+_RATE_THREADS = _Threads(4, "option-rate-lookup")
+_DIVIDEND_THREADS = _Threads(8, "option-dividend-lookup")
+_READ_THREADS = _Threads(8, "option-model-inputs-read")
 
 # This process's own clock, for how long a lookup took. Never a time of day.
 _monotonic = time.monotonic
@@ -98,7 +127,15 @@ _monotonic = time.monotonic
 
 def off_the_loop[T](read: Callable[[], T]) -> asyncio.Future[T]:
     """Run a blocking read of the model's inputs for a caller on an event loop, in the threads kept for it."""
-    return asyncio.get_running_loop().run_in_executor(_READ_THREADS, contextvars.copy_context().run, read)
+    return asyncio.wrap_future(
+        _READ_THREADS.submit(contextvars.copy_context().run, read), loop=asyncio.get_running_loop()
+    )
+
+
+def close_lookup_threads() -> None:
+    """Stop the threads the rate and the dividends are looked up and read in, if this process ever started any."""
+    for threads in (_RATE_THREADS, _DIVIDEND_THREADS, _READ_THREADS):
+        threads.close()
 
 
 class DividendsUnknown(Exception):
@@ -341,9 +378,11 @@ def _sources(
 class _Kept[T]:
     value: T
     until_ms: int
+    # When the lookup it came from began, on this process's own clock.
+    began: float
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _Running[T]:
     """One lookup in a thread of its own."""
 
@@ -353,6 +392,8 @@ class _Running[T]:
     began: float
     # How long a read waits for it, counted from when it began. None: it ends itself.
     bound_s: float | None
+    # Its place in the line for a thread: what is cancelled when it is given up on before it got one.
+    queued: Future[None] | None = None
 
 
 class _Shelf[K, T]:
@@ -367,7 +408,7 @@ class _Shelf[K, T]:
 
     def __init__(
         self,
-        threads: ThreadPoolExecutor,
+        threads: _Threads,
         *,
         known: Callable[[T], bool],
         kept_until_ms: Callable[[T, int], int],
@@ -391,7 +432,14 @@ class _Shelf[K, T]:
             if running is not None:
                 return running, False
             running = self._running[key] = _Running(Future(), at_ms, _monotonic(), bound_s)
-        self._threads.submit(self._run, key, lookup, running)
+        try:
+            running.queued = self._threads.submit(self._run, key, lookup, running)
+        except BaseException:
+            # Nothing is left looking like a lookup under way that no thread will ever run.
+            with self._guard:
+                if self._running.get(key) is running:
+                    del self._running[key]
+            raise
         return running, True
 
     def wait_for(self, key: K, at_ms: int, running: _Running[T]) -> T:
@@ -407,7 +455,11 @@ class _Shelf[K, T]:
         with self._guard:
             if self._running.get(key) is running:
                 del self._running[key]
-                self._keep(key, gave_up, self._ended_ms(running))
+                self._keep(key, gave_up, running)
+        if running.queued is not None:
+            # Still waiting for a thread: it is never begun, and its vendor is not asked for an answer nobody
+            # waits for. One already asking its vendor is not stopped by this, and what it learns is kept.
+            running.queued.cancel()
         return gave_up
 
     def clear(self) -> None:
@@ -437,14 +489,21 @@ class _Shelf[K, T]:
             still_waited_for = self._running.get(key) is running
             if still_waited_for:
                 del self._running[key]
-            # Given up on at its bound, it may still have learned the fact. That it failed after all is not news.
-            if still_waited_for or self._known(learned):
-                self._keep(key, learned, self._ended_ms(running))
+            # Given up on at its bound, it may still have learned the fact. That it failed after all is not news,
+            # and what it learned never replaces the answer of a lookup begun after it.
+            if still_waited_for or (self._known(learned) and self._none_begun_since(key, running)):
+                self._keep(key, learned, running)
         running.answer.set_result(learned)
 
-    def _keep(self, key: K, learned: T, ended_ms: int) -> None:
+    def _none_begun_since(self, key: K, running: _Running[T]) -> bool:
+        """No lookup of ``key`` began after ``running`` did: none is under way, and none's answer is kept."""
+        kept = self._kept.get(key)
+        return key not in self._running and (kept is None or kept.began <= running.began)
+
+    def _keep(self, key: K, learned: T, running: _Running[T]) -> None:
+        ended_ms = self._ended_ms(running)
         self._kept.pop(key, None)
-        self._kept[key] = _Kept(learned, self._kept_until_ms(learned, ended_ms))
+        self._kept[key] = _Kept(learned, self._kept_until_ms(learned, ended_ms), running.began)
         for other in [other for other, kept in self._kept.items() if kept.until_ms <= ended_ms]:
             del self._kept[other]
         for oldest in list(self._kept)[: max(len(self._kept) - MOST_KEPT, 0)]:
@@ -543,6 +602,10 @@ def read_option_model_inputs(
         if learned_rate is None:
             looking_rate, begun = _rates.look_up(rate_asked, at_ms, partial(sources.rate, days, today), sources.rate_bound_s)
             joined |= not begun
+            if joined and not wait:
+                # Said before the dividends are asked for. The caller whose lookup this is may be between its
+                # two, and beginning the second one here would ask twice for one answer.
+                raise ModelInputsBeingRead(f"the rate and the dividends for {symbol} are being looked up")
         if learned_dividends is None and not nothing_to_look_up:
             looking_dividends, begun = _dividends.look_up(
                 dividends_asked,

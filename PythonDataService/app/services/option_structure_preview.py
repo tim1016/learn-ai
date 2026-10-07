@@ -33,12 +33,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -105,6 +105,9 @@ MAX_PREVIEW_WINDOWS = 4
 # How long one ask waits for the rate and the dividends to be looked up before it answers that they are
 # not read yet. The lookup goes on, and a later ask finds what it learned.
 MODEL_INPUTS_WAIT_S = 4.0
+# How many previews may wait on that lookup at once. On a fleet Clerk a preview is worked on the capacity kept
+# for commands, so pages' waits are bounded: one more is told at once to ask again (#2913).
+MAX_PREVIEWS_WAITING_ON_INPUTS = 4
 _ASK_AGAIN_MS = 1_000
 _KEY_PREFIX = "preview:"
 # The refusals that say the picked contracts are another shape than the one named, as against money that
@@ -177,9 +180,13 @@ def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
             f"contracts its bots hold or watch. {cannot_see}"
         )
     if reason == NoLine.NO_CAPACITY:
+        # True whether IBKR refused a line of this preview's, or the preview was asked nothing for because
+        # bots hold every line IBKR is known to grant.
         return reason, (
-            "IBKR refused a quote line for this preview: the account's allowance is in use, here or in another "
-            f"IBKR session. {cannot_see}"
+            "No IBKR quote line is free for this preview. IBKR has refused this system a line since it last "
+            "connected, because the account's allowance was in use, here or in another IBKR session, and the "
+            "lines it is known to grant are taken. One more is asked for once a minute, and a bot's contracts "
+            f"come before a preview's. {cannot_see}"
         )
     return PreviewReason.LINE_REFUSED, sentence(f"No quote line could be had for this preview: {reason}")
 
@@ -248,6 +255,14 @@ class _NoFigures:
     reading: _Reading | None = None
 
 
+def _no_line(reason: str, use: LineUse, **found: Any) -> _NoFigures:
+    """A preview that could not have a quote line. Kept out by IBKR's allowance it is waiting: one more line is
+    asked for once a minute while it asks, so it asks again. Kept out by the Clerk's own budget, or by a
+    refusal of another kind, it waits for nothing that passes by itself."""
+    code, notice = _no_line_words(reason, use)
+    return _NoFigures("no_quote_line", code, notice, passes_by_itself=reason == NoLine.NO_CAPACITY, **found)
+
+
 def _watched_view(reading: _Reading) -> OptionPreviewWatched:
     watched = [OptionContract.from_occ_symbol(symbol) for symbol in reading.chain.watched]
     kinds = sorted({(seen.contract.right, seen.contract.expiry_ms) for seen in reading.window})
@@ -299,11 +314,7 @@ def _read(
     arriving = now - since_ms <= ARRIVAL_GRACE_MS
     # With no line spare for a page the supervisor asks IBKR for nothing on its account, so what is missing
     # below is not on its way: it is missing for that reason.
-    no_line = (
-        None
-        if use.pages_not_served is None
-        else _NoFigures("no_quote_line", *_no_line_words(use.pages_not_served, use))
-    )
+    no_line = None if use.pages_not_served is None else _no_line(use.pages_not_served, use)
     chain = quotes.option_chain(underlying)
     not_read = no_line or _NoFigures(
         "listing_not_read",
@@ -371,9 +382,7 @@ def _lines_stand_in_the_way(reading: _Reading) -> _NoFigures | None:
     if not reading.wanted or reading.wanted & reading.chain.watched.keys():
         return None
     if reading.refused:
-        return _NoFigures(
-            "no_quote_line", *_no_line_words(next(iter(reading.refused.values())), reading.use), reading=reading
-        )
+        return _no_line(next(iter(reading.refused.values())), reading.use, reading=reading)
     if reading.arriving:
         return _NoFigures(
             "quotes_arriving",
@@ -394,9 +403,7 @@ def _not_resolved(refused: ContractsNotResolved, reading: _Reading) -> _NoFigure
         # With no contract named, a rule by delta found nothing of its kind watched at all.
         without = reading.refused.get(symbol) if symbol is not None else next(iter(reading.refused.values()), None)
         if without is not None:
-            return _NoFigures(
-                "no_quote_line", *_no_line_words(without, reading.use), leg_ids=refused.leg_ids, contract=contract, reading=reading
-            )
+            return _no_line(without, reading.use, leg_ids=refused.leg_ids, contract=contract, reading=reading)
         if reading.arriving and (symbol is None or symbol in reading.wanted or symbol in reading.chain.watched):
             return _NoFigures(
                 "quotes_arriving",
@@ -431,15 +438,25 @@ def _search_not_done(not_run: SearchNotRun, reading: _Reading) -> _NoFigures:
     return _NoFigures("search_not_done", str(reason), notice, passes_by_itself=reason.still_running, reading=reading)
 
 
-@dataclass(frozen=True, slots=True)
-class _Standing:
-    """What an answer is built from beside the search's own. Two asks of one page stand on the same thing when
-    the page built the same structure and the feed has not reconnected between them."""
+class _InputsWaits:
+    """How many previews are waiting on the rate and the dividends right now. Read and moved on the event loop
+    alone."""
 
-    request: OptionStructurePreviewRequest
-    generation: int
-    reading: _Reading = field(compare=False)
-    inputs: ModelInputsRead = field(compare=False)
+    def __init__(self) -> None:
+        self.now = 0
+
+
+_inputs_waits = _InputsWaits()
+
+
+def _inputs_not_read(underlying: str, reading: _Reading) -> _NoFigures:
+    return _NoFigures(
+        "pricing_inputs_unknown",
+        PreviewReason.PRICING_INPUTS_NOT_READ,
+        f"The rate and the dividends for {underlying} are still being looked up.",
+        passes_by_itself=True,
+        reading=reading,
+    )
 
 
 # ---- the answer -----------------------------------------------------------------
@@ -640,7 +657,7 @@ async def preview_option_structure(
     quotes: IbkrMarketStatusSource | None,
     watch: OptionWatchList,
     model_inputs: ModelInputsReader,
-    searches: PreviewSearches[_Standing],
+    searches: PreviewSearches,
     strikes_each_side: int,
     clock: Clock = now_ms_utc,
 ) -> OptionStructurePreview:
@@ -650,7 +667,9 @@ async def preview_option_structure(
     is put on it, on a lease. ``strikes_each_side`` is the reach that
     supervisor watches a window with, so that the preview knows which
     contracts it asked for. ``searches`` is where the search for the
-    contracts runs: a worker process, never this one.
+    contracts runs: a worker process, never this one. An answer is always
+    this ask's own search, of the quotes this ask read: a search that took
+    too long to wait for is not shown to a later ask.
     """
     key = _KEY_PREFIX + request.preview_key
     asked = _Asked(request, clock())
@@ -705,20 +724,18 @@ async def preview_option_structure(
         first = _lines_stand_in_the_way(first) or first
     if isinstance(first, _NoFigures):
         return asked.without_figures(plan, first)
+    if _inputs_waits.now >= MAX_PREVIEWS_WAITING_ON_INPUTS:
+        return asked.without_figures(plan, _inputs_not_read(request.underlying, first))
+    _inputs_waits.now += 1
     try:
         inputs = await asyncio.wait_for(
             off_the_loop(partial(model_inputs, request.underlying, first.now, first.latest_expiry)),
             timeout=MODEL_INPUTS_WAIT_S,
         )
     except (TimeoutError, ModelInputsBeingRead):
-        not_read = _NoFigures(
-            "pricing_inputs_unknown",
-            PreviewReason.PRICING_INPUTS_NOT_READ,
-            f"The rate and the dividends for {request.underlying} are still being looked up.",
-            passes_by_itself=True,
-            reading=first,
-        )
-        return asked.without_figures(plan, not_read)
+        return asked.without_figures(plan, _inputs_not_read(request.underlying, first))
+    finally:
+        _inputs_waits.now -= 1
     reading = read()
     if isinstance(reading, _NoFigures):
         return _Asked(request, clock()).without_figures(plan, reading, inputs)
@@ -753,18 +770,15 @@ async def preview_option_structure(
             decision_bar_close_ms=reading.now,
             selection_ms=reading.now,
         ),
-        standing_on=_Standing(request, reading.feed.generation, reading, inputs),
     )
     if isinstance(found, SearchNotRun):
         return asked.without_figures(plan, _search_not_done(found, reading), inputs)
-    # The answer may be an earlier ask's, kept for this one. It is shown as of the quotes that ask read.
-    reading, inputs = found.standing_on.reading, found.standing_on.inputs
-    if isinstance(found.outcome, ContractsNotResolved):
-        return asked.without_figures(plan, _not_resolved(found.outcome, reading), inputs)
+    if isinstance(found, ContractsNotResolved):
+        return asked.without_figures(plan, _not_resolved(found, reading), inputs)
     today = reading.today
     figures = structure_figures(
         plan,
-        found.outcome,
+        found,
         units=request.structures,
         cost_limit_percent=request.cost_limit_percent,
         fee_provision=lambda structure, markets, size: _fee_provision(today, structure, dict(markets), size),

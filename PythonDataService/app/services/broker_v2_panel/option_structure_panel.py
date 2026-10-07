@@ -8,7 +8,6 @@ from lives in ``app.options.structure_catalogue``.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
 
 from app.broker.alpaca.market_liveness import get_option_quotes
 from app.broker.ibkr.config import get_settings as ibkr_settings
@@ -32,6 +31,7 @@ from app.schemas.option_preview import (
     OptionLegRules,
     OptionOrderTermDefaults,
     OptionPercentTerm,
+    OptionRuleOtherLeg,
     OptionRuleTolerance,
     OptionRuleValue,
     OptionStrikeRule,
@@ -57,7 +57,7 @@ def _model_inputs(underlying: str, at_ms: int, latest_expiry: date) -> ModelInpu
     return read_option_model_inputs(underlying, at_ms=at_ms, latest_expiry=latest_expiry, wait=False)
 
 
-def _preview_searches() -> PreviewSearches[Any]:
+def _preview_searches() -> PreviewSearches:
     """Where a page's search for its contracts runs: this process's preview lane, a worker process of its own."""
     return get_option_searches().preview
 
@@ -104,6 +104,12 @@ def _value(offered: RuleOffered) -> OptionRuleValue | None:
     return OptionRuleValue(field=offered.value_field, unit=offered.value_unit, unit_label=offered.value_label)
 
 
+def _measured_from(offered: RuleOffered) -> OptionRuleOtherLeg | None:
+    if offered.other_leg_field is None:
+        return None
+    return OptionRuleOtherLeg(field=offered.other_leg_field, unit="leg", unit_label=offered.other_leg_label)
+
+
 def _tolerance(offered: RuleOffered) -> OptionRuleTolerance | None:
     if offered.tolerance_field is None:
         return None
@@ -146,7 +152,13 @@ async def option_structure_catalogue(broker: str, account_id: str) -> OptionStru
         custom_description=f"Start from no legs and add up to {MAX_OPTION_LEGS}.",
         max_legs=MAX_OPTION_LEGS,
         strike_rules=[
-            OptionStrikeRule(selector=offered.selector, label=offered.label, value=_value(offered), tolerance=_tolerance(offered))
+            OptionStrikeRule(
+                selector=offered.selector,
+                label=offered.label,
+                value=_value(offered),
+                measured_from=_measured_from(offered),
+                tolerance=_tolerance(offered),
+            )
             for offered in STRIKE_RULES
         ],
         expiry_rules=[

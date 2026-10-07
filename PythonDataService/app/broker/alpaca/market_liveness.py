@@ -480,7 +480,12 @@ class AlpacaMarketLivenessConsumer:
             await local_source.close()
 
         status_source = local_status
+        # What quotes option contracts is this supervisor's own pass. A process that reads its market status
+        # from a shared source never makes that pass, so it has no option quotes and says so. Nothing drives
+        # the keeping there either: it begins no round and keeps no mark (#2913).
+        option_quotes: IbkrMarketStatusSource | None = local_source
         if resolved.market_status_upstream_url is not None:
+            option_quotes = None
             from app.config import settings as service_settings
 
             if not service_settings.DATA_PLANE_CONTROL_SECRET:
@@ -503,7 +508,7 @@ class AlpacaMarketLivenessConsumer:
             journal=journal,
             status_snapshot_source=status_source,
             status_source_close=close_local,
-            option_quotes=local_source,
+            option_quotes=option_quotes,
         )
 
 

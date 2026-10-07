@@ -20224,6 +20224,21 @@ export interface components {
             right: "call" | "put";
         };
         /**
+         * OptionRuleOtherLeg
+         * @description The other leg a rule is measured from: the builder's "From".
+         */
+        OptionRuleOtherLeg: {
+            /** Field */
+            field: string;
+            /**
+             * Unit
+             * @constant
+             */
+            unit: "leg";
+            /** Unit Label */
+            unit_label: string;
+        };
+        /**
          * OptionRuleTolerance
          * @description How far from its target a rule's pick may be: the builder's "Within".
          */
@@ -20257,11 +20272,13 @@ export interface components {
         };
         /**
          * OptionStrikeRule
-         * @description One way of choosing a leg's strike, as the builder offers it.
+         * @description One way of choosing a leg's strike, as the builder offers it. ``value``, ``measured_from`` and
+         *     ``tolerance`` between them name every field the Action Plan's rule has beside its ``selector``.
          */
         OptionStrikeRule: {
             /** Label */
             label: string;
+            measured_from: components["schemas"]["OptionRuleOtherLeg"] | null;
             /**
              * Selector
              * @enum {string}

@@ -12,7 +12,7 @@ from fractions import Fraction
 import pytest
 
 from app.options.american import AmericanIvStatus
-from app.options.entry import DEFAULT_LEG_GAP_LIMIT_PERCENT, prepare_entry
+from app.options.entry import prepare_entry
 from app.options.lean import LeanDirection
 from app.options.named_structures import NamedStructure
 from app.options.preview import (
@@ -155,10 +155,9 @@ def test_a_preview_judges_the_cost_by_the_owners_own_limit_and_shows_what_an_ent
             quotes=resolution.quotes,
             units=2,
             fee_provision_cents=37,
-            # Each leg's market is four cents wide, under 2% of its mid: inside the gap limit an entry
-            # starts from, so the cost limit is the only question either is asked here.
-            leg_gap_limit_percent=DEFAULT_LEG_GAP_LIMIT_PERCENT,
             cost_limit_percent=Decimal(cost_limit),
+            # As wide as a gap can be: the entry's own gap limit is not what this test asks about.
+            leg_gap_limit_percent=Decimal(200),
         )
 
     assert shown.over_cost_limit is over

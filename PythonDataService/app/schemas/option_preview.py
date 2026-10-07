@@ -37,7 +37,10 @@ _MAX_LEGS_ASKED = 8
 
 
 def _as_an_owner_writes_it(percent: Decimal) -> Decimal:
-    """``1e1`` is 10, and ``10.000`` is 10: a percent is carried back and printed as written out."""
+    """``1e1`` is 10, ``10.000`` is 10 and ``-0`` is 0: a percent is carried back and printed as written out."""
+    if not percent:
+        # Nothing, whatever sign it was written with.
+        return Decimal(0)
     return Decimal(format(percent.normalize(), "f"))
 
 
@@ -88,7 +91,8 @@ PreviewState = Literal[
     "no_quote_source",
     "feed_not_up",
     # No quote line could be had for the preview's contracts: none is spare, IBKR refused one, or too many
-    # previews are open and this one's window was given up.
+    # previews are open and this one's window was given up. ``ask_again_in_ms`` is set when it is IBKR's
+    # allowance that stands in the way: one more line is asked for once a minute while the page asks.
     "no_quote_line",
     # IBKR's list of the underlying's expiries or contracts has not been read yet. Ask again.
     "listing_not_read",
@@ -389,8 +393,21 @@ class OptionRuleTolerance(BaseModel):
     default: float
 
 
+class OptionRuleOtherLeg(BaseModel):
+    """The other leg a rule is measured from: the builder's "From"."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The field of the rule's selector that names the other leg, by that leg's ``leg_id``.
+    field: str
+    unit: Literal["leg"]
+    # The unit as a screen writes it beside the box.
+    unit_label: str
+
+
 class OptionStrikeRule(BaseModel):
-    """One way of choosing a leg's strike, as the builder offers it."""
+    """One way of choosing a leg's strike, as the builder offers it. ``value``, ``measured_from`` and
+    ``tolerance`` between them name every field the Action Plan's rule has beside its ``selector``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -398,6 +415,8 @@ class OptionStrikeRule(BaseModel):
     selector: Literal["delta", "atm_offset", "leg_distance", "percent"]
     label: str
     value: OptionRuleValue
+    # None: the rule is measured from no other leg.
+    measured_from: OptionRuleOtherLeg | None
     # None: the rule names its strike exactly, and has no "Within".
     tolerance: OptionRuleTolerance | None
 

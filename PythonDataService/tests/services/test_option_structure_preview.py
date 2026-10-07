@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -20,7 +20,8 @@ import numpy as np
 import pytest
 
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
-from app.broker.ibkr.option_quotes import OptionQuoteLines, WatchRequest
+from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
+from app.broker.ibkr.option_quotes import CEILING_PROBE_MS, OptionQuoteLines, WatchRequest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.options.american import CashDividend, american_implied_volatility, years_from_ms
 from app.options.expiry import option_expiry_anchor_ms
@@ -34,7 +35,7 @@ from app.services import option_structure_preview
 from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
 from app.services.option_preview_views import usd
-from app.services.option_search import OptionSearchLane, PreviewSearches
+from app.services.option_search import PREVIEW_SEARCH_WAIT_S, OptionSearchLane, PreviewSearches
 from app.services.option_structure_preview import (
     ARRIVAL_GRACE_MS,
     MAX_PREVIEW_WINDOWS,
@@ -857,6 +858,41 @@ async def test_a_lookup_that_takes_too_long_is_answered_as_not_read_yet(monkeypa
     assert _shows_no_figure(seen) and seen.ask_again_in_ms is not None
 
 
+async def test_only_so_many_previews_wait_on_a_slow_lookup_at_once_and_one_more_is_told_at_once_to_ask_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a fleet Clerk a preview is worked on the capacity kept for commands. Pages' waits on a slow lookup are
+    bounded, so they cannot take that capacity up between them."""
+    desk = Desk(monkeypatch)
+    monkeypatch.setattr(option_structure_preview, "MAX_PREVIEWS_WAITING_ON_INPUTS", 2)
+    answered = threading.Event()
+    looked_up: list[str] = []
+
+    def slow(underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+        looked_up.append(underlying)
+        answered.wait(timeout=10)
+        return _KNOWN
+
+    await desk.quoted(_BULL_CALL_SPREAD)
+    monkeypatch.setattr(desk, "_model_inputs", slow)
+    waiting = [asyncio.create_task(desk.preview(_BULL_CALL_SPREAD)) for _ in range(2)]
+    try:
+        await _until(lambda: len(looked_up) == 2)
+        # Far inside the seconds an ask may wait: this one is answered without waiting at all.
+        one_more = await asyncio.wait_for(desk.preview(_BULL_CALL_SPREAD), timeout=1)
+        looked_up_while_two_waited = len(looked_up)
+    finally:
+        answered.set()
+    await asyncio.gather(*waiting)
+    once_they_are_done = await desk.preview(_BULL_CALL_SPREAD)
+
+    assert (one_more.state, one_more.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ")
+    assert _shows_no_figure(one_more) and one_more.ask_again_in_ms is not None
+    assert looked_up_while_two_waited == 2
+    # The two that waited gave their places back.
+    assert once_they_are_done.state == "resolved"
+
+
 # ---- The lease ------------------------------------------------------------------------
 
 
@@ -1010,6 +1046,43 @@ async def test_a_bots_claim_on_its_own_underlying_stands_whatever_pages_ask(monk
     assert desk.ibkr.open_option_lines() == feed._symbols(583, 584, 585, 586, 587)
 
 
+async def test_a_page_kept_out_by_ibkrs_allowance_is_told_to_ask_again_and_is_let_in_when_ibkr_has_a_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IBKR grants three lines and refuses a fourth. The bot then holds exactly those three, IBKR's lines come
+    back, and a page asks about QQQ. It is asked nothing for, so nothing of its was refused by IBKR: it is
+    waiting for a line, is told to ask again, and a minute after the refusal one more line is tried for."""
+    held = tuple(scenes._contract("call", strike) for strike in (584, 585, 586, 587))
+    desk = Desk(monkeypatch, WatchRequest("SPY", LineClass.CANDIDATE, held=held), budget=20)
+    desk.ibkr.allowance = 3
+    await desk.settle()
+    granted = desk.ibkr.open_option_lines()
+    desk.watch.watch(
+        "bot-0", WatchRequest("SPY", LineClass.CANDIDATE, held=tuple(c for c in held if c.occ_symbol in granted))
+    )
+    desk.ibkr.allowance = None
+    await desk.settle()
+    puts = _on_qqq(_leg("long_put", "long", "put", _AT_THE_MONEY), structure="long_put")
+
+    await desk.preview(puts)
+    await desk.settle()
+    waiting = await desk.preview(puts)
+    asked_ibkr_for_qqq = "QQQ" in desk.ibkr.asked
+    desk.ibkr.now += CEILING_PROBE_MS
+    desk.ibkr.keep_alive()
+    await desk.preview(puts)
+    await desk.settle()
+    let_in = await desk.preview(puts)
+
+    assert len(granted) == 3
+    assert (waiting.state, waiting.reason_code) == ("no_quote_line", "OPTION_LINE_NO_CAPACITY")
+    assert _shows_no_figure(waiting) and waiting.ask_again_in_ms is not None
+    # Nothing was asked of IBKR on this page's account, so nothing of its can have been refused.
+    assert not asked_ibkr_for_qqq and "refused a quote line for this preview" not in waiting.notice
+    assert let_in.state != "no_quote_line" and "QQQ" in desk.ibkr.lines
+    assert granted <= desk.ibkr.open_option_lines() and not granted & set(desk.ibkr.cancelled)
+
+
 # ---- Where the search runs ------------------------------------------------------------------
 
 
@@ -1030,6 +1103,13 @@ async def _quoted_and_ready(desk: Desk, request: OptionStructurePreviewRequest) 
 async def _turns(times: int = 10) -> None:
     for _ in range(times):
         await asyncio.sleep(0)
+
+
+async def _until(happened: Callable[[], bool]) -> None:
+    """Wait for something to have happened, however long the machine takes over it."""
+    async with asyncio.timeout(30):
+        while not happened():
+            await asyncio.sleep(0.001)
 
 
 async def test_the_search_worker_is_started_when_a_window_is_first_asked_for_so_that_it_loads_while_quotes_arrive(
@@ -1056,9 +1136,8 @@ async def test_a_second_ask_while_the_search_runs_starts_no_second_search_and_is
     await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
 
     first = asyncio.ensure_future(desk.preview(_BULL_CALL_SPREAD))
-    await asyncio.sleep(0.05)
+    worker = await workers.handed()
     second = await desk.preview(_BULL_CALL_SPREAD)
-    (worker,) = workers.made
     begun = len(worker.searches)
     worker.let_go()
     answered = await first
@@ -1072,68 +1151,65 @@ async def test_a_second_ask_while_the_search_runs_starts_no_second_search_and_is
     assert answered.state == "resolved"
 
 
-async def test_a_search_that_outlives_its_ask_is_shown_at_the_next_ask_as_of_the_quotes_it_read(
+async def test_a_page_whose_search_would_be_the_third_in_hand_is_told_to_ask_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two other pages' searches are in hand, one running and one waiting. This page's is not queued behind
+    them: it is told its turn has not come, and to ask again."""
+    desk = Desk(monkeypatch)
+    workers = _held_back(desk)
+    pages = [_BULL_CALL_SPREAD.model_copy(update={"preview_key": f"page-{page:04d}"}) for page in range(3)]
+    for page in pages[1:]:
+        await desk.preview(page)
+    await _quoted_and_ready(desk, pages[0])
+
+    running = asyncio.ensure_future(desk.preview(pages[0]))
+    worker = await workers.handed()
+    waiting = asyncio.ensure_future(desk.preview(pages[1]))
+    await _until(lambda: desk.searches.lane.in_hand == 2)
+    third = await desk.preview(pages[2])
+    worker.let_go(0)
+    (await workers.handed(2)).let_go(1)
+
+    assert (third.state, third.reason_code) == ("search_not_done", "OPTION_SEARCH_LANE_BUSY")
+    assert _shows_no_figure(third) and third.ask_again_in_ms is not None
+    assert (third.verdict.resolves_as_built, third.verdict.red) == (None, False)
+    assert ((await running).state, (await waiting).state) == ("resolved", "resolved")
+    assert len(worker.searches) == 2
+
+
+async def test_a_search_that_outlives_its_ask_is_never_shown_and_the_next_ask_searches_the_quotes_as_it_reads_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A search too slow to wait for stands on quotes read before it began. Its answer is not kept for the
+    page's next ask: by the time that ask comes, those quotes are older than a pick may stand on."""
     desk = Desk(monkeypatch)
     workers = _held_back(desk, wait_s=0.05)
     await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
     read_at = desk.ibkr.now
 
     told = await desk.preview(_BULL_CALL_SPREAD)
-    workers.made[0].let_go()
+    worker = await workers.handed()
+    worker.let_go(0)
     await _turns()
     desk.ibkr.now += 1_000
-    seen = await desk.preview(_BULL_CALL_SPREAD)
+    asking = asyncio.ensure_future(desk.preview(_BULL_CALL_SPREAD))
+    (await workers.handed(2)).let_go(1)
+    seen = await asking
 
     assert (told.state, told.reason_code) == ("search_not_done", "OPTION_SEARCH_NOT_DONE_IN_TIME")
     assert told.ask_again_in_ms is not None
-    # The one search answered: its figures are stamped with the moment its quotes were read, a second ago.
-    assert (seen.state, seen.quotes_read_ms, seen.oldest_quote_age_ms) == ("resolved", read_at, 400)
-    assert len(workers.made[0].searches) == 1
+    # A search of its own, of the quotes as read a second later: they are 1,400 ms old then, not 400.
+    assert (seen.state, seen.quotes_read_ms, seen.oldest_quote_age_ms) == ("resolved", read_at + 1_000, 1_400)
+    assert [search.asked.selection_ms for search in worker.searches] == [read_at, read_at + 1_000]
 
 
-async def test_a_search_kept_for_a_structure_the_page_has_since_changed_is_not_shown(monkeypatch: pytest.MonkeyPatch) -> None:
-    desk = Desk(monkeypatch)
-    workers = _held_back(desk, wait_s=0.05)
-    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
-    three = _BULL_CALL_SPREAD.model_copy(update={"structures": 3})
+def test_a_late_answer_would_be_older_than_a_pick_may_stand_on_before_a_page_could_ask_for_it() -> None:
+    """Why a search that outlives its ask is not kept for the page's next one. The ask waits four seconds and
+    is told to ask again in one, so the next ask comes when the quotes the search read are past the age limit
+    the resolver is handed. Were the wait made shorter or the limit longer, keeping a late answer, no older
+    than that limit, would be of use again: this fails then, to say so."""
+    earliest_next_ask_ms = PREVIEW_SEARCH_WAIT_S * 1_000 + option_structure_preview._ASK_AGAIN_MS
 
-    await desk.preview(_BULL_CALL_SPREAD)
-    workers.made[0].let_go(0)
-    await _turns()
-    asking = asyncio.ensure_future(desk.preview(three))
-    await asyncio.sleep(0.01)
-    workers.made[0].let_go(1)
-    seen = await asking
-    if seen.state == "search_not_done":
-        seen = await desk.preview(three)
-
-    assert (seen.state, seen.money.structures) == ("resolved", 3)
-    assert len(workers.made[0].searches) == 2
-
-
-async def test_a_search_kept_from_before_a_reconnect_is_not_shown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Its picks stand on quotes of a generation that is gone."""
-    desk = Desk(monkeypatch)
-    workers = _held_back(desk, wait_s=0.05)
-    await _quoted_and_ready(desk, _BULL_CALL_SPREAD)
-
-    await desk.preview(_BULL_CALL_SPREAD)
-    workers.made[0].let_go(0)
-    await _turns()
-    desk.ibkr.reconnect()
-    await desk.settle()
-    desk.spy()
-    await desk.settle()
-    desk.quote_every_line()
-    desk.spy()
-    after = asyncio.ensure_future(desk.preview(_BULL_CALL_SPREAD))
-    await asyncio.sleep(0.01)
-
-    assert len(workers.made[0].searches) == 2
-    workers.made[0].let_go(1)
-    await after
+    assert earliest_next_ask_ms >= DECISION_DATA_MAX_AGE_MS
 
 
 async def test_a_search_that_could_not_be_run_is_said_plainly_and_is_no_refusal_of_the_structure(
@@ -1184,26 +1260,29 @@ async def test_the_event_loop_keeps_running_while_a_real_worker_process_searches
     """The loop that stamps quote receipts, runs the supervisor and sends orders is not stopped by a preview.
 
     An iron condor picks two legs by delta: forty-two contracts priced on the full tree, with ten strikes
-    watched either side. Measured on macOS, CPython 3.12.13, 2026-10-07:
+    watched either side. A ticker runs on the event loop beside one ask, and the longest the loop went between
+    two of its ticks is compared with how long that ask took, nearly all of which is its search. Measured on
+    macOS, CPython 3.12.13, 2026-10-07, three asks each way:
 
-    - searched in a worker process, as here: the ask took 923 to 946 ms and the loop's longest gap was 2.5
-      to 3.4 ms;
-    - the same search handed to a thread of this process, as it was first built: the ask took 935 to 962 ms
-      and the loop did not run at all for 932 to 959 ms of it.
+    - searched in a worker process, as here: the ask took 1,241 to 1,410 ms and the loop's longest gap was 3.5
+      to 5.5 ms, 0.3 to 0.4 percent of the ask;
+    - the same search handed to a thread of this process, as it was first built: the ask took 1,009 to 1,133
+      ms and the loop did not run for 1,005 to 1,130 ms of it, 99.5 to 99.7 percent.
 
     The pricer lets go of the interpreter lock for under a microsecond at a time, and a thread waiting for it
-    never gets in. A search in this process therefore fails this test, in a thread or not.
+    never gets in. A search in this process therefore fails this test, in a thread or not. The gap is held to
+    half the ask and not to a number of milliseconds: a machine with too few processors stretches both, and
+    half still parts a loop that ran throughout from one that waited for the search.
     """
     desk = Desk(monkeypatch, reach=10)
-    desk.searches = PreviewSearches(OptionSearchLane("preview"))
+    # A wait long enough that a worker starved of the processor still answers: this ask is never told that
+    # its search is not done.
+    desk.searches = PreviewSearches(OptionSearchLane("preview"), wait_s=120.0)
     iron_condor = _as_the_builder_starts(NamedStructure.IRON_CONDOR)
     try:
         await _quoted_and_ready(desk, iron_condor)
-        # The first answer starts the worker and loads it. The ask that is measured finds it up.
-        for _ in range(100):
-            if (await desk.preview(iron_condor)).state == "resolved":
-                break
-            await asyncio.sleep(0.2)
+        # The first ask starts the worker and waits for it to load. The ask that is measured finds it up.
+        loaded = await desk.preview(iron_condor)
         desk.quote_every_line()
         desk.spy()
         desk.ibkr.now += 400
@@ -1212,8 +1291,8 @@ async def test_the_event_loop_keeps_running_while_a_real_worker_process_searches
     finally:
         desk.searches.close()
 
-    assert seen.state == "resolved", (seen.state, seen.reason_code, seen.notice)
+    assert (loaded.state, seen.state) == ("resolved", "resolved"), (loaded.reason_code, seen.reason_code, seen.notice)
     assert sorted(leg.leg_id for leg in seen.legs) == ["long_call", "long_put", "short_call", "short_put"]
     # A search long enough to tell a loop that ran through it from one that waited for it.
     assert took_s >= 0.2, took_s
-    assert largest_gap_s < took_s / 4, (largest_gap_s, took_s)
+    assert largest_gap_s < took_s / 2, (largest_gap_s, took_s)

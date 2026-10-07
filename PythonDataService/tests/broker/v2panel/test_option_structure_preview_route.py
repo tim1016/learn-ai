@@ -20,7 +20,7 @@ from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.named_structures import NamedStructure
 from app.options.structure_catalogue import order_term_starts
-from app.schemas.action_plan import ExpirySelector, StrikeSelector
+from app.schemas.action_plan import ActionPlan, ExpirySelector, StrikeSelector
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
 from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_search import get_option_searches
@@ -88,8 +88,29 @@ async def test_every_start_the_catalogue_gives_is_a_structure_the_preview_takes_
             assert (seen["state"], seen["structure"]) == ("no_quote_source", start["structure"])
 
 
-# What an owner might type into the box beside each rule.
-_TYPED = {"target": 0.30, "offset": -2, "dollars": 5.0, "percent": 1.5, "days": 7}
+# What an owner might put in a box, by the unit the catalogue gives the box. A date is its 16:00 New York
+# anchor, never a date's text; a leg is another leg's id.
+_TYPED = {
+    "delta": 0.30,
+    "strikes": -2,
+    "dollars": 5.0,
+    "percent": 1.5,
+    "days": 7,
+    "date": option_expiry_anchor_ms(FRIDAY),
+    "leg": "other_leg",
+}
+
+
+def _from_the_catalogue_alone(rule: dict, *, tolerance_said: bool = True) -> dict:
+    """A leg's strike or expiry rule, built from nothing but what the catalogue says of it: its selector,
+    something typed into each box it names, and its "Within" left at the default it gives."""
+    built = {"selector": rule["selector"]}
+    for box in ("value", "measured_from"):
+        if rule.get(box) is not None:
+            built[rule[box]["field"]] = _TYPED[rule[box]["unit"]]
+    if tolerance_said and rule.get("tolerance") is not None:
+        built[rule["tolerance"]["field"]] = rule["tolerance"]["default"]
+    return built
 
 
 async def test_the_catalogue_offers_the_strike_rules_the_builder_lists_each_with_the_action_plans_own_tolerance(
@@ -106,19 +127,20 @@ async def test_the_catalogue_offers_the_strike_rules_the_builder_lists_each_with
     assert [None if rule["tolerance"] is None else rule["tolerance"]["unit"] for rule in rules] == [
         "delta", None, "dollars", "percent",
     ]
+    # Only a distance is measured from another leg, and the catalogue says which field names that leg.
+    assert [None if rule["measured_from"] is None else rule["measured_from"]["unit"] for rule in rules] == [
+        None, None, "leg", None,
+    ]
     for rule in rules:
         assert rule["label"] and rule["value"]["unit_label"]
-        built = {"selector": rule["selector"], rule["value"]["field"]: _TYPED[rule["value"]["field"]]}
-        if rule["selector"] == "leg_distance":
-            built["leg_id"] = "other"
-        left_unsaid = as_a_strike_rule.validate_python(built)
+        assert rule["measured_from"] is None or rule["measured_from"]["unit_label"]
+        left_unsaid = as_a_strike_rule.validate_python(_from_the_catalogue_alone(rule, tolerance_said=False))
         if rule["tolerance"] is None:
             continue
         assert rule["tolerance"]["unit_label"]
         # Left unsaid, the plan's own default is what the catalogue said the box starts at.
         assert getattr(left_unsaid, rule["tolerance"]["field"]) == rule["tolerance"]["default"]
-        said = as_a_strike_rule.validate_python(built | {rule["tolerance"]["field"]: rule["tolerance"]["default"]})
-        assert said == left_unsaid
+        assert as_a_strike_rule.validate_python(_from_the_catalogue_alone(rule)) == left_unsaid
 
 
 async def test_the_catalogue_offers_the_expiry_rules_the_builder_lists_and_each_makes_a_rule_the_plan_takes(
@@ -126,7 +148,6 @@ async def test_the_catalogue_offers_the_expiry_rules_the_builder_lists_and_each_
 ) -> None:
     app, _registry = deploy_app
     as_an_expiry_rule = TypeAdapter(ExpirySelector)
-    typed = _TYPED | {"expiration_ms": _BULL_CALL_SPREAD.legs[0].expiry.expiration_ms}
 
     rules = (await _get(app, f"{_BOTS}/option-structures")).json()["expiry_rules"]
 
@@ -134,10 +155,50 @@ async def test_the_catalogue_offers_the_expiry_rules_the_builder_lists_and_each_
     assert [None if rule["value"] is None else rule["value"]["unit"] for rule in rules] == ["days", None, None, "date"]
     for rule in rules:
         assert rule["label"]
-        value = {} if rule["value"] is None else {rule["value"]["field"]: typed[rule["value"]["field"]]}
-        assert as_an_expiry_rule.validate_python({"selector": rule["selector"]} | value).selector == rule["selector"]
+        assert as_an_expiry_rule.validate_python(_from_the_catalogue_alone(rule)).selector == rule["selector"]
     # A fixed date is sent as its 16:00 New York anchor, never as a date's text.
-    assert typed["expiration_ms"] == option_expiry_anchor_ms(FRIDAY)
+    assert _TYPED["date"] == _BULL_CALL_SPREAD.legs[0].expiry.expiration_ms
+
+
+async def test_every_rule_the_catalogue_offers_makes_a_leg_the_action_plan_takes_from_the_catalogues_own_fields_alone(
+    deploy_app,
+) -> None:
+    """The builder knows a rule only by what the catalogue says of it. Each strike rule with each expiry rule,
+    with something in every box the catalogue names and nothing else, is a leg of a plan the Action Plan takes:
+    the catalogue leaves the builder nothing a rule requires to know by itself. A distance needs the leg it is
+    measured from, and the catalogue names that field too."""
+    app, _registry = deploy_app
+    catalogue = (await _get(app, f"{_BOTS}/option-structures")).json()
+
+    def leg(leg_id: str, strike: dict, expiry: dict) -> dict:
+        return {
+            "leg_id": leg_id,
+            "instrument": {"kind": "option", "underlying": "SPY"},
+            "position": "long",
+            "qty_ratio": 1,
+            "right": "call",
+            "strike": _from_the_catalogue_alone(strike),
+            "expiry": _from_the_catalogue_alone(expiry),
+        }
+
+    stands_alone = next(rule for rule in catalogue["strike_rules"] if rule["measured_from"] is None)
+    taken = []
+    for strike in catalogue["strike_rules"]:
+        for expiry in catalogue["expiry_rules"]:
+            legs = [leg(_TYPED["leg"], stands_alone, expiry), leg("this_leg", strike, expiry)]
+            plan = ActionPlan.model_validate(
+                {"on_enter": legs, "on_exit": [{"kind": "close_leg", "entry_leg_id": each["leg_id"]} for each in legs]}
+            )
+            built = plan.on_enter[1]
+            taken.append((built.strike.selector, built.expiry.selector))
+            # Every field the plan's own rule has, beside its selector, is one the catalogue named.
+            assert set(type(built.strike).model_fields) == set(legs[1]["strike"]), strike["selector"]
+            assert set(type(built.expiry).model_fields) == set(legs[1]["expiry"]), expiry["selector"]
+
+    assert taken == [
+        (strike["selector"], expiry["selector"]) for strike in catalogue["strike_rules"] for expiry in catalogue["expiry_rules"]
+    ]
+    assert len(taken) == 16
 
 
 async def test_the_catalogue_gives_the_order_terms_a_deploy_starts_from_each_where_the_code_holds_it(deploy_app) -> None:
@@ -253,6 +314,20 @@ async def test_a_limit_is_carried_back_and_said_as_the_owner_would_write_it(
     assert f"{read_as}%" in seen["money"]["cost_sentence"] and "E" not in seen["money"]["cost_sentence"].split("limit")[1]
 
 
+@pytest.mark.parametrize("written", ["-0", "-0.000", "0.0", "0"])
+async def test_a_cost_limit_of_nothing_is_carried_back_and_said_as_zero_whatever_sign_it_was_written_with(
+    deploy_app, monkeypatch: pytest.MonkeyPatch, written: str
+) -> None:
+    app, _registry = deploy_app
+    desk = Desk(monkeypatch)
+    _on(desk, monkeypatch)
+
+    seen = await _resolved(app, desk, {**_SPREAD, "cost_limit_percent": written})
+
+    assert (seen["state"], seen["cost_limit_percent"], seen["money"]["cost_limit_percent"]) == ("resolved", "0", "0")
+    assert "-0" not in seen["money"]["cost_sentence"]
+
+
 async def test_on_a_process_with_no_option_quote_source_the_preview_says_so_and_shows_no_figure(deploy_app) -> None:
     app, _registry = deploy_app
 
@@ -285,6 +360,9 @@ async def test_a_structure_the_plan_refuses_is_an_answer_and_not_an_error(deploy
         pytest.param({"cost_limit_percent": "3.3333333"}, id="a cost limit finer than it can be compared in"),
         pytest.param({"cost_limit_percent": "1e-7"}, id="a cost limit finer than that, written with an exponent"),
         pytest.param({"cost_limit_percent": "NaN"}, id="a cost limit that is no number"),
+        # Refused by the bound on its value, before anything writes it out.
+        pytest.param({"cost_limit_percent": "1e999999999"}, id="a cost limit too large to write out"),
+        pytest.param({"gap_limit_percent": "1e999000"}, id="a gap limit that would write out to a megabyte"),
         pytest.param({"gap_limit_percent": "7.1234567"}, id="a gap limit as fine"),
         pytest.param({"gap_limit_percent": "0"}, id="a gap limit of nothing"),
         pytest.param({"structure": "short_straddle"}, id="a name that is no named structure"),

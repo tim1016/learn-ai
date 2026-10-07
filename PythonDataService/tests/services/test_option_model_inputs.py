@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import contextvars
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -23,8 +25,10 @@ from app.services.option_model_inputs import (
     DeclaredDividend,
     DividendsUnknown,
     ModelInputsBeingRead,
+    ModelInputsRead,
     declared_dividend_lookup,
     declared_dividends_from_polygon,
+    off_the_loop,
     read_option_model_inputs,
 )
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
@@ -216,7 +220,10 @@ def test_what_stands_in_for_unknown_dividends_says_in_its_source_that_it_is_not_
         known.unverified_model()
 
 
+@pytest.mark.usefixtures("own_clock")
 def test_what_was_learned_is_kept_for_an_hour_and_a_failure_is_asked_again_after_half_a_minute() -> None:
+    """The hour and the half minute run from when a lookup ended, on this process's own clock. That clock
+    stands still here: a lookup takes no time, and each ends at exactly its hour or half minute on any machine."""
     known, failing = Lookups([DeclaredDividend(_FRIDAY, 1.80)]), Lookups(DividendsUnknown("no answer"))
 
     for later in (0, 59 * 60_000, 60 * 60_000 - 1):
@@ -506,6 +513,59 @@ def test_a_lookup_given_up_on_that_learns_the_fact_after_all_is_kept(monkeypatch
     assert hung.times_asked == 1
 
 
+def test_a_slow_lookup_that_ends_after_a_newer_one_does_not_put_its_older_answer_back(hung: Hangs) -> None:
+    """FRED is slow, the read gives up, and half a minute later a second lookup learns the rate at once. When
+    the first then comes back with the rate it read earlier, the newer one's answer stays."""
+    rates = option_model_inputs._rates
+    asked = (10, _TUESDAY)
+    older = option_model_inputs.RateLearned(0.0512, RATE_SOURCE_FRED, None)
+    newer = option_model_inputs.RateLearned(0.0498, RATE_SOURCE_FRED, None)
+
+    def slow() -> option_model_inputs.RateLearned:
+        hung.rate(*asked)
+        return older
+
+    first, _ = rates.look_up(asked, NOW, slow, 0.05)
+    gave_up = rates.wait_for(asked, NOW, first)
+    second, _ = rates.look_up(asked, NOW + 31_000, lambda: newer, 5.0)
+    learned = rates.wait_for(asked, NOW + 31_000, second)
+    hung.let_go.set()
+    # The slow lookup has ended, and has kept whatever it keeps.
+    assert first.answer.result(timeout=5) is older
+
+    assert gave_up.why_default == WhyNotKnown.LOOKUP_TOO_SLOW
+    assert learned is newer
+    assert rates.kept(asked, NOW + 32_000) is newer
+
+
+def test_a_slow_lookup_that_ends_while_a_newer_one_is_still_asking_leaves_the_answer_to_the_newer_one(hung: Hangs) -> None:
+    rates = option_model_inputs._rates
+    asked = (10, _TUESDAY)
+    older = option_model_inputs.RateLearned(0.0512, RATE_SOURCE_FRED, None)
+    newer = option_model_inputs.RateLearned(0.0498, RATE_SOURCE_FRED, None)
+    newer_may_answer = threading.Event()
+
+    def slow() -> option_model_inputs.RateLearned:
+        hung.rate(*asked)
+        return older
+
+    def later() -> option_model_inputs.RateLearned:
+        newer_may_answer.wait(timeout=20)
+        return newer
+
+    first, _ = rates.look_up(asked, NOW, slow, 0.05)
+    rates.wait_for(asked, NOW, first)
+    second, _ = rates.look_up(asked, NOW + 31_000, later, 5.0)
+    hung.let_go.set()
+    assert first.answer.result(timeout=5) is older
+    kept_while_the_newer_one_asks = rates.kept(asked, NOW + 31_500)
+    newer_may_answer.set()
+
+    assert kept_while_the_newer_one_asks is not older
+    assert rates.wait_for(asked, NOW + 31_000, second) is newer
+    assert rates.kept(asked, NOW + 32_000) is newer
+
+
 def test_only_so_many_answers_are_kept_and_the_oldest_go_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(option_model_inputs, "MOST_KEPT", 3)
     lookups = Lookups([])
@@ -522,7 +582,84 @@ def test_only_so_many_answers_are_kept_and_the_oldest_go_first(monkeypatch: pyte
     assert len(option_model_inputs._dividends) <= 3
 
 
+def test_a_lookup_given_up_on_while_it_still_waits_for_a_thread_is_never_begun(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eight lookups of the dividends hang, and between them hold every thread kept for those. A ninth is given
+    up on at its bound, before a thread was free for it. When the eight end, the ninth is not begun: nobody is
+    waiting for what it would learn, and its vendor is not asked late for it."""
+    option_model_inputs.close_lookup_threads()
+    lookups = Lookups([])
+    begun: list[str] = []
+    one_more_began, let_go = threading.Semaphore(0), threading.Event()
+
+    def dividends(underlying: str, _first: date, _last: date) -> list[DeclaredDividend]:
+        begun.append(underlying)
+        one_more_began.release()
+        if underlying.startswith("HUNG"):
+            let_go.wait(timeout=20)
+        return []
+
+    def read(underlying: str) -> ModelInputsRead:
+        return read_option_model_inputs(
+            underlying, at_ms=NOW, latest_expiry=_NEXT_FRIDAY, rate=lookups.rate, dividends=dividends
+        )
+
+    hung = [f"HUNG{letter}" for letter in "ABCDEFGH"]
+    readers = [threading.Thread(target=read, args=(underlying,), daemon=True) for underlying in hung]
+    for reader in readers:
+        reader.start()
+    try:
+        assert all(one_more_began.acquire(timeout=10) for _ in hung)
+        with monkeypatch.context() as a_short_wait:
+            a_short_wait.setattr(option_model_inputs, "VENDOR_LOOKUP_BOUND_S", 0.05)
+            given_up_on = read("NINTH")
+    finally:
+        let_go.set()
+        for reader in readers:
+            reader.join(timeout=10)
+    after = read("LAST")
+
+    assert given_up_on.dividends is None and given_up_on.dividends_unknown_why == WhyNotKnown.LOOKUP_TOO_SLOW
+    # A lookup handed over after the ninth has been made, so the ninth's turn for a thread has come and gone.
+    assert after.dividends == ()
+    assert sorted(begun) == sorted([*hung, "LAST"])
+
+
+_ASKED_BY: contextvars.ContextVar[str] = contextvars.ContextVar("asked_by", default="nobody")
+
+
+async def test_a_read_for_a_caller_on_the_event_loop_runs_in_the_threads_kept_for_reads_and_as_that_caller() -> None:
+    """Never in the loop's own default threads, where the Clerk's execution-lease heartbeat runs."""
+    _ASKED_BY.set("this caller")
+
+    ran_in, ran_as = await off_the_loop(lambda: (threading.current_thread().name, _ASKED_BY.get()))
+
+    assert ran_in.startswith("option-model-inputs-read") and ran_in != threading.current_thread().name
+    assert ran_as == "this caller"
+
+
+def test_the_threads_lookups_run_in_end_when_they_are_closed_and_the_next_read_starts_them_again() -> None:
+    lookups = Lookups([DeclaredDividend(_FRIDAY, 1.80)])
+    kept_for_lookups = ("option-rate-lookup", "option-dividend-lookup", "option-model-inputs-read")
+
+    first = lookups.read()
+    started = [thread for thread in threading.enumerate() if thread.name.startswith(kept_for_lookups)]
+    option_model_inputs.close_lookup_threads()
+    give_up_at = time.monotonic() + 10
+    for thread in started:
+        thread.join(timeout=max(give_up_at - time.monotonic(), 0))
+    still_running = [thread.name for thread in started if thread.is_alive()]
+    # Closing what is closed does nothing, and the next read is served as the first was.
+    option_model_inputs.close_lookup_threads()
+    option_model_inputs.clear_cache()
+    again = lookups.read()
+
+    assert started and still_running == []
+    assert again == first and len(lookups.dividends_asked) == 2
+
+
+@pytest.mark.usefixtures("own_clock")
 def test_what_is_no_longer_kept_is_dropped_when_something_newer_is_learned() -> None:
+    """Half a minute on, to the millisecond: this process's own clock stands still, so no lookup takes any time."""
     lookups = Lookups(DividendsUnknown("no answer"))
 
     lookups.read(underlying="AAPL")
