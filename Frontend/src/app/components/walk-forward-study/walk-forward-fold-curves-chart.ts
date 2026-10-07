@@ -17,10 +17,14 @@ interface DrawnFold {
   readonly falls: readonly (number | null)[];
 }
 
+/** Each fold carries its end value at its last session only while the labels have room beside one another. */
+const END_LABELS = 12;
+
 /**
  * A study's folds on the shared session chart (#2936), one after another:
  * each fold's winner over its own test window, in the next palette colour,
- * with where it ended at its right end. `sessions` is the read's axis, every
+ * with where it ended at its right end while there are few enough folds for
+ * the labels to stand apart. `sessions` is the read's axis, every
  * fold's test window, so a fold with no line shows as a gap. Folds share no
  * session, so a hover names the one fold that scored it, or says none did.
  * Every value is the server's, the deepest fall included.
@@ -60,9 +64,10 @@ function colorOf(index: number, theme: ChartTheme): string {
   return theme.series[index % theme.series.length];
 }
 
-/** Each fold at full strength with its end value: folds follow one another, so however many there are they never pile up. */
+/** Each fold at full strength: folds follow one another, so however many there are the lines never pile up. */
 function lines(drawn: readonly DrawnFold[], theme: ChartTheme): SessionLine[] {
-  return drawn.map(({ fold, name, returns, falls }, index) => ({ key: keyOf(fold), name, returns, falls, color: colorOf(index, theme), width: 1.75, dashed: false, z: 2, endLabel: true, filled: false }));
+  const labelled = drawn.length <= END_LABELS;
+  return drawn.map(({ fold, name, returns, falls }, index) => ({ key: keyOf(fold), name, returns, falls, color: colorOf(index, theme), width: 1.75, dashed: false, z: 2, endLabel: labelled, filled: false }));
 }
 
 function tooltip(drawn: readonly DrawnFold[], date: string, index: number, theme: ChartTheme): string {
