@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer
 
+from app.schemas.option_endings import OptionEndingView
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
@@ -170,6 +171,19 @@ class ClerkTransactionRow(BaseModel):
     receipt: dict[str, Any] = Field(default_factory=dict)
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
     custody_timeline: ClerkCustodyTimeline | None = None
+    #: Set when the row is an option position that ended with no order of the bot's: it expired,
+    #: was exercised or assigned, or was sold by an order the Clerk did not place (ADR 0076
+    #: decision 22). The row's ``strategy_instance_id`` is the bot that held the contract.
+    option_event: OptionEndingView | None = None
+
+    # No return annotation: an annotated ``dict`` would replace the row's published schema with a bare object.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_option_event(self, handler: SerializerFunctionWrapHandler):
+        """A row that is no option event answers exactly as before the field existed."""
+        row = handler(self)
+        if row.get("option_event") is None:
+            row.pop("option_event", None)
+        return row
 
 
 class ClerkTransactionSummaryRow(BaseModel):
@@ -203,6 +217,19 @@ class ClerkTransactionSummaryRow(BaseModel):
     execution_price: float | None = None
     external_order_id: str | None = Field(default=None, min_length=1, max_length=256)
     event_count: int = Field(ge=1)
+    #: Set when the row is an option position that ended with no order of the bot's: it expired,
+    #: was exercised or assigned, or was sold by an order the Clerk did not place (ADR 0076
+    #: decision 22). The row's ``strategy_instance_id`` is the bot that held the contract.
+    option_event: OptionEndingView | None = None
+
+    # No return annotation: an annotated ``dict`` would replace the row's published schema with a bare object.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_option_event(self, handler: SerializerFunctionWrapHandler):
+        """A row that is no option event answers exactly as before the field existed."""
+        row = handler(self)
+        if row.get("option_event") is None:
+            row.pop("option_event", None)
+        return row
 
 
 class ClerkCustodyWindowSummary(BaseModel):

@@ -95,6 +95,7 @@ from app.services.broker_v2_panel.sqlite_roster_status import (
     lifecycle_record,
     run_receipt_outcome,
 )
+from app.services.option_ending_views import option_ending_view
 from app.services.sqlite_clerk_compat import active_sqlite_facade, custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
@@ -427,6 +428,7 @@ def _runs(sid: str, facts: Sequence[RunFacts], *, retired_at_ms: int | None) -> 
             outcome=_outcome(view, flattened=run.flattened),
             transaction_count=run.transactions,
             orders=_orders(run.orders),
+            option_endings=[option_ending_view(ending) for ending in run.option_endings] or None,
         ))
     return tuple(rows)
 

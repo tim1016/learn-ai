@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler
 
 from app.schemas.action_plan import TradedInstrumentView
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
+from app.schemas.option_endings import OptionEndingView
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 #: Where a bot is now: running; stopped but still holding money; finished
@@ -70,6 +71,22 @@ class BotHistoryRun(BaseModel):
     outcome: BotHistoryOutcome | None
     transaction_count: int = Field(ge=0)
     orders: BotHistoryOrders
+    #: Each option position of the run that ended with no order of the bot's, oldest first
+    #: (ADR 0076 decision 22). Absent for a run that had none.
+    option_endings: list[OptionEndingView] | None = None
+
+    # No return annotation, for the reason ``BotHistoryBot``'s serializer gives.
+    @model_serializer(mode="wrap")
+    def _omit_absent_option_endings(self, handler: SerializerFunctionWrapHandler):
+        """A run with no such ending answers exactly as before the field existed.
+
+        The coordinator reads each lane's answer strictly, so a ``null``
+        here would make a coordinator on an earlier build refuse the row.
+        """
+        row = handler(self)
+        if row.get("option_endings") is None:
+            row.pop("option_endings", None)
+        return row
 
 
 class BotHistoryBot(BaseModel):

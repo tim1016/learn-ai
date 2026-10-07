@@ -62,6 +62,7 @@ from app.broker.alpaca.clerk.sqlite.off_loop import (
     run_drained,
     run_inline,
 )
+from app.broker.alpaca.clerk.sqlite.option_event_books import event_share_order_symbol
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     UNFILLED_TERMINAL_STATES,
     OrderProjectionReadError,
@@ -142,6 +143,12 @@ def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
     """Read an entry's symbol from its immutable acceptance fact."""
     transition = repo.first_order_transition(order_ref=order_ref, transition_kind="ENTER_ACCEPTED")
     if transition is None:
+        # The shares an option event left have no ENTER: they are in the symbol their bot is
+        # registered under (ADR 0076 decision 22).
+        with repo.write_fence() as conn:
+            left_by_an_event = event_share_order_symbol(conn, order_ref)
+        if left_by_an_event is not None:
+            return left_by_an_event
         raise AssertionError(f"no ENTER_ACCEPTED transition found for {order_ref!r}")
     return EnterAcceptedFacts.from_facts_json(transition["facts_json"]).leg["symbol"]
 

@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    OPTION_EVENT_HOLD_REASON_CODES,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
@@ -467,6 +468,9 @@ def test_every_registered_reason_declares_its_lane_quiet_answer() -> None:
     draining (account holds, the coverage conflict).
     """
     assert {code: policy.blocks_lane_quiet for code, policy in _REASON_POLICIES.items()} == {
+        # ADR 0076 decision 22: what a bot holds is still proven by the broker-flat and
+        # attributed-flat reads, and the owner's acknowledgement is refused while draining.
+        **dict.fromkeys(OPTION_EVENT_HOLD_REASON_CODES, False),
         "POSITION_DRIFT": True,
         "BROKER_SNAPSHOT_STALE": True,
         "RECONCILIATION_INCOMPLETE": True,

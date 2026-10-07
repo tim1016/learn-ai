@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryPlan,
     HistoricalExecutionRecoveryRefused,
 )
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import OptionEventHoldNotAcknowledged
 from app.broker.alpaca.clerk.sqlite.projections import (
     InvalidTimelineCursor,
     ProjectionReadError,
@@ -78,6 +79,8 @@ from app.schemas.alpaca_clerk_sqlite import (
     HistoricalExecutionRecoveryPlanResponse,
     HistoricalExecutionRecoveryPrepareRequest,
     HistoricalExecutionRecoveryReceiptResponse,
+    OptionEventHoldAcknowledgementRequest,
+    OptionEventHoldAcknowledgementResponse,
     RecoveryActionCheckRequest,
     RecoveryActionCheckResponse,
     RecoveryActionExecuteRequest,
@@ -778,6 +781,84 @@ async def execute_bot_recovery_action(
 ) -> RecoveryActionExecuteResponse:
     async with _bot_action_facade(account_id, strategy_instance_id) as facade:
         return await _execute_presented_recovery_action(
+            facade,
+            strategy_instance_id=strategy_instance_id,
+            body=body,
+        )
+
+
+_OPTION_EVENT_HOLD_ACKNOWLEDGEMENT_RESPONSES = {
+    404: {"description": "The selected SQLite authority or bot is unavailable."},
+    409: {"description": "The notice was not acknowledged; the detail says why, and nothing was written."},
+    503: {"description": "The SQLite authority or Alpaca is temporarily unavailable."},
+}
+
+
+async def _acknowledge_option_event_hold(
+    facade: SqliteAlpacaClerkFacade,
+    *,
+    strategy_instance_id: str | None,
+    body: OptionEventHoldAcknowledgementRequest,
+) -> OptionEventHoldAcknowledgementResponse:
+    try:
+        receipt = await facade.acknowledge_option_event_hold(
+            request=body.to_request(strategy_instance_id),
+            # Who acknowledges is this installation's configured operator, never a request field.
+            operator=settings.PANEL_OPERATOR_IDENTITY,
+        )
+    except OptionEventHoldNotAcknowledged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "option_event_hold_not_acknowledged",
+                "reason_code": exc.refusal_code,
+                "message": str(exc),
+                # The symbols in which the broker and the books differ, and what the notice
+                # names now, each empty unless it is why.
+                "symbols": list(exc.symbols),
+                "item_refs": list(exc.item_refs),
+            },
+        ) from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
+    except BrokerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "broker_unavailable", "message": str(exc)},
+        ) from exc
+    return OptionEventHoldAcknowledgementResponse.model_validate(receipt)
+
+
+@router.post(
+    "/accounts/{account_id}/option-event-holds/acknowledge",
+    response_model=OptionEventHoldAcknowledgementResponse,
+    responses=_OPTION_EVENT_HOLD_ACKNOWLEDGEMENT_RESPONSES,
+)
+async def acknowledge_account_option_event_hold(
+    account_id: str,
+    body: OptionEventHoldAcknowledgementRequest,
+) -> OptionEventHoldAcknowledgementResponse:
+    """Acknowledge one option-event notice of the account's own, once the books agree with the broker (#2913)."""
+    return await _acknowledge_option_event_hold(
+        _active_sqlite_facade(account_id),
+        strategy_instance_id=None,
+        body=body,
+    )
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/option-event-holds/acknowledge",
+    response_model=OptionEventHoldAcknowledgementResponse,
+    responses=_OPTION_EVENT_HOLD_ACKNOWLEDGEMENT_RESPONSES,
+)
+async def acknowledge_bot_option_event_hold(
+    account_id: str,
+    strategy_instance_id: str,
+    body: OptionEventHoldAcknowledgementRequest,
+) -> OptionEventHoldAcknowledgementResponse:
+    """Acknowledge one bot's option-event notice, once the books agree with the broker (#2913)."""
+    async with _bot_action_facade(account_id, strategy_instance_id) as facade:
+        return await _acknowledge_option_event_hold(
             facade,
             strategy_instance_id=strategy_instance_id,
             body=body,

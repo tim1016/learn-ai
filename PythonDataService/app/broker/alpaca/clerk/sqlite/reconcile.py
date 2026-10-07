@@ -11,6 +11,7 @@ from typing import Literal, NamedTuple, Protocol
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.simulated_option_settlement import option_settlement_simulation
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
     MAX_OPEN_ORDER_SNAPSHOT,
     broker_order_in_flight,
@@ -51,6 +52,11 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
+from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
+from app.broker.alpaca.clerk.sqlite.option_events import (
+    book_outside_option_orders_in_a_pass,
+    poll_option_events_in_a_pass,
+)
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     asked_of_a_real_option_order,
     look_up_by_client_order_id,
@@ -539,9 +545,11 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
         order.order_id
         for order in foreign_orders
         if (
-            observation := repo.external_order_by_broker_order_id(order.order_id)
-        ) is None
-        or observation.acknowledged_at_ms is None
+            (observation := repo.external_order_by_broker_order_id(order.order_id)) is None
+            or observation.acknowledged_at_ms is None
+        )
+        # An order in an option contract a bot holds is held against that bot (ADR 0076 decision 22).
+        and not _held_against_a_bot(repo, order)
     )
     if not evidence_refs:
         resolve_account_hold(
@@ -556,6 +564,13 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
         reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE,
         evidence_refs=evidence_refs,
     )
+
+
+def _held_against_a_bot(repo: ClerkSqliteRepository, order: BrokerOrder) -> bool:
+    with repo.write_fence() as conn:
+        return outside_order_reduces_a_bots_contract(
+            conn, symbol=order.symbol, side=order.side, broker_order_id=order.order_id
+        )
 
 
 def _sync_position_drift(
@@ -1312,6 +1327,19 @@ async def _reconcile_account_serialized(
     # option entry it reads an empty worklist and writes nothing.
     await cancel_entries_past_their_wait(repo, trade=trade, off_loop=to_thread)
 
+    # An assignment, an exercise or an expiry is read from the broker's
+    # activities and booked for the bot that held the contract, before the
+    # final look at the broker (ADR 0076 decision 22). A contract whose
+    # position this pass's snapshot shows differing from the books is read
+    # for at once. A simulated account's trade port settles what it holds
+    # past expiry first, since no broker does. On books with no option
+    # contract one empty table is read, neither port is asked and nothing is
+    # written. A fault in this step is logged and the pass goes on.
+    await poll_option_events_in_a_pass(
+        repo, read=read, simulation=option_settlement_simulation(trade), off_loop=intake.off_loop,
+        broker_positions=broker_positions,
+    )
+
     # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``
     # authority, whatever an ended run left is closed at the last price it saw.
     await close_exposure_of_ended_dry_runs(
@@ -1433,6 +1461,9 @@ def _finalize_reconciliation_verdict(
         known_broker_order_ids=captured_broker_order_ids,
     )
     plan = _contain_unfoldable_orders(repo, plan)
+    # An order just observed in an option contract a bot holds is held against that bot in
+    # this same pass, from the books' own record of it (ADR 0076 decision 22).
+    book_outside_option_orders_in_a_pass(repo)
     _sync_unexplained_order_hold(repo, plan.unexplained_orders)
     _sync_position_drift(
         repo,
