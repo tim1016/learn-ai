@@ -153,7 +153,7 @@ class OptionExitEvidence:
     """The quotes read at an exit decision for the contracts the bot holds. A contract with none is left out.
 
     Each quote is named by its contract's OCC symbol, as the quotes kept are
-    (``keep_option_quotes``). A leg id would say which rule of the plan the
+    (``kept_option_quotes``). A leg id would say which rule of the plan the
     quote was read for, never which contract it is of; the Clerk closes a
     contract, and takes a quote only for the one it closes.
     """

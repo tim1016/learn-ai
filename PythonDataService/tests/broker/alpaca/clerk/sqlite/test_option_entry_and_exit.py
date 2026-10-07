@@ -13,7 +13,7 @@ a contract: one contract costs $194.00 to buy.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_s
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence, OptionPlanRefused
@@ -146,6 +147,13 @@ class _DryRun:
     @property
     def repo(self) -> Any:
         return self.clerk.repository
+
+    def hand_over(self, quotes: Mapping[str, HeldQuote]) -> None:
+        """State each quote as the newest held for its contract now, as the Clerk's own keeping does:
+        straight into the account's kept quotes."""
+        KeptOptionQuotes.of_account(artifacts_root=self.artifacts_root, account_id=self.repo.account_id).keep_all(
+            quotes, kept_at_ms=self.clock()
+        )
 
     def wait(self, ms: int) -> None:
         """Let time pass, the Clerk's hold on its account kept alive as its heartbeat keeps it."""
@@ -572,7 +580,7 @@ async def test_an_exit_uses_a_newer_quote_the_runner_handed_over_while_the_bot_h
     """With no quote at the exit decision, the newest kept is the one handed as a mark, not the entry's."""
     await dry_run.enter(dry_run.evidence())
     dry_run.wait(60_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.20", "2.26", received_ms=dry_run.clock() - 200)})
+    dry_run.hand_over({SYMBOL: _quote("2.20", "2.26", received_ms=dry_run.clock() - 200)})
     dry_run.wait(30_000)
 
     closed = await dry_run.exit(None)
@@ -715,7 +723,7 @@ async def test_an_open_contract_is_marked_at_the_bid_of_a_fresh_quote_and_not_at
     with pytest.raises(SimulationEvidenceUnavailable, match=SYMBOL):
         dry_run.account_reading()
 
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.50", "2.56", received_ms=dry_run.clock() - 500)})
+    dry_run.hand_over({SYMBOL: _quote("2.50", "2.56", received_ms=dry_run.clock() - 500)})
     reading = dry_run.account_reading()
     assert reading.unrealized_pl_usd == Decimal("56")
     # $1,000.00 less the $194.00 paid; the day's fees are an estimate until the day is over.
@@ -731,7 +739,7 @@ async def test_a_quiet_contract_whose_bid_has_not_moved_is_still_marked_while_it
     unchanged = _quote("2.50", "2.56", received_ms=dry_run.clock())
 
     dry_run.wait(300_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: unchanged})
+    dry_run.hand_over({SYMBOL: unchanged})
 
     assert dry_run.account_reading().unrealized_pl_usd == Decimal("56")
     dry_run.wait(100_000)
@@ -761,9 +769,9 @@ async def test_a_contract_held_overnight_starts_the_next_day_from_its_mark_at_th
     """
     await dry_run.enter(dry_run.evidence())
     dry_run.wait(4 * 3_600_000 - 31_000)  # 15:59:30 New York time
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.00", "2.06", received_ms=dry_run.clock() - 5_000)})
+    dry_run.hand_over({SYMBOL: _quote("2.00", "2.06", received_ms=dry_run.clock() - 5_000)})
     dry_run.wait(17 * 3_600_000 + 31 * 60_000 + 30_000)  # 09:31:00 the next morning
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.50", "2.56", received_ms=dry_run.clock() - 200)})
+    dry_run.hand_over({SYMBOL: _quote("2.50", "2.56", received_ms=dry_run.clock() - 200)})
 
     reading = dry_run.account_reading()
 
@@ -780,9 +788,9 @@ async def test_a_quote_handed_over_the_next_morning_does_not_stand_in_for_the_cl
     await dry_run.enter(dry_run.evidence())
     quiet = _quote("2.00", "2.06", received_ms=dry_run.clock())
     dry_run.wait(3 * 3_600_000)  # 15:00, an hour before the close
-    dry_run.clerk.keep_option_quotes({SYMBOL: quiet})
+    dry_run.hand_over({SYMBOL: quiet})
     dry_run.wait(18 * 3_600_000 + 31 * 60_000 - 1_000)  # 09:31:00 the next morning
-    dry_run.clerk.keep_option_quotes({SYMBOL: quiet})
+    dry_run.hand_over({SYMBOL: quiet})
 
     with pytest.raises(SimulationEvidenceUnavailable, match=SYMBOL):
         dry_run.account_reading()
@@ -836,7 +844,7 @@ async def test_a_close_is_still_priced_from_the_entrys_own_quote_when_the_quotes
 async def test_a_run_that_ends_holding_has_its_contract_closed_at_the_newest_quote_kept(dry_run: _DryRun) -> None:
     await dry_run.enter(dry_run.evidence())
     dry_run.wait(20_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() - 1_000)})
+    dry_run.hand_over({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() - 1_000)})
     await dry_run.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN)
 
     await dry_run.clerk.reconcile_once()

@@ -1004,15 +1004,6 @@ class SqliteAlpacaClerkFacade:
             "have not been checked against Alpaca on a Paper, Live Shadow or Live account."
         )
 
-    def keep_option_quotes(self, quotes: Mapping[str, HeldQuote]) -> None:
-        """Hand a Dry Run the newest quote held for each contract a bot holds, by OCC symbol (ADR 0076).
-
-        A simulated close and the simulated account's mark of an open
-        contract are priced from the newest quote kept. Any other account
-        keeps none.
-        """
-        self._trade.keep_option_quotes(quotes)
-
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id."""
         return self._trade.synthesized_option_fills()

@@ -100,8 +100,8 @@ def _wait_until(account: _DryRun, at_ms: int) -> None:
 
 
 def _hand_over(account: _DryRun, bid: str, ask: str, *, age_ms: int = 200) -> None:
-    """The runner passes the Clerk the newest quote it holds for the contract."""
-    account.clerk.keep_option_quotes({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
+    """The newest quote held for the contract is stated as its mark, as the Clerk's keeping states it."""
+    account.hand_over({SYMBOL: _quote(bid, ask, received_ms=account.clock() - age_ms)})
 
 
 async def _stop(account: _DryRun) -> None:
@@ -388,7 +388,7 @@ async def test_a_quote_stamped_after_the_clerks_clock_gets_no_flatten_offered(dr
     await _stop(dry_run)
     await dry_run.clerk.reconcile_once()
     dry_run.wait(30_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() + 60_000)})
+    dry_run.hand_over({SYMBOL: _quote("2.10", "2.16", received_ms=dry_run.clock() + 60_000)})
 
     await _flatten_not_offered(dry_run, "OPTION_EXIT_UNPRICED")
 
@@ -1143,8 +1143,8 @@ async def test_a_quote_stamped_after_the_clerks_own_clock_prices_no_close(dry_ru
     """A quote from a minute ahead is not a price the close could have met. The newest one by now is used."""
     await dry_run.enter(dry_run.evidence())
     dry_run.wait(60_000)
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.20", "2.26", received_ms=dry_run.clock() - 500)})
-    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("9.00", "9.06", received_ms=dry_run.clock() + 60_000)})
+    dry_run.hand_over({SYMBOL: _quote("2.20", "2.26", received_ms=dry_run.clock() - 500)})
+    dry_run.hand_over({SYMBOL: _quote("9.00", "9.06", received_ms=dry_run.clock() + 60_000)})
 
     closed = await dry_run.exit(None)
 
