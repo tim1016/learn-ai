@@ -33,7 +33,7 @@ class Bounds:
     step: Decimal | None = None
 
     def __post_init__(self) -> None:
-        if self.step is not None and self.step.normalize().as_tuple().digits != (1,):
+        if self.step is not None and _written(self.step)[0] != (1,):
             # A step is read off a number's own digits, which works for a power of ten and nothing else.
             raise ValueError(f"a step is a power of ten; got {self.step}")
         if self.lowest is not None and self.highest is not None and self.lowest > self.highest:
@@ -42,8 +42,11 @@ class Bounds:
     def fault(self, value: Decimal) -> BoundsFault | None:
         """Which way a finite ``value`` is outside these bounds, or ``None`` when it is inside them.
 
-        Nothing here writes the number out or divides by it, so a number of
-        any size is judged at once: ``1e999999999`` is above a hundred.
+        Each end is one exact comparison, and the step is read off the
+        number's own digits. Nothing here writes the number out, divides by
+        it or rounds it, so a number of any size is judged at once, whether
+        or not the range has a top: ``1e999999999`` is above a hundred, and
+        is a whole number where nothing bounds it.
         """
         if not value.is_finite():
             raise ValueError(f"only a finite number is held to a range; got {value}")
@@ -51,9 +54,11 @@ class Bounds:
             return "below"
         if self.highest is not None and (value > self.highest or (value == self.highest and not self.highest_included)):
             return "above"
-        # Nothing, however it was written, is a whole number of every step: its digits come to none.
-        if self.step is not None and value.normalize().as_tuple().exponent < self.step.normalize().as_tuple().exponent:
-            return "finer"
+        if self.step is not None:
+            digits, finest_place = _written(value)
+            # Nothing, however it was written, is a whole number of every step: its digits come to none.
+            if digits and finest_place < _written(self.step)[1]:
+                return "finer"
         return None
 
     def held_by(self, kind: type[int] | type[Decimal]) -> tuple[Gt | Ge | Lt | Le, ...]:
@@ -65,6 +70,22 @@ class Bounds:
         if self.highest is not None:
             held.append(Le(kind(self.highest)) if self.highest_included else Lt(kind(self.highest)))
         return tuple(held)
+
+
+def _written(value: Decimal) -> tuple[tuple[int, ...], int]:
+    """A finite number's digits with its trailing zeros taken off, and the place of the last digit left:
+    0 for ones, -3 for thousandths, 2 for hundreds. ``7.50`` is ``(7, 5)`` at -1, and nothing is no digits.
+
+    Read off the number as it is held. ``Decimal.normalize`` gives the same answer by rounding to the decimal
+    context, and raises on a number the context cannot hold, such as ``1e1000000``.
+    """
+    _sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError(f"only a finite number has digits to read; got {value}")
+    kept = len(digits)
+    while kept and digits[kept - 1] == 0:
+        kept -= 1
+    return digits[:kept], exponent + len(digits) - kept
 
 
 def _exact(bound: object) -> Decimal:

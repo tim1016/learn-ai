@@ -46,6 +46,30 @@ def test_a_range_with_no_bound_on_a_side_refuses_nothing_there_and_a_whole_numbe
     assert [any_number.fault(Decimal(number)) for number in ("0", "0.0000000001", "1e30", "-0.1")] == [None, None, None, "below"]
 
 
+@pytest.mark.parametrize(
+    ("bounds", "number", "fault"),
+    [
+        # A whole number with no bound at all, and one with a bottom and no top: nothing stops a huge number
+        # before its step is read, and the step is read off its digits.
+        pytest.param(Bounds(step=Decimal(1)), "1e999999999", None, id="no bounds: a whole number too large to write out"),
+        pytest.param(Bounds(step=Decimal(1)), "-1e999999999", None, id="no bounds: as far below nothing"),
+        pytest.param(Bounds(step=Decimal(1)), "1e1000000", None, id="no bounds: one past the largest exponent the context holds"),
+        pytest.param(Bounds(Decimal(1), True, step=Decimal(1)), "1e999999999", None, id="a bottom and no top"),
+        pytest.param(Bounds(Decimal(1), True, step=Decimal(1)), "1e1000000", None, id="a bottom and no top, one past the context"),
+        pytest.param(Bounds(Decimal(1), True, step=Decimal(1)), "-1e999999999", "below", id="a bottom: far below it"),
+        pytest.param(Bounds(step=Decimal(1)), "1e-999999999", "finer", id="too small to write out is finer than one"),
+        pytest.param(Bounds(step=Decimal(1)), "1.5e1000000", None, id="fifteen followed by zeros is whole"),
+        pytest.param(Bounds(step=Decimal("0.001")), "1.2345e-999999", "finer", id="finer than a thousandth by a long way"),
+    ],
+)
+def test_a_number_of_any_size_is_judged_at_once_whether_or_not_the_range_has_a_top(
+    bounds: Bounds, number: str, fault: str | None
+) -> None:
+    """Each of these is a number the decimal context cannot round: ``Decimal.normalize`` raises on it. A range
+    with a top calls a huge number "above" before its step is asked. One without a top must read the step."""
+    assert bounds.fault(Decimal(number)) == fault
+
+
 def test_only_a_finite_number_is_held_to_a_range() -> None:
     for no_number in ("NaN", "Infinity", "-Infinity"):
         with pytest.raises(ValueError, match="finite"):
