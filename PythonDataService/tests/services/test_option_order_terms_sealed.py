@@ -34,9 +34,12 @@ from app.services.bot_runner_errors import (
     OptionStartRefusedError,
     require_option_start_configuration,
 )
+from app.services.signal_program_admission import build_start_program_seal
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.schemas.test_signal_program_seal import _sealed_bot_program
 from tests.services.bot_runner._option_floor import STARTING_TERMS, one_call
+from tests.services.test_signal_program_admission import _binding as _program_binding
+from tests.services.test_signal_program_admission import _validation
 
 # A stock bot's configuration hash and its seal's hash, on the commit before the terms existed.
 _STOCK_CONFIGURATION_HASH = "2519cb566e1ce75c15ebd2f589d5a854cf927a1072306463de20b0fe57e67130"
@@ -213,3 +216,15 @@ def test_a_bot_in_shares_starts_as_it_always_did_and_never_with_option_terms() -
     with pytest.raises(OptionStartRefusedError) as refused:
         require_option_start_configuration(action_plan=shares, use_rth=True, option_order_terms=_OWN)
     assert refused.value.reason_code == OPTION_ORDER_TERMS_NOT_APPLICABLE
+
+
+def test_a_start_seals_the_terms_its_binding_carries() -> None:
+    """The seal a first Start authors is made from the binding: its terms go under the seal's hash with its plan."""
+    binding = _program_binding(action_plan=one_call(), option_order_terms=_OWN)
+    in_shares = _program_binding()
+
+    sealed = build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
+    plain = build_start_program_seal(in_shares, _validation(), parameter_origins=in_shares.strategy_param_origins)
+
+    assert sealed is not None and plain is not None
+    assert sealed.option_order_terms == _OWN and plain.option_order_terms is None

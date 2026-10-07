@@ -699,3 +699,25 @@ def test_money_that_cannot_be_set_aside_is_not_said_to_be_skipped_right_now() ->
 
     assert "right now" not in red and "cannot be made" in red
     assert "right now" in entry_sentence([])
+
+
+def test_the_structure_is_previewed_under_the_owners_own_size_and_terms_on_one_hold_of_quote_lines() -> None:
+    """What Deploy asks the preview is what the bot would run under, so the money reviewed is the money of
+    that bot. The hold on quote lines is named for the structure and the account, never for the budget."""
+    terms = {"gap_limit_percent": "12.5", "entry_wait_seconds": 7, "cost_limit_percent": "4", "expiry_close_lead_minutes": 90}
+    body = {**_SETTINGS, "trades": {**_ONE_CALL, "order_terms": terms}, "sizing": {"preset": "custom", "quantity": 3}}
+    request = AlpacaPaperDeployRequest.model_validate(body)
+
+    asked = option_deploy.preview_request_for(ACCT, request)
+
+    assert (asked.underlying, asked.listens_to, asked.structure, asked.structures) == ("SPY", "SPY", "long_call", 3)
+    assert (asked.gap_limit_percent, asked.cost_limit_percent) == (Decimal("12.5"), Decimal(4))
+    assert (asked.entry_wait_seconds, asked.expiry_close_lead_minutes) == (7, 90)
+    assert [leg.model_dump(mode="json") for leg in asked.legs] == [_LONG_CALL]
+    another_budget = AlpacaPaperDeployRequest.model_validate({**body, "budget": {"amount_usd": "900.00", "risk_revision": 1}})
+    a_put = AlpacaPaperDeployRequest.model_validate(
+        {**body, "trades": {**_ONE_CALL, "structure": "long_put", "legs": [{**_LONG_CALL, "right": "put"}]}}
+    )
+    assert option_deploy.preview_request_for(ACCT, another_budget).preview_key == asked.preview_key
+    assert option_deploy.preview_request_for(ACCT, a_put).preview_key != asked.preview_key
+    assert option_deploy.preview_request_for("PA-OTHER", request).preview_key != asked.preview_key
