@@ -18,7 +18,7 @@ from app.engine.engine import ClosingBarSkip
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.lean_sidecar.closing_bar import ClosingBarConvention
 from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
-from app.research.golden_search.evidence import daily_equity
+from app.research.sweep.daily_equity import daily_equity
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services.engine_backtest_service import _aggregate_backtest_response
 

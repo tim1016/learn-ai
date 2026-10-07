@@ -53,11 +53,19 @@
     </div>
   }
 
+  @if (detail()) {
+    <app-grid-search-curves [searchId]="searchId()" [cells]="drawn()" [max]="maxDrawn()" [drawableOnPage]="drawable().length" (drawPage)="drawPage()" (cleared)="clearDrawn()" />
+  }
+
   @if (page(); as p) {
+    @if (p.without_curve > 0) {
+      <p class="muted" role="note">Completed cells with no curve recorded: {{ p.without_curve }}. They are listed with their numbers and cannot be drawn.</p>
+    }
     <div class="table-wrap">
       <table class="cells">
         <thead>
           <tr>
+            <th scope="col"><span class="sr-only">Draw</span></th>
             <th scope="col">Settings</th>
             @for (column of sortable; track column) {
               <th scope="col" [attr.aria-sort]="query().sort_by === column ? (query().direction === 'asc' ? 'ascending' : 'descending') : 'none'">
@@ -70,6 +78,8 @@
         <tbody>
           @for (cell of p.cells; track cell.params_hash) {
             <tr [class.leader-row]="cell.is_leader" [class.failed-row]="cell.status === 'failed'" [class.zero-row]="cell.status === 'completed' && cell.total_trades === 0">
+              @let isTicked = tickedHashes().has(cell.params_hash);
+              <td><input type="checkbox" [checked]="isTicked && cell.has_curve" [disabled]="!cell.has_curve || (full() && !isTicked)" [attr.aria-label]="'Draw ' + settingsOf(cell)" (change)="toggle(cell)" /></td>
               <td class="mono">@for (entry of cell.params | keyvalue; track entry.key) { <span>{{ entry.key }}={{ entry.value }}</span> }</td>
               <td class="num">{{ cell.sharpe_ratio === null ? '—' : (cell.sharpe_ratio | number: '1.2-2') }}</td>
               <td class="num">{{ cell.total_return_pct === null ? '—' : (cell.total_return_pct | percent: '1.2-2') }}</td>
@@ -83,10 +93,11 @@
                 @if (cell.status === 'failed') { <span class="tag tag--warn" [title]="cell.error ?? ''">Failed</span> }
                 @else if (cell.total_trades === 0) { <span class="tag tag--warn">Zero trades</span> }
                 @else if (!cell.eligible) { <span class="tag">Not eligible</span> }
+                @if (cell.status === 'completed' && !cell.has_curve) { <span class="tag">Curve not recorded</span> }
               </td>
             </tr>
           } @empty {
-            <tr><td colspan="8" class="muted">{{ running() ? 'Waiting for the first cells…' : 'No cells recorded.' }}</td></tr>
+            <tr><td colspan="9" class="muted">{{ running() ? 'Waiting for the first cells…' : 'No cells recorded.' }}</td></tr>
           }
         </tbody>
       </table>

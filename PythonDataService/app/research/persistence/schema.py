@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -825,6 +825,21 @@ DDL_V15: tuple[str, ...] = (
     """,
 )
 
+# Every Grid Search cell keeps its daily equity (#2935), the way a Golden Search run does (v15). A walk-forward
+# study's fold sweeps are these cells too. Cells recorded before this stay null and read "curve not recorded".
+DDL_V16: tuple[str, ...] = (
+    """
+    ALTER TABLE research_grid_search_cells
+        ADD COLUMN IF NOT EXISTS equity_close_ms BIGINT[] NULL,
+        ADD COLUMN IF NOT EXISTS equity_values DOUBLE PRECISION[] NULL
+    """,
+    """
+    ALTER TABLE research_grid_search_cells
+        ADD CONSTRAINT ck_research_grid_search_cells_equity_arrays
+        CHECK (cardinality(equity_close_ms) IS NOT DISTINCT FROM cardinality(equity_values))
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -841,6 +856,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (13, DDL_V13),
     (14, DDL_V14),
     (15, DDL_V15),
+    (16, DDL_V16),
 )
 
 

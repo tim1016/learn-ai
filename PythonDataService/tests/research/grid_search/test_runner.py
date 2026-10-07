@@ -39,6 +39,7 @@ def test_every_combination_runs_exactly_once_and_is_persisted_as_each_cell_compl
 def test_a_failing_cell_is_recorded_and_does_not_abort_the_run() -> None:
     candidates, expected = _grid(1, 2, 3)
     failures: list[tuple[str, str]] = []
+    persisted: list[CellResult] = []
 
     def execute(spec) -> CellResult:
         if spec.params["short_window"] == 2:
@@ -49,11 +50,11 @@ def test_a_failing_cell_is_recorded_and_does_not_abort_the_run() -> None:
         candidates,
         expected_cells=expected,
         execute_cell=execute,
-        persist=lambda cell: None,
+        persist=persisted.append,
         on_cell_failed=lambda spec, message: failures.append((spec.params_hash, message)),
     )
 
-    failed = [r for r in summary.results if r.status == "failed"]
+    failed = [r for r in persisted if r.status == "failed"]
     assert len(failed) == 1 and failed[0].error == "engine exploded"
     assert summary.completed_cells == 2 and summary.failed_cells == 1
     assert failures == [(failed[0].params_hash, "engine exploded")]

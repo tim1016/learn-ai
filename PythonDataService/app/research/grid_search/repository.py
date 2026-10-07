@@ -89,6 +89,7 @@ def _row_to_cell(row: asyncpg.Record) -> CellRow:
         error=row["error"],
         exploratory=row["exploratory"],
         completed_at_ms=row["completed_at_ms"],
+        has_curve=row["has_curve"],
     )
 
 
@@ -101,10 +102,11 @@ _SEARCH_COLUMNS = """
     receipt_json::text AS receipt_json, expected_cells, completed_cells, failed_cells,
     leader_params_hash, leader_params_json::text AS leader_params_json, incomplete, failure_reason
 """
+# Every cell column but the curve arrays: a list of cells never carries their daily equity.
 _CELL_COLUMNS = """
     search_id, params_hash, params_json::text AS params_json, status, attempt, total_trades, net_profit,
     total_return_pct, sharpe_ratio, max_drawdown_pct, win_rate, bars_consumed, error, exploratory,
-    completed_at_ms
+    completed_at_ms, equity_close_ms IS NOT NULL AS has_curve
 """
 
 
@@ -195,15 +197,17 @@ async def write_cells(conn: asyncpg.Connection, search_id: str, attempt: int, ce
             """
             INSERT INTO research_grid_search_cells (
                 search_id, params_hash, params_json, status, attempt, total_trades, net_profit, total_return_pct,
-                sharpe_ratio, max_drawdown_pct, win_rate, bars_consumed, error, exploratory, completed_at_ms
-            ) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                sharpe_ratio, max_drawdown_pct, win_rate, bars_consumed, error, exploratory, completed_at_ms,
+                equity_close_ms, equity_values
+            ) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::bigint[], $17::float8[])
             ON CONFLICT (search_id, params_hash) DO UPDATE SET
                 params_json = EXCLUDED.params_json, status = EXCLUDED.status, attempt = EXCLUDED.attempt,
                 total_trades = EXCLUDED.total_trades, net_profit = EXCLUDED.net_profit,
                 total_return_pct = EXCLUDED.total_return_pct, sharpe_ratio = EXCLUDED.sharpe_ratio,
                 max_drawdown_pct = EXCLUDED.max_drawdown_pct, win_rate = EXCLUDED.win_rate,
                 bars_consumed = EXCLUDED.bars_consumed, error = EXCLUDED.error, exploratory = EXCLUDED.exploratory,
-                completed_at_ms = EXCLUDED.completed_at_ms
+                completed_at_ms = EXCLUDED.completed_at_ms, equity_close_ms = EXCLUDED.equity_close_ms,
+                equity_values = EXCLUDED.equity_values
             """,
             [
                 (
@@ -222,6 +226,8 @@ async def write_cells(conn: asyncpg.Connection, search_id: str, attempt: int, ce
                     cell.error,
                     cell.exploratory,
                     now,
+                    None if cell.daily_equity is None else [ms for ms, _ in cell.daily_equity],
+                    None if cell.daily_equity is None else [equity for _, equity in cell.daily_equity],
                 )
                 for cell in cells
             ],
@@ -330,6 +336,19 @@ async def existing_params_hashes(conn: asyncpg.Connection, search_id: str) -> se
     return {row["params_hash"] for row in rows}
 
 
+async def cell_curves(conn: asyncpg.Connection, search_id: str, params_hashes: Sequence[str]) -> dict[str, list[tuple[int, float]]]:
+    """The stored daily equity ``(session close ms, equity)`` of each named cell that kept one."""
+    rows = await conn.fetch(
+        """
+        SELECT params_hash, equity_close_ms, equity_values FROM research_grid_search_cells
+         WHERE search_id = $1 AND params_hash = ANY($2::text[]) AND equity_close_ms IS NOT NULL
+        """,
+        search_id,
+        list(params_hashes),
+    )
+    return {row["params_hash"]: list(zip(row["equity_close_ms"], row["equity_values"], strict=True)) for row in rows}
+
+
 async def list_all_cells(conn: asyncpg.Connection, search_id: str) -> list[CellRow]:
     rows = await conn.fetch(
         f"SELECT {_CELL_COLUMNS} FROM research_grid_search_cells WHERE search_id = $1 ORDER BY params_hash",
@@ -362,7 +381,13 @@ async def list_cells(
     if page < 1 or page_size < 1:
         raise ValueError("page and page_size must be positive")
     order = "ASC NULLS LAST" if direction == "asc" else "DESC NULLS LAST"
-    total = await conn.fetchval("SELECT COUNT(*) FROM research_grid_search_cells WHERE search_id = $1", search_id)
+    counts = await conn.fetchrow(
+        """
+        SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'completed' AND equity_close_ms IS NULL) AS without_curve
+          FROM research_grid_search_cells WHERE search_id = $1
+        """,
+        search_id,
+    )
     rows = await conn.fetch(
         f"""
         SELECT {_CELL_COLUMNS} FROM research_grid_search_cells
@@ -375,5 +400,5 @@ async def list_cells(
         (page - 1) * page_size,
         pin_params_hash,
     )
-    return CellPage(total=int(total or 0), page=page, page_size=page_size, cells=[_row_to_cell(row) for row in rows])
+    return CellPage(total=counts["total"], page=page, page_size=page_size, cells=[_row_to_cell(row) for row in rows], without_curve=counts["without_curve"])
 
