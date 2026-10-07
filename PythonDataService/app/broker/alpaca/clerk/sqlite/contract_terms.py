@@ -16,7 +16,8 @@ thing only, to refuse an option fill the books cannot count.
 The two writers are fold helpers. They run on the connection of the fold that
 creates the order, inside that fold's transaction, so an option order never
 exists without its contract, and a rebuild from the mirror rebuilds both
-tables. Neither is called by any fold yet: the option order path writes them.
+tables. Two folds call them: an option ENTER's, and a reducing order's when
+what it reduces is a contract the books have recorded.
 """
 
 from __future__ import annotations

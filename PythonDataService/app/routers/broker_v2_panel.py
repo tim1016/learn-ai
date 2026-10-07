@@ -76,6 +76,11 @@ from app.schemas.deployment_budget import (
     DeploySubmissionUncommitted,
 )
 from app.schemas.exit_terms import ExitTermsInput
+from app.schemas.option_preview import (
+    OptionStructureCatalogue,
+    OptionStructurePreview,
+    OptionStructurePreviewRequest,
+)
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_view import StrategyViewResponse
 from app.services.broker_v2_panel import (
@@ -84,6 +89,7 @@ from app.services.broker_v2_panel import (
     bot_history,
     budget_deploy,
     cohort_flatten,
+    option_structure_panel,
     panel_deploy,
     panel_errors,
     panel_scope,
@@ -344,6 +350,37 @@ async def get_deploy_traded_asset(
         raise HTTPException(status_code=404, detail="Trading another asset is available on Alpaca accounts.")
     try:
         return await panel_deploy.deploy_traded_asset(broker, account_id, symbol, traded_symbol)
+    except panel_errors.PanelDataError as error:
+        _raise_alpaca_deploy_error(error)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/option-structures",
+    response_model=OptionStructureCatalogue,
+    summary="Deploy: the named option structures the builder offers, with the legs each starts from (#2913)",
+)
+async def get_option_structure_catalogue(broker: str, account_id: str) -> OptionStructureCatalogue:
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Option structures are available on Alpaca accounts.")
+    try:
+        return await option_structure_panel.option_structure_catalogue(broker, account_id)
+    except panel_errors.PanelDataError as error:
+        _raise_alpaca_deploy_error(error)
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots/option-structure-preview",
+    response_model=OptionStructurePreview,
+    summary="Deploy: what an option structure's rules would pick right now, and what it would cost (#2913)",
+)
+async def preview_option_structure_scoped(
+    broker: str, account_id: str, request: OptionStructurePreviewRequest
+) -> OptionStructurePreview:
+    """Reads only. It is a POST because the structure being built is its body."""
+    if broker != "alpaca":
+        raise HTTPException(status_code=404, detail="Option structures are available on Alpaca accounts.")
+    try:
+        return await option_structure_panel.option_structure_preview(broker, account_id, request)
     except panel_errors.PanelDataError as error:
         _raise_alpaca_deploy_error(error)
 

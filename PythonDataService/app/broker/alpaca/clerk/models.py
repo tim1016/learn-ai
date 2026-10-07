@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.schemas.account_authority import AuthorityKind
-from app.schemas.action_plan import ActionPlan, StockEntryLeg
+from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 EpochMs = Annotated[
@@ -59,6 +59,13 @@ class AlpacaEffectOperation(BaseModel):
     The plan is deployed configuration.  It is recorded with the operation so
     replay after a runtime or Clerk restart has the exact immutable intent
     without consulting a second execution ledger.
+
+    The plan trades shares through one stock leg and its close, or option
+    contracts through the legs of one structure, each closed once (ADR 0076).
+    ``quantity`` is shares for the first and structures for the second. Which
+    option structures the Clerk takes is its own refusal to make, on a receipt
+    that carries this operation: a plan of several option legs can be recorded
+    here as refused.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -72,6 +79,10 @@ class AlpacaEffectOperation(BaseModel):
 
     @model_validator(mode="after")
     def _requires_one_stock_entry_and_matching_close(self) -> AlpacaEffectOperation:
+        if self.action_plan.on_enter and all(isinstance(leg, OptionEntryLeg) for leg in self.action_plan.on_enter):
+            # The plan's own rules already hold an option structure to one
+            # order's legs, each closed exactly once.
+            return self
         stock_entries = [leg for leg in self.action_plan.on_enter if isinstance(leg, StockEntryLeg)]
         if len(stock_entries) != 1 or len(self.action_plan.on_enter) != 1:
             raise ValueError("Alpaca effect operations require exactly one stock entry leg")

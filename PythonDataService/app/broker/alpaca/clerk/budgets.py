@@ -164,6 +164,39 @@ def budget_entry_decision(account: AccountBudget, *, strategy_instance_id: str, 
     own claim once. Cash projections already own order/fill/fee overlap.
     """
     required, fee_cents = entry_requirement(quantity=quantity, price=price, at_ms=at_ms)
+    return _requirement_decision(account, strategy_instance_id=strategy_instance_id, required=required, fee_cents=fee_cents)
+
+
+@money_context()
+def option_entry_decision(
+    account: AccountBudget, *, strategy_instance_id: str, commitment_cents: int, fee_provision_cents: int,
+) -> BudgetEntryDecision:
+    """The same next-position rule for an entry in option contracts (ADR 0076).
+
+    What it needs is its entry commitment, in whole cents: the broker's
+    requirement, plus the premium at the limit price, plus the option fee
+    provision. That figure is ``app/options/requirement.py``'s; nothing is
+    priced here.
+
+    Formula: admitted when commitment <= this deployment's free budget and
+      commitment + every other claim <= observed cash.
+    Reference: ADR 0076 decision 2; PRD #2540 admission.
+    Canonical implementation: the rule is this file's (``_requirement_decision``).
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.py.
+    """
+    for name, cents in (("an entry commitment", commitment_cents), ("a fee provision", fee_provision_cents)):
+        if isinstance(cents, bool) or not isinstance(cents, int) or cents < 0:
+            raise BudgetUnavailable(f"{name} is a whole number of cents, zero or more.")
+    return _requirement_decision(
+        account, strategy_instance_id=strategy_instance_id,
+        required=Decimal(commitment_cents) / 100, fee_cents=fee_provision_cents,
+    )
+
+
+def _requirement_decision(
+    account: AccountBudget, *, strategy_instance_id: str, required: Decimal, fee_cents: int,
+) -> BudgetEntryDecision:
+    """Whether this deployment's budget and the account's cash cover ``required`` dollars. The caller holds the money context."""
     required_display = Decimal(cents_required(required)) / 100
     own = next((item for item in account.deployments if item.strategy_instance_id == strategy_instance_id), None)
     if own is None or not own.active:

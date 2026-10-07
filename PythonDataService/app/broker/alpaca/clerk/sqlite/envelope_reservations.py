@@ -58,6 +58,10 @@ earlier build wrote beside the transition carries a float price and no
 recorded provision (#2553). Its fills still price as above, but while it has
 an unfilled remainder its fee is unknown: reading that claim refuses with
 ``EntryFeeProvisionUnrecorded`` rather than pricing the fee at zero.
+
+An option ENTER writes its row with contracts and its limit price, a premium
+per share (ADR 0076). A sold leg's requirement is not held here yet; only a
+bought option, whose requirement is zero, is reserved whole.
 """
 
 from __future__ import annotations
@@ -214,8 +218,8 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
             if multiplier is not None:
                 # The reference price is read as a premium per share, as a
                 # fill's price is, so the claim before a fill is the position's
-                # cost after one at that price. No order path writes an option
-                # entry's reservation yet (#2913, ADR 0076 decision 13).
+                # cost after one at that price (ADR 0076 decision 13). An
+                # option ENTER's fold writes the row with its limit price.
                 unfilled_cost *= contract_multiplier(multiplier)
             claims.append(EntryCashClaim(
                 strategy_instance_id=first["strategy_instance_id"], order_ref=order_ref,

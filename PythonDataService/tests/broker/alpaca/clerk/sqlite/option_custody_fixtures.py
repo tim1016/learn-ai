@@ -1,9 +1,10 @@
 """A test-only writer of option orders, standing in for the order path that will write them (#2913).
 
 The two contract tables are written by fold helpers
-(``contract_terms.record_contract_terms`` and ``bind_order_contract``). No
-production fold calls them yet. These tests register two transition kinds of
-their own. One does what an option order's acceptance will do: create the
+(``contract_terms.record_contract_terms`` and ``bind_order_contract``). The
+production folds that call them take one bought option on a Dry Run. Custody
+is proven here on its own, for any contract and any multiplier, so these
+tests register two transition kinds of their own. One does what an option order's acceptance does: create the
 order as an ENTER does, record the contract's terms, and bind the order to
 the contract, all in one transition. The other does the same for the order
 that closes a position: an EXIT with its reducing order, as the real folds

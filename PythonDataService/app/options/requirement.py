@@ -59,6 +59,10 @@ class StructureMoneyRefusal(StrEnum):
     MIXED_EXPIRY_WITH_SOLD_LEG = "OPTION_STRUCTURE_MIXED_EXPIRY_WITH_SOLD_LEG"
     # Requirement plus premium is zero or less: the prices do not belong together.
     COMMITMENT_NOT_POSITIVE = "OPTION_STRUCTURE_COMMITMENT_NOT_POSITIVE"
+    # Opening and closing at once would cost more than the owner's limit, as a percent of the commitment.
+    COST_OVER_LIMIT = "OPTION_STRUCTURE_COST_OVER_LIMIT"
+    # One leg's own market is wider than the owner's limit, as a percent of its mid.
+    LEG_GAP_OVER_LIMIT = "OPTION_STRUCTURE_LEG_GAP_OVER_LIMIT"
 
 
 class StructureMoneyRefused(ValueError):
@@ -118,6 +122,18 @@ def _payoff_thousandths(structure: ResolvedStructure, price_thousandths: int) ->
         exercise_value = price_thousandths - strike if leg.contract.right == "call" else strike - price_thousandths
         total += _sign(leg) * leg.ratio * max(exercise_value, 0)
     return total
+
+
+def exercise_payoff_thousandths(structure: ResolvedStructure, price_thousandths: int) -> int:
+    """One structure's exercise payoff per share at an underlying price, in thousandths of a dollar.
+
+    The one payoff every figure at expiry is read from: the requirement and
+    the loss estimate here, and the gain, the ranges and the break-evens in
+    ``app.options.at_expiry``.
+    """
+    if isinstance(price_thousandths, bool) or not isinstance(price_thousandths, int) or price_thousandths < 0:
+        raise ValueError(f"an underlying price is whole thousandths of a dollar, zero or more; got {price_thousandths!r}")
+    return _payoff_thousandths(structure, price_thousandths)
 
 
 def _lowest_payoff_thousandths(structure: ResolvedStructure) -> int:

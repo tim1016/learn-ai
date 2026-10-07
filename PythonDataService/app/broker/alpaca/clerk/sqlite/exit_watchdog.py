@@ -60,6 +60,17 @@ stands, as behind any other work in flight, and escalates on the same clock.
 What that bot is told names the bot whose order it is and points at that
 bot's page. Its next step is its own safe flatten, which needs nothing of
 that order.
+
+ADR 0076: an episode whose position is in an option contract is known by the
+symbol the episode names. It is re-driven only by the market leg inside the
+regular session, as a scheduled end's is, and outside it holds for the next
+open. Once the contract's last session has ended no order can close it, so
+every pass holds under ``OPTION_CONTRACT_EXPIRED``: nothing is accepted, no
+attempt is spent, and the episode never escalates for want of a fill that
+cannot come. The first pass to hold it so also rewrites the bot's open EXIT
+notices to say that the contract expired: they were written while a retry or
+a flatten could still close it, and a stopped bot makes no later EXIT that
+would correct them.
 """
 
 from __future__ import annotations
@@ -78,8 +89,10 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     next_redrive_at_ms,
     reducing_send_verdict,
 )
+from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
+    OptionCloseTakesNoPricedLeg,
     accept_recovery_exit,
     newest_reducible_entry,
     resolve_accepted_exit,
@@ -93,9 +106,12 @@ from app.broker.alpaca.clerk.sqlite.exit_recovery import (
     recovery_stopped_because,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    expired_option_close,
+    option_retry_waits_for_open,
     redrive_decision_prefix,
     redrive_episode_token,
     regular_session_sale_waits_for_open,
+    say_the_contract_expired,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -208,8 +224,17 @@ class _StaleExit:
 
     @property
     def regular_session_only(self) -> bool:
-        """The episode's EXIT sells only inside the regular session, so every re-drive of it does too."""
-        return any(a.regular_session_only for a in self.attempts)
+        """The episode's EXIT sells only inside the regular session, so every re-drive of it does too.
+
+        An option position's close always does (ADR 0076), whatever raised
+        its episode and whether or not any order of it was ever made.
+        """
+        return self.closes_an_option or any(a.regular_session_only for a in self.attempts)
+
+    @property
+    def closes_an_option(self) -> bool:
+        """The position the episode names is in an option contract, read from the symbol it names."""
+        return is_option_contract_symbol(self.cause.symbol.upper())
 
 
 @dataclass(frozen=True)
@@ -331,6 +356,11 @@ def evaluate_recovery_wait(
     policy: ProgramLegPolicy, liveness: MarketLivenessFact | None,
 ) -> RecoveryResult | None:
     """Decide from the episode and current market evidence; never record or send."""
+    if stale.closes_an_option:
+        # Asked first: nothing below can change what an expired contract is.
+        expired = expired_option_close(stale.cause.symbol, now_ms)
+        if expired is not None:
+            return RecoveryResult("hold", expired.reason_code, expired.explanation)
     if stale.stopped:
         return RecoveryResult("hold", "EXIT_STUCK", stale.stopped_because)
     if own_exit_working:
@@ -339,7 +369,7 @@ def evaluate_recovery_wait(
     if isinstance(verdict, LegRefusal):
         return RecoveryResult("hold", verdict.reason_code, verdict.explanation)
     if stale.regular_session_only and verdict != "send":
-        waits = regular_session_sale_waits_for_open(now_ms)
+        waits = option_retry_waits_for_open(now_ms) if stale.closes_an_option else regular_session_sale_waits_for_open(now_ms)
         return RecoveryResult("hold", waits.reason_code, waits.explanation, waits.available_at_ms)
     if stale.opposite_side == "open" and (now_ms < stale.settled_at_ms or verdict != "send"):
         # Past the settle age in the regular session the ordinary failure path
@@ -447,6 +477,9 @@ async def _recover_stale_exit(
             repo, accepted=accepted, trade=trade, pricing=pricing, read=None, off_loop=run
         )
         return await run(lambda: _redrive_result(repo, stale, resolved))
+    except OptionCloseTakesNoPricedLeg as exc:
+        # Refused before anything was accepted: an option position is closed by a market order only.
+        return RecoveryResult("hold", exc.refusal.reason_code, exc.refusal.explanation)
     except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
         return RecoveryResult("hold", "RECOVERY_CUSTODY_BUSY", "Another custody operation owns this exit; the Clerk will check again.")
 
@@ -493,6 +526,8 @@ def commit_recovery_evaluations(
             result=result, evaluated_at_ms=evaluation.evaluated_at_ms,
             pass_started_at_ms=pass_started_at_ms, interval_ms=interval_ms,
         )
+        if observation is not None:
+            _say_if_the_contract_expired(repo, evaluation)
         if observation is None or result.outcome != "failure":
             continue
         exhausted = stale.regular_failures >= policy.max_count
@@ -504,6 +539,29 @@ def commit_recovery_evaluations(
             failure_elapsed_ms=observation.failure_elapsed_ms, failure_reason=result.explanation,
             next_step=result.next_step,
         )
+
+
+def _say_if_the_contract_expired(repo: ClerkSqliteRepository, evaluation: RecoveryEvaluation) -> None:
+    """Rewrite the notices of an episode this pass held because its option contract has expired (ADR 0076).
+
+    Written with the pass's observation, so only for an episode that is
+    still the bot's open one. The notices then say what is true from now
+    on: the contract expired, no order can close it, and nothing more is
+    sent for it. They send the operator to no flatten and promise no retry.
+    A later pass finds them saying so already and writes nothing.
+    """
+    stale = evaluation.stale
+    if not stale.closes_an_option:
+        return
+    expired = expired_option_close(stale.cause.symbol, evaluation.evaluated_at_ms)
+    if expired is None:
+        return
+    if say_the_contract_expired(repo, strategy_instance_id=stale.strategy_instance_id, expired=expired):
+        logger.warning("a held option contract expired; the bot's open EXIT notices now say so", extra={
+            "action": "exit_notices_say_contract_expired", "account_id": repo.account_id,
+            "strategy_instance_id": stale.strategy_instance_id, "symbol": stale.cause.symbol,
+            "uncertainty_id": stale.episode["uncertainty_id"],
+        })
 
 
 def _accept_admissible_redrive(

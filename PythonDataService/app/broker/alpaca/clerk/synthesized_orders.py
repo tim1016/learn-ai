@@ -14,6 +14,11 @@ fill model and the decision bar the fill was synthesized from (ADR 0002's third
 invariant — synthetic fills declare their provenance). Both are optional so
 rows written before this module existed still parse.
 
+An option order's record carries a ``SynthesizedOptionFill`` in their place:
+the order as it was asked, and the quote, model and age its fill was priced
+with (ADR 0076). It is left out of a record that has none, so a ledger with
+no option order still reads on a build from before the field existed.
+
 Math Provenance Contract
 ------------------------
 Formula: for each symbol, the projected position is an average-cost fold of
@@ -32,15 +37,19 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, NamedTuple, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
+from app.broker.alpaca.clerk.option_effects import RecordedQuote
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.options import SingleOptionOrderRequest
+from app.options.simulated_fill import SimulatedFillModel
 from app.services.jsonl_wal import JsonlWal
 from app.services.session_authority import order_session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
@@ -123,6 +132,37 @@ class BoundBar(NamedTuple):
         return "decision_bar_close" if self.older_fill_at_ms is None else "older_bar_close"
 
 
+class SynthesizedOptionFill(BaseModel):
+    """How a simulation answered one option order (ADR 0076).
+
+    The order as it was asked, with its limit. The quote it was priced from,
+    each side with the time it was received. The model that priced it and how
+    old the side it used was when it filled. A simulation models what a real
+    venue would have filled; this is the record of the model, not of a fill.
+
+    ``fill_price`` is dollars a share, exact. It is absent, with the model
+    and the age, for an order the simulation ended unfilled: a limit the
+    quote did not reach.
+
+    ``multiplier`` is the shares one contract's price stands for, as the
+    Clerk's books record the contract. It comes with an opening order's
+    quote, and the position that order opens is counted in dollars by it.
+    A closing order opens nothing and carries none.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request: SingleOptionOrderRequest
+    quote: RecordedQuote
+    multiplier: int | None = Field(default=None, ge=1, strict=True)
+    # Where the quote is kept, when it was read back from the quotes kept.
+    quote_ref: str | None = None
+    fill_model: SimulatedFillModel | None
+    fill_price: Decimal | None
+    quote_age_ms: int | None
+    filled_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class SynthesizedOrderRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -130,6 +170,14 @@ class SynthesizedOrderRecord(BaseModel):
     order: BrokerOrder
     leg: BrokerOrderLeg | None = None
     anchor: SynthesizedAnchor | None = None
+    option: SynthesizedOptionFill | None = None
+
+    @model_serializer(mode="wrap")
+    def _leave_out_an_absent_option_fill(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("option") is None:
+            data.pop("option", None)
+        return data
 
 
 def _corrupt_order_ledger(path: Path, detail: str) -> RuntimeError:
@@ -359,6 +407,14 @@ class SynthesizedOrderLedger:
         self._fill_anchors = (stamp, anchors)
         return anchors
 
+    def option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
+        """How each option order this ledger holds was answered, by client order id."""
+        return {
+            client_order_id: record.option
+            for client_order_id, record in self.latest_records().items()
+            if record.option is not None
+        }
+
     def _orders_stamp(self) -> tuple[int, int] | None:
         """The order WAL's size and last write, which every append changes; ``None`` before its first."""
         try:
@@ -409,6 +465,7 @@ class SynthesizedOrderLedger:
         order: BrokerOrder,
         leg: BrokerOrderLeg | None = None,
         anchor: SynthesizedAnchor | None = None,
+        option: SynthesizedOptionFill | None = None,
     ) -> SynthesizedOrderRecord:
         """Append inside :meth:`transaction`; ``records`` is that transaction's read."""
         if not getattr(self._transaction, "held", False):
@@ -421,7 +478,7 @@ class SynthesizedOrderLedger:
         # write. Refresh the WAL's sequence cache while holding the
         # cross-process transaction lock so it cannot reuse a sequence.
         self._orders.reset_seq(next_seq)
-        record = SynthesizedOrderRecord(seq=next_seq, order=order, leg=leg, anchor=anchor)
+        record = SynthesizedOrderRecord(seq=next_seq, order=order, leg=leg, anchor=anchor, option=option)
         self._orders.append(record)
         records.append(record)
         return record
@@ -468,6 +525,7 @@ __all__ = [
     "SynthesizedAnchor",
     "SynthesizedBarBindingError",
     "SynthesizedLedgerTransactionError",
+    "SynthesizedOptionFill",
     "SynthesizedOrderLedger",
     "SynthesizedOrderRecord",
     "observed_in_send_session",

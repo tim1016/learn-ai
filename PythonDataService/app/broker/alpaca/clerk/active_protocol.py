@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         ReconciliationCut,
         ReconciliationVerdict,
     )
+    from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
@@ -128,6 +129,8 @@ class ActiveAlpacaClerk(Protocol):
         retained_source_bar: RetainedSourceBar | None = None,
         pricing_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
+        option_entry: OptionEntryEvidence | None = None,
+        option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt: ...
 
     async def reconcile_once(self) -> ReconciliationVerdict: ...
