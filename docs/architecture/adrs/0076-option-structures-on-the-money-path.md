@@ -706,10 +706,11 @@ Deploy takes an option structure as what a bot trades. What it writes is fixed f
 
 **The four terms are sealed**
 
-- **The widest gap a leg, the entry wait, the whole-structure cost limit and the expiry-day close** are said on the request, each a number inside the range decision 17's catalogue offers. None is filled in for one left out.
+- **The widest gap a leg, the entry wait, the whole-structure cost limit and the expiry-day close** are said on the request, each a number inside the range decision 17's catalogue offers. None is filled in for one left out. The two times are whole numbers, strictly: a boolean is not a term.
 - **They ride beside the plan** on the start request, the binding, the instance record and the seal, under the configuration hash and the seal's hash. The review token binds them too: a review of one set of terms is no review of another.
 - **The runner reads them from the binding, in one place,** and hands them to the Clerk with every entry (decision 21). It assumes none: a bot sealed with no terms is refused as its run starts. A bot in shares may carry none.
 - **The Clerk does not check them against its own copy** of the bot's configuration. The runner is the one reader.
+- **The seal's terms are held to the binding's.** The seal's check table has a row for them, as it has for every field a seal carries: a seal made under other terms than the bot is bound to does not prove its build.
 
 **What stops a Deploy**
 
@@ -733,7 +734,7 @@ A Deploy is refused for the first of these, and asks nobody further. The money r
 - **One entry is priced by the preview.** An option contract has no top of book to price a position from. The review asks the preview for the structure, on a hold of quote lines of its own, and reads the entry's own figures from its answer (decision 17). It works out one figure of its own: what the budget has free after one entry.
 - **The rows are the five quantities by their names:** what is set aside, and the premium, Alpaca's requirement and the fee estimate that add up to it; the loss at expiry if held, an estimate, or "not estimated"; and what the budget has free after one entry. Each is whole cents with dollars written out beside.
 - **The budget must cover one entry as priced now.** The Clerk's registration asks an option bot's budget for no minimum, because it cannot price a contract (decision 15). So Deploy asks, as it does of a bot in shares.
-- **With no price there is no review to consent to, and no Deploy.** While the preview is only still arriving the review waits; otherwise it says why. At the click Deploy waits a few seconds for a preview that is still arriving, and then refuses by name (above). The read made before the click waits for nothing and is not refused for a price that has not arrived: the page asks it again.
+- **With no price there is no review to consent to, and no Deploy.** While the preview is only still arriving the review waits; otherwise it says why. At the click Deploy waits a few seconds for a preview that is still arriving, and then refuses by name (above). The wait is a deadline on a clock, counted from the click's first ask, so the time each ask takes is inside it. The read made before the click waits for nothing and is not refused for a price that has not arrived: the page asks it again.
 
 **The acknowledgement**
 
