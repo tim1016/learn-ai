@@ -19530,6 +19530,8 @@ export interface components {
         NamedStructureStart: {
             /** Description */
             description: string;
+            /** In A Sentence */
+            in_a_sentence: string;
             /** Label */
             label: string;
             /** Legs */
@@ -19992,10 +19994,27 @@ export interface components {
             expiry_close_lead_minutes: components["schemas"]["OptionWholeNumberTerm"];
             gap_limit_percent: components["schemas"]["OptionPercentTerm"];
         };
+        /**
+         * OptionOrderTermNotes
+         * @description What How says under the option order terms, for every option bot.
+         */
+        OptionOrderTermNotes: {
+            /** Alpaca Sentence */
+            alpaca_sentence: string;
+            /** Entries Sentence */
+            entries_sentence: string;
+            /** Exits Sentence */
+            exits_sentence: string;
+            /** Hours Sentence */
+            hours_sentence: string;
+        };
         /** OptionPercentTerm */
         OptionPercentTerm: {
+            bounds: components["schemas"]["OptionValueBounds"];
             /** Default */
             default: string;
+            /** Help */
+            help: string;
             /** Label */
             label: string;
             /** Unit Label */
@@ -20023,14 +20042,47 @@ export interface components {
             gain_holds: components["schemas"]["PriceRangeView"][];
             /** Gain Sentence */
             gain_sentence: string | null;
+            /** Gain Usd */
+            gain_usd: string | null;
             /** Loss Cents */
             loss_cents: number | null;
             /** Loss Holds */
             loss_holds: components["schemas"]["PriceRangeView"][];
             /** Loss Sentence */
             loss_sentence: string | null;
+            /** Loss Usd */
+            loss_usd: string | null;
+            /** Sketch */
+            sketch: components["schemas"]["OptionPreviewSketchPoint"][];
             /** Warning Sentence */
             warning_sentence: string;
+        };
+        /**
+         * OptionPreviewDecay
+         * @description What the next 24 hours take from the entry, by this system's own model, with the underlying's price,
+         *     each leg's volatility and the rate held. An estimate. Three such days pass over a weekend.
+         */
+        OptionPreviewDecay: {
+            /** Assumptions Sentence */
+            assumptions_sentence: string;
+            /** Direction */
+            direction: ("loses" | "gains" | "neither") | null;
+            /** Estimated */
+            estimated: boolean;
+            /** Leg Ids */
+            leg_ids: string[];
+            /** Near Ex Date Sentence */
+            near_ex_date_sentence: string | null;
+            /** Per 24H Cents */
+            per_24h_cents: number | null;
+            /** Per 24H Usd */
+            per_24h_usd: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Sentence */
+            sentence: string;
+            /** Warning Sentence */
+            warning_sentence: string | null;
         };
         /** OptionPreviewDividend */
         OptionPreviewDividend: {
@@ -20041,6 +20093,18 @@ export interface components {
              * Format: int64
              */
             ex_ms: number;
+        };
+        /**
+         * OptionPreviewEntryRefusal
+         * @description One reason an entry on these picks and quotes would be refused.
+         */
+        OptionPreviewEntryRefusal: {
+            /** Leg Ids */
+            leg_ids: string[];
+            /** Reason Code */
+            reason_code: string;
+            /** Sentence */
+            sentence: string;
         };
         /** OptionPreviewLean */
         OptionPreviewLean: {
@@ -20067,18 +20131,28 @@ export interface components {
         /** OptionPreviewLeg */
         OptionPreviewLeg: {
             contract: components["schemas"]["OptionContractView"];
+            /** Daily Decay */
+            daily_decay: number | null;
             /** Delta */
             delta: number | null;
             /** Delta Status */
             delta_status: string;
+            /** Delta Status Sentence */
+            delta_status_sentence: string;
             /** Gap Percent Of Mid */
             gap_percent_of_mid: string;
+            /** Gap Sentence */
+            gap_sentence: string;
             /** Ibkr Delta */
             ibkr_delta: number | null;
             /** Implied Volatility */
             implied_volatility: number | null;
             /** Leg Id */
             leg_id: string;
+            /** Number */
+            number: number;
+            /** Over Gap Limit */
+            over_gap_limit: boolean | null;
             /**
              * Position
              * @enum {string}
@@ -20089,20 +20163,40 @@ export interface components {
             ratio: number;
         };
         /**
+         * OptionPreviewLegAsked
+         * @description One leg as it was asked for: its rules, in words.
+         */
+        OptionPreviewLegAsked: {
+            /** Leg Id */
+            leg_id: string;
+            /** Number */
+            number: number;
+            /** Sentence */
+            sentence: string;
+            /** Side Label */
+            side_label: string;
+        };
+        /**
          * OptionPreviewMoney
          * @description What entering would mean in cash, for the structures asked. Whole cents.
          */
         OptionPreviewMoney: {
             /** Broker Requirement Cents */
             broker_requirement_cents: number;
+            /** Broker Requirement Usd */
+            broker_requirement_usd: string;
             /** Cost Limit Percent */
             cost_limit_percent: string;
             /** Cost Sentence */
             cost_sentence: string;
             /** Entry Commitment Cents */
             entry_commitment_cents: number;
+            /** Entry Commitment Usd */
+            entry_commitment_usd: string;
             /** Fee Estimate Cents */
             fee_estimate_cents: number;
+            /** Fee Estimate Usd */
+            fee_estimate_usd: string;
             /** Fees Sentence */
             fees_sentence: string;
             /** Multiplier */
@@ -20113,6 +20207,8 @@ export interface components {
             net_entry_premium_per_structure_cents: number;
             /** Net Price */
             net_price: string;
+            /** Net Price Usd */
+            net_price_usd: string;
             /** Over Cost Limit */
             over_cost_limit: boolean;
             /**
@@ -20120,12 +20216,38 @@ export interface components {
              * @enum {string}
              */
             premium_is: "paid" | "received" | "nothing";
+            /** Premium Is Label */
+            premium_is_label: string;
+            /** Premium Per Structure Usd */
+            premium_per_structure_usd: string;
+            /** Premium Sentence */
+            premium_sentence: string;
+            /** Premium Usd */
+            premium_usd: string;
             /** Round Trip Cost Cents */
             round_trip_cost_cents: number;
             /** Round Trip Cost Percent */
             round_trip_cost_percent: string;
+            /** Round Trip Cost Usd */
+            round_trip_cost_usd: string;
             /** Structures */
             structures: number;
+        };
+        /**
+         * OptionPreviewOrderTerms
+         * @description The order terms this preview was asked with, and what they come to.
+         */
+        OptionPreviewOrderTerms: {
+            /** Cost Limit Percent */
+            cost_limit_percent: string;
+            /** Entry Wait Seconds */
+            entry_wait_seconds: number;
+            /** Expiry Close Lead Minutes */
+            expiry_close_lead_minutes: number;
+            /** Expiry Close Sentence */
+            expiry_close_sentence: string;
+            /** Gap Limit Percent */
+            gap_limit_percent: string;
         };
         /**
          * OptionPreviewPricingInputs
@@ -20165,6 +20287,16 @@ export interface components {
             bid_age_ms: number;
         };
         /**
+         * OptionPreviewSketchPoint
+         * @description One point of the profit-and-loss line at expiry: the underlying's price, and what the entry comes to there.
+         */
+        OptionPreviewSketchPoint: {
+            /** Price */
+            price: string;
+            /** Result Cents */
+            result_cents: number;
+        };
+        /**
          * OptionPreviewVerdict
          * @description The builder's verdict, in two halves.
          */
@@ -20200,6 +20332,8 @@ export interface components {
             lines_wanted: number;
             /** Ranges */
             ranges: components["schemas"]["OptionPreviewWatchedRange"][];
+            /** Sentence */
+            sentence: string;
         };
         /**
          * OptionPreviewWatchedRange
@@ -20222,6 +20356,8 @@ export interface components {
              * @enum {string}
              */
             right: "call" | "put";
+            /** Sentence */
+            sentence: string;
         };
         /**
          * OptionRuleOtherLeg
@@ -20243,6 +20379,7 @@ export interface components {
          * @description How far from its target a rule's pick may be: the builder's "Within".
          */
         OptionRuleTolerance: {
+            bounds: components["schemas"]["OptionValueBounds"];
             /** Default */
             default: number;
             /** Field */
@@ -20260,6 +20397,7 @@ export interface components {
          * @description What the box beside a rule holds.
          */
         OptionRuleValue: {
+            bounds: components["schemas"]["OptionValueBounds"];
             /** Field */
             field: string;
             /**
@@ -20295,17 +20433,22 @@ export interface components {
         OptionStructureCatalogue: {
             /** Custom Description */
             custom_description: string;
+            /** Custom In A Sentence */
+            custom_in_a_sentence: string;
             /** Custom Label */
             custom_label: string;
             /** Expiry Rules */
             expiry_rules: components["schemas"]["OptionExpiryRule"][];
             /** Groups */
             groups: components["schemas"]["NamedStructureGroup"][];
+            leg_quantity_bounds: components["schemas"]["OptionValueBounds"];
             /** Max Legs */
             max_legs: number;
+            order_term_notes: components["schemas"]["OptionOrderTermNotes"];
             order_terms: components["schemas"]["OptionOrderTermDefaults"];
             /** Strike Rules */
             strike_rules: components["schemas"]["OptionStrikeRule"][];
+            structures_bounds: components["schemas"]["OptionValueBounds"];
         };
         /** OptionStructurePreview */
         OptionStructurePreview: {
@@ -20315,12 +20458,23 @@ export interface components {
             contract: components["schemas"]["OptionContractView"] | null;
             /** Cost Limit Percent */
             cost_limit_percent: string;
+            decay: components["schemas"]["OptionPreviewDecay"] | null;
+            /** Entry Refusals */
+            entry_refusals: components["schemas"]["OptionPreviewEntryRefusal"][];
+            /** Entry Sentence */
+            entry_sentence: string | null;
             /** Fault */
             fault: string | null;
             /** Feed Generation */
             feed_generation: number | null;
+            /** Figures Good For Ms */
+            figures_good_for_ms: number | null;
+            /** Figures Good Until Ms */
+            figures_good_until_ms: number | null;
+            /** Figures Stale Sentence */
+            figures_stale_sentence: string | null;
             /** Gap Limit Percent */
-            gap_limit_percent: string | null;
+            gap_limit_percent: string;
             lean: components["schemas"]["OptionPreviewLean"] | null;
             /** Lean Unknown Sentence */
             lean_unknown_sentence: string | null;
@@ -20328,11 +20482,14 @@ export interface components {
             leg_ids: string[];
             /** Legs */
             legs: components["schemas"]["OptionPreviewLeg"][];
+            /** Legs Asked */
+            legs_asked: components["schemas"]["OptionPreviewLegAsked"][];
             money: components["schemas"]["OptionPreviewMoney"] | null;
             /** Notice */
             notice: string | null;
             /** Oldest Quote Age Ms */
             oldest_quote_age_ms: number | null;
+            order_terms: components["schemas"]["OptionPreviewOrderTerms"] | null;
             /** Preview Sentence */
             preview_sentence: string;
             pricing_inputs: components["schemas"]["OptionPreviewPricingInputs"] | null;
@@ -20341,6 +20498,8 @@ export interface components {
              * Format: int64
              */
             quotes_read_ms: number;
+            /** Quotes Read Sentence */
+            quotes_read_sentence: string | null;
             /** Reason Code */
             reason_code: string | null;
             /**
@@ -20349,6 +20508,8 @@ export interface components {
              */
             state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "search_not_done" | "not_resolved" | "resolved";
             structure: components["schemas"]["NamedStructure"] | null;
+            /** Structure In A Sentence */
+            structure_in_a_sentence: string;
             /** Structure Label */
             structure_label: string;
             /** Structures */
@@ -20370,8 +20531,21 @@ export interface components {
              * @default 10
              */
             cost_limit_percent?: number | string;
-            /** Gap Limit Percent */
-            gap_limit_percent?: number | string | null;
+            /**
+             * Entry Wait Seconds
+             * @default 20
+             */
+            entry_wait_seconds?: number;
+            /**
+             * Expiry Close Lead Minutes
+             * @default 45
+             */
+            expiry_close_lead_minutes?: number;
+            /**
+             * Gap Limit Percent
+             * @default 8
+             */
+            gap_limit_percent?: number | string;
             /** Legs */
             legs: components["schemas"]["OptionLegRules"][];
             /** Listens To */
@@ -20408,10 +20582,32 @@ export interface components {
             /** Template */
             template: string;
         };
+        /**
+         * OptionValueBounds
+         * @description What a number typed into a box may be: the range the server holds it to. A form can refuse a number
+         *     outside it before asking. A number that reaches the preview all the same is refused in words.
+         */
+        OptionValueBounds: {
+            /** Max */
+            max: string | null;
+            /** Max Included */
+            max_included: boolean;
+            /** Min */
+            min: string | null;
+            /** Min Included */
+            min_included: boolean;
+            /** Sentence */
+            sentence: string;
+            /** Step */
+            step: string | null;
+        };
         /** OptionWholeNumberTerm */
         OptionWholeNumberTerm: {
+            bounds: components["schemas"]["OptionValueBounds"];
             /** Default */
             default: number;
+            /** Help */
+            help: string;
             /** Label */
             label: string;
             /** Unit Label */
