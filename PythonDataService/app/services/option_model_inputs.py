@@ -56,6 +56,10 @@ class DividendsUnknown(Exception):
     """The declared dividends could not be looked up. The message is the reason, in the owner's words."""
 
 
+class ModelInputsBeingRead(Exception):
+    """Another caller is looking these up right now, and this one chose not to wait for it."""
+
+
 @dataclass(frozen=True, slots=True)
 class DeclaredDividend:
     ex_date: date
@@ -196,13 +200,17 @@ def clear_cache() -> None:
         _dividends.clear()
 
 
+def _still_kept[T](kept: _Kept[T] | None, at_ms: int) -> _Kept[T] | None:
+    return None if kept is None or at_ms >= kept.until_ms else kept
+
+
 def _when(at_ms: int) -> str:
     return f"{datetime.fromtimestamp(at_ms / 1000, tz=UTC).astimezone(_NY):%Y-%m-%d %H:%M:%S} New York time"
 
 
 def _rate(days: int, today: date, at_ms: int, lookup: RateLookup) -> tuple[float, str, bool]:
-    kept = _rates.get((days, today))
-    if kept is None or at_ms >= kept.until_ms:
+    kept = _still_kept(_rates.get((days, today)), at_ms)
+    if kept is None:
         rate, source = lookup(days, today)
         is_default = source != RATE_SOURCE_FRED
         if is_default:
@@ -221,8 +229,8 @@ def _rate(days: int, today: date, at_ms: int, lookup: RateLookup) -> tuple[float
 def _declared(
     underlying: str, first: date, last: date, at_ms: int, lookup: DividendLookup
 ) -> tuple[tuple[DeclaredDividend, ...] | None, str, int]:
-    kept = _dividends.get((underlying, first, last))
-    if kept is None or at_ms >= kept.until_ms:
+    kept = _still_kept(_dividends.get((underlying, first, last)), at_ms)
+    if kept is None:
         try:
             declared = tuple(lookup(underlying, first, last))
         except DividendsUnknown as unknown:
@@ -248,6 +256,7 @@ def read_option_model_inputs(
     latest_expiry: date,
     rate: RateLookup | None = None,
     dividends: DividendLookup | None = None,
+    wait: bool = True,
 ) -> ModelInputsRead:
     """The rate and the declared dividends for pricing options on ``underlying`` at ``at_ms``.
 
@@ -255,16 +264,39 @@ def read_option_model_inputs(
     rate is the one for the days left to it, and the dividends are the ones
     with an ex-date from today to it. A dividend whose ex-date's session has
     already opened is in the stock's price, and is left out.
+
+    One lookup runs at a time. A caller that finds one running waits for it,
+    or with ``wait`` false raises ``ModelInputsBeingRead`` at once: a page
+    that asks every second must not stack a waiting thread on each ask.
+    What is already kept is answered without waiting either way.
     """
     symbol = underlying.upper()
     today = et_date_at_ms(at_ms)
     days = max((latest_expiry - today).days, 1)
-    with _lookups:
-        rate_now, rate_source, rate_is_default = _rate(days, today, at_ms, rate or _fred_rate)
-        if latest_expiry < today:
-            declared, told, read_ms = (), f"Nothing was looked up: {latest_expiry} is already past.", at_ms
-        else:
-            declared, told, read_ms = _declared(symbol, today, latest_expiry, at_ms, dividends or declared_dividend_lookup())
+    nothing_to_look_up = latest_expiry < today
+    kept_rate = _still_kept(_rates.get((days, today)), at_ms)
+    kept_dividends = _still_kept(_dividends.get((symbol, today, latest_expiry)), at_ms)
+    if kept_rate is None or (kept_dividends is None and not nothing_to_look_up):
+        if not _lookups.acquire(blocking=wait):
+            raise ModelInputsBeingRead(f"the rate and the dividends for {symbol} are being looked up")
+        try:
+            learned_rate = _rate(days, today, at_ms, rate or _fred_rate)
+            learned_dividends = (
+                None
+                if nothing_to_look_up
+                else _declared(symbol, today, latest_expiry, at_ms, dividends or declared_dividend_lookup())
+            )
+        finally:
+            _lookups.release()
+    else:
+        learned_rate = kept_rate.value
+        learned_dividends = None if kept_dividends is None else kept_dividends.value
+    rate_now, rate_source, rate_is_default = learned_rate
+    declared, told, read_ms = learned_dividends or (
+        (),
+        f"Nothing was looked up: {latest_expiry} is already past.",
+        at_ms,
+    )
     still_to_go_ex = None
     if declared is not None:
         still_to_go_ex = tuple(

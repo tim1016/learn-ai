@@ -35,7 +35,8 @@ _ANY_UNDERLYING = "SPY"
 
 
 def _model_inputs(underlying: str, at_ms: int, latest_expiry: date) -> ModelInputsRead:
-    return read_option_model_inputs(underlying, at_ms=at_ms, latest_expiry=latest_expiry)
+    # A page asks every second or so. It never queues behind a lookup another ask already started.
+    return read_option_model_inputs(underlying, at_ms=at_ms, latest_expiry=latest_expiry, wait=False)
 
 
 async def option_structure_preview(

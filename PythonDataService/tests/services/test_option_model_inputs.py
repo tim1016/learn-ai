@@ -15,6 +15,7 @@ from app.services.fred_service import RATE_SOURCE_DEFAULT, RATE_SOURCE_FRED
 from app.services.option_model_inputs import (
     DeclaredDividend,
     DividendsUnknown,
+    ModelInputsBeingRead,
     declared_dividend_lookup,
     declared_dividends_from_polygon,
     read_option_model_inputs,
@@ -244,3 +245,32 @@ def test_polygon_failing_is_unknown_not_none_declared(monkeypatch: pytest.Monkey
     read = read_option_model_inputs("SPY", at_ms=NOW, latest_expiry=_FRIDAY, rate=lambda _days, _today: (0.05, RATE_SOURCE_FRED))
 
     assert read.dividends is None and read.model is None
+
+
+def test_a_caller_that_will_not_wait_is_told_a_lookup_is_running_and_still_gets_what_is_already_kept() -> None:
+    """A page asks every second. It must not stack a waiting thread behind a lookup that is already running."""
+    lookups = Lookups([DeclaredDividend(_FRIDAY, 1.80)])
+    lookups.read()
+
+    assert option_model_inputs._lookups.acquire(blocking=False)
+    try:
+        kept = read_option_model_inputs(
+            "SPY", at_ms=NOW + 1_000, latest_expiry=_NEXT_FRIDAY, rate=lookups.rate, dividends=lookups.dividends, wait=False
+        )
+        with pytest.raises(ModelInputsBeingRead):
+            read_option_model_inputs(
+                "QQQ", at_ms=NOW, latest_expiry=_NEXT_FRIDAY, rate=lookups.rate, dividends=lookups.dividends, wait=False
+            )
+    finally:
+        option_model_inputs._lookups.release()
+
+    assert [paid.cash for paid in kept.dividends] == [1.80]
+    assert lookups.dividends_asked == [("SPY", _TUESDAY, _NEXT_FRIDAY)]
+
+
+def test_an_expiry_already_past_has_nothing_to_look_up() -> None:
+    lookups = Lookups([DeclaredDividend(_FRIDAY, 1.80)])
+
+    read = lookups.read(latest_expiry=date(2026, 10, 2))
+
+    assert (read.dividends, lookups.dividends_asked) == ((), [])

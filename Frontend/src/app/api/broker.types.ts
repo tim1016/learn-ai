@@ -20236,7 +20236,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "dividends_unknown" | "not_resolved" | "resolved";
+            state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "not_resolved" | "resolved";
             structure: components["schemas"]["NamedStructure"] | null;
             /** Structure Label */
             structure_label: string;

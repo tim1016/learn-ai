@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
+from app.options.entry import DEFAULT_COST_LIMIT_PERCENT
 from app.options.named_structures import NamedStructure
 from app.schemas.action_plan import ExpirySelector, StrikeSelector
 
@@ -67,7 +68,7 @@ class OptionStructurePreviewRequest(BaseModel):
     # The widest bid-ask gap a leg may have, as a percent of its mid. Carried back; no leg is judged by it yet.
     gap_limit_percent: Annotated[Decimal, Field(gt=0, le=100)] | None = None
     # The most opening and closing at once may cost, as a percent of what the entry sets aside.
-    cost_limit_percent: Annotated[Decimal, Field(ge=0, le=100)] = Decimal(10)
+    cost_limit_percent: Annotated[Decimal, Field(ge=0, le=100)] = DEFAULT_COST_LIMIT_PERCENT
 
 
 PreviewState = Literal[
@@ -83,8 +84,9 @@ PreviewState = Literal[
     # Lines are open and their first quotes have not all arrived. Ask again.
     "quotes_arriving",
     "underlying_quote_unusable",
-    # The dividends could not be looked up, and a leg picks by delta.
-    "dividends_unknown",
+    # The rate and the dividends are not read yet (ask again), or the dividends could not be looked up and
+    # a leg picks by delta.
+    "pricing_inputs_unknown",
     # The rules did not come to a contract for every leg: the resolver's own refusal.
     "not_resolved",
     "resolved",

@@ -18,8 +18,8 @@ its answer says so.
 ``resolve_contracts``'s, and every way it can fail to pick is that
 function's own typed refusal or one of the states named here: no quote
 source in this process, the feed not up, no quote line, the listing not read
-yet, quotes still arriving, no usable quote for the underlying, dividends
-not known. Only a resolution carries figures.
+yet, quotes still arriving, no usable quote for the underlying, pricing
+inputs not known. Only a resolution carries figures.
 
 The supervisor is read on the event loop, where its callbacks write. The
 lookups of the rate and the dividends, and the resolution itself, block, and
@@ -61,6 +61,7 @@ from app.options.resolver import (
 )
 from app.options.structure import ResolvedStructure
 from app.options.structure_catalogue import label
+from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, NoLine, WindowContract, expiries_wanted, watched_window
 from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg
 from app.schemas.option_preview import (
@@ -80,7 +81,7 @@ from app.schemas.option_preview import (
     PreviewState,
     PriceRangeView,
 )
-from app.services.option_model_inputs import ModelInputsRead
+from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
 from app.services.option_watch import OptionWatchList
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
@@ -97,8 +98,14 @@ PREVIEW_LEASE_MS = 60_000
 ARRIVAL_GRACE_MS = 10_000
 # The most windows pages may hold at once. One more gives up the one asked for longest ago.
 MAX_PREVIEW_WINDOWS = 4
+# How long one ask waits for the rate and the dividends to be looked up before it answers that they are
+# not read yet. The lookup goes on, and a later ask finds what it learned.
+MODEL_INPUTS_WAIT_S = 4.0
 _ASK_AGAIN_MS = 1_000
 _KEY_PREFIX = "preview:"
+# The refusals that say the picked contracts are another shape than the one named, as against money that
+# cannot be set aside for them.
+_SHAPE_REFUSALS = frozenset(str(reason) for reason in StructureRefusal)
 _CENT = Decimal("0.01")
 
 # (underlying, the moment, the latest expiry the plan comes to) -> the rate and the dividends, with sources.
@@ -110,6 +117,8 @@ class PreviewReason(StrEnum):
 
     NO_LEGS = "OPTION_PREVIEW_NO_LEGS"
     PLAN_REFUSED = "OPTION_PREVIEW_PLAN_REFUSED"
+    # A ticker with a share class is written another way in a contract symbol, and no pick on it stands yet.
+    SHARE_CLASS_UNDERLYING = "OPTION_PREVIEW_SHARE_CLASS_UNDERLYING"
     NO_QUOTE_SOURCE = "OPTION_PREVIEW_NO_QUOTE_SOURCE"
     FEED_NOT_UP = "OPTION_PREVIEW_FEED_NOT_UP"
     LISTING_NOT_READ = "OPTION_PREVIEW_LISTING_NOT_READ"
@@ -117,6 +126,8 @@ class PreviewReason(StrEnum):
     # IBKR refused a line for a reason other than capacity, such as a missing market-data subscription.
     LINE_REFUSED = "OPTION_PREVIEW_LINE_REFUSED"
     DIVIDENDS_UNKNOWN = "OPTION_PREVIEW_DIVIDENDS_UNKNOWN"
+    # The rate and the dividends are still being looked up.
+    PRICING_INPUTS_NOT_READ = "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ"
 
 
 def plan_of(request: OptionStructurePreviewRequest) -> ActionPlan:
@@ -647,7 +658,11 @@ class _Asked:
             verdict=OptionPreviewVerdict(
                 **self._deployable(plan),
                 resolves_as_built=None,
-                resolves_sentence="What it resolves to right now is not known.",
+                resolves_sentence=(
+                    "Right now its rules do not come to a contract for every leg."
+                    if why.state == "not_resolved"
+                    else "What it resolves to right now is not known."
+                ),
                 resolves_reason_code=None,
                 leg_ids=[],
                 red=False,
@@ -667,7 +682,7 @@ class _Asked:
                 if name is None
                 else f"Right now it resolves to a {name.in_words}."
             )
-        elif name is not None and figures.money is not None:
+        elif name is not None and broken.reason in _SHAPE_REFUSALS:
             resolves = _sentence(f"Right now this is not a {name.in_words}: {broken.detail}")
         else:
             resolves = _sentence(f"Right now this cannot be entered as built: {broken.detail}")
@@ -726,6 +741,12 @@ async def preview_option_structure(
     if not request.legs:
         watch.unwatch(key)
         return asked.plan_refused(PreviewReason.NO_LEGS, "Add a leg. A structure has one to four.")
+    if not request.underlying.isalpha():
+        watch.unwatch(key)
+        return asked.plan_refused(
+            PreviewReason.SHARE_CLASS_UNDERLYING,
+            f"Options on a ticker with a share class, such as {request.underlying}, are not handled yet.",
+        )
     try:
         plan = plan_of(request)
     except ValidationError as refused:
@@ -762,7 +783,20 @@ async def preview_option_structure(
         first = _lines_stand_in_the_way(first, first.now - since_ms <= ARRIVAL_GRACE_MS) or first
     if isinstance(first, _NoFigures):
         return asked.without_figures(plan, first)
-    inputs = await asyncio.to_thread(model_inputs, request.underlying, first.now, first.latest_expiry)
+    try:
+        inputs = await asyncio.wait_for(
+            asyncio.to_thread(model_inputs, request.underlying, first.now, first.latest_expiry),
+            timeout=MODEL_INPUTS_WAIT_S,
+        )
+    except (TimeoutError, ModelInputsBeingRead):
+        not_read = _NoFigures(
+            "pricing_inputs_unknown",
+            PreviewReason.PRICING_INPUTS_NOT_READ,
+            f"The rate and the dividends for {request.underlying} are still being looked up.",
+            passes_by_itself=True,
+            reading=first,
+        )
+        return asked.without_figures(plan, not_read)
     reading = read()
     if isinstance(reading, _NoFigures):
         return _Asked(request, clock()).without_figures(plan, reading, inputs)
@@ -776,7 +810,7 @@ async def preview_option_structure(
     if model is None:
         if any(isinstance(leg, OptionEntryLeg) and isinstance(leg.strike, DeltaStrike) for leg in plan.on_enter):
             unknown = _NoFigures(
-                "dividends_unknown",
+                "pricing_inputs_unknown",
                 PreviewReason.DIVIDENDS_UNKNOWN,
                 f"The dividends {request.underlying} pays before expiry are not known, and a leg here is picked by "
                 f"delta, which needs them. Nothing is picked on a guess. {inputs.dividends_source}",

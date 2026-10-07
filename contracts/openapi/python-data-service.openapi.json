@@ -35211,7 +35211,7 @@
               "listing_not_read",
               "quotes_arriving",
               "underlying_quote_unusable",
-              "dividends_unknown",
+              "pricing_inputs_unknown",
               "not_resolved",
               "resolved"
             ],

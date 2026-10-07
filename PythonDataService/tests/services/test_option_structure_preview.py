@@ -7,6 +7,7 @@ its callbacks, as they would from the Gateway.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -23,7 +24,8 @@ from app.options.expiry import option_expiry_anchor_ms
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA
 from app.options.watch import LineClass
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
-from app.services.option_model_inputs import ModelInputsRead
+from app.services import option_structure_preview
+from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
 from app.services.option_structure_preview import (
     ARRIVAL_GRACE_MS,
     MAX_PREVIEW_WINDOWS,
@@ -78,7 +80,8 @@ class Desk:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, *bots: WatchRequest, budget: int = 60, reach: int = 2) -> None:
         self.ibkr = feed.Gateway(monkeypatch)
         self.reach = reach
-        self.inputs = _KNOWN
+        # What the lookup of the rate and the dividends answers, or the exception it raises.
+        self.inputs: ModelInputsRead | Exception = _KNOWN
         self.watch = OptionWatchList(clock=lambda: self.ibkr.now)
         for number, bot in enumerate(bots):
             self.watch.watch(f"bot-{number}", bot)
@@ -89,12 +92,17 @@ class Desk:
             symbols=lambda: (), client=lambda: self.ibkr.client, clock=lambda: self.ibkr.now, options=self.lines
         )
 
+    def _model_inputs(self, _underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+        if isinstance(self.inputs, Exception):
+            raise self.inputs
+        return self.inputs
+
     async def preview(self, request: OptionStructurePreviewRequest) -> OptionStructurePreview:
         return await preview_option_structure(
             request,
             quotes=self.status,
             watch=self.watch,
-            model_inputs=lambda _underlying, _at_ms, _latest_expiry: self.inputs,
+            model_inputs=self._model_inputs,
             strikes_each_side=self.reach,
             clock=lambda: self.ibkr.now,
         )
@@ -370,6 +378,10 @@ async def test_a_structure_the_plans_rules_refuse_is_a_verdict_and_asks_for_no_q
         ),
         pytest.param(_asking(_leg("only", "long", "put", _AT_THE_MONEY), structure="long_call"), id="a name its legs are not"),
         pytest.param(_asking(_leg("Not An Id", "long", "call", _AT_THE_MONEY)), id="a leg id the plan cannot carry"),
+        pytest.param(
+            _asking(_leg("only", "long", "call", _AT_THE_MONEY), underlying="BRK.B"),
+            id="a ticker with a share class, whose contracts are written another way",
+        ),
     ],
 )
 async def test_every_hard_rule_of_the_plan_is_answered_as_a_verdict_never_as_an_error(
@@ -592,7 +604,7 @@ async def test_with_dividends_unknown_a_rule_by_delta_picks_nothing(monkeypatch:
 
     seen = await desk.quoted(_CALL_NEAR_30_DELTA)
 
-    assert (seen.state, seen.reason_code) == ("dividends_unknown", "OPTION_PREVIEW_DIVIDENDS_UNKNOWN")
+    assert (seen.state, seen.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_DIVIDENDS_UNKNOWN")
     assert _shows_no_figure(seen)
     assert (seen.pricing_inputs.dividends_known, seen.pricing_inputs.dividends) == (False, [])
 
@@ -609,6 +621,38 @@ async def test_with_dividends_unknown_other_rules_still_pick_and_no_delta_or_lea
     assert [(leg.delta, leg.implied_volatility, leg.delta_status) for leg in seen.legs] == [(None, None, "inputs_not_known")] * 2
     assert seen.lean is None and seen.lean_unknown_sentence
     assert seen.pricing_inputs.dividends_known is False
+
+
+async def test_while_another_ask_is_looking_the_rate_and_dividends_up_this_one_says_so_and_does_not_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch)
+    desk.inputs = ModelInputsBeingRead("another ask is looking them up")
+
+    seen = await desk.quoted(_BULL_CALL_SPREAD)
+
+    assert (seen.state, seen.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ")
+    assert _shows_no_figure(seen) and seen.ask_again_in_ms is not None
+
+
+async def test_a_lookup_that_takes_too_long_is_answered_as_not_read_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lookup goes on in its own thread. The page is answered, and asks again."""
+    desk = Desk(monkeypatch)
+    answered = threading.Event()
+
+    def slow(_underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+        answered.wait(timeout=10)
+        return _KNOWN
+
+    monkeypatch.setattr(desk, "_model_inputs", slow)
+    monkeypatch.setattr(option_structure_preview, "MODEL_INPUTS_WAIT_S", 0.05)
+    try:
+        seen = await desk.quoted(_BULL_CALL_SPREAD)
+    finally:
+        answered.set()
+
+    assert (seen.state, seen.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ")
+    assert _shows_no_figure(seen) and seen.ask_again_in_ms is not None
 
 
 # ---- The lease ------------------------------------------------------------------------
