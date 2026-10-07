@@ -230,6 +230,27 @@ def test_a_shape_that_fails_is_named_ahead_of_money_that_fails() -> None:
     assert shown.money is None
 
 
+def test_a_shape_that_fails_is_named_ahead_of_a_day_with_no_fee_rate_and_both_are_told() -> None:
+    """The sold call below the bought one, under a name that means the other way, on a day with no pinned rate."""
+    shown = _figures(_spread(sold_from_bought=-5.0, name=NamedStructure.BULL_CALL_SPREAD), fees=None)
+
+    assert shown.not_as_built.reason == StructureRefusal.STRIKES_NOT_AS_NAMED
+    assert [refusal.reason for refusal in shown.entry_refusals] == [StructureRefusal.STRIKES_NOT_AS_NAMED, FEE_RATE_NOT_PINNED]
+    assert shown.money is None
+
+
+def test_a_wide_leg_is_told_ahead_of_a_day_with_no_fee_rate_as_an_entry_would_ask_them() -> None:
+    """Forty cents on a mid of 4.10 is 9.76%, over 8%. The gap is asked before anything is set aside."""
+    shown = _figures(_spread(), fees=None, c585=("3.90", "4.30"), c590=("2.18", "2.22"))
+
+    assert [refusal.reason for refusal in shown.entry_refusals] == [
+        StructureMoneyRefusal.LEG_GAP_OVER_LIMIT, FEE_RATE_NOT_PINNED,
+    ]
+    # A wide market passes by itself. No rate pinned is why nothing can be set aside.
+    assert shown.not_as_built.reason == FEE_RATE_NOT_PINNED
+    assert [leg.over_gap_limit for leg in shown.legs] == [True, False]
+
+
 def test_inputs_that_are_not_known_show_no_delta_and_no_lean() -> None:
     shown = _figures(_spread(), model_is_known=False, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
 

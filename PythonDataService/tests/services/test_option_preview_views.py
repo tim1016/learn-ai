@@ -185,6 +185,8 @@ def _decayed(total: float | None, **found: object) -> StructureFigures:
         pytest.param(30.004, "gains", 3_000, id="a day pays it"),
         pytest.param(0.004, "neither", 0, id="under half a cent either way"),
         pytest.param(-0.004, "neither", 0, id="under half a cent the other way"),
+        pytest.param(0.006, "gains", 1, id="over half a cent rounds to a cent, and is not cut off"),
+        pytest.param(-12.346, "loses", -1_235, id="rounded to the nearest cent, away from nothing here"),
     ],
 )
 def test_a_decay_is_said_as_lost_gained_or_neither_by_its_figure_to_the_cent(dollars: float, direction: str, cents: int) -> None:

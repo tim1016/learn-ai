@@ -311,6 +311,51 @@ def test_an_entry_asks_nothing_after_its_first_refusal_where_a_preview_asks_on()
     assert not isinstance(mistake.value, StructureRefused | StructureMoneyRefused)
 
 
+def test_an_entry_refused_for_a_wide_leg_never_reads_the_fee_provision_it_was_handed() -> None:
+    """The gap is asked before the money. A provision that is no amount is the caller's mistake, and an entry
+    already refused for its leg's market never gets as far as finding that out."""
+    picked = {"long_call": _BOUGHT, "short_call": _SOLD}
+    wide = {"long_call": _market("3.90", "4.30"), "short_call": _market("2.18", "2.22")}
+    tight = {"long_call": _market("4.08", "4.12"), "short_call": _market("2.18", "2.22")}
+
+    with pytest.raises(LegGapOverLimit):
+        _prepared(_bought_spread(), picked=picked, quotes=wide, fee_provision_cents=-1)
+    with pytest.raises(ValueError, match="a fee provision is a whole number of cents") as mistake:
+        _prepared(_bought_spread(), picked=picked, quotes=tight, fee_provision_cents=-1)
+    assert not isinstance(mistake.value, StructureMoneyRefused)
+
+
+def test_an_entry_whose_money_is_refused_is_refused_for_that_whatever_crossing_its_markets_would_cost() -> None:
+    """Two expiries and a sold leg: the requirement is not known, and the entry is refused. Its quotes are also
+    finer than any cent, so what crossing them costs is no whole number of cents. An entry never works that out:
+    it was refused first. Asked for every refusal, the cost is worked out, and that is the caller's mistake."""
+    plan = scenes._plan(
+        scenes._leg("short_call", "call", {"selector": "atm"}, position="short"),
+        scenes._leg("long_call", "call", {"selector": "leg_distance", "leg_id": "short_call", "dollars": 5.0}),
+    )
+    picked = {"short_call": _BOUGHT, "long_call": scenes._contract("call", 590, scenes._NEXT_FRIDAY)}
+    finer_than_a_cent = {"short_call": _market("5.00", "5.04"), "long_call": _market("1.89", "1.89005")}
+
+    with pytest.raises(StructureMoneyRefused) as refused:
+        _prepared(plan, picked=picked, quotes=finer_than_a_cent, leg_gap_limit_percent=Decimal(200))
+    assert refused.value.reason is StructureMoneyRefusal.MIXED_EXPIRY_WITH_SOLD_LEG
+
+    with pytest.raises(ValueError, match="whole number of cents") as mistake:
+        _figures(plan, picked=picked, quotes=finer_than_a_cent, leg_gap_limit_percent=Decimal(200))
+    assert not isinstance(mistake.value, StructureMoneyRefused)
+
+
+def test_a_gap_limit_of_nothing_is_a_limit_and_refuses_any_leg_with_a_gap_at_all() -> None:
+    """An entry takes a limit of zero. Only a leg bid and offered at one price passes it."""
+    picked = {"long_call": _BOUGHT, "short_call": _SOLD}
+    locked = {"long_call": _market("4.10", "4.10"), "short_call": _market("2.20", "2.20")}
+    a_cent_wide = {"long_call": _market("4.10", "4.11"), "short_call": _market("2.20", "2.20")}
+
+    assert _prepared(_bought_spread(), picked=picked, quotes=locked, leg_gap_limit_percent=Decimal(0)).round_trip_cost_cents == 0
+    with pytest.raises(LegGapOverLimit):
+        _prepared(_bought_spread(), picked=picked, quotes=a_cent_wide, leg_gap_limit_percent=Decimal(0))
+
+
 def test_picks_that_are_not_the_plans_legs_have_that_one_refusal_and_no_figure() -> None:
     worked = _figures(
         _bought_spread(),

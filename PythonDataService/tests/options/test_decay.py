@@ -252,6 +252,20 @@ def test_a_dividend_going_ex_inside_the_day_reaches_each_picks_decay() -> None:
     assert abs(apart.decay - without.decay) > 1e-3
 
 
+def test_a_dividend_is_inside_the_day_by_the_moment_the_picks_were_priced_at_not_the_bars_close() -> None:
+    """The picks are priced at the selection, two seconds after the decision bar closed. A dividend going ex one
+    second short of 24 hours after the selection is inside the day. Counted from the bar's close it would be a
+    second outside it, and the later price would be worked at the wrong stock price."""
+    scene = scenes._scene()
+    going_ex = (DividendOn(ex_ms=scene.selection_ms + ONE_DAY_MS - 1_000, cash=1.75),)
+    assert going_ex[0].ex_ms - scene.decision_bar_close_ms > ONE_DAY_MS
+    resolution = replace(scene, model=replace(scenes._MODEL, dividends=going_ex)).resolve(_plan_of_two_calls())
+
+    decays = picks_daily_decay(resolution)
+
+    assert [leg.worked.cash_gone_ex for leg in decays.values()] == [1.75, 1.75]
+
+
 def test_a_pick_whose_quote_no_volatility_explains_has_no_decay_and_says_why() -> None:
     """The 590 call quoted far above anything the model can reach. A rule by strike still picks it."""
     scene = scenes._scene()
