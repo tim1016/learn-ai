@@ -16,6 +16,12 @@ close. A position the strategy does not know it holds is closed like any
 other: a part of an entry that filled after the strategy dropped it, a fill
 on an entry already told as failed, what a run that ended left behind.
 
+**The positions say first whether anything can be owed.** A close is owed on
+a held contract's expiry day, and every session by a holding with a sold
+contract. So a bot whose contracts are all bought and all expire on a later
+day owes nothing and missed nothing, and none of its entries is read: it
+costs the same few steps however long its history is.
+
 **It is one more exit.** A close that is due is accepted as a recovery EXIT
 under ``SCHEDULED_CLOSE_DECISION_PREFIX``, keyed on the session's date and
 the entry, so asking again drives the same EXIT and never makes a second.
@@ -47,10 +53,21 @@ the same read of the books.
 accepts no scheduled close for it: it cannot know whether its last order
 traded. The close reads as left to the owner, and is recorded missed.
 
-**What a failed close is retried by** is the stuck-EXIT watchdog, on the
-pass: again after 30 seconds, and not counted out while the close's own
-session is open (``exit_watchdog``). A Dry Run's bot that is running has no
-pass, so its failed close is not tried again until its run ends.
+**A failed close is tried again every 30 seconds while its own session is
+open.** The rule is asked of the books (:func:`close_being_retried`): the
+contract is still held, it owes a close in the session open now, and the
+Clerk took that close. Which order of the bot failed last does not come
+into it. On a real account the stuck-EXIT watchdog sends the close again,
+on the pass. It neither counts it out nor gives the bot up in that session,
+and what was tried under the rule is not counted in a later session
+(``exit_watchdog``). A Dry Run has no pass on a timer, so there the
+keeper's own step takes the failed close again.
+
+**A stop loses no close and sends none twice.** A close cut by a stop after
+it was accepted stays accepted, and the next start drives it as it drives
+every unfinished EXIT. One cut inside its send is looked up by its order's
+own id before anything is sent again. A closing Clerk's last round takes no
+close at all: a closing Clerk sends no new order.
 
 Not here: reading an expiry, an exercise or an assignment and taking the
 contract off the books. After a miss on an expired contract nothing is sent
@@ -773,7 +790,7 @@ def _missed_next_step(item: HeldContract, *, simulated: bool, now_ms: int) -> st
             "sends nothing for this bot by itself."
         )
     return (
-        "The Clerk's close of it goes out in the next regular session. Or stop the bot and flatten the position "
+        "The Clerk sends a close of it in the next regular session. Or stop the bot and flatten the position "
         "from its page once that session is open."
     )
 

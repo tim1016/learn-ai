@@ -471,6 +471,16 @@ def residue_discharge_role(reason_code: str) -> ResidueDischargeRole:
     return "refuses" if policy is None else policy.residue_discharge
 
 
+def reasons_that_strand_a_residue() -> str:
+    """Every reason whose open episode lets a residue be written off, as a refusal names them: "A, B or C".
+
+    Read from the registry, so a refusal that says which episode is missing
+    names every one that would do.
+    """
+    codes = [code for code, policy in _REASON_POLICIES.items() if policy.residue_discharge == "strands"]
+    return " or ".join(filter(None, (", ".join(codes[:-1]), codes[-1])))
+
+
 def reason_age_policy[AgePolicyT: (CauseCleared, VoidAfter, RedriveThenEscalate)](
     reason_code: str, expect: type[AgePolicyT]
 ) -> AgePolicyT:

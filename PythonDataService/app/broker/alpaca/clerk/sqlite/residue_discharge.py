@@ -51,7 +51,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import resolve_flat_exit_fences
-from app.broker.alpaca.clerk.sqlite.uncertainty_policies import residue_discharge_role
+from app.broker.alpaca.clerk.sqlite.uncertainty_policies import reasons_that_strand_a_residue, residue_discharge_role
 from app.broker.contract.ports import BrokerReadPort
 
 logger = logging.getLogger(__name__)
@@ -168,7 +168,7 @@ def _discharge(
     if not episodes:
         raise ResidueDischargeRefused(
             "NO_STRANDED_EXIT_EPISODE",
-            "No open EXIT_NOT_FLAT or EXIT_STUCK episode names this residue; "
+            f"No open {reasons_that_strand_a_residue()} episode names this residue; "
             "flatten real exposure instead of discharging it.",
         )
     if repo.active_run(strategy_instance_id) is not None:
