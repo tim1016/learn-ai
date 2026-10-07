@@ -35,9 +35,9 @@ from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import (
     ActionPlan,
     CloseLegExit,
-    OptionEntryLeg,
     StockEntryLeg,
     StockInstrument,
+    is_option_plan,
 )
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
@@ -164,9 +164,7 @@ class BrokerBotBinding(BaseModel):
 
     @model_validator(mode="after")
     def _only_an_option_plan_carries_option_order_terms(self) -> BrokerBotBinding:
-        if self.option_order_terms is not None and not any(
-            isinstance(leg, OptionEntryLeg) for leg in self.action_plan.on_enter
-        ):
+        if self.option_order_terms is not None and not is_option_plan(self.action_plan):
             raise ValueError("option order terms belong to a bot that trades option contracts; this plan trades shares")
         return self
 

@@ -19981,11 +19981,8 @@ export interface components {
             preview_reason_code: string | null;
             /** Preview Sentence */
             preview_sentence: string | null;
-            /**
-             * Preview State
-             * @enum {string}
-             */
-            preview_state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "search_not_done" | "not_resolved" | "resolved";
+            /** Preview State */
+            preview_state: ("plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "search_not_done" | "not_resolved" | "resolved") | "not_asked";
             /** Quotes Read Ms */
             quotes_read_ms: number | null;
             /** Structure In A Sentence */

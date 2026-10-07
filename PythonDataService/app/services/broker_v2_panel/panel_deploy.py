@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
@@ -39,7 +39,13 @@ from app.research.golden_search import qualification_service
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
 from app.schemas.account_authority import world_admits_account_mode
-from app.schemas.action_plan import OptionEntryLeg, traded_instrument, trades_the_signals_shares
+from app.schemas.action_plan import (
+    ActionPlan,
+    OptionEntryLeg,
+    is_option_plan,
+    traded_instrument,
+    trades_the_signals_shares,
+)
 from app.schemas.broker_bots import (
     AlpacaDeploySubmission,
     AlpacaPaperDeployReceipt,
@@ -58,6 +64,7 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.option_deploy import TradesOptions
+from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.option_preview import OptionLegRules
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.traded_asset_acknowledgement import (
@@ -310,16 +317,15 @@ async def preview_alpaca_deployment_budget(
     owner gives it last, and only Deploy requires it.
     """
     _view, resolved = await _deploy_preflight(broker, account_id, request)
-    option_review, priced = None, {}
+    option_review, option_entry = None, None
     if request.options is not None:
         # The structure is judged and priced first: an option entry has no
         # top of book, so the budget is reviewed against what the structure
         # preview says one entry sets aside (ADR 0076 decision 24).
         amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
         option_review, option_entry = await option_deploy.review_for(broker, account_id, request, budget_cents=amount)
-        priced = {"option_entry": option_entry}
     try:
-        preview = budget_deploy.preview_budget(account_id, request, resolved_parameters=resolved.effective, **priced)
+        preview = _priced(budget_deploy.preview_budget, account_id, request, resolved.effective, option_entry)
         same_symbol_note = await asyncio.to_thread(budget_deploy.same_symbol_note, account_id, request)
     except BudgetUnavailable as exc:
         raise budget_deploy.budget_error(exc) from exc
@@ -504,12 +510,16 @@ async def deploy_alpaca_paper_bot(
         # earlier bot may have started.
         with _refusals_settle_the_key(earlier is None or request.budget is not None):
             view, resolved_params = await _deploy_preflight(broker, account_id, request)
+            if request.options is not None:
+                # A mode that takes no option bot is refused by name before the owner is asked to
+                # accept anything for it (ADR 0076 decision 24).
+                option_deploy.require_mode_open(request)
             _require_traded_asset_acknowledgement(request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
             traded = await _what_it_trades(broker, account_id, request, at_the_click=True)
             try:
-                consent = None if request.budget is None else budget_deploy.resolve_consent(
-                    account_id, request, resolved_parameters=resolved_params.effective, **traded.priced,
+                consent = None if request.budget is None else _priced(
+                    budget_deploy.resolve_consent, account_id, request, resolved_params.effective, traded.price,
                 )
             except BudgetUnavailable as exc:
                 raise budget_deploy.budget_error(exc) from exc
@@ -536,7 +546,8 @@ async def deploy_alpaca_paper_bot(
                 exit_terms=request.exit_terms.seal(),
                 strategy_param_origins=resolved_params.origins,
                 end=end,
-                **traded.start,
+                action_plan=traded.plan,
+                option_order_terms=traded.terms,
                 **({"budget_consent": consent} if consent is not None else {}),
             )
         except (BotRunnerError, BudgetUnavailable, DurableConflictError, StrategyRegistrationConflictError, AdmissionBlockedError) as exc:
@@ -569,6 +580,7 @@ async def deploy_alpaca_paper_bot(
         bot=started.bot,
         admission=started.admission,
         resolved_params=resolved_params,
+        action_plan=traded.plan,
     )
 
 
@@ -658,8 +670,8 @@ async def preview_alpaca_paper_start_admission(
         raise _unnamed(exc) from exc
     traded = await _what_it_trades(broker, account_id, request, at_the_click=False)
     try:
-        consent = None if request.budget is None else budget_deploy.resolve_consent(
-            account_id, request, resolved_parameters=resolved_params.effective, **traded.priced,
+        consent = None if request.budget is None else _priced(
+            budget_deploy.resolve_consent, account_id, request, resolved_params.effective, traded.price,
         )
         return await registry.preview_start_admission(
             broker=broker,
@@ -676,7 +688,8 @@ async def preview_alpaca_paper_start_admission(
             strategy_params=resolved_params.effective,
             exit_terms=request.exit_terms.seal(),
             strategy_param_origins=resolved_params.origins,
-            **traded.start,
+            action_plan=traded.plan,
+            option_order_terms=traded.terms,
             **({"budget_consent": consent} if consent is not None else {}),
         )
     except BudgetUnavailable as exc:
@@ -715,7 +728,7 @@ async def deploy_prefill(broker: str, account_id: str, sid: str) -> BotDeployPre
         symbol=binding.symbol,
         traded_symbol=(
             None
-            if trades_the_signals_shares(binding.action_plan, binding.symbol) or binding.option_order_terms is not None
+            if trades_the_signals_shares(binding.action_plan, binding.symbol) or is_option_plan(binding.action_plan)
             else traded_instrument(binding.action_plan).underlying
         ),
         trades=_option_choice_of(binding),
@@ -730,12 +743,34 @@ async def deploy_prefill(broker: str, account_id: str, sid: str) -> BotDeployPre
     )
 
 
+OPTION_BOT_HAS_NO_SEALED_TERMS = "OPTION_DEPLOY_AGAIN_NO_SEALED_TERMS"
+
+
 def _option_choice_of(binding: BrokerBotBinding) -> TradesOptions | None:
     """The option structure an earlier bot was deployed with, as a Deploy request says one: its legs and its
-    four sealed terms. ``None`` for a bot in shares."""
+    four sealed terms. ``None`` for a bot in shares.
+
+    Whether the bot trades options is its plan's to say, never whether
+    terms are sealed with it. An option bot with none (one bound before
+    Deploy sealed them) cannot be deployed again as it is: the four terms
+    are the owner's to set, and filling them in here would seal numbers
+    nobody chose. It is refused by name, never answered as a bot in the
+    underlying's shares.
+    """
+    if not is_option_plan(binding.action_plan):
+        return None
     terms = binding.option_order_terms
     if terms is None:
-        return None
+        raise PanelRunnerError(
+            f"{binding.strategy_instance_id} trades option contracts and has no order terms sealed with it.",
+            detail=(
+                "It was bound before Deploy sealed an option bot's four order terms, so there are none to "
+                "deploy again with. Nothing was filled in for them."
+            ),
+            next_action="Build the structure again in the Deploy form and set its four order terms there.",
+            http_status=409,
+            reason_code=OPTION_BOT_HAS_NO_SEALED_TERMS,
+        )
     return TradesOptions(
         kind="options",
         underlying=traded_instrument(binding.action_plan).underlying,
@@ -754,13 +789,15 @@ def _option_choice_of(binding: BrokerBotBinding) -> TradesOptions | None:
 
 @dataclass(frozen=True, slots=True)
 class _Traded:
-    """What a start of this Deploy's bot is handed beside its symbol, and the price its budget is judged by."""
+    """What a start of this Deploy's bot is handed beside its symbol, and the price its budget is judged by.
 
-    # Nothing for a bot in shares: the registry builds its plan from the symbol it trades.
-    start: dict[str, object]
-    # ``option_entry`` for the money review of a bot that trades options; nothing for a bot in shares,
-    # whose review prices itself.
-    priced: dict[str, object]
+    All three are ``None`` for a bot in shares: the registry builds its plan
+    from the symbol it trades, and its money review prices itself.
+    """
+
+    plan: ActionPlan | None = None
+    terms: SealedOptionOrderTerms | None = None
+    price: budget_deploy.OptionEntryPrice | None = None
 
 
 async def _what_it_trades(
@@ -771,12 +808,30 @@ async def _what_it_trades(
     Raises the first thing that stops an option Deploy, by name: asked at
     the click and at the admission preview, after the checks every Deploy
     makes (ADR 0076 decision 24). Only the click waits for a price that is
-    still arriving.
+    still arriving, and only the click is refused for having none.
     """
-    if request.options is None:
-        return _Traded(start={}, priced={})
+    choice = request.options
+    if choice is None:
+        return _Traded()
     plan, price = await option_deploy.require_deployable(broker, account_id, request, at_the_click=at_the_click)
-    return _Traded(start=option_deploy.sealed_terms_and_plan(request, plan), priced={"option_entry": price})
+    return _Traded(plan=plan, terms=choice.order_terms, price=price)
+
+
+def _priced[Reviewed](
+    reviewed: Callable[..., Reviewed],
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+    resolved_parameters: dict,
+    option_entry: budget_deploy.OptionEntryPrice | None,
+) -> Reviewed:
+    """Ask the money review, or the consent that stands on it, with the price of an option entry when there is one.
+
+    A bot in shares is asked about exactly as it was before an option entry
+    had a price: no new argument.
+    """
+    if option_entry is None:
+        return reviewed(account_id, request, resolved_parameters=resolved_parameters)
+    return reviewed(account_id, request, resolved_parameters=resolved_parameters, option_entry=option_entry)
 
 
 def _owner_parameters(binding: BrokerBotBinding) -> dict[str, object]:

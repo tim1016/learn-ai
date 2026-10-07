@@ -243,6 +243,65 @@ def _the_plans_own_words(refused: ValidationError) -> str:
     return " ".join(said)
 
 
+@dataclass(frozen=True, slots=True)
+class PlanRefusal:
+    """Why no plan can hold a structure as it was asked: the reason, the sentence in the builder's words, and
+    the legs it is about."""
+
+    reason: PreviewReason
+    why: str
+    leg_ids: tuple[str, ...] = ()
+
+
+def plan_or_refusal(request: OptionStructurePreviewRequest) -> ActionPlan | PlanRefusal:
+    """The plan a Deploy of what the owner has built would carry, or why no plan can hold it.
+
+    The checks a structure passes before anything is resolved for it: it
+    has a leg, its underlying has no share class, no two legs share an id,
+    no leg measures its strike from a leg that is not there, and the plan's
+    own rules take it. It reads no quote and watches nothing, so a preview
+    and a Deploy ask the same function and cannot differ (ADR 0076 decision
+    24). Every sentence names a leg by its place.
+    """
+    order = [leg.leg_id for leg in request.legs]
+    if not request.legs:
+        return PlanRefusal(PreviewReason.NO_LEGS, "Add a leg. A structure has one to four.")
+    if not request.underlying.isalpha():
+        return PlanRefusal(
+            PreviewReason.SHARE_CLASS_UNDERLYING,
+            f"Options on a ticker with a share class, such as {request.underlying}, are not handled yet.",
+        )
+    shared = [leg_id for leg_id in dict.fromkeys(order) if order.count(leg_id) > 1]
+    if shared:
+        # Each id that was given twice, with the places of the legs that were given it.
+        told = [
+            f"{places_in_words([number for number, given in enumerate(order, start=1) if given == leg_id])} "
+            "were given one id."
+            for leg_id in shared
+        ]
+        return PlanRefusal(
+            PreviewReason.LEGS_SHARE_AN_ID, f"{' '.join(told)} Each leg has an id of its own.", tuple(shared)
+        )
+    adrift = [
+        leg.leg_id
+        for leg in request.legs
+        if isinstance(leg.strike, LegDistanceStrike) and leg.strike.leg_id not in order
+    ]
+    if adrift:
+        # The plan refuses this too, and names the missing leg by an id nobody was shown. Said here by place.
+        one = len(adrift) == 1
+        return PlanRefusal(
+            PreviewReason.PLAN_REFUSED,
+            f"{leg_names(adrift, order)} {'measures its strike' if one else 'measure their strikes'} from a leg "
+            "that is not in this structure. Choose the leg to measure from again.",
+            tuple(adrift),
+        )
+    try:
+        return plan_of(request)
+    except ValidationError as refused:
+        return PlanRefusal(PreviewReason.PLAN_REFUSED, in_the_builders_words(_the_plans_own_words(refused), order))
+
+
 def _no_line_words(reason: str, use: LineUse) -> tuple[str, str]:
     """The reason code and the sentence for a preview that could not have a quote line."""
     cannot_see = "The count is this system's own. It cannot see what other IBKR sessions use."
@@ -879,48 +938,11 @@ async def preview_option_structure(
     """
     key = _KEY_PREFIX + request.preview_key
     asked = _Asked(request, clock())
-    if not request.legs:
-        watch.unwatch(key)
-        return asked.plan_refused(PreviewReason.NO_LEGS, "Add a leg. A structure has one to four.")
-    if not request.underlying.isalpha():
-        watch.unwatch(key)
-        return asked.plan_refused(
-            PreviewReason.SHARE_CLASS_UNDERLYING,
-            f"Options on a ticker with a share class, such as {request.underlying}, are not handled yet.",
-        )
-    shared = [leg_id for leg_id in dict.fromkeys(asked.order) if asked.order.count(leg_id) > 1]
-    if shared:
-        watch.unwatch(key)
-        # Each id that was given twice, with the places of the legs that were given it.
-        told = [
-            f"{places_in_words([number for number, given in enumerate(asked.order, start=1) if given == leg_id])} "
-            "were given one id."
-            for leg_id in shared
-        ]
-        return asked.plan_refused(
-            PreviewReason.LEGS_SHARE_AN_ID, f"{' '.join(told)} Each leg has an id of its own.", leg_ids=tuple(shared)
-        )
-    adrift = [
-        leg.leg_id
-        for leg in request.legs
-        if isinstance(leg.strike, LegDistanceStrike) and leg.strike.leg_id not in asked.order
-    ]
-    if adrift:
-        # The plan refuses this too, and names the missing leg by an id nobody was shown. Said here by place.
-        watch.unwatch(key)
-        one = len(adrift) == 1
-        return asked.plan_refused(
-            PreviewReason.PLAN_REFUSED,
-            f"{leg_names(adrift, asked.order)} {'measures its strike' if one else 'measure their strikes'} from a leg "
-            "that is not in this structure. Choose the leg to measure from again.",
-            leg_ids=tuple(adrift),
-        )
-    try:
-        plan = plan_of(request)
-    except ValidationError as refused:
+    plan = plan_or_refusal(request)
+    if isinstance(plan, PlanRefusal):
         # A structure that cannot be deployed has nothing worth a quote line.
         watch.unwatch(key)
-        return asked.plan_refused(PreviewReason.PLAN_REFUSED, asked.said(_the_plans_own_words(refused)))
+        return asked.plan_refused(plan.reason, plan.why, leg_ids=plan.leg_ids)
     if quotes is None:
         return asked.without_figures(
             plan,

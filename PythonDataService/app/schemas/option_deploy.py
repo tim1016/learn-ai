@@ -127,6 +127,10 @@ class OptionPickedContract(BaseModel):
     contract: OptionContractView
 
 
+# The structure preview's own states, and one more that is the review's: the preview was not asked.
+ReviewPreviewState = PreviewState | Literal["not_asked"]
+
+
 class OptionDeployReview(BaseModel):
     """What Deploy says of a bot that trades an option structure, beside its budget."""
 
@@ -145,7 +149,10 @@ class OptionDeployReview(BaseModel):
     # Said under the bot's end when a sold leg makes the Clerk schedule a close every session. None otherwise.
     end_sentence: str | None
     # Where the structure preview this review read stood. Only ``resolved`` carries money rows.
-    preview_state: PreviewState
+    # ``not_asked``: the review read no preview, because something found first made it pointless (no plan
+    # can hold the structure, or this Clerk has no option quotes of its own). It then carries no reason
+    # code and no sentence of the preview's, and ``blockers`` says why.
+    preview_state: ReviewPreviewState
     preview_reason_code: str | None
     preview_sentence: str | None
     # Set while the preview is only still arriving: ask the review again after this long.
@@ -171,6 +178,7 @@ __all__ = [
     "OptionDeployReview",
     "OptionMoneyRow",
     "OptionPickedContract",
+    "ReviewPreviewState",
     "TradesAnotherStock",
     "TradesOptions",
     "TradesTheSignal",

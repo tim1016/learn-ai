@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, NoReturn
 
-from app.schemas.action_plan import ActionPlan, OptionEntryLeg, traded_instrument
+from app.schemas.action_plan import ActionPlan, is_option_plan, traded_instrument
 from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.traded_asset_acknowledgement import (
@@ -207,6 +207,7 @@ def require_start_configuration(
 
 
 OPTION_BOT_REGULAR_HOURS_ONLY = "OPTION_BOT_REGULAR_HOURS_ONLY"
+ACTION_PLAN_AND_TRADED_SYMBOL = "ACTION_PLAN_AND_TRADED_SYMBOL"
 OPTION_ORDER_TERMS_REQUIRED = "OPTION_ORDER_TERMS_REQUIRED"
 OPTION_ORDER_TERMS_NOT_APPLICABLE = "OPTION_ORDER_TERMS_NOT_APPLICABLE"
 
@@ -225,8 +226,7 @@ def require_option_start_configuration(
     none. The runner is where every bot starts, so the rule is held here
     whatever route asked.
     """
-    trades_options = any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
-    if not trades_options:
+    if not is_option_plan(action_plan):
         if option_order_terms is None:
             return
         raise OptionStartRefusedError(

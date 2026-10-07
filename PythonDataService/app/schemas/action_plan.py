@@ -422,6 +422,15 @@ def traded_instrument(action_plan: ActionPlan) -> StockInstrument | OptionInstru
     return action_plan.on_enter[0].instrument
 
 
+def is_option_plan(action_plan: ActionPlan) -> bool:
+    """Whether the plan's entry is in option contracts. A plan cannot mix them with a stock leg.
+
+    The one answer to "does this bot trade options", for every layer: the
+    Clerk, the binding, the start rule and Deploy again all ask it here.
+    """
+    return any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
+
+
 def trades_the_signals_shares(action_plan: ActionPlan, signal_symbol: str) -> bool:
     """Whether the plan trades shares of the symbol the bot listens to.
 

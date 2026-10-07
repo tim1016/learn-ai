@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
-from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg
+from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg, is_option_plan
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -183,11 +183,6 @@ class OptionExitEvidence:
     def for_other_contracts_than(self, symbol: str) -> tuple[str, ...]:
         """The contracts quoted here that are not ``symbol``, in order."""
         return tuple(sorted(quoted for quoted in self.quotes if quoted != symbol))
-
-
-def is_option_plan(action_plan: ActionPlan) -> bool:
-    """Whether the plan's entry is in option contracts. A plan cannot mix them with a stock leg."""
-    return any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
 
 
 def the_one_bought_option_leg(action_plan: ActionPlan) -> OptionEntryLeg:

@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Final
@@ -51,10 +52,12 @@ from app.broker.alpaca.clerk.option_effects import (
     OptionPlanRefused,
     the_one_bought_option_leg,
 )
+from app.broker.alpaca.live_option_bots import SETTING as LIVE_SETTING
+from app.broker.alpaca.live_option_bots import live_option_bots_enabled
 from app.broker.contract.errors import BrokerError
+from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.broker.contract.options import BrokerOptionAccountSnapshot, option_contract_refusal
 from app.broker.contract.registry import get_broker_registry
-from app.config import settings
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.structure_catalogue import in_a_sentence, label, orders_in_a_line
@@ -75,9 +78,8 @@ from app.services.broker_v2_panel import option_structure_panel
 from app.services.broker_v2_panel.budget_deploy import OptionEntryPrice
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.option_preview_words import in_the_builders_words, plural, sentence, usd
-from app.services.option_search import get_option_searches
-from app.services.option_structure_preview import plan_of, preview_option_structure
-from app.services.option_watch import OptionWatchList
+from app.services.option_structure_preview import PlanRefusal, plan_or_refusal
+from app.utils.timestamps import now_ms_utc
 
 # ---- reason codes: what stops an option Deploy, where no typed refusal already says it -------------
 
@@ -119,15 +121,10 @@ LIVE_SWITCHED_OFF_SENTENCE: Final = (
 )
 LIVE_SWITCHED_OFF_FIX: Final = (
     "Run an option bot on Paper and check its first option orders at Alpaca. Then set "
-    "ALPACA_LIVE_OPTION_BOTS_ENABLED=true for this Clerk and restart it."
+    f"{LIVE_SETTING}=true for this Clerk and restart it."
 )
 LIVE_SHADOW_SENTENCE: Final = "A Live Shadow does not take an option bot yet. It is not built."
 LIVE_SHADOW_FIX: Final = "Deploy this bot as a Dry Run, or on a Paper account."
-
-
-def live_option_bots_enabled() -> bool:
-    """Whether this deployment has opened Live accounts to option bots. Off unless it says so."""
-    return settings.ALPACA_LIVE_OPTION_BOTS_ENABLED
 
 
 # ---- the request as the preview takes it --------------------------------------------------------------
@@ -150,7 +147,9 @@ def preview_request_for(account_id: str, request: AlpacaPaperDeployRequest) -> O
     return OptionStructurePreviewRequest(
         preview_key=_lease_key(account_id, choice),
         underlying=choice.underlying,
-        listens_to=request.symbol if request.symbol.isalpha() else None,
+        # Only the warning about leaning against the signal reads it. A symbol the preview's own request
+        # would refuse is left unsaid, never a malformed request of this module's making.
+        listens_to=request.symbol if re.fullmatch(US_EQUITY_SYMBOL_PATTERN, request.symbol) else None,
         structure=choice.structure,
         legs=list(choice.legs),
         structures=request.sizing.quantity,
@@ -182,46 +181,27 @@ def _refused(blocker: OptionDeployBlocker) -> PanelRunnerError:
         blocker.gate_id,
         blocker.headline,
         detail=f"{blocker.label} stops this Deploy. Nothing was deployed and nothing was sent.",
-        next_action=blocker.fix or "Change the structure or the account, then review the Deploy again.",
+        next_action=blocker.fix,
     )
 
 
 # ---- the plan ---------------------------------------------------------------------------------------
 
 
-async def plan_verdict(account_id: str, request: AlpacaPaperDeployRequest) -> OptionStructurePreview:
-    """Whether a plan can hold this Deploy's structure at all, as the structure preview's own checks say it.
+def plan_blocker(refused: PlanRefusal) -> OptionDeployBlocker:
+    """The structure preview's own refusal of the structure, as a blocker: its code and its words.
 
-    The preview is asked with no quote source: it answers at once, either
-    that the structure cannot be deployed (``plan_refused``), in its own
-    words with each leg named by its place, or that it has no quotes, which
-    here means the plan stands. Nothing is watched for it.
+    The preview's plan checks are one function (``plan_or_refusal``), which
+    reads no quote. Deploy asks that function and nothing else of the
+    preview to learn whether a plan stands, so it never reads an answer
+    about quotes as an answer about the plan.
     """
-    return await preview_option_structure(
-        preview_request_for(account_id, request),
-        quotes=None,
-        watch=OptionWatchList(),
-        model_inputs=option_structure_panel._model_inputs,
-        searches=get_option_searches().preview,
-        strikes_each_side=0,
-    )
-
-
-def plan_blocker(verdict: OptionStructurePreview) -> OptionDeployBlocker | None:
-    """The structure preview's refusal of the structure itself, as a blocker. ``None`` when a plan can hold it."""
-    if verdict.state != "plan_refused":
-        return None
     return OptionDeployBlocker(
-        gate_id=verdict.reason_code or NO_LEGS,
+        gate_id=str(refused.reason),
         label="Structure",
-        headline=verdict.notice or verdict.verdict.deploy_sentence,
+        headline=refused.why,
         fix="Change the structure in the builder, then review the Deploy again.",
     )
-
-
-def sealed_terms_and_plan(request: AlpacaPaperDeployRequest, plan: ActionPlan) -> dict[str, object]:
-    """What a start of this Deploy's bot is handed beside its symbol: the plan and the terms sealed with it."""
-    return {"action_plan": plan, "option_order_terms": _choice(request).order_terms}
 
 
 # ---- what stops it ------------------------------------------------------------------------------------
@@ -621,7 +601,7 @@ def _preview_notes(preview: OptionStructurePreview) -> list[OptionDeployNote]:
 def review_of(
     request: AlpacaPaperDeployRequest,
     plan: ActionPlan | None,
-    preview: OptionStructurePreview,
+    preview: OptionStructurePreview | None,
     *,
     blockers: list[OptionDeployBlocker],
     notes: list[OptionDeployNote],
@@ -631,11 +611,13 @@ def review_of(
 
     ``plan`` is None for a structure no plan can hold; ``blockers`` then
     says why. ``preview`` is the structure preview's answer the review
-    stands on, which carries figures only when it resolved.
+    stands on, which carries figures only when it resolved. It is None when
+    the preview was not asked, and the review then says nothing of quotes
+    nobody read: no state of the preview's, no reason code, no sentence.
     """
     choice = _choice(request)
     structures = request.sizing.quantity
-    with_figures = preview.state == "resolved"
+    with_figures = preview is not None and preview.state == "resolved"
     return OptionDeployReview(
         underlying=choice.underlying,
         structure_label=label(choice.structure),
@@ -653,24 +635,28 @@ def review_of(
             "A whole number of structures an entry. Each leg's contracts are that number times its ratio."
         ),
         end_sentence=None if plan is None else _end_sentence(plan),
-        preview_state=preview.state,
-        preview_reason_code=preview.reason_code,
-        preview_sentence=None if with_figures else (preview.notice or preview.verdict.resolves_sentence),
-        ask_again_in_ms=preview.ask_again_in_ms,
-        quotes_read_ms=preview.quotes_read_ms if with_figures else None,
-        figures_good_until_ms=preview.figures_good_until_ms,
-        picks=tuple(
+        preview_state="not_asked" if preview is None else preview.state,
+        preview_reason_code=None if preview is None else preview.reason_code,
+        preview_sentence=(
+            None if preview is None or with_figures else (preview.notice or preview.verdict.resolves_sentence)
+        ),
+        ask_again_in_ms=None if preview is None else preview.ask_again_in_ms,
+        quotes_read_ms=preview.quotes_read_ms if preview is not None and with_figures else None,
+        figures_good_until_ms=None if preview is None else preview.figures_good_until_ms,
+        picks=() if preview is None else tuple(
             OptionPickedContract(
                 number=leg.number, side_label="Buy" if leg.position == "long" else "Sell", ratio=leg.ratio,
                 contract=leg.contract,
             )
             for leg in preview.legs
         ),
-        money_rows=_money_rows(preview, structures, budget_cents),
+        money_rows=() if preview is None else _money_rows(preview, structures, budget_cents),
         money_sentence=MONEY_SENTENCE,
-        entry_sentence=preview.entry_sentence if with_figures and not preview.verdict.red else None,
+        entry_sentence=(
+            preview.entry_sentence if preview is not None and with_figures and not preview.verdict.red else None
+        ),
         blockers=tuple(blockers),
-        notes=tuple([*notes, *_preview_notes(preview), *_standing_notes(request)]),
+        notes=tuple([*notes, *([] if preview is None else _preview_notes(preview)), *_standing_notes(request)]),
     )
 
 
@@ -691,10 +677,13 @@ def trades_summary(request: AlpacaPaperDeployRequest) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _Judged:
-    """One judging of an option Deploy: its plan when one stands, the preview read for it, and what was found."""
+    """One judging of an option Deploy: its plan when one stands, the structure preview when it was read, and
+    what was found."""
 
     plan: ActionPlan | None
-    preview: OptionStructurePreview
+    # None when the structure preview was not asked: no plan stands, this Clerk has no option quotes of its
+    # own, or a click was already stopped by something found before it.
+    preview: OptionStructurePreview | None
     blockers: list[OptionDeployBlocker]
     notes: list[OptionDeployNote]
 
@@ -704,37 +693,56 @@ async def _judge(
     account_id: str,
     request: AlpacaPaperDeployRequest,
     *,
+    every_blocker: bool,
     patience_ms: int,
     market: OptionMarket | None = None,
 ) -> _Judged:
-    """Ask everything a Deploy of this option bot is held to, in the order it is shown.
+    """Ask what a Deploy of this option bot is held to, in the order it is shown.
 
-    A structure no plan can hold, one the Clerk does not take, an account
-    whose mode is not open and a Clerk that cannot quote it are each found
-    before anything is asked of the quotes or of a broker: nothing is
-    watched and nobody is asked for a bot that cannot be deployed.
+    First what needs no quote and no broker: a structure no plan can hold,
+    one the Clerk does not take, an account whose mode is not open, and a
+    Clerk that cannot quote it. A click or an admission read stops at the
+    first of those (``every_blocker`` false): nothing is watched and nobody
+    is asked for a bot that cannot be deployed.
+
+    The money review goes on, so that its list is whole (``every_blocker``
+    true). It reads the structure preview unless no plan stands or this
+    Clerk has no option quotes of its own, and it asks Alpaca about a real
+    account unless the account's mode is not open: a Live Shadow's and a
+    switched-off Live account's review asks Alpaca nothing. What needs a
+    price or a pick (option buying power, Alpaca's listing, a red verdict)
+    is found only once the preview has resolved.
     """
-    verdict = await plan_verdict(account_id, request)
-    refused = plan_blocker(verdict)
-    if refused is not None:
-        return _Judged(None, verdict, [refused], [])
-    plan = plan_of(_choice(request))
-    blockers = [found for found in (structure_not_taken(request, plan), mode_blocker(request)) if found is not None]
-    blockers.extend(quote_line_blockers(plan, market or this_process_option_market()))
-    if blockers:
-        return _Judged(plan, verdict, blockers, [])
-    preview = await read_preview(broker, account_id, request, patience_ms=patience_ms)
+    checked = plan_or_refusal(preview_request_for(account_id, request))
+    mode = mode_blocker(request)
+    if isinstance(checked, PlanRefusal):
+        return _Judged(None, None, [plan_blocker(checked), *([] if mode is None else [mode])], [])
+    plan = checked
+    market = market or this_process_option_market()
+    blockers = [found for found in (structure_not_taken(request, plan), mode) if found is not None]
+    blockers.extend(quote_line_blockers(plan, market))
+    if blockers and not every_blocker:
+        return _Judged(plan, None, blockers, [])
+    preview = None
+    if not market.quotes_are_read_elsewhere():
+        preview = await read_preview(broker, account_id, request, patience_ms=patience_ms)
     notes: list[OptionDeployNote] = []
-    if request.execution_mode != "dry_run":
-        blockers, notes = await real_account_findings(broker, request, plan, preview)
-    found = preview_blocker(preview)
+    if request.execution_mode != "dry_run" and mode is None:
+        said_by_alpaca, notes = await real_account_findings(broker, request, plan, preview)
+        blockers.extend(said_by_alpaca)
+    found = None if preview is None else preview_blocker(preview)
     if found is not None:
         blockers.append(found)
     return _Judged(plan, preview, blockers, notes)
 
 
-def _not_priced(judged: _Judged) -> OptionEntryPrice:
-    return OptionEntryPrice(None, judged.preview.quotes_read_ms, False, judged.blockers[0].headline)
+def _price(judged: _Judged) -> OptionEntryPrice:
+    """The price a budget is judged against: none for a Deploy that something stops, in the first blocker's words."""
+    if not judged.blockers:
+        assert judged.preview is not None
+        return price_of(judged.preview)
+    read_ms = now_ms_utc() if judged.preview is None else judged.preview.quotes_read_ms
+    return OptionEntryPrice(None, read_ms, False, judged.blockers[0].headline)
 
 
 async def review_for(
@@ -742,14 +750,27 @@ async def review_for(
 ) -> tuple[OptionDeployReview, OptionEntryPrice]:
     """The review of one option Deploy, and the price its budget is judged against.
 
-    A Deploy that something stops has no price: its budget is reviewed
-    against nothing, so no review of it can be consented to.
+    Every blocker found is listed. A Deploy that something stops has no
+    price: its budget is reviewed against nothing, so no review of it can be
+    consented to.
     """
-    judged = await _judge(broker, account_id, request, patience_ms=0)
+    judged = await _judge(broker, account_id, request, every_blocker=True, patience_ms=0)
     review = review_of(
         request, judged.plan, judged.preview, blockers=judged.blockers, notes=judged.notes, budget_cents=budget_cents
     )
-    return review, _not_priced(judged) if judged.blockers else price_of(judged.preview)
+    return review, _price(judged)
+
+
+def require_mode_open(request: AlpacaPaperDeployRequest) -> None:
+    """Raise the refusal of an account whose mode takes no option bot, by name.
+
+    Asked at the click before the owner's acceptance is: nobody is asked to
+    write an acceptance, kept with a bot for good, for a bot that cannot
+    exist.
+    """
+    blocked = mode_blocker(request)
+    if blocked is not None:
+        raise _refused(blocked)
 
 
 async def require_deployable(
@@ -758,14 +779,37 @@ async def require_deployable(
     """The plan and the price of an option Deploy that nothing stops, or the first thing that stops it, by name.
 
     At the click a preview that is only still arriving is waited for, for
-    ``PRICE_PATIENCE_MS``. A read made before the click waits for nothing:
-    the page asks it again.
+    ``PRICE_PATIENCE_MS``, and a Deploy with no price is then refused by
+    name (``NOT_PRICED``) in the price's own sentence, with a budget on the
+    request or without one, on a Dry Run and on a real account: an option
+    bot is deployed only while one entry of its structure can be priced
+    (ADR 0076 decision 24). So every click that gets past this was held to
+    what needs a price or a pick too: Alpaca's listing, option buying power
+    and a red verdict.
+
+    A read made before the click waits for nothing and is not refused for a
+    price that has not arrived: the page asks it again.
     """
-    judged = await _judge(broker, account_id, request, patience_ms=PRICE_PATIENCE_MS if at_the_click else 0)
+    judged = await _judge(
+        broker, account_id, request, every_blocker=False, patience_ms=PRICE_PATIENCE_MS if at_the_click else 0
+    )
     if judged.blockers:
         raise _refused(judged.blockers[0])
     assert judged.plan is not None
-    return judged.plan, price_of(judged.preview)
+    price = _price(judged)
+    if at_the_click and price.commitment_cents is None:
+        raise _refusal(
+            NOT_PRICED,
+            price.detail,
+            detail=(
+                "An option bot is deployed only while one entry of its structure can be priced. Nothing was "
+                "deployed and nothing was sent."
+            ),
+            next_action=(
+                "Deploy again in a few seconds." if price.waiting else "Review the Deploy again: its review says why."
+            ),
+        )
+    return judged.plan, price
 
 
 __all__ = [
@@ -774,10 +818,8 @@ __all__ = [
     "OptionEntryPrice",
     "approval_blocker",
     "buying_power_finding",
-    "live_option_bots_enabled",
     "mode_blocker",
     "plan_blocker",
-    "plan_verdict",
     "preview_blocker",
     "preview_request_for",
     "price_of",
@@ -785,9 +827,9 @@ __all__ = [
     "read_preview",
     "real_account_findings",
     "require_deployable",
+    "require_mode_open",
     "review_for",
     "review_of",
-    "sealed_terms_and_plan",
     "structure_not_taken",
     "trades_summary",
 ]

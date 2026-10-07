@@ -4,7 +4,15 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from app.broker.alpaca.clerk.account_money import FULL_BAR_BPS, SegmentKind
 from app.broker.alpaca.clerk.models import EpochMs
@@ -237,7 +245,8 @@ class DeploymentBudgetPreview(BaseModel):
     trades_summary: str | None = None
     # What Deploy says of a bot that trades an option structure (#2913): its
     # money rows, what stops the Deploy, and what the owner should know.
-    # ``None`` for every bot in shares.
+    # ``None`` for every bot in shares, and then left out of the review's
+    # dump (``_omit_an_absent_option_review``).
     option_review: OptionDeployReview | None = None
     # The previewed amount as Python normalizes it: what Deploy sets aside.
     budget_usd: str | None = None
@@ -257,6 +266,15 @@ class DeploymentBudgetPreview(BaseModel):
     # has one to draw. ``None`` when the account itself could not be read,
     # and for Dry Run, which never uses the account's money.
     money_after: AccountMoneyView | None = None
+
+    # No return annotation: the review's published schema stays this model's own fields.
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_option_review(self, handler: SerializerFunctionWrapHandler):
+        """A bot in shares is reviewed in exactly the bytes it was before ``option_review`` existed."""
+        dumped = handler(self)
+        if dumped.get("option_review") is None:
+            dumped.pop("option_review", None)
+        return dumped
 
 
 class BudgetStatementLine(BaseModel):

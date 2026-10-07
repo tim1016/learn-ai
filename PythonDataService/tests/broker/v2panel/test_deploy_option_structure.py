@@ -13,6 +13,7 @@ stand-ins. Nothing is sent to a broker.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -45,10 +46,10 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS
 from tests.broker.v2panel.fixtures import ACCT
+from tests.broker.v2panel.test_deploy_submissions import prefill_app  # noqa: F401 -- pytest fixture, used by name
 from tests.broker.v2panel.test_deploy_traded_symbol import (
     _UNTOUCHED,
     _UNTOUCHED_FINGERPRINT,
-    _WORLDS,
     _fingerprint,
     _serve,
 )
@@ -210,6 +211,17 @@ def _refusal(response: httpx.Response) -> dict[str, Any]:
     return response.json()["detail"]
 
 
+async def _the_quotes_are_up(floor: _Floor, trades: dict[str, Any] = _ONE_CALL) -> None:
+    """The structure was asked about once, as its review asks, and its quotes have arrived since: a click now
+    finds a price. An option bot is deployed only while one entry can be priced."""
+    request = AlpacaPaperDeployRequest.model_validate({**_SETTINGS, "execution_mode": "dry_run", "trades": trades})
+
+    async def ask() -> Any:
+        return await option_deploy.read_preview("alpaca", ACCT, request)
+
+    await floor.quotes_arrive(ask, right=trades["legs"][0]["right"])
+
+
 # ── a Dry Run and a Paper account ───────────────────────────────────────
 
 
@@ -218,6 +230,7 @@ async def test_a_dry_run_of_one_bought_call_starts_with_the_previews_plan_and_th
 ) -> None:
     app, registry = deploy_app
     terms = {"gap_limit_percent": "12.5", "entry_wait_seconds": 7, "cost_limit_percent": "4", "expiry_close_lead_minutes": 90}
+    await _the_quotes_are_up(floor)
 
     response = await _deploy(
         app, execution_mode="dry_run", trades={**_ONE_CALL, "order_terms": terms}, sizing={"preset": "custom", "quantity": 3}
@@ -243,6 +256,7 @@ async def test_what_a_deploy_hands_the_start_is_what_the_bots_runner_reads_its_t
     terms, and the runner's one read of a bot's order terms gives the owner's four numbers back."""
     app, registry = deploy_app
     terms = {"gap_limit_percent": "12.5", "entry_wait_seconds": 7, "cost_limit_percent": "4", "expiry_close_lead_minutes": 90}
+    await _the_quotes_are_up(floor)
     await _deploy(app, execution_mode="dry_run", trades={**_ONE_CALL, "order_terms": terms})
     [call] = registry.deploy_calls
 
@@ -262,8 +276,11 @@ async def test_what_a_deploy_hands_the_start_is_what_the_bots_runner_reads_its_t
     assert (read.close.entry_wait_ms, read.close.expiry_close_lead_ms) == (7_000, 90 * 60_000)
 
 
-async def test_on_paper_an_accepted_option_bot_starts_once_alpaca_approves_the_account(deploy_app, floor: _Floor) -> None:
+async def test_on_paper_an_accepted_option_bot_starts_once_alpaca_approves_the_account_and_lists_the_contract(
+    deploy_app, floor: _Floor
+) -> None:
     app, registry = deploy_app
+    await _the_quotes_are_up(floor)
 
     response = await _deploy(app, execution_mode="paper", trades=_ONE_CALL, traded_asset_acknowledgement=_ACCEPTANCE)
 
@@ -271,19 +288,20 @@ async def test_on_paper_an_accepted_option_bot_starts_once_alpaca_approves_the_a
     [call] = registry.deploy_calls
     assert (call["mode"], call["option_order_terms"]) == ("trade", SealedOptionOrderTerms.model_validate(_TERMS))
     assert call["traded_asset_acknowledgement"].reason == _ACCEPTANCE["reason"]
-    assert floor.alpaca.asked == ["account"], "no contract was picked yet, so no listing was asked about"
+    assert floor.alpaca.asked == ["account", CALL_585.occ_symbol], "the account, and the listing of the contract picked"
 
 
 # ── the acknowledgement, by mode ────────────────────────────────────────
 
 
-@_WORLDS
+@pytest.mark.parametrize(("execution_mode", "view_of"), [("paper", None), ("live", _live_view)], ids=["paper", "live"])
 async def test_options_on_the_bots_own_symbol_still_need_the_owners_acceptance_where_money_is_at_stake(
     deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, execution_mode: str, view_of: Callable | None
 ) -> None:
-    """Options on SPY are something else than SPY shares. Paper, Live Shadow and Live alike."""
+    """Options on SPY are something else than SPY shares. On Paper, and on Live once it is open to option bots."""
     app, registry = deploy_app
     _serve(monkeypatch, view_of)
+    monkeypatch.setattr(settings, "ALPACA_LIVE_OPTION_BOTS_ENABLED", True)
 
     refusal = _refusal(await _deploy(app, execution_mode=execution_mode, trades=_ONE_CALL))
 
@@ -291,6 +309,25 @@ async def test_options_on_the_bots_own_symbol_still_need_the_owners_acceptance_w
     assert "options on SPY" in refusal["message"]
     assert refusal["submission_settled"] is True
     assert registry.deploy_calls == []
+
+
+@pytest.mark.parametrize(
+    ("execution_mode", "view_of", "refused_as"),
+    [("shadow", _shadow_view, option_deploy.LIVE_SHADOW_NOT_BUILT), ("live", _live_view, option_deploy.LIVE_SWITCHED_OFF)],
+    ids=["live-shadow", "live-switched-off"],
+)
+async def test_a_mode_that_takes_no_option_bot_is_refused_by_name_before_the_owner_is_asked_to_accept_anything(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, execution_mode: str, view_of: Callable, refused_as: str
+) -> None:
+    """Nobody is asked to write an acceptance, kept with a bot for good, for a bot that cannot exist."""
+    app, registry = deploy_app
+    _serve(monkeypatch, view_of)
+
+    refusal = _refusal(await _deploy(app, execution_mode=execution_mode, trades=_ONE_CALL))
+
+    assert refusal["reason_code"] == refused_as
+    assert refusal["submission_settled"] is True
+    assert registry.deploy_calls == [] and floor.alpaca.asked == []
 
 
 async def test_a_dry_run_of_options_is_asked_for_no_acceptance_and_may_carry_none(deploy_app, floor: _Floor) -> None:
@@ -408,12 +445,14 @@ async def test_turning_the_setting_on_is_all_a_live_option_deploy_needs_to_pass_
     app, registry = deploy_app
     _serve(monkeypatch, _live_view)
     monkeypatch.setattr(settings, "ALPACA_LIVE_OPTION_BOTS_ENABLED", True)
+    await _the_quotes_are_up(floor)
 
     response = await _deploy(app, execution_mode="live", trades=_ONE_CALL, traded_asset_acknowledgement=_ACCEPTANCE)
 
     assert response.status_code == 201, response.text
     [call] = registry.deploy_calls
     assert (call["mode"], call["option_order_terms"]) == ("trade", SealedOptionOrderTerms.model_validate(_TERMS))
+    assert floor.alpaca.asked == ["account", CALL_585.occ_symbol], "real money is held to what Alpaca says, as Paper is"
 
 
 async def test_a_clerk_that_counts_no_quote_line_free_refuses_and_says_the_count_is_its_own(
@@ -442,6 +481,7 @@ async def test_the_lines_other_option_bots_can_need_count_against_the_clerks_bud
         ),
     )
     floor.line_budget = 14
+    await _the_quotes_are_up(floor)
 
     refusal = _refusal(await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL))
     floor.line_budget = 15
@@ -637,7 +677,7 @@ async def test_a_bot_in_shares_has_no_option_review(deploy_app, floor: _Floor, m
     response = await _post(app, "/budget-preview", execution_mode="dry_run")
 
     assert response.status_code == 200, response.text
-    assert response.json()["option_review"] is None
+    assert "option_review" not in response.json(), "left out, so the review is the bytes it was before the field"
 
 
 # ── what the screens are told of an option bot ──────────────────────────
@@ -677,6 +717,84 @@ async def test_picking_options_is_warned_of_at_once_even_on_the_symbol_the_bot_l
     assert "time" in warning["detail"] and "volatility" in warning["detail"]
     assert warning["acceptance_label"] is None, "the owner accepts at Confirm, not while still choosing"
     assert shares.json() == {"refusal": None, "warning": None}
+
+
+def _an_earlier_option_bot(
+    trades: dict[str, Any], *, sid: str = "spy-ema-20260101-0931", quantity: int = 2, sealed: bool = True
+) -> Any:
+    """The binding an earlier Deploy of ``trades`` left, as a first Start makes it. ``sealed`` false: a bot bound
+    before Deploy sealed an option bot's order terms."""
+    choice = TradesOptions.model_validate(trades)
+    return new_run_binding(
+        make_start_request(
+            broker="alpaca", strategy_instance_id=sid, strategy_key="ema_crossover_signal", symbol="SPY",
+            use_rth=True, mode="dry_run", quantity=quantity, carryover_policy="FORBID", evidence_override=None,
+            action_plan=plan_of(choice), exit_terms=DEPLOY_EXIT_TERMS,
+            option_order_terms=choice.order_terms if sealed else None,
+        ),
+        now_ms=1,
+    )
+
+
+async def test_deploy_again_of_an_option_bot_then_a_deploy_from_its_answer_seals_the_same_plan_and_terms(
+    prefill_app, floor: _Floor  # noqa: F811
+) -> None:
+    """The prefill names the structure and its four terms and no stock to trade. A Deploy made from exactly
+    what it answered hands the start the plan and the terms the earlier bot was sealed with."""
+    app, registry = prefill_app.app, prefill_app.registry
+    terms = {"gap_limit_percent": "12.5", "entry_wait_seconds": 7, "cost_limit_percent": "4", "expiry_close_lead_minutes": 90}
+    earlier = _an_earlier_option_bot({**_ONE_CALL, "order_terms": terms}, quantity=3)
+    on_another_underlying = _an_earlier_option_bot({**_ONE_CALL, "underlying": "QQQ"}, sid="spy-ema-20260101-0932")
+    for bound in (earlier, on_another_underlying):
+        prefill_app.sources[bound.strategy_instance_id] = bound
+    await _the_quotes_are_up(floor)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        found = await client.get(f"{_BOTS}/{earlier.strategy_instance_id}/deploy-prefill")
+        other = await client.get(f"{_BOTS}/{on_another_underlying.strategy_instance_id}/deploy-prefill")
+        assert found.status_code == 200 and other.status_code == 200, (found.text, other.text)
+        prefill = found.json()
+        # Exactly what the prefill answered, as the form sends it back: nothing added but the mode and the key.
+        again = {name: prefill[name] for name in prefill if name != "source_strategy_instance_id" and prefill[name] is not None}
+        deployed = await client.post(_BOTS, json={
+            **again, "execution_mode": "dry_run", "submission_key": "deploy-again-0001",
+            "replaces_strategy_instance_id": earlier.strategy_instance_id,
+        })
+
+    assert "traded_symbol" not in again, "an option bot names no stock to trade: both together are refused"
+    assert (prefill["symbol"], prefill["trades"]["underlying"], prefill["trades"]["order_terms"]) == ("SPY", "SPY", terms)
+    assert (other.json()["trades"]["underlying"], other.json()["traded_symbol"]) == ("QQQ", None)
+    assert deployed.status_code == 201, deployed.text
+    call = registry.deploy_calls[-1]
+    assert call["action_plan"] == earlier.action_plan, "the same legs make the same plan again"
+    assert call["option_order_terms"] == earlier.option_order_terms
+    assert (call["quantity"], call["symbol"], call["traded_symbol"]) == (3, "SPY", None)
+
+
+async def test_deploy_again_of_an_option_bot_with_no_sealed_terms_is_refused_by_name(prefill_app) -> None:  # noqa: F811
+    """Never answered as a bot in the underlying's shares, and no term is filled in for it."""
+    bound_before_terms_were_sealed = _an_earlier_option_bot({**_ONE_CALL, "underlying": "QQQ"}, sealed=False)
+    prefill_app.sources[bound_before_terms_were_sealed.strategy_instance_id] = bound_before_terms_were_sealed
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=prefill_app.app), base_url="http://test") as client:
+        found = await client.get(f"{_BOTS}/{bound_before_terms_were_sealed.strategy_instance_id}/deploy-prefill")
+
+    assert found.status_code == 409, found.text
+    assert found.json()["detail"]["reason_code"] == panel_deploy.OPTION_BOT_HAS_NO_SEALED_TERMS
+    assert "QQQ" not in json.dumps(found.json().get("traded_symbol", ""))
+
+
+async def test_the_answer_to_an_option_deploy_says_the_plan_the_start_was_handed(deploy_app, floor: _Floor) -> None:
+    """Not shares of the contracts' underlying."""
+    app, registry = deploy_app
+    await _the_quotes_are_up(floor)
+
+    response = await _deploy(app, execution_mode="dry_run", trades=_ONE_CALL)
+
+    assert response.status_code == 201, response.text
+    [call] = registry.deploy_calls
+    assert response.json()["action_plan"] == call["action_plan"].model_dump(mode="json")
+    assert response.json()["action_plan"]["on_enter"][0]["instrument"] == {"kind": "option", "underlying": "SPY"}
 
 
 def test_deploy_again_of_an_option_bot_carries_its_structure_and_its_sealed_terms() -> None:

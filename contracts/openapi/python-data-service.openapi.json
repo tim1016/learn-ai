@@ -34475,21 +34475,28 @@
             "title": "Preview Sentence"
           },
           "preview_state": {
-            "enum": [
-              "plan_refused",
-              "no_quote_source",
-              "feed_not_up",
-              "no_quote_line",
-              "listing_not_read",
-              "quotes_arriving",
-              "underlying_quote_unusable",
-              "pricing_inputs_unknown",
-              "search_not_done",
-              "not_resolved",
-              "resolved"
+            "anyOf": [
+              {
+                "enum": [
+                  "plan_refused",
+                  "no_quote_source",
+                  "feed_not_up",
+                  "no_quote_line",
+                  "listing_not_read",
+                  "quotes_arriving",
+                  "underlying_quote_unusable",
+                  "pricing_inputs_unknown",
+                  "search_not_done",
+                  "not_resolved",
+                  "resolved"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "not_asked"
+              }
             ],
-            "title": "Preview State",
-            "type": "string"
+            "title": "Preview State"
           },
           "quotes_read_ms": {
             "anyOf": [

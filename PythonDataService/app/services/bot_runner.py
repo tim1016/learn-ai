@@ -164,6 +164,7 @@ from app.services.bot_run_terminal import (
     prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
+    ACTION_PLAN_AND_TRADED_SYMBOL,
     LANE_GO_LIVE_HOLD_UNREADABLE,
     LANE_GO_LIVE_PENDING,
     ActivationFailedCleanupProvenError,
@@ -173,6 +174,7 @@ from app.services.bot_runner_errors import (
     CarryoverPolicyRefusedError,
     InvalidStrategyInstanceIdError,
     MarketDataFeedUnavailableError,
+    OptionStartRefusedError,
     RecoveryUncertainError,
     RunAdmissionRefusedError,
     UnknownBotError,
@@ -323,7 +325,14 @@ def _plan_to_start(action_plan: ActionPlan | None, *, traded_symbol: str | None,
     if action_plan is None:
         return alpaca_v1_action_plan(traded_symbol or symbol)
     if traded_symbol is not None:
-        raise ValueError("a start names an action plan or a traded symbol, never both")
+        raise OptionStartRefusedError(
+            "This start says what the bot trades twice.",
+            detail=(
+                f"It was handed an action plan and the traded symbol {traded_symbol}. A start names one or the "
+                "other, never both."
+            ),
+            reason_code=ACTION_PLAN_AND_TRADED_SYMBOL,
+        )
     return action_plan
 
 
