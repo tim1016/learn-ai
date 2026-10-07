@@ -2205,6 +2205,51 @@
         "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_with_cash_dividends_matches_the_second_engines_difference",
         "tests/fixtures/test_american_option_fixtures.py::test_a_days_decay_at_the_default_step_count_stays_close_to_the_second_engine_group_by_group"
       ]
+    },
+    {
+      "id": "SB-001",
+      "name": "Stationary bootstrap of a paired, serially dependent series (mean, Sharpe, Sharpe difference)",
+      "category": "resampling",
+      "canonical_module": "PythonDataService/app/research/monte_carlo/stationary.py, PythonDataService/app/research/golden_search/chance.py",
+      "canonical_callable": "stationary_index_chunks, path_sharpe",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "arch==8.0.0 arch.bootstrap.StationaryBootstrap (numpy==2.2.6). Generation-only: in no requirements file, never imported under app/ or tests/.",
+        "citation": "Politis & Romano (1994), The Stationary Bootstrap, Journal of the American Statistical Association 89(428), 1303-1313. See the fixture attribution."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/stationary_bootstrap.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.008,
+        "rtol": 0.0,
+        "note": "A random method, so a Monte Carlo band and not float equality (owner decision 4 on issue #2932): the share of our 200,000 resamples at or below each of arch's quantiles against that quantile's level. Each side places a share to sqrt(p(1-p)/200000) <= 0.00112; 0.008 is five standard errors of their difference. Measured maximum 0.0024. Never widened: a miss means the two disagree about the method."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "8fcf60d4cfc94b8bc1b49324963faac1a63c9a8359e6d236cde627c612444c2a",
+            "output.arrow": "8e0ff72c09439fc5f4a47b16b0c4043cd8c85ad453d17befb42d054fac169b30",
+            "attribution.md": "e0944d958de6fa3eecd8104f8c5bb0a90c98d720c2df0d722cd1785031b91a5d"
+          },
+          "file_sha256": {
+            "input.arrow": "2cb3e36b098a791ebabec945aee19f440f37b7d22c3ea03fe13ec78f72f0e20d",
+            "output.arrow": "53f027c5ddd4a9cef079d631953656947d6dce5f55e8e89de758f1f5df3e2b54",
+            "attribution.md": "e0944d958de6fa3eecd8104f8c5bb0a90c98d720c2df0d722cd1785031b91a5d"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/research/monte_carlo/test_stationary.py::test_stationary_bootstrap_agrees_with_arch_fixture_sb_001"
+      ]
     }
   ]
 }

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
+    from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill
     from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
     from app.schemas.action_plan import ActionPlan
     from app.schemas.exit_terms import ExitTerms
@@ -132,6 +133,14 @@ class ActiveAlpacaClerk(Protocol):
         option_entry: OptionEntryEvidence | None = None,
         option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt: ...
+
+    def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
+        """The option contracts one bot holds now, by OCC symbol: what its EXIT closes (ADR 0076)."""
+        ...
+
+    def option_fills_of_decision(self, strategy_instance_id: str, decision_id: str) -> tuple[OptionDecisionFill, ...]:
+        """What the order one decision made has filled in option contracts, oldest first (ADR 0076)."""
+        ...
 
     async def reconcile_once(self) -> ReconciliationVerdict: ...
 

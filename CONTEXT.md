@@ -1671,8 +1671,17 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option entry evidence** — what a runner hands the Clerk with an option ENTER: for each leg the contract picked, its listed multiplier and the quote read just before; the quotes' generation; the bot's two limits. Facts, never a price or a commitment.
 - **Leg gap limit** — the widest bid-ask gap the owner allows any one leg at an entry, as a percent of that leg's mid. Starts at 8.
 - **Order line** — an option order as the books write it beside a stock leg: the contract's symbol, the side, contracts, the limit a share. The exact order is kept with it.
-- **Quotes kept** — the option quotes a Dry Run's Clerk was handed, kept so a later close or mark can be priced from them. Cut back as they grow to what a later reader can still ask for.
-- **Hand-over** — the runner passing the Clerk the newest quote it holds for a contract. It says "this is still the newest", which a quiet contract's old receipt time cannot.
+- **Quotes kept** — the option quotes kept for a Dry Run's contracts, so a later close or mark can be priced from them: an entry's, a priced exit's, the marks the Clerk's keeping states, and what a held contract's line shows while one side has still to arrive. Cut back as they grow to what a later reader can still ask for.
+- **Hand-over** — a statement that a quote is the newest held for a contract a bot holds. It says "this is still the newest", which a quiet contract's old receipt time cannot. The entry's own quote is stated as its order is sent; every one after that is the Clerk's keeping's. A runner makes none between its two decisions.
+- **Put back (a quote)** — written into the quotes kept as of its own receipt, never as of now: it can be the newest quote and price a close, and it states nothing. An exit's quote is put back as its close is priced, and so is a held line that shows one side.
+- **One-sided line** — a held contract's line on which one side has ticked since a reconnect or a data loss and the other has not. It is the line's last word and is put back as it stands. With no bid on it a sale is not priced, runner or no runner. It is never a mark.
+- **Keeping (of held quotes)** — the Clerk stating, every fifteen seconds while the session is open, the mark of each contract its bots hold. What a close, a Flatten and the account's reading are priced from when no runner is alive.
+  _Avoid_: polling, mark-to-market.
+- **Mark (of a held contract)** — the newest whole quote its line holds, as the keeping last stated it: live data, of the feed's current generation, both sides received since today's session opened. Its age is not tested. The account reads the contract at its bid while the statement is fresh, and takes no mark from a quote with one side.
+  _Avoid_: last price, a decision's quote (that one is held to five seconds).
+- **Round (of the keeping)** — one reading of the books and one writing of the marks, begun by the supervisor's pass and never waited for by it. A Clerk that reads its market status from a shared source makes no pass, and so begins none.
+- **Held line** — the quote line of a contract a bot holds. Asked for by the Clerk from its own books, whether a runner is alive or not, and never given up for a window.
+- **Last word (of a Clerk's books)** — what a Dry Run's books said its bots hold as its Clerk was closed. It stands until the account is opened again.
 - **Natural price from an older quote** — how a simulated close is priced when its exit decision had no usable quote: from the newest quote kept, with that quote's age.
 - **Last session (of a contract)** — the last regular session a contract trades in: the one on its expiry date, to that session's close, a half day's included. After it the contract has expired: nothing is bought or sold in it.
   _Avoid_: expiry (that names the date), close deadline (when the bot closes, earlier).
@@ -1689,12 +1698,18 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
   _Avoid_: direction of the trade, bullish or bearish (the signal stays ENTER and EXIT), exposure.
 - **Search (for option contracts)** — one run of the resolver: a plan's rules against the quotes held, to one contract for every leg or one refusal. It runs in a worker process, never in the Clerk's own.
   _Avoid_: lookup (that is the rate and the dividends), scan.
-- **Search lane** — where the searches of one kind run, one at a time, in a worker process of their own. There are two: one for bots' entries, which nothing uses yet, and one for pages' previews. A lane has one worker process at most, and ends it when it does not come up or does not answer in time.
+- **Search lane** — where the searches of one kind run, one at a time, in a worker process of their own. There are two: one for bots' entries and one for pages' previews. A lane has one worker process at most, and ends it when it does not come up or does not answer in time.
   _Avoid_: lane with no "search" (a lane is an account's Clerk in the fleet).
 - **Search not run** — a search that gave no answer because its worker could not be started, did not come up in time, died, or did not answer in time; or because the search itself failed. Not a refusal of the plan, and never a guess. For a page it also covers a search still running: a search too slow to wait for is never shown later, and the page's next ask searches again.
 - **Pricing inputs** — the rate and the cash dividends the option model is given, each with its source. Dividends that could not be looked up are unknown, never none. A process with its own Polygon and FRED keys reads them there; a fleet Clerk asks the coordinator.
 - **Declared dividend** — a cash dividend a company has announced, with its ex-date. Only a declared dividend can be known; none declared is not none paid.
-- **Option order terms** — the four settings an owner is to fix for an option bot at Deploy: the widest bid-ask gap each leg may have, how long an entry waits for its fill, the structure cost limit, and how long before the close an expiring position is closed. The builder is given the default each starts from; nothing holds a bot to them yet.
+- **Option order terms** — the four settings an owner is to fix for an option bot at Deploy: the widest bid-ask gap each leg may have, how long an entry waits for its fill, the structure cost limit, and how long before the close an expiring position is closed. The builder is given the default each starts from. Until Deploy stores them, a bot runs under those defaults.
+- **The money (of an entry)** — the close of the underlying's own bar for the decision's minute: what a strike rule counts from. The decision bar when the bot listens to the underlying; the underlying's bar for that minute when it listens to another symbol. None when the underlying did not trade in that minute.
+  _Avoid_: spot, the underlying's price (that is its live quote).
+- **Watched window (a bot's)** — the contracts a running bot asks to have quoted, from the start of its run: its plan's rules, centred on the newest closed bar of the underlying. The contract it holds is not in it; that one is the Clerk's to ask for.
+- **Blocked entry** — an ENTER decision that was not sent, with one reason code and one sentence. It is discarded: the bot does not queue it and does not try it again on a later bar. An entry the Clerk accepted and then refused as its order was sent is not this: its receipt is the accepted one, and the books record the refusal.
+- **Refused run (option bot)** — a run ended by name as it starts, before it asks for a bar: its watched window cannot fit the Clerk's line budget, or its Clerk has no option quotes of its own because it reads its market status from a shared source.
+- **Contract reference (in a Dry Run)** — IBKR's own listing of the contract. A simulated broker has none of its own.
 
 ## Market-data readiness (resolved 2026-09-22)
 

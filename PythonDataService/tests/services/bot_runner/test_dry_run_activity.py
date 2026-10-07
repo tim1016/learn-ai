@@ -446,3 +446,52 @@ def test_a_fill_priced_at_its_own_minute_writes_the_row_it_always_wrote(tmp_path
     assert "price_bar_end_ms" not in own_minute
     assert older["price_bar_end_ms"] == _T0 - 120_000
     assert [activity.price_bar_end_ms for activity in journal.tail(5)] == [None, _T0 - 120_000]
+
+
+_A_FILL_IN_SHARES = {
+    "seq": 1, "strategy_instance_id": _SID, "run_id": "run-1",
+    "authority_account_id": f"sim:{_SID}", "authority_kind": "synthetic", "recorded_at_ms": _T0,
+    "bar_ref": "bar-1", "intent": "ENTER", "order_ref": "order-1", "symbol": "SPY", "side": "buy",
+    "quantity": 1.0, "fill_price": 585.0,
+}
+_OF_AN_OPTION_FILL = {
+    "symbol": "SPY261009C00585000", "fill_price": 4.12, "underlying": "SPY", "multiplier": 100,
+    "fill_model": "natural_price", "quote_age_ms": 250, "contract_reference": "ibkr_listing",
+}
+
+
+def test_a_fill_in_shares_writes_none_of_an_option_fills_keys_and_an_option_fill_reads_back(tmp_path: Path) -> None:
+    """A row for shares is what it was before a row could name a contract (#2913): the journal refuses a key
+    it does not know, so code from before must still read every fill a stock bot makes."""
+    journal = DryRunActivityJournal(tmp_path)
+    journal.append(DryRunActivity(**_A_FILL_IN_SHARES))
+    journal.append(DryRunActivity(**{**_A_FILL_IN_SHARES, **_OF_AN_OPTION_FILL, "seq": 2, "order_ref": "order-2"}))
+
+    shares, contract = (json.loads(line) for line in (tmp_path / "dry_run_activity.jsonl").read_text().splitlines())
+    in_shares, in_a_contract = journal.tail(5)
+
+    assert shares == {**_A_FILL_IN_SHARES, "simulated": True}
+    assert {key: contract[key] for key in _OF_AN_OPTION_FILL} == _OF_AN_OPTION_FILL
+    assert (in_shares.underlying, in_shares.multiplier, in_shares.fill_model) == (None, None, None)
+    assert (in_a_contract.symbol, in_a_contract.underlying, in_a_contract.multiplier) == (
+        "SPY261009C00585000", "SPY", 100,
+    )
+    assert (in_a_contract.fill_model, in_a_contract.quote_age_ms, in_a_contract.contract_reference) == (
+        "natural_price", 250, "ibkr_listing",
+    )
+
+
+@pytest.mark.parametrize(
+    "half_an_option_fill",
+    [
+        pytest.param({"multiplier": 100}, id="a multiplier and no underlying"),
+        pytest.param({"underlying": "SPY"}, id="an underlying and no multiplier"),
+        pytest.param({"fill_model": "natural_price"}, id="a fill model on a fill in shares"),
+        pytest.param({"quote_age_ms": 250}, id="a quote's age on a fill in shares"),
+        pytest.param({"contract_reference": "ibkr_listing"}, id="a contract reference on a fill in shares"),
+    ],
+)
+def test_a_row_is_a_fill_in_shares_or_a_fill_in_a_contract_never_half_of_each(half_an_option_fill: dict[str, Any]) -> None:
+    """A premium with no multiplier beside it would be read as a share price."""
+    with pytest.raises(ValueError, match="option"):
+        DryRunActivity(**{**_A_FILL_IN_SHARES, **half_an_option_fill})
