@@ -777,15 +777,15 @@ async def test_a_stock_only_accounts_books_are_never_read_however_long_their_log
                 done = await keeper.tick()
             with _StepsCounted(repo) as the_step:
                 await cancel_entries_past_their_wait(repo, trade=_FakeTradePort())
-            with _StepsCounted(repo) as the_gate:
-                admit_new_exposure(repo, strategy_instance_id="spy-bot")
+            with _StepsCounted(repo) as the_gates_question, repo.write_fence() as conn:
+                assert reads.working_option_entry_for_strategy(conn, "spy-bot") is None
             assert done.entries == WaitEndedRound() and repo.last_custody_sequence() == written
-            costs[transitions] = (idle_round.steps, the_step.steps, the_gate.steps)
+            costs[transitions] = (idle_round.steps, the_step.steps, the_gates_question.steps)
         finally:
             repo.close()
 
-    assert costs[0][:2] == costs[3_000][:2]
-    assert 0 < costs[0][0] < 100 and 0 < costs[0][1] < 100
+    assert costs[0] == costs[3_000]
+    assert all(0 < steps < 100 for steps in costs[0])
 
 
 async def test_one_round_of_the_keeper_reads_the_worklist_once(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
