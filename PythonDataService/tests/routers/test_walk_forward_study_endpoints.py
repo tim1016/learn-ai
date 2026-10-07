@@ -184,6 +184,12 @@ def _curve_factory(*, fold_one_trades: int, fold_zero_test_keeps_a_curve: bool):
     return factory
 
 
+def _test_closes(folds: list[dict]) -> list[int]:
+    """Every session close inside the folds' test windows."""
+    closes = [session_close_ms_utc(day) for day in SESSIONS]
+    return [close for close in closes if any(fold["test_start_ms"] <= close < fold["test_end_ms"] for fold in folds)]
+
+
 async def _run_study(c: httpx.AsyncClient, factory) -> str:
     job_id = f"job-wf-{uuid.uuid4().hex[:8]}"
     launched = await c.post("/api/jobs-internal/walk-forward-study", json={**_body(initial_cash=50_000.0), "jobId": job_id})
@@ -207,11 +213,11 @@ async def test_each_completed_folds_winner_is_drawn_over_its_own_test_window_fro
     body = read.json()
     first, second = body["curves"]
     assert body["not_recorded"] == [] and (first["fold_index"], second["fold_index"]) == (0, 1)
-    # One date axis, fold after fold: each fold's two sessions fall inside its own test window.
-    assert len(body["sessions_ms"]) == 4 and (first["first_session"], second["first_session"]) == (0, 2)
+    # One date axis over both test windows, fold after fold: each fold's two sessions open its own window.
+    assert body["sessions_ms"] == _test_closes(folds)
     for fold, curve in zip(folds, body["curves"], strict=True):
         own = body["sessions_ms"][curve["first_session"] : curve["first_session"] + len(curve["cumulative_return"])]
-        assert all(fold["test_start_ms"] <= close < fold["test_end_ms"] for close in own)
+        assert own == _test_closes([fold])[:2]
     # Each fold is its winner's run (short window 3, then 2) from the study's 50,000 afresh: neither carries the other's gain.
     assert first["cumulative_return"] == pytest.approx([0.006, 0.012], abs=1e-12, rel=0)
     assert second["cumulative_return"] == pytest.approx([0.004, 0.008], abs=1e-12, rel=0)
@@ -232,7 +238,8 @@ async def test_a_fold_that_kept_no_curve_is_named_and_a_fold_that_failed_has_no_
         await c.delete(f"/api/research/walk-forward-studies/{study_id}")
 
     assert [fold["status"] for fold in folds] == ["completed", "failed"]
-    assert read.json() == {"sessions_ms": [], "curves": [], "not_recorded": [0]}
+    # Neither fold has a line, and both stand on the axis: a gap is drawn as a gap.
+    assert read.json() == {"sessions_ms": _test_closes(folds), "curves": [], "not_recorded": [0]}
     assert missing.status_code == 404
 
 

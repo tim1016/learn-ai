@@ -21,9 +21,10 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
 from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search.engine_adapter import default_execute_cell
-from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal
+from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal, window_dates
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
 from app.research.session_curves import session_curves
@@ -171,17 +172,27 @@ async def _winner_test_curves(conn: asyncpg.Connection, folds: Sequence[FoldReco
     return curves
 
 
+def _test_window_closes(fold: FoldRecord) -> list[int]:
+    """Every scheduled session close of the fold's test window, from the canonical calendar."""
+    return [session_close_ms_utc(day) for day in expected_sessions(*window_dates(fold.test_start_ms, fold.test_end_ms))]
+
+
 @router.get("/{study_id}/fold-curves", response_model=WalkForwardFoldCurvesResponse)
 async def get_walk_forward_fold_curves(study_id: str) -> WalkForwardFoldCurvesResponse:
     """Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).
 
     Every fold's test run starts from the study's starting capital, so each
-    curve starts flat. A fold that did not complete has no curve and nothing
-    stands in for it.
+    curve starts flat. The sessions are those of every fold's test window, so
+    a fold with no curve — failed, not yet run, or recorded without one —
+    stands on the axis as a gap and nothing is drawn across it.
     """
     row = await _load(study_id)
     stored = await with_connection(_winner_test_curves, row.folds)
-    sessions, curves = session_curves(stored, StudySpec.from_request_dict(row.request).grid.initial_cash)
+    sessions, curves = session_curves(
+        stored,
+        StudySpec.from_request_dict(row.request).grid.initial_cash,
+        also=[close for fold in row.folds for close in _test_window_closes(fold)],
+    )
     return WalkForwardFoldCurvesResponse(
         sessions_ms=sessions,
         curves=[{"fold_index": index, **curve} for index, curve in sorted(curves.items())],

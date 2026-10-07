@@ -14,8 +14,9 @@ const FOLDS = { one: 'fold', many: 'folds' } as const;
  * A study's out-of-sample record as curves (#2936): each completed fold's
  * winner over its test window, fold after fold on one date axis. Every fold
  * starts from the study's starting capital afresh, so each line starts flat
- * and none carries the last one's gain. A fold that did not complete leaves a
- * gap, and a fold whose test run kept no curve is named, never drawn flat.
+ * and none carries the last one's gain. The axis runs over every fold's test
+ * window: a fold that did not complete leaves a gap, and a fold whose test run
+ * kept no curve is named, never drawn flat.
  * The set is read again when another fold completes.
  */
 @Component({
@@ -82,7 +83,8 @@ export class WalkForwardFoldCurvesComponent {
   protected readonly chart = computed(
     () => {
       const lines = this.lines();
-      return lines.length === 0 ? null : runCurvesSpec(lines, null, FOLDS);
+      // The axis runs over every fold's test window, so a fold with no line shows as a gap.
+      return lines.length === 0 ? null : runCurvesSpec(lines, null, FOLDS, this.read()?.sessions_ms);
     },
     { equal: sameChart },
   );

@@ -5882,8 +5882,9 @@ export interface paths {
          * @description Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).
          *
          *     Every fold's test run starts from the study's starting capital, so each
-         *     curve starts flat. A fold that did not complete has no curve and nothing
-         *     stands in for it.
+         *     curve starts flat. The sessions are those of every fold's test window, so
+         *     a fold with no curve — failed, not yet run, or recorded without one —
+         *     stands on the axis as a gap and nothing is drawn across it.
          */
         get: operations["get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get"];
         put?: never;
@@ -25160,7 +25161,7 @@ export interface components {
         WalkForwardFoldCurvesResponse: {
             /**
              * Curves
-             * @description In fold order. A fold that did not complete has none: the line breaks there.
+             * @description In fold order. A fold that did not complete has none: its sessions stand empty.
              */
             curves: components["schemas"]["FoldTestCurve"][];
             /**
@@ -25170,7 +25171,7 @@ export interface components {
             not_recorded: number[];
             /**
              * Sessions Ms
-             * @description Every session close any fold's curve scored, in order, sent once.
+             * @description Every session close of every fold's test window, in order, sent once.
              */
             sessions_ms: number[];
         };

@@ -68,7 +68,8 @@ function detail(overrides: Partial<WalkForwardStudyDetail> = {}): WalkForwardStu
   };
 }
 
-const SESSIONS_MS = ['2025-04-01', '2025-04-02', '2025-05-01', '2025-05-02'].map((day) => etMidnightMs(day));
+const SESSION_DATES = ['2025-04-01', '2025-04-02', '2025-05-01', '2025-05-02', '2025-06-02', '2025-06-03'];
+const SESSIONS_MS = SESSION_DATES.map((day) => etMidnightMs(day));
 
 /** A fold's test-window curve over two sessions, ending at `end`. */
 function foldCurve(foldIndex: number, firstSession: number, end: number): FoldTestCurve {
@@ -81,17 +82,18 @@ function foldCurves(overrides: Partial<WalkForwardFoldCurves> = {}): WalkForward
 
 async function renderResult(row: WalkForwardStudyDetail, overrides: Partial<WalkForwardStudyService> = {}) {
   const gridGet = vi.fn(async (id: string) => gridSearchDetail({ id, owner: { kind: 'walk_forward', owner_id: 'study-1', fold_index: 0, phase: 'test' }, leader_params: { short_window: 5 }, resume_refusal: null }));
+  const charts = fakeCharts();
   const view = await render(WalkForwardStudyResultComponent, {
     inputs: { studyId: row.id, pollMs: 0 },
     providers: [
       provideRouter([]),
-      ...fakeCharts().providers,
+      ...charts.providers,
       { provide: WalkForwardStudyService, useValue: { get: vi.fn(async () => row), foldCurves: vi.fn(async () => foldCurves()), finish: vi.fn(), delete: vi.fn(async () => undefined), ...overrides } },
       { provide: GridSearchService, useValue: { get: gridGet, cells: vi.fn(async () => ({ total: 0, page: 1, page_size: 25, sort_by: 'sharpe_ratio', direction: 'desc', cells: [] })) } },
       { provide: JobsService, useValue: { cancelJob: vi.fn(async () => undefined) } },
     ],
   });
-  return { view, gridGet };
+  return { view, gridGet, charts: charts.charts };
 }
 
 describe('WalkForwardStudyResultComponent', () => {
@@ -115,7 +117,7 @@ describe('WalkForwardStudyResultComponent', () => {
 
   it('draws each completed fold over its own test window, fold after fold, and names it by its winner', async () => {
     const completed = [fold(), fold({ fold_index: 1, train_search_id: 'train-1', test_search_id: 'test-1', winner_params: { short_window: 10, long_window: 30 } })];
-    const read = foldCurves({ sessions_ms: SESSIONS_MS, curves: [foldCurve(0, 0, 0.02), foldCurve(1, 2, -0.01)] });
+    const read = foldCurves({ sessions_ms: SESSIONS_MS.slice(0, 4), curves: [foldCurve(0, 0, 0.02), foldCurve(1, 2, -0.01)] });
     await renderResult(detail({ completed_folds: 2, failed_folds: 0, folds: completed }), { foldCurves: vi.fn(async () => read) });
 
     const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
@@ -130,8 +132,25 @@ describe('WalkForwardStudyResultComponent', () => {
     ]);
   });
 
+  it('leaves the sessions of a fold that did not complete empty on the date axis, between the folds that did', async () => {
+    // Folds 1 and 3 ran; fold 2 (the May sessions) failed. The read's sessions cover all three test windows.
+    const read = foldCurves({ sessions_ms: SESSIONS_MS, curves: [foldCurve(0, 0, 0.02), foldCurve(2, 4, 0.03)] });
+    const { charts } = await renderResult(detail(), { foldCurves: vi.fn(async () => read) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    await waitFor(() => expect(within(panel).getByRole('img').getAttribute('aria-label')).toContain('2 folds drawn'));
+    const option = charts.at(-1)?.options.at(-1);
+    const axis = Array.isArray(option?.xAxis) ? option.xAxis[0] : option?.xAxis;
+    expect(axis !== undefined && 'data' in axis ? axis.data : null).toEqual(SESSION_DATES);
+    const drawn = (Array.isArray(option?.series) ? option.series : []).filter((series) => String(series.id).startsWith('equity:')).map((series) => series.data);
+    expect(drawn).toEqual([
+      [0.01, 0.02, '-', '-', '-', '-'],
+      ['-', '-', '-', '-', 0.015, 0.03],
+    ]);
+  });
+
   it('says the curve was not recorded for a study that ran before folds kept theirs, and draws nothing', async () => {
-    await renderResult(detail(), { foldCurves: vi.fn(async () => foldCurves({ sessions_ms: [], curves: [], not_recorded: [0] })) });
+    await renderResult(detail(), { foldCurves: vi.fn(async () => foldCurves({ curves: [], not_recorded: [0] })) });
 
     const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
     expect(await within(panel).findByText('Curve not recorded: this study ran before folds kept their daily equity.')).not.toBeNull();
@@ -154,7 +173,7 @@ describe('WalkForwardStudyResultComponent', () => {
     const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
     expect((await within(panel).findByRole('alert')).textContent).toContain('The folds’ curves could not be loaded.');
 
-    read.mockImplementation(async () => foldCurves({ sessions_ms: [], curves: [] }));
+    read.mockImplementation(async () => foldCurves({ curves: [] }));
     fireEvent.click(within(panel).getByRole('button', { name: 'Try again' }));
 
     expect(await within(panel).findByText('A fold’s curve appears here once its test window has run.')).not.toBeNull();

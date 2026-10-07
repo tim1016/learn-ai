@@ -112,9 +112,9 @@ export interface FoldTestCurve {
 }
 
 export interface WalkForwardFoldCurves {
-  /** Every session close any fold's curve scored, in order. */
+  /** Every session close of every fold's test window, in order. */
   sessions_ms: number[];
-  /** In fold order; a fold that did not complete has none. */
+  /** In fold order; a fold that did not complete has none, and its sessions stand empty. */
   curves: FoldTestCurve[];
   /** The completed folds whose winner's test run kept no daily equity. */
   not_recorded: number[];

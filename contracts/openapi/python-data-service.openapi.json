@@ -47626,7 +47626,7 @@
         "description": "Each completed fold's winner over its test window, from the study's starting capital afresh (#2936).",
         "properties": {
           "curves": {
-            "description": "In fold order. A fold that did not complete has none: the line breaks there.",
+            "description": "In fold order. A fold that did not complete has none: its sessions stand empty.",
             "items": {
               "$ref": "#/components/schemas/FoldTestCurve"
             },
@@ -47642,7 +47642,7 @@
             "type": "array"
           },
           "sessions_ms": {
-            "description": "Every session close any fold's curve scored, in order, sent once.",
+            "description": "Every session close of every fold's test window, in order, sent once.",
             "items": {
               "maximum": 253402300799999.0,
               "minimum": 0.0,
@@ -71931,7 +71931,7 @@
     },
     "/api/research/walk-forward-studies/{study_id}/fold-curves": {
       "get": {
-        "description": "Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).\n\nEvery fold's test run starts from the study's starting capital, so each\ncurve starts flat. A fold that did not complete has no curve and nothing\nstands in for it.",
+        "description": "Each completed fold's winner over its test window: cumulative return and fall from peak at each session close (#2936).\n\nEvery fold's test run starts from the study's starting capital, so each\ncurve starts flat. The sessions are those of every fold's test window, so\na fold with no curve \u2014 failed, not yet run, or recorded without one \u2014\nstands on the axis as a gap and nothing is drawn across it.",
         "operationId": "get_walk_forward_fold_curves_api_research_walk_forward_studies__study_id__fold_curves_get",
         "parameters": [
           {

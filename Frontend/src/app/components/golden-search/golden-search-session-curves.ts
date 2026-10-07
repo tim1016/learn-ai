@@ -64,11 +64,16 @@ export interface ReadCurve {
  * and fall at each. The axis holds the sessions a drawn curve scored and no
  * other, so it does not depend on which curves were read together. Curves of
  * one read already share its sessions; curves of several reads are joined by
- * instant. A curve with no fall recorded has none at any session.
+ * instant. A curve with no fall recorded has none at any session. `also`
+ * names sessions the axis holds though no curve scored them: a window no
+ * curve covers then shows as a gap.
  */
-export function onOneAxis(curves: readonly ReadCurve[]): { readonly dates: string[]; readonly lines: { readonly returns: (number | null)[]; readonly falls: (number | null)[] }[] } {
+export function onOneAxis(
+  curves: readonly ReadCurve[],
+  also: readonly number[] = [],
+): { readonly dates: string[]; readonly lines: { readonly returns: (number | null)[]; readonly falls: (number | null)[] }[] } {
   const closes = curves.map(({ sessions, curve }) => sessions.slice(curve.first_session, curve.first_session + curve.cumulative_return.length));
-  const { sessions, dates } = sessionAxis(curves.map(({ curve }, i) => closes[i].filter((_, at) => curve.cumulative_return[at] !== null)));
+  const { sessions, dates } = sessionAxis([...curves.map(({ curve }, i) => closes[i].filter((_, at) => curve.cumulative_return[at] !== null)), also]);
   return {
     dates,
     lines: curves.map(({ curve }, i) => ({

@@ -28,6 +28,24 @@ describe('onOneAxis', () => {
     expect(axis.lines[0].returns).toEqual([0.01, 0.03]);
   });
 
+  it('keeps a session the caller names on the axis though no curve scored it', () => {
+    // A walk-forward fold that did not run: Jan 3 and Jan 6 stand empty between two folds that did.
+    const sessions = [JAN_2, JAN_3, JAN_6, JAN_7];
+    const axis = onOneAxis(
+      [
+        { sessions, curve: { first_session: 0, cumulative_return: [0.01], drawdown: [0] } },
+        { sessions, curve: { first_session: 3, cumulative_return: [0.02], drawdown: [0] } },
+      ],
+      sessions,
+    );
+
+    expect(axis.dates).toEqual(['2025-01-02', '2025-01-03', '2025-01-06', '2025-01-07']);
+    expect(axis.lines.map((line) => line.returns)).toEqual([
+      [0.01, null, null, null],
+      [null, null, null, 0.02],
+    ]);
+  });
+
   it('joins curves of separate reads by instant, whatever index each read gave the session', () => {
     const axis = onOneAxis([
       { sessions: [JAN_6, JAN_7], curve: { first_session: 0, cumulative_return: [0.02, 0.03], drawdown: [0, 0] } },

@@ -42,3 +42,12 @@ def test_a_read_sends_its_sessions_once_and_each_curve_starts_at_its_own_first_s
     # A session inside a run's span that it did not score is a gap, never a carried value.
     assert curves["gapped"]["first_session"] == 0 and curves["gapped"]["cumulative_return"][2] is None and curves["gapped"]["drawdown"][2] is None
     assert curves["gapped"]["drawdown"][3] == pytest.approx(84.0 / 105.0 - 1.0, abs=1e-12, rel=0) == curves["gapped"]["deepest_drawdown"]
+
+
+def test_a_session_the_caller_names_stands_on_the_axis_though_no_run_scored_it() -> None:
+    # A walk-forward fold that did not run: its sessions (3 and 4) are on the axis, empty, between two folds that did.
+    sessions, curves = session_curves({"first": [(1, 110.0), (2, 121.0)], "third": [(5, 90.0)]}, 100.0, also=[1, 2, 3, 4, 5, 6])
+
+    assert sessions == [1, 2, 3, 4, 5, 6]
+    assert (curves["first"]["first_session"], curves["first"]["cumulative_return"]) == (0, pytest.approx([0.1, 0.21], abs=1e-12, rel=0))
+    assert (curves["third"]["first_session"], curves["third"]["cumulative_return"]) == (4, pytest.approx([-0.1], abs=1e-12, rel=0))

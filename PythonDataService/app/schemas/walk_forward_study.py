@@ -121,6 +121,6 @@ class FoldTestCurve(SessionCurve):
 class WalkForwardFoldCurvesResponse(BaseModel):
     """Each completed fold's winner over its test window, from the study's starting capital afresh (#2936)."""
 
-    sessions_ms: SessionsMs = Field(description="Every session close any fold's curve scored, in order, sent once.")
-    curves: list[FoldTestCurve] = Field(description="In fold order. A fold that did not complete has none: the line breaks there.")
+    sessions_ms: SessionsMs = Field(description="Every session close of every fold's test window, in order, sent once.")
+    curves: list[FoldTestCurve] = Field(description="In fold order. A fold that did not complete has none: its sessions stand empty.")
     not_recorded: list[int] = Field(description="The completed folds whose winner's test run kept no daily equity; never drawn as a flat line.")
