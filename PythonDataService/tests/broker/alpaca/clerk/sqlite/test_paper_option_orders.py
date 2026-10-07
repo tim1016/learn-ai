@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     option_order_evidence,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.resting_entries import resting_entries
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXIT_NOT_FLAT_REASON_CODE
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
@@ -50,6 +51,7 @@ from app.broker.contract.errors import BrokerEvidenceUnavailable, BrokerOrderRej
 from app.broker.contract.models import BrokerOrderEvent, OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.options.deadlines import CloseTerms
+from app.options.quotes import QuoteFault
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.market_liveness import QUOTE_MAX_AGE_MS
@@ -212,6 +214,36 @@ async def test_an_entry_whose_listing_was_not_asked_is_never_taken_when_the_sess
     _refused(refused, "OPTION_CONTRACT_REFERENCE_UNREAD")
     assert paper.account.listing_reads == [] and paper.venue.option_submit_calls == []
     assert paper.set_aside_cents() == 0
+
+
+async def test_a_paper_entry_whose_quote_grew_old_between_being_taken_and_being_sent_is_not_sent(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The order would rest at the price a quote gave. That quote is tested again at the clock of the send.
+
+    It was 300 ms old when the entry was taken. Five seconds pass before
+    its order is reached for sending: the quote is past what an entry's
+    quotes are good for, so no order goes to Alpaca and nothing stays set aside.
+    """
+    take = clerk_runtime.accept_option_enter
+
+    def take_and_the_quote_grows_old(*args: object, **kwargs: object) -> object:
+        taken = take(*args, **kwargs)
+        paper.wait(QUOTE_MAX_AGE_MS)
+        return taken
+
+    monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_the_quote_grows_old)
+
+    refused = await paper.enter()
+
+    assert refused.state is EffectOperationState.REJECTED, refused.explanation
+    [order_ref] = refused.child_order_refs
+    not_sent = paper.repo.last_order_transition(order_ref=order_ref, transition_kind="ENTER_SUBMISSION_REFUSED")
+    assert not_sent is not None and not_sent["summary_code"] == QuoteFault.STALE.value
+    assert paper.venue.option_submit_calls == [] and paper.set_aside_cents() == 0
+    # Never sent: there is nothing at Alpaca to cancel, and the keeper has nothing to do for it.
+    assert paper.outcome(order_ref).standing is EntryStanding.NOT_SENT
+    assert resting_entries(paper.repo) == []
 
 
 async def test_a_decision_sent_again_is_answered_from_its_own_entry_without_asking_alpaca_again(
