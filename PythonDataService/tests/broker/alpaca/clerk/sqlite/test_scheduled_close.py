@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
 from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
 from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.residue_discharge import discharge_attributed_residue
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
@@ -280,6 +281,24 @@ async def test_after_the_owner_stops_the_bot_its_close_still_goes_out_at_its_tim
     await paper.round()
 
     assert paper.repo.active_run("a") is None
+    assert _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
+
+
+async def test_a_bot_whose_runner_is_gone_still_has_its_contract_closed_at_its_time(paper: PaperOptions) -> None:  # noqa: F811
+    """No runner holds the bot's run. The pass retires the run, and the close is owed all the same."""
+    await _holds_one_call(paper)
+    _until(paper, DUE - 5 * 60_000)
+    for _ in range(2):  # the second pass that finds the run with no runner stops it
+        paper.wait(PASS_MS)
+        await reconcile_account(
+            paper.repo, read=paper.account, trade=paper.venue, intake=paper.clerk.intake,
+            pricing=paper.clerk.recovery_pricing, run_ownership=paper.clerk.run_ownership,
+        )
+    assert paper.repo.active_run("a") is None and _closes_sent(paper) == []
+
+    _until(paper, DUE)
+    await paper.round()
+
     assert _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
 
 
