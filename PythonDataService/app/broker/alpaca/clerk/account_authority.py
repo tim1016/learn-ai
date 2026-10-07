@@ -83,6 +83,11 @@ def is_shadow_account_id(account_id: str) -> bool:
     return account_id.startswith(SHADOW_ACCOUNT_PREFIX)
 
 
+def is_simulated_account_id(account_id: str) -> bool:
+    """Whether custody belongs to a Dry Run or Live Shadow."""
+    return simulated_account_named(account_id) is not None
+
+
 def simulated_account_named(account_id: str) -> str | None:
     """What a simulated account is called in a sentence an owner reads, or ``None`` for a real account.
 
@@ -378,6 +383,7 @@ __all__ = [
     "evidence_account_id_for",
     "is_shadow_account_id",
     "is_shadow_evidence_account_id",
+    "is_simulated_account_id",
     "is_synthetic_account_id",
     "live_account_id_for_shadow_account",
     "live_evidence_account_id_for_strategy",

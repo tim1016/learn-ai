@@ -56,6 +56,7 @@ not rediscover them in production:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -69,7 +70,9 @@ from app.broker.alpaca.clerk.account_authority import (
 )
 from app.broker.alpaca.clerk.fill_models import limit_touch_fill
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
+from app.broker.alpaca.clerk.simulated_option_expiry import SimulatedOptionExpiry
 from app.broker.alpaca.clerk.simulated_option_orders import SimulatedOptionOrders, contract_multipliers
+from app.broker.alpaca.clerk.simulated_option_settlement import OwnersWord, SimulatedOptionSettlements
 from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_symbol
 from app.broker.alpaca.clerk.sqlite.reconcile import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.sqlite.writes import account_paths, confined_account_file
@@ -84,7 +87,7 @@ from app.broker.alpaca.clerk.synthesized_orders import (
     recovery_bar_in_send_session,
 )
 from app.broker.alpaca.clerk.synthetic_broker import (
-    OptionOrdersNotTaken,
+    UnsupportedOptionOrderRefusal,
     filter_synthesized_orders,
     shape_immediate_order,
     synthesized_positions,
@@ -602,13 +605,49 @@ def _execution_window_witnessed(bars: list[RetainedSourceBar], *, start_ms: int,
     return covered_until >= end_ms and end_ms > start_ms
 
 
-class NoSubmitAlpacaTradePort(OptionOrdersNotTaken):
+class _ShadowSettlementBars:
+    """Market bars retained by the bots whose option orders belong to this shadow book."""
+
+    def __init__(self, book: ShadowOrderBook) -> None:
+        self._book = book
+
+    def latest_for_symbol(self, symbol: str, *, market_only: bool, at_or_before_ms: int) -> RetainedSourceBar | None:
+        records = self._book._ledger.latest_records().values()
+        accounts = {
+            self._book._evidence_namespace_for(record.order.client_order_id)
+            for record in records
+            if record.option is not None and record.option.request.contract.root == symbol
+            and record.order.client_order_id is not None
+        }
+        bars = []
+        for account_id in sorted(accounts):
+            try:
+                with self._book._evidence.open(account_id) as ledger:
+                    bar = ledger.latest_for_symbol(symbol, market_only=market_only, at_or_before_ms=at_or_before_ms)
+            except FileNotFoundError:
+                logging.getLogger(__name__).warning(
+                    "shadow settlement has no retained market ledger",
+                    extra={"action": "shadow_settlement_ledger_missing", "account_id": account_id, "symbol": symbol},
+                )
+                continue
+            if bar is not None:
+                bars.append(bar)
+        if not bars:
+            return None
+        latest_ms = max(bar.end_ms for bar in bars)
+        latest = [bar for bar in bars if bar.end_ms == latest_ms]
+        if len({bar.close for bar in latest}) != 1:
+            raise ShadowBookUnreadable(f"Shadow settlement has conflicting closing prices for {symbol}.")
+        return min(latest, key=lambda bar: bar.bar_ref)
+
+
+class NoSubmitAlpacaTradePort(UnsupportedOptionOrderRefusal):
     """``BrokerTradePort`` that synthesizes every order and never reaches Alpaca (ADR 0059 D2).
 
     It takes an option order of one leg, so it answers that and the two
     option lookups itself, from the book's own. An order of several legs it
     refuses in the words every simulated port refuses option orders in
-    (``OptionOrdersNotTaken``).
+    (``UnsupportedOptionOrderRefusal``).
     """
 
     broker_id = SHADOW_BROKER_ID
@@ -617,6 +656,15 @@ class NoSubmitAlpacaTradePort(OptionOrdersNotTaken):
     def __init__(self, book: ShadowOrderBook) -> None:
         self._book = book
         self._options = book.option_orders
+        self._expiry = SimulatedOptionExpiry(
+            account_id=book._ledger.account_id, broker_id=self.broker_id, ledger=book._ledger,
+            source_bars=_ShadowSettlementBars(book), clock=book._clock,
+        )
+
+    def settle_expired_options(
+        self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None,
+    ) -> SimulatedOptionSettlements:
+        return self._expiry.settle_expired_options(after_ms=after_ms, at_the_owners_word=at_the_owners_word)
 
     @property
     def submission_response_is_authoritative_evidence(self) -> bool:
@@ -757,8 +805,8 @@ class ShadowAccountReadPort:
         The live account's own assignments, exercises and expiries end
         positions the live account holds. They are not passed through as
         events of a book that never held those contracts. A contract the
-        book itself holds past its expiry is not settled here yet: nothing
-        reports its ending, and the Clerk says so on the bot that holds it.
+        book itself holds past its expiry is settled by the trade port's
+        separate simulated-expiry step, as on a Dry Run (ADR 0076 D22).
         """
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)

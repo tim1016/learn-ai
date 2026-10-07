@@ -300,11 +300,13 @@ class LiveEnvelopeGate:
         self.custody_is_simulated = custody_is_simulated
         self._max_age_ms = observation_max_age_ms
         self._observation: AccountObservation | None = None
+        self.unavailable_reason: str | None = None
 
     def publish(self, observation: AccountObservation) -> None:
         self._observation = observation
+        self.unavailable_reason = None
 
-    def withdraw(self) -> None:
+    def withdraw(self, *, reason: str | None = None) -> None:
         """Drop the published observation.
 
         The sync could not judge the account, so ENTER refuses
@@ -312,6 +314,7 @@ class LiveEnvelopeGate:
         bounding one against a figure that only *looks* fresh.
         """
         self._observation = None
+        self.unavailable_reason = reason
 
     @property
     def observation_max_age_ms(self) -> int:

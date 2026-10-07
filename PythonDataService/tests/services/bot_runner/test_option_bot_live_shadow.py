@@ -21,7 +21,9 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.broker import AlpacaBroker
+from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.held_option_quotes import KEEP_EVERY_MS, reset_held_option_quotes_for_testing
+from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.simulated_option_orders import SimulatedOptionOrders
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
@@ -36,6 +38,8 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     execute_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext, build_recovery_catalog
+from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness
+from app.broker.alpaca.clerk.sqlite.scheduled_close import scheduled_close_state
 from app.broker.alpaca.clerk.sqlite.scheduled_end import ScheduledEnd, install_bot_end_schedule
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection, SimulationEvidenceUnavailable
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -49,10 +53,13 @@ from app.options.simulated_fill import SimulatedFillModel
 from app.schemas.bot_end import BotEnd
 from app.schemas.market_liveness import MarketLivenessFact, SymbolTradingStatusEvidence
 from app.services import market_liveness
+from app.services.bot_binding_repository import alpaca_v1_action_plan
 from app.services.market_liveness import unknown_market_liveness
+from app.services.source_bar_ledger import SourceBarLedger
+from tests._helpers.market_quotes import publish_quotes
 from tests.options import test_resolver as scenes
 
-from ._option_floor import CALL_585, ENTER_MS, EXIT_MS, FIRST_GREEN_MS, MINUTE, Step, green, red
+from ._option_floor import CALL_585, ENTER_MS, EXIT_MS, FIRST_GREEN_MS, MINUTE, Step, bar, green, red
 from ._shadow_option_floor import ShadowFloor
 
 CALL = CALL_585.occ_symbol
@@ -354,6 +361,9 @@ async def test_a_close_owed_with_nothing_bid_is_not_made_and_the_session_that_en
     assert notice is not None
     words = json.loads(notice["facts_json"])["explanation"]
     assert "This is a Live Shadow: nothing real is held." in words and "Alpaca" not in words
+    assert "Alpaca" not in json.loads(notice["facts_json"])["next_step"]
+    (state,) = scheduled_close_state(shadow.repo, shadow.sid)
+    assert "Live Shadow" in state.sentence and "Alpaca" not in state.sentence
     assert shadow.holds() == {CALL: 1.0}
 
 
@@ -482,11 +492,11 @@ async def test_a_plan_of_several_legs_is_refused_by_name_as_a_shadow_bot_is_regi
 # ---- After a restart -----------------------------------------------------------------------------------
 
 
-async def test_after_the_clerk_restarts_the_shadow_still_holds_its_contract_marks_it_and_its_exit_sells_it(
+async def test_after_the_clerk_restarts_the_shadow_still_holds_its_contract_and_marks_it(
     shadow: ShadowFloor,
 ) -> None:
     """The book, the kept quotes and the Clerk's books are files. A new process finds the contract held,
-    follows its books again, and a later run's EXIT sells it."""
+    follows its books again, and marks it from the new quote."""
     await _holding_one_call(shadow)
 
     await shadow.the_clerk_restarts()
@@ -501,16 +511,13 @@ async def test_after_the_clerk_restarts_the_shadow_still_holds_its_contract_mark
     assert shadow.held.held() == {shadow.repo.account_id: (CALL,)}
 
 
-# ---- A contract held past its expiry: what a Shadow does until expiries are settled ----------------------
+# ---- A contract held past its expiry without a closing price --------------------------------------------
 
 
 async def test_a_contract_a_shadow_still_holds_after_its_expiry_is_told_as_it_is_and_no_write_off_is_offered(
     shadow: ShadowFloor,
 ) -> None:
-    """Settling an expired contract is not built for a simulation yet. Until it is, a Shadow that still holds
-    one says so: the close it owed is recorded missed, no order is sent for it, its account's reading is
-    unavailable, and the write-off is not offered, because the Shadow's own order book still holds the
-    contract. Nothing real is held, and the words say that."""
+    """No closing price was retained: no settlement is invented, and the owner may end it."""
     await _holding_one_call(shadow)
     await shadow.stop_is_pressed()
     await shadow.hours_pass_to(scenes._at(EXPIRY_DAY, 16, 0) + MINUTE)
@@ -535,6 +542,91 @@ async def test_a_contract_a_shadow_still_holds_after_its_expiry_is_told_as_it_is
 
 
 # ---- A real account's send rules, a simulation's price -------------------------------------------------
+
+
+@pytest.mark.parametrize("close_price", ["590.25", "584.00"], ids=["cash settlement", "worthless expiry"])
+async def test_an_expired_shadow_option_settles_and_the_account_admits_a_stock_entry(
+    shadow: ShadowFloor, close_price: str,
+) -> None:
+    await _holding_one_call(shadow)
+    shadow.option_lines_tick = True
+    for day in (EXPIRY_DAY.replace(day=EXPIRY_DAY.day - 2), EXPIRY_DAY.replace(day=EXPIRY_DAY.day - 1)):
+        await shadow.hours_pass_to(scenes._at(day, 15, 58, 30))
+        await shadow.time_passes_to(scenes._at(day, 16, 0))
+    shadow.option_lines_tick = False
+    await shadow.hours_pass_to(DUE)
+    await _the_call_is_quoted(shadow, "0", "0.05")
+    await shadow.keeper.tick()
+    close_ms = scenes._at(EXPIRY_DAY, 16, 0)
+    shadow.ledger().append(bar(close_ms, open_price=close_price, close_price=close_price), run_id=shadow.binding.run_id)
+    await shadow.hours_pass_to(close_ms + 3 * MINUTE)
+    await shadow.keeper.tick()
+    await shadow.keeper.option_events_read()
+
+    assert shadow.holds() == {}
+    assert not any(
+        notice["strategy_instance_id"] == shadow.sid and notice["reason_code"] == EXIT_NOT_FLAT_REASON_CODE
+        for notice in shadow.repo.active_uncertainties()
+    )
+    if close_price == "590.25":
+        assert shadow.fills()[-1] == (CALL, "sell", 1.0, 5.25, 100, Decimal("525.00"))
+    assert await shadow.runtime.envelope_sync.tick() == "observed", shadow.clerk.live_envelope.unavailable_reason  # type: ignore[union-attr]
+    observation = shadow.clerk.live_envelope.fresh_observation(shadow.clock.value)
+    assert observation is not None
+    # $412.00 premium plus $0.06 entry fees; $0.08 sale fees accrue now and settle next day.
+    # The October TAF rate is zero, unlike the September Dry Run scene (ADR 0076 D13).
+    expected_cash = Decimal("100112.86") if close_price == "590.25" else Decimal("99587.94")
+    assert observation.equity_usd == expected_cash
+    assert observation.cash_available_usd == (
+        Decimal("100112.94") if close_price == "590.25" else expected_cash
+    )
+    stock = shadow.binding.model_copy(update={
+        "strategy_instance_id": "stock-after-expiry", "run_id": "stock-run",
+        "action_plan": alpaca_v1_action_plan("SPY"),
+    })
+    await shadow.hours_pass_to(scenes._at(EXPIRY_DAY.replace(day=EXPIRY_DAY.day + 3), 10, 0))
+    assert await shadow.runtime.envelope_sync.tick() == "observed"
+    reading = shadow.clerk.live_envelope.fresh_observation(shadow.clock.value)
+    assert reading is not None and reading.cash_available_usd == expected_cash
+    publish_quotes(shadow.clock.value, SPY=585.0)
+    await shadow.clerk.register_strategy_run(stock)
+    stock_bars = SourceBarLedger(
+        artifacts_root=shadow.root, account_id=shadow_evidence_account_id_for_strategy(stock.strategy_instance_id),
+    )
+    try:
+        retained = stock_bars.append(
+            bar(shadow.clock.value, open_price="585", close_price="585"), run_id=stock.run_id,
+        )
+    finally:
+        stock_bars.close()
+    receipt = await shadow.clerk.execute_for_instance(
+        strategy_instance_id=stock.strategy_instance_id, run_id=stock.run_id, decision_id="stock-enter",
+        purpose=EffectPurpose.ENTER, action_plan=stock.action_plan, quantity=1, retained_source_bar=retained,
+    )
+    assert receipt.state is EffectOperationState.SUBMITTED, receipt.explanation
+    assert shadow.live.trade_calls == []
+
+
+async def test_a_shadow_contract_with_no_closing_price_can_be_ended_by_its_owner(shadow: ShadowFloor) -> None:
+    await _holding_one_call(shadow)
+    await shadow.stop_is_pressed()
+    shadow.option_lines_tick = True
+    for day in (EXPIRY_DAY.replace(day=EXPIRY_DAY.day - 2), EXPIRY_DAY.replace(day=EXPIRY_DAY.day - 1)):
+        await shadow.hours_pass_to(scenes._at(day, 15, 58, 30))
+        await shadow.time_passes_to(scenes._at(day, 16, 0))
+    shadow.option_lines_tick = False
+    await shadow.hours_pass_to(scenes._at(EXPIRY_DAY, 16, 0) + 3 * MINUTE)
+    await shadow.keeper.tick()
+    await shadow.keeper.option_events_read()
+    offered = await _offered(shadow, "end_expired_option")
+    assert offered.available, offered.unavailable_reason
+
+    await shadow.clerk.end_expired_option(
+        strategy_instance_id=shadow.sid, symbol=CALL, operator="owner", reason="No closing price was retained",
+    )
+    assert shadow.holds() == {}
+    assert await shadow.runtime.envelope_sync.tick() == "observed", shadow.clerk.live_envelope.unavailable_reason  # type: ignore[union-attr]
+    assert shadow.live.trade_calls == []
 
 
 async def test_a_halt_of_the_underlying_holds_a_shadows_close_and_the_pass_sells_it_when_the_halt_lifts(
@@ -589,6 +681,12 @@ async def test_kept_quotes_that_cannot_be_read_leave_a_shadow_with_no_reading_an
         reading.observe(reference_cash=100_000, observed_at_ms=shadow.clock.value, now_ms=shadow.clock.value)
 
     assert CALL in str(unreadable.value)
+    assert await shadow.runtime.envelope_sync.tick() != "observed"
+    refused = current_risk_readiness(
+        shadow.repo, envelope=shadow.clerk.live_envelope, now_ms=shadow.clock.value,
+    )
+    assert refused.reason_code == "LIVE_ENVELOPE_UNOBSERVED"
+    assert "Live Shadow" in (refused.detail or "") and "Alpaca has not confirmed" not in (refused.detail or "")
     assert not shadow.clerk._trade.recovery_price_available(CALL, side="sell")
     assert shadow.holds() == {CALL: 1.0}
 
