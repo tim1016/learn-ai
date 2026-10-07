@@ -89,6 +89,44 @@ describe('formatTimestampDisplay', () => {
       expect(formatTimestampDisplay(undefined, { mode: 'et', granularity: 'chart' })).toBe('—');
     });
   });
+
+  describe('short-date granularity', () => {
+    // 2026-10-09 16:00 America/New_York = 2026-10-09 20:00 UTC.
+    const OCTOBER_EXPIRY_MS = Date.UTC(2026, 9, 9, 20, 0, 0);
+
+    it('says a date-anchored value as month, day and a two-digit year', () => {
+      expect(formatTimestampDisplay(OCTOBER_EXPIRY_MS, {
+        mode: 'date-et',
+        granularity: 'short-date',
+      })).toBe("Oct 9 '26");
+    });
+
+    it('keeps the year on a date in the year after this one', () => {
+      // 2027-01-15 16:00 America/New_York = 2027-01-15 21:00 UTC.
+      expect(formatTimestampDisplay(Date.UTC(2027, 0, 15, 21, 0, 0), {
+        mode: 'date-et',
+        granularity: 'short-date',
+      })).toBe("Jan 15 '27");
+    });
+
+    it('stays on the New York date where the viewer is already in the next day', () => {
+      // In Tokyo this instant is 05:00 on October 10.
+      expect(formatTimestampDisplay(OCTOBER_EXPIRY_MS, {
+        mode: 'local',
+        granularity: 'short-date',
+        localTimeZone: 'Asia/Tokyo',
+      })).toBe("Oct 10 '26");
+      expect(formatTimestampDisplay(OCTOBER_EXPIRY_MS, {
+        mode: 'date-et',
+        granularity: 'short-date',
+        localTimeZone: 'Asia/Tokyo',
+      })).toBe("Oct 9 '26");
+    });
+
+    it('returns the fallback for absent values', () => {
+      expect(formatTimestampDisplay(null, { mode: 'date-et', granularity: 'short-date' })).toBe('—');
+    });
+  });
 });
 
 describe('TimestampDisplayPipe', () => {
