@@ -1263,6 +1263,13 @@ def _sale_fee_cents(trade_date: date, *, contracts: int, price: Decimal, multipl
     from its fills where every fee is (``fee_evidence``), which settles a
     day over all of that day's option fills, so the day's charge can differ
     from this by a cent a fee type.
+
+    Formula: ``option_fee_provision_cents`` of the one fill: each fee type of a
+      sale of ``contracts`` at ``price`` a share, rounded up to the cent, summed.
+    Reference: ADR 0076 decision 13; Alpaca's fee schedule as ``option_fees.py`` cites it.
+    Canonical implementation: ``app/broker/alpaca/option_fees.py``. Nothing is worked out here.
+    Validated against: tests/broker/alpaca/clerk/test_synthetic_broker_option_settlement.py
+      (one call sold at 5.25: nine cents, by hand).
     """
     try:
         return option_fee_provision_cents([

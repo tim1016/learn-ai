@@ -62,6 +62,7 @@ from app.broker.alpaca.clerk.money import (
     dollars,
     money_context,
     normalize_money,
+    notional,
 )
 from app.broker.contract.option_events import BrokerOptionEventActivity
 from app.options.contract import OptionContract
@@ -156,7 +157,8 @@ def exercise_value(
       own rule (ADR 0076 decision 22): options trade in whole cents, and
       Alpaca's Trading API page ("Options Trading", read 2026-10-06) says a
       position an account cannot pay to exercise is sold before expiry.
-    Canonical implementation: this function.
+    Canonical implementation: this function; the cash is ``clerk/money.py::notional``'s, an option's
+      contracts x price a share x multiplier.
     Validated against: tests/broker/alpaca/clerk/test_simulated_option_settlement.py
       (hand-derived cases, exact; and the payoff of ``app/options/requirement.py``
       for one bought leg, exact).
@@ -171,9 +173,10 @@ def exercise_value(
     with money_context():
         value = price - contract.strike if contract.right == "call" else contract.strike - price
         worked_out = max(value, ZERO)
-        booked_cents = cents_spendable(worked_out)
-        booked = Decimal(booked_cents).scaleb(-2)
-        return ExerciseValue(worked_out=worked_out, booked=booked, cash_cents=booked_cents * contracts * multiplier)
+        booked = Decimal(cents_spendable(worked_out)).scaleb(-2)
+        # Whole cents: the booked price is whole cents, and the contracts and the multiplier whole numbers.
+        cash_cents = cents_spendable(notional(contracts, booked, multiplier=multiplier))
+        return ExerciseValue(worked_out=worked_out, booked=booked, cash_cents=cash_cents)
 
 
 class SettlementPrice(BaseModel):

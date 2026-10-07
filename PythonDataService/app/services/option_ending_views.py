@@ -12,7 +12,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from app.broker.alpaca.clerk.money import money_context, normalize_money
+from app.broker.alpaca.clerk.money import money_context, normalize_money, notional
 from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OptionEnding, OptionPositionEndedFacts
 from app.options.contract import OptionContract
@@ -55,9 +55,18 @@ def _before_the_close(before_close_ms: int) -> str:
 
 
 def _close_cash_cents(facts: OptionPositionEndedFacts, close_price: Decimal) -> int | None:
-    """What the close came to for the bot's contracts, signed as its cash moved. None when not whole cents."""
+    """What the close came to for the bot's contracts, signed as its cash moved. None when not whole cents.
+
+    Formula: contracts x close price a share x the contract's multiplier, in
+      cents: received for a bought lot that was sold, paid for a sold lot
+      bought back.
+    Reference: ADR 0076 decision 13 (an option's notional).
+    Canonical implementation: ``app/broker/alpaca/clerk/money.py::notional``. Nothing is worked out here but the sign.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_option_event_screens.py
+      (a sale at 0.40: $40.00 in, and $40.00 out for a buy-back; a settlement at 5.25: $525.00).
+    """
     with money_context():
-        cents = normalize_money(close_price) * 100 * facts.contracts * facts.multiplier
+        cents = notional(facts.contracts, close_price, multiplier=facts.multiplier) * 100
         if cents != cents.to_integral_value():
             return None
         return int(cents) if facts.held == "bought" else -int(cents)
