@@ -51,6 +51,9 @@ From Non-Trade Activities for Option Events:
 | `OPEXP`, an expiry | the same eight | `symbol` is the OCC symbol. `qty` is negative: every example is a bought option expiring. `net_amount` is "0" |
 | `OPTRD`, the share trade | the same eight and `price` | `symbol` is the **underlying's**. `qty` is in shares, positive when bought and negative when sold. `price` is a share's. `net_amount` is the cash, negative when paid |
 
+No row carries a `side`, a time of day, or the id of an order. Which way a
+row goes is the sign of its `qty`. A row's `date` is a date alone.
+
 - "The exercise event (OPEXC) is applicable to 2 contracts, and the
   corresponding trade (OPTRD) represents 200 of the underlying shares being
   purchased at a per-share amount of $150 (strike price)."
