@@ -629,6 +629,23 @@ async def test_a_write_off_of_one_contract_does_not_explain_an_expiry_of_two(tmp
         repo.close()
 
 
+async def test_a_write_off_of_another_contract_does_not_explain_an_expiry_of_this_one(tmp_path: Path) -> None:
+    """The bot bought this call and sold it. It wrote off a different one. A row for this one is nobody's."""
+    repo = _one_bot(tmp_path)
+    holds_option(repo, "bot-a", CALL, contracts=-1)
+    holds_option(repo, "bot-a", OTHER_CALL, contracts=1)
+    holds_option(repo, "bot-b", "AAPL230915C00150000", contracts=1)
+    _the_owner_writes_off(repo, "bot-a", OTHER_CALL, 1.0)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry())
+
+        assert bookings(repo) == []
+        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+    finally:
+        repo.close()
+
+
 async def test_a_write_off_of_a_bought_contract_does_not_explain_an_assignment_of_it(tmp_path: Path) -> None:
     """An assignment ends a sold position. The bot wrote off a bought one, so the row is still nobody's."""
     repo = _one_bot(tmp_path)
