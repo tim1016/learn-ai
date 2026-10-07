@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
@@ -1839,6 +1839,29 @@ def attributed_positions_by_subject(conn: sqlite3.Connection) -> dict[tuple[str,
     """
     rows = conn.execute("SELECT subject_id, symbol, attributed_qty FROM positions").fetchall()
     return {(row["subject_id"], row["symbol"]): row["attributed_qty"] for row in rows}
+
+
+def option_contracts_held_by_others(
+    conn: sqlite3.Connection, *, strategy_instance_id: str, symbols: Sequence[str]
+) -> list[tuple[str, str | None, float]]:
+    """What the account holds, outside one bot, in the option contracts ``symbols``: (symbol, holder, signed quantity).
+
+    Every holding that is not zero of every other custody subject: another
+    bot's, or the owner's own orders (the holder is then ``None``). What an
+    option entry is held against before it is taken, so no leg opens a
+    position that would cancel another's at the broker (ADR 0076). One read,
+    by the contracts asked about.
+    """
+    if not symbols:
+        return []
+    rows = conn.execute(
+        "SELECT UPPER(symbol) AS symbol, strategy_instance_id, attributed_qty FROM positions "
+        f"WHERE UPPER(symbol) IN ({', '.join('?' for _ in symbols)}) AND attributed_qty != 0 "
+        "AND (strategy_instance_id IS NULL OR strategy_instance_id != ?) "
+        "ORDER BY symbol, subject_id",
+        (*(symbol.upper() for symbol in symbols), strategy_instance_id),
+    ).fetchall()
+    return [(row["symbol"], row["strategy_instance_id"], row["attributed_qty"]) for row in rows]
 
 
 def attributed_positions_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> dict[str, float]:

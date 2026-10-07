@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -174,14 +174,16 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.option_admission import (
     ENTRY_CLOSE_TERMS,
+    HeldByAnother,
     OptionEntryRefused,
     entry_past_cutoff,
     entry_quote_refusal,
+    held_on_the_other_side,
     work_out_option_entry,
 )
 from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill, option_fills_of_decision
 from app.broker.alpaca.clerk.sqlite.option_entry import (
-    OptionEntryFacts,
+    OptionEntry,
     option_entry_contracts,
     option_entry_of_order,
 )
@@ -419,19 +421,36 @@ class _PricingBarBoundTradePort:
 
 
 class _OptionQuoteBoundTradePort:
-    """Bind a simulated option entry to the one quote its limit price was worked out from (ADR 0076).
+    """Bind a simulated option entry to the quotes its limit price was worked out from (ADR 0076).
 
-    The option twin of ``_PricingBarBoundTradePort``: the quote is bound to
-    the order's own id just before the order is sent, so the simulation fills
-    from the quote the entry was admitted on and from no other. The
-    contract's terms go with it, as the books record them: the simulation
-    holds no listing, and counts the position's dollars by their multiplier.
+    The option twin of ``_PricingBarBoundTradePort``: each leg's quote is
+    bound to the order's own id just before the order is sent, so the
+    simulation fills every leg from the quote the entry was admitted on and
+    from no other. Each contract's terms go with its quote, as the books
+    record them: the simulation holds no listing, and counts the position's
+    dollars by their multiplier. One leg is one binding; an order of several
+    legs binds one for each, under the one order id.
     """
 
-    def __init__(self, inner: GuardedBrokerTradePort, *, terms: ContractTerms, quote: HeldQuote) -> None:
+    def __init__(
+        self,
+        inner: GuardedBrokerTradePort,
+        *,
+        terms: ContractTerms,
+        quote: HeldQuote,
+        other_legs: Sequence[tuple[ContractTerms, HeldQuote]] = (),
+    ) -> None:
         self._inner = inner
-        self._terms = terms
-        self._quote = quote
+        # The first leg, and for an order of several legs each leg after it, in the order's leg order.
+        self._priced_from = ((terms, quote), *other_legs)
+
+    @classmethod
+    def of_entry(cls, inner: GuardedBrokerTradePort, entry: OptionEntry) -> _OptionQuoteBoundTradePort:
+        """The port that binds every leg of ``entry`` to the quote that leg was priced from."""
+        (first, *others) = (
+            (terms, leg.quote.held) for terms, leg in zip(entry.leg_terms, entry.legs, strict=True)
+        )
+        return cls(inner, terms=first[0], quote=first[1], other_legs=others)
 
     @property
     def broker_id(self) -> str:
@@ -455,9 +474,10 @@ class _OptionQuoteBoundTradePort:
         return await self._inner.get_order_by_broker_order_id(order_id)
 
     async def submit_option_order(self, order: OptionOrderRequest, *, client_order_id: str) -> BrokerOptionOrder:
-        self._inner.bind_option_entry_quote(
-            client_order_id, symbol=self._terms.symbol, quote=self._quote, multiplier=self._terms.multiplier
-        )
+        for terms, quote in self._priced_from:
+            self._inner.bind_option_entry_quote(
+                client_order_id, symbol=terms.symbol, quote=quote, multiplier=terms.multiplier
+            )
         return await self._inner.submit_option_order(order, client_order_id=client_order_id)
 
     async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
@@ -1823,7 +1843,7 @@ class SqliteAlpacaClerkFacade:
             raise ValueError(f"an option effect is for a whole number of structures, 1 to 100; got {quantity!r}")
         accepted_enter: EnterSubmission | None = None
         accepted_exit: ExitSubmission | None = None
-        entry: OptionEntryFacts | None = None
+        entry: OptionEntry | None = None
         durable_decision_id = _durable_decision_id(decision_id)
         not_listed = (
             None
@@ -1900,6 +1920,32 @@ class SqliteAlpacaClerkFacade:
                         next_step=_ENTRY_NOT_RETRIED,
                     )
                 entry = worked_out
+                against_another = held_on_the_other_side(
+                    entry,
+                    [
+                        HeldByAnother(symbol, holder, held)
+                        for symbol, holder, held in self._repo.option_contracts_held_by_others(
+                            strategy_instance_id=strategy_instance_id,
+                            symbols=[terms.symbol for terms in entry.leg_terms],
+                        )
+                    ],
+                )
+                if against_another is not None:
+                    logger.info(
+                        "an option entry was refused: the account holds one of its contracts on the other side",
+                        extra={
+                            "action": "option_entry_refused",
+                            "account_id": self._repo.account_id,
+                            "strategy_instance_id": strategy_instance_id,
+                            "decision_id": decision_id,
+                            "reason_code": against_another.reason_code,
+                        },
+                    )
+                    return rejected(
+                        reason_code=against_another.reason_code,
+                        explanation=against_another.explanation,
+                        next_step=_ENTRY_NOT_RETRIED,
+                    )
                 underlying = option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
                 if stream_health_refusal(self._stream_health, symbol=underlying) is not None:
                     return rejected(
@@ -2035,7 +2081,7 @@ class SqliteAlpacaClerkFacade:
 
         if accepted_enter is not None:
             assert entry is not None
-            priced_from, quote_generation = entry.the_leg, entry.quote_generation
+            priced_from, quote_generation = entry.legs, entry.quote_generation
             clock = self._repo.clock
             opened = entry.structure
             # The entry's own terms. One accepted before entries kept theirs is held to the defaults.
@@ -2052,13 +2098,14 @@ class SqliteAlpacaClerkFacade:
                     return EntrySubmissionRefusal(summary_code=too_late.reason_code, why=too_late.explanation)
                 # The quote was tested as the entry was worked out. The order goes out later: a
                 # simulation fills it from that quote, and a real account's limit rests at the price
-                # that quote gave. So it is tested again by the same rule, at this clock.
-                unusable = entry_quote_refusal(
-                    priced_from.contract, priced_from.quote.held, position=priced_from.position,
-                    generation=quote_generation, now_ms=now_ms, at_the_send=True,
-                )
-                if unusable is not None:
-                    return EntrySubmissionRefusal(summary_code=unusable.reason_code, why=unusable.explanation)
+                # that quote gave. So it is tested again by the same rule, at this clock: every leg's.
+                for leg in priced_from:
+                    unusable = entry_quote_refusal(
+                        leg.contract, leg.quote.held, position=leg.position,
+                        generation=quote_generation, now_ms=now_ms, at_the_send=True,
+                    )
+                    if unusable is not None:
+                        return EntrySubmissionRefusal(summary_code=unusable.reason_code, why=unusable.explanation)
                 return None
 
             if accepted_enter.created and self._entry_deadline_nudge is not None:
@@ -2071,9 +2118,7 @@ class SqliteAlpacaClerkFacade:
                 # A simulation fills from the quote the entry was admitted on. A real
                 # account's order rests at the broker, which needs no quote of ours.
                 trade=(
-                    _OptionQuoteBoundTradePort(
-                        self._trade, terms=entry.contract_terms, quote=entry.the_leg.quote.held
-                    )
+                    _OptionQuoteBoundTradePort.of_entry(self._trade, entry)
                     if self._sends_to_a_simulation
                     else self._trade
                 ),
@@ -3370,17 +3415,20 @@ def _strategy_display_name(strategy_key: str) -> str:
     )
 
 
-def _asks_for_another_entry(first: OptionEntryFacts, *, units: int, evidence: OptionEntryEvidence | None) -> bool:
+def _asks_for_another_entry(first: OptionEntry, *, units: int, evidence: OptionEntryEvidence | None) -> bool:
     """Whether an option ENTER sent again under one decision asks for something the first did not.
 
-    Another number of structures, or another contract for the leg the first
-    entry opened. The quotes and so the price are expected to differ: a
-    retry reads them again. A retry that names no contract asks for none.
+    Another number of structures, or another contract for a leg the first
+    entry opened: every leg is compared with its own. The quotes and so the
+    price are expected to differ: a retry reads them again. A retry that
+    names no contract for a leg asks for none.
     """
     if units != first.units:
         return True
-    picked = None if evidence is None else evidence.picked.get(first.the_leg.leg_id)
-    return picked is not None and picked != first.the_leg.contract
+    picked = {} if evidence is None else evidence.picked
+    return any(
+        (again := picked.get(leg.leg_id)) is not None and again != leg.contract for leg in first.legs
+    )
 
 
 def _effect_receipt(

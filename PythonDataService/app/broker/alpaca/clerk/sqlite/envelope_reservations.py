@@ -59,9 +59,19 @@ recorded provision (#2553). Its fills still price as above, but while it has
 an unfilled remainder its fee is unknown: reading that claim refuses with
 ``EntryFeeProvisionUnrecorded`` rather than pricing the fee at zero.
 
-An option ENTER writes its row with contracts and its limit price, a premium
-per share (ADR 0076). A sold leg's requirement is not held here yet; only a
-bought option, whose requirement is zero, is reserved whole.
+An option ENTER of one contract writes its row with contracts and its limit
+price, a premium per share (ADR 0076), and its claim is counted with the
+contract's multiplier.
+
+An option ENTER of several legs writes its row for its one order, the
+parent: whole structures, and in the price's place **the dollars one
+structure sets aside before fees**, requirement plus premium at the limit.
+That figure is not a price a share and nothing multiplies it by a contract's
+multiplier. It is above zero for a structure that receives its premium too.
+The parent has no fill of its own, so its claim is worked out from its legs'
+fills, in whole structures (``_structure_claim``). What is claimed for a
+structure once it has filled, its requirement while it is held, is not this
+row's to say: a reservation is for what has not filled yet.
 """
 
 from __future__ import annotations
@@ -75,6 +85,7 @@ from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED
 from app.broker.alpaca.clerk.money import ZERO, contract_multiplier, money_context, normalize_money, notional
 from app.broker.alpaca.clerk.sqlite.contract_terms import ORDER_CONTRACT_JOINS_SQL, ORDER_CONTRACT_MULTIPLIER_SQL
 from app.broker.alpaca.clerk.sqlite.order_projection import ORDER_ENDED_SQL
+from app.options.whole_units import LegContracts, whole_units
 
 
 class EntryFeeProvisionUnrecorded(BudgetUnavailable):
@@ -143,7 +154,9 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     its unseen recorded fills at their actual cost plus its unrecorded
     remainder at the reservation's reference price and the whole
     recorded fee provision. An order bound to an option contract has both
-    taken by the contract's multiplier. Nothing is pruned on
+    taken by the contract's multiplier. An entry of several legs is claimed
+    in whole structures, from its legs' fills (:func:`_structure_claim`).
+    Nothing is pruned on
     ``orders.updated_at_ms``: ``EXECUTION_SLICE_FILLED`` writes a fill
     without touching ``orders``, and the websocket's acknowledgement is
     skipped when the snapshot has not moved, so a dead order's
@@ -195,10 +208,15 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     by_order: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
         by_order.setdefault(row["order_ref"], []).append(row)
+    # The parents of option orders of several legs (ADR 0076). None on books that never took one.
+    parents = {row[0] for row in conn.execute("SELECT DISTINCT parent_order_ref FROM option_order_legs")}
     claims: list[EntryCashClaim] = []
     with money_context():
         for order_ref, fills in by_order.items():
             first = fills[0]
+            if order_ref in parents:
+                claims.append(_structure_claim(conn, first, seen_before_ms=seen_before_ms))
+                continue
             multiplier = first["contract_multiplier"]
             filled = unseen_cost = ZERO
             for fill in fills:
@@ -226,6 +244,93 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 unfilled_cost=unfilled_cost, unseen_fill_cost=unseen_cost, _fee=fee,
             ))
     return tuple(claims)
+
+
+def _structure_claim(conn: sqlite3.Connection, reserved: sqlite3.Row, *, seen_before_ms: int) -> EntryCashClaim:
+    """The cash claim of one entry of several legs, from its reservation row and its legs' fills (ADR 0076).
+
+    ``reserved`` is the entry's row as :func:`entry_cash_claims` read it:
+    whole structures, what one sets aside before fees, the fee provision,
+    and whether the parent has ended. The parent holds no fill. Its legs do,
+    each on a row of its own, so the claim is worked out in whole
+    structures.
+
+    Formula: with uᵢ = the contracts leg i has filled, counted in the leg's
+      own direction, and rᵢ its ratio,
+        units filled = max(0, minᵢ ⌊uᵢ / rᵢ⌋)        (``app.options.whole_units``)
+        unfilled     = max(0, units asked − units filled) × set aside a unit,
+                       and zero once the parent has ended
+        fee          = the whole provision while any unit is unfilled, else zero
+        unseen       = Σ (qty × price × m + reported fee) over the legs' effective
+                       BUY fills recorded at or after ``seen_before_ms``.
+      "Set aside a unit" is dollars, requirement plus premium at the limit,
+      and takes no multiplier. m is each leg's own contract's.
+    Reference: ADR 0076 decisions 2 and 10; ADR 0059 D4 and #2442 for the
+      seen-before boundary.
+    Canonical implementation: this function; ``app/options/whole_units.py``
+      owns the units, ``clerk.money.notional`` a fill's product.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_several_legs_admission.py,
+      each figure by hand.
+
+    A sold leg's fill is a sale: cash in. It is not claimed here below zero.
+    It reaches the account's money where every sale the cash reading has not
+    seen does (``budget_projection.project_account_money``, the unseen
+    sales), so it is counted once. Until the reading sees it, the cash it
+    brought is simply not yet spendable, which errs the safe way.
+
+    Caller holds the money context.
+    """
+    rows = conn.execute(
+        f"{_effective_fill_lineage_cte()} "
+        "SELECT leg.leg_id, leg.side AS leg_side, leg.ratio, contract.multiplier, f.fill_id, f.qty, f.price, f.fee, "
+        "f.side AS fill_side, COALESCE(r2.root_recorded_at_ms, f.recorded_at_ms) AS execution_recorded_at_ms "
+        "FROM option_order_legs leg JOIN option_contracts contract ON contract.symbol = leg.symbol "
+        "LEFT JOIN fills f ON f.order_ref = leg.order_ref "
+        "  AND NOT EXISTS (SELECT 1 FROM fills s WHERE s.superseded_execution_ref = f.execution_id) "
+        "LEFT JOIN roots r2 ON r2.effective_fill_id = f.fill_id "
+        "WHERE leg.parent_order_ref = ? ORDER BY leg.leg_number, f.fill_id",
+        (reserved["order_ref"],),
+    ).fetchall()
+    filled: dict[str, Decimal] = {}
+    ratios: dict[str, int] = {}
+    unseen_cost = ZERO
+    for row in rows:
+        ratios[row["leg_id"]] = row["ratio"]
+        filled.setdefault(row["leg_id"], ZERO)
+        if row["fill_id"] is None:
+            continue
+        qty = normalize_money(row["qty"])
+        opens = row["fill_side"].lower() == row["leg_side"]
+        filled[row["leg_id"]] += qty if opens else -qty
+        if row["fill_side"].upper() == "BUY" and row["execution_recorded_at_ms"] >= seen_before_ms:
+            fee = ZERO if row["fee"] is None else normalize_money(row["fee"])
+            unseen_cost += notional(qty, row["price"], multiplier=row["multiplier"]) + fee
+    legs = []
+    for leg_id, contracts in filled.items():
+        if contracts != contracts.to_integral_value():
+            raise BudgetUnavailable(
+                f"Leg {leg_id!r} of entry {reserved['order_ref']} has filled {contracts} contracts. An option fills "
+                "in whole contracts, so what this entry still claims cannot be worked out."
+            )
+        legs.append(LegContracts(leg_id=leg_id, ratio=ratios[leg_id], contracts=int(contracts)))
+    units_asked = normalize_money(reserved["quantity"])
+    remaining_units = ZERO if reserved["ended"] else max(ZERO, units_asked - whole_units(legs).units)
+    fee_claim: Decimal | None = ZERO
+    if remaining_units > ZERO:
+        fee_claim = Decimal(reserved["fee_provision_cents"]) / 100 if reserved["provision_recorded"] else None
+    return EntryCashClaim(
+        strategy_instance_id=reserved["strategy_instance_id"], order_ref=reserved["order_ref"],
+        # Dollars a structure, as the row keeps them: no contract's multiplier is taken.
+        unfilled_cost=remaining_units * normalize_money(reserved["reference_price"]),
+        unseen_fill_cost=unseen_cost, _fee=fee_claim,
+    )
+
+
+def _effective_fill_lineage_cte() -> str:
+    # Imported here for the reason :func:`entry_cash_claims` gives: ``repository`` imports this module.
+    from app.broker.alpaca.clerk.sqlite.economic_projection import EFFECTIVE_FILL_LINEAGE_CTE
+
+    return EFFECTIVE_FILL_LINEAGE_CTE
 
 
 __all__ = [

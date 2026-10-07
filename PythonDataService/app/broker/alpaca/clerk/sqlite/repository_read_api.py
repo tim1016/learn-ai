@@ -694,6 +694,15 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.fills_for_order(self._conn, order_ref)
 
+    def option_contracts_held_by_others(
+        self: ClerkSqliteRepository, *, strategy_instance_id: str, symbols: Sequence[str]
+    ) -> list[tuple[str, str | None, float]]:
+        """What the account holds, outside one bot, in the option contracts ``symbols`` (ADR 0076)."""
+        with self._write_lock:
+            return reads.option_contracts_held_by_others(
+                self._conn, strategy_instance_id=strategy_instance_id, symbols=symbols
+            )
+
     def order_legs(self: ClerkSqliteRepository, parent_order_ref: str) -> tuple[option_order_legs.OrderLeg, ...]:
         """The legs of an option order of several legs, in leg order; empty for every other order (ADR 0076)."""
         with self._write_lock:
