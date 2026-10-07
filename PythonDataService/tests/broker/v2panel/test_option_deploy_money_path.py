@@ -34,10 +34,17 @@ from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_author
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.options import BrokerOptionAccountSnapshot
 from app.config import settings
+from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import DeploymentBudgetPreview
+from app.schemas.option_deploy import TradesOptions
+from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.services import market_liveness
+from app.services import option_structure_preview as preview_service
 from app.services.broker_v2_panel import bot_custody, budget_deploy, option_deploy
+from app.services.option_structure_preview import FIGURES_GOOD_FOR_MS, plan_of
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS
 from tests.broker.v2panel.fixtures import ACCT
@@ -46,12 +53,15 @@ from tests.broker.v2panel.test_deploy_option_structure import (
     _ACCEPTANCE,
     _ONE_CALL,
     _SPREAD,
+    _TERMS,
+    CALL_585,
     _Floor,
     floor,  # noqa: F401 -- pytest fixture, used by name
 )
-from tests.broker.v2panel.test_deploy_traded_symbol import _serve
+from tests.broker.v2panel.test_deploy_traded_symbol import _UNTOUCHED, _serve
 from tests.broker.v2panel.test_panel_deploy_live import _live_view
 from tests.broker.v2panel.test_panel_deploy_shadow import _shadow_view
+from tests.services.test_option_structure_preview import _AT_THE_MONEY, Desk, _asking, _from, _leg
 
 _BOTS = f"/api/brokers/alpaca/accounts/{ACCT}/bots"
 _NO_QUOTE_SOURCE = "OPTION_PREVIEW_NO_QUOTE_SOURCE"
@@ -317,3 +327,332 @@ async def test_the_money_review_of_a_bot_in_shares_carries_no_option_review_at_a
     assert "option_review" not in in_shares
     assert "option_review" not in DeploymentBudgetPreview(state="ready", detail="Ready", world="synthetic").model_dump()
     assert settings.ALPACA_LIVE_OPTION_BOTS_ENABLED is False
+
+
+# ── the real price, through the real budget review, the token and the click ──
+
+
+async def test_a_dry_run_is_reviewed_at_the_previews_price_and_the_click_commits_exactly_that(
+    deploy_app, floor: _Floor, books  # noqa: F811
+) -> None:
+    """Two calls offered at $4.12: one entry sets aside $824.09. A budget a cent under is refused in an entry's
+    words, a budget of exactly that is given a token, and the click hands the start a consent for it."""
+    app, registry = deploy_app
+    body = {"execution_mode": "dry_run", "trades": _ONE_CALL}
+
+    arriving = await _review(app, **body)
+    await floor.lines_are_quoted()
+    priced = await _review(app, **body)
+    under = await _review(app, **body, budget={"amount_usd": "824.08", "risk_revision": 0})
+    exact = await _review(app, **body, budget={"amount_usd": "824.09", "risk_revision": 0})
+    admitted = await _post(
+        app, "/admission", **body, budget={"amount_usd": "824.09", "risk_revision": 0, "review_token": exact["review_token"]}
+    )
+    # The stand-in registry commits no budget, so the click's own answer is not what is looked at here: what
+    # it handed the start is.
+    await _post(app, "", **body, budget={"amount_usd": "824.09", "risk_revision": 0, "review_token": exact["review_token"]})
+
+    assert (arriving["state"], arriving["option_review"]["ask_again_in_ms"]) == ("awaiting_price", 1_000)
+    assert (priced["state"], priced["minimum_budget_usd"], priced["estimated_price_usd"]) == ("ready", "824.09", None)
+    assert under["state"] == "unavailable" and under["review_token"] is None
+    assert under["detail"].startswith("One entry sets aside $824.09 right now")
+    assert exact["state"] == "ready" and exact["review_token"] and exact["budget_usd"] == "824.09"
+    assert admitted.status_code == 200, admitted.text
+    [call] = registry.deploy_calls
+    assert call["budget_consent"].committed_cents == 82_409
+    assert call["option_order_terms"] == SealedOptionOrderTerms.model_validate(_TERMS)
+    assert call["action_plan"] == plan_of(TradesOptions.model_validate(_ONE_CALL))
+
+
+async def test_a_token_is_no_consent_once_the_price_has_moved_past_the_budget_or_the_size_has_changed(
+    deploy_app, floor: _Floor, books  # noqa: F811
+) -> None:
+    app, registry = deploy_app
+    body = {"execution_mode": "dry_run", "trades": _ONE_CALL}
+    await _quotes_up(app, floor, **body)
+    reviewed = await _review(app, **body, budget={"amount_usd": "824.09", "risk_revision": 0})
+    consent = {"amount_usd": "824.09", "risk_revision": 0, "review_token": reviewed["review_token"]}
+
+    three = _refused(await _post(
+        app, "", **{**body, "sizing": {"preset": "custom", "quantity": 3}}, budget={**consent, "amount_usd": "5000.00"}
+    ))
+    floor.desk.quote("call", 585, "4.60", "4.70")
+    floor.desk.spy()
+    floor.desk.ibkr.now += 400
+    moved = _refused(await _post(app, "", **body, budget=consent, submission_key="submission-0002"))
+
+    assert "Review this exact budget and configuration" in json.dumps(three)
+    assert "One entry sets aside $940.09 right now" in json.dumps(moved)
+    assert registry.deploy_calls == []
+
+
+async def test_on_paper_what_alpaca_says_at_the_click_stops_a_deploy_that_was_reviewed_clean(
+    deploy_app, floor: _Floor, books  # noqa: F811
+) -> None:
+    """Between the review and the click: buying power falls, the listing goes, the listing cannot be read,
+    the level is no longer reported. Each stops the Deploy by its own name. As reviewed, it is taken."""
+    app, registry = deploy_app
+    body = {"execution_mode": "paper", "trades": _ONE_CALL}
+    await _quotes_up(app, floor, **body)
+    reviewed = await _review(app, **body, budget={"amount_usd": "1000.00", "risk_revision": 1})
+    assert reviewed["state"] == "ready", reviewed["detail"]
+    click = {
+        **body, "traded_asset_acknowledgement": _ACCEPTANCE,
+        "budget": {"amount_usd": "1000.00", "risk_revision": 1, "review_token": reviewed["review_token"]},
+    }
+
+    async def stopped_by(key: str, **alpaca: Any) -> str:
+        was = {name: getattr(floor.alpaca, name) for name in alpaca}
+        for name, value in alpaca.items():
+            setattr(floor.alpaca, name, value)
+        refusal = _refused(await _post(app, "", **click, submission_key=key))
+        for name, value in was.items():
+            setattr(floor.alpaca, name, value)
+        assert refusal["submission_settled"] is True
+        return refusal["reason_code"]
+
+    unreachable = BrokerUnavailable("Alpaca is unreachable.", broker="alpaca", detail="connection refused")
+    assert await stopped_by("submission-0002", buying_power=Decimal("100")) == option_deploy.BUYING_POWER_SHORT
+    assert await stopped_by("submission-0003", listed={}) == "OPTION_CONTRACT_NOT_LISTED"
+    assert await stopped_by("submission-0004", listing_error=unreachable) == option_deploy.CONTRACT_NOT_READ
+    assert await stopped_by("submission-0005", level=None) == option_deploy.APPROVAL_UNKNOWN
+    assert await stopped_by("submission-0006", level=1, approved_level=3) == option_deploy.APPROVAL_TOO_LOW
+    assert registry.deploy_calls == [] and CALL_585.occ_symbol in floor.alpaca.listed
+
+    await _post(app, "", **click, submission_key="submission-0007")
+
+    [call] = registry.deploy_calls
+    assert call["budget_consent"].committed_cents == 100_000 and call["mode"] == "trade"
+
+
+async def test_option_buying_power_is_held_to_everything_one_entry_sets_aside_to_the_cent(
+    deploy_app, floor: _Floor, books  # noqa: F811
+) -> None:
+    """$824.00 of premium and 9 cents of fees. $824.08 of buying power is short; $824.09 is enough."""
+    app, _registry = deploy_app
+    body = {"execution_mode": "paper", "trades": _ONE_CALL}
+    await _quotes_up(app, floor, **body)
+
+    floor.alpaca.buying_power = Decimal("824.08")
+    short = await _review(app, **body)
+    floor.alpaca.buying_power = Decimal("824.09")
+    enough = await _review(app, **body)
+
+    [blocker] = short["option_review"]["blockers"]
+    assert blocker["gate_id"] == option_deploy.BUYING_POWER_SHORT
+    assert "$824.08 of options buying power" in blocker["headline"] and "sets aside $824.09" in blocker["headline"]
+    assert enough["option_review"]["blockers"] == [] and enough["state"] == "ready"
+
+
+async def test_a_red_verdict_is_listed_and_stops_the_click_and_offers_no_fix_that_would_not_help(
+    deploy_app, floor: _Floor, books, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """No fee rate is pinned for the day, so what an entry sets aside is not known. Changing the structure's
+    rules would not help, and the review does not say it would."""
+    app, registry = deploy_app
+    body = {"execution_mode": "dry_run", "trades": _ONE_CALL}
+    await _quotes_up(app, floor, **body)
+    monkeypatch.setattr(preview_service, "_fee_provision", lambda *_args, **_kwargs: None)
+
+    review = await _review(app, **body, budget={"amount_usd": "2000.00", "risk_revision": 0})
+    refusal = _refused(await _post(app, "", **body))
+
+    [blocker] = review["option_review"]["blockers"]
+    assert blocker["gate_id"] == refusal["reason_code"] == "OPTION_FEE_RATE_NOT_PINNED"
+    assert blocker["fix"] is None and review["option_review"]["money_rows"] == []
+    assert review["state"] == "unavailable" and review["review_token"] is None
+    assert registry.deploy_calls == []
+
+
+async def test_each_money_row_writes_out_in_dollars_exactly_the_cents_beside_it(
+    deploy_app, floor: _Floor, books  # noqa: F811
+) -> None:
+    app, _registry = deploy_app
+    body = {"execution_mode": "dry_run", "trades": _ONE_CALL}
+    await _quotes_up(app, floor, **body)
+
+    review = (await _review(app, **body, budget={"amount_usd": "1000.00", "risk_revision": 0}))["option_review"]
+
+    assert [(row["key"], row["amount_cents"], row["amount_usd"]) for row in review["money_rows"]] == [
+        ("set_aside", 82_409, "$824.09"),
+        ("premium", 82_400, "$824.00"),
+        ("broker_requirement", 0, "$0.00"),
+        ("fees", 9, "$0.09"),
+        ("loss_at_expiry", 82_400, "$824.00"),
+        ("budget_free", 17_591, "$175.91"),
+    ]
+    assert review["figures_good_until_ms"] == review["quotes_read_ms"] + FIGURES_GOOD_FOR_MS
+
+
+async def test_an_entry_that_would_be_skipped_right_now_is_said_beside_a_review_that_can_still_be_consented_to(
+    deploy_app, floor: _Floor, books  # noqa: F811
+) -> None:
+    """A call quoted $3.00 by $5.00 under an 8% gap limit. The bot picks again at every entry, so nothing stops
+    the Deploy, and the owner is told an entry made now would be skipped."""
+    app, _registry = deploy_app
+    body = {"execution_mode": "dry_run", "trades": _ONE_CALL}
+    await _quotes_up(app, floor, **body)
+    floor.desk.quote("call", 585, "3.00", "5.00")
+    floor.desk.ibkr.now += 400
+
+    review = await _review(app, **body, budget={"amount_usd": "2000.00", "risk_revision": 0})
+
+    [note] = [said for said in review["option_review"]["notes"] if said["code"] == option_deploy.ENTRY_WOULD_BE_SKIPPED]
+    assert "skipped right now" in note["headline"] and "8% limit" in note["detail"]
+    assert review["state"] == "ready" and review["review_token"] and review["option_review"]["blockers"] == []
+
+
+# ── the wait: none at a review, a deadline at the click ─────────────────
+
+
+async def test_a_review_waits_for_nothing_and_a_click_waits_until_its_deadline_and_no_longer(
+    deploy_app, floor: _Floor, books, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The click's patience is six seconds on a clock, and each ask of the preview takes its own time out of
+    it. Here every ask takes two seconds and says to ask again in one: three asks fit, not seven."""
+    app, registry = deploy_app
+    monkeypatch.setattr(option_deploy, "PRICE_PATIENCE_MS", 6_000)
+    now, slept, asks = [100.0], [], []
+    ask = option_deploy.option_structure_panel.option_structure_preview
+
+    async def an_ask_that_takes_two_seconds(broker: str, account_id: str, asked: Any) -> Any:
+        asks.append(now[0])
+        now[0] += 2.0
+        return await ask(broker, account_id, asked)
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(option_deploy.option_structure_panel, "option_structure_preview", an_ask_that_takes_two_seconds)
+    monkeypatch.setattr(option_deploy, "asyncio", SimpleNamespace(sleep=sleep))
+    monkeypatch.setattr(option_deploy, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    review = await _review(app, execution_mode="dry_run", trades=_ONE_CALL)
+    assert review["state"] == "awaiting_price" and slept == [] and len(asks) == 1
+
+    refusal = _refused(await _post(app, "", execution_mode="dry_run", trades=_ONE_CALL))
+
+    assert refusal["reason_code"] == option_deploy.NOT_PRICED and registry.deploy_calls == []
+    assert slept == [1.0, 1.0] and len(asks) == 4, "one ask for the review, three for the click"
+    assert now[0] - asks[1] == 8.0, "the last ask began inside the six seconds and was heard out"
+
+
+# ── what Alpaca's answer about the account is taken to mean ─────────────
+
+
+def _account(approved: int | None, in_force: int | None, power: str | None = "1000") -> BrokerOptionAccountSnapshot:
+    return BrokerOptionAccountSnapshot(
+        broker="alpaca", account_id=ACCT, account_mode="paper",
+        options_buying_power=None if power is None else Decimal(power),
+        options_approved_level=approved, options_trading_level=in_force, observed_at_ms=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("approved", "in_force", "stopped_as"),
+    [
+        (3, 1, option_deploy.APPROVAL_TOO_LOW),
+        (3, 0, option_deploy.APPROVAL_TOO_LOW),
+        (1, None, option_deploy.APPROVAL_TOO_LOW),
+        (None, None, option_deploy.APPROVAL_UNKNOWN),
+        (3, 2, None),
+        (2, None, None),
+        (None, 2, None),
+    ],
+)
+def test_the_option_level_in_force_decides_and_the_approved_level_only_when_none_is_in_force(
+    approved: int | None, in_force: int | None, stopped_as: str | None
+) -> None:
+    plan = plan_of(TradesOptions.model_validate(_ONE_CALL))
+
+    blocker = option_deploy.approval_blocker(plan, _account(approved, in_force))
+
+    assert (None if blocker is None else blocker.gate_id) == stopped_as
+
+
+def test_an_account_the_owner_set_to_a_lower_level_than_alpaca_approved_is_not_told_to_ask_alpaca_for_approval() -> None:
+    plan = plan_of(TradesOptions.model_validate(_ONE_CALL))
+
+    set_lower = option_deploy.approval_blocker(plan, _account(3, 1))
+    not_approved = option_deploy.approval_blocker(plan, _account(1, 1))
+
+    assert set_lower is not None and not_approved is not None
+    assert "set to 1" in set_lower.headline and "approved for" in set_lower.headline
+    assert "Ask Alpaca" not in (set_lower.fix or "") and "Raise" in (set_lower.fix or "")
+    assert "Ask Alpaca" in (not_approved.fix or "")
+
+
+def test_a_negative_buying_power_is_written_with_its_sign_before_the_dollar() -> None:
+    short = option_deploy.buying_power_finding(_account(2, 2, "-5"), 82_409, 2)
+
+    assert short is not None and "-$5.00 of options buying power" in short.headline
+
+
+# ── a structure that pays: its rows by the review's own function ────────
+
+
+async def test_the_rows_of_a_spread_that_pays_add_up_with_a_premium_received(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three bear call spreads, five dollars wide: $921.00 received, $1,500.00 required, 29 cents of fees. What
+    is set aside is the requirement less the premium, with the fees: $579.29."""
+    desk = Desk(monkeypatch)
+    received = _asking(
+        _leg("short_call", "short", "call", _AT_THE_MONEY),
+        _leg("long_call", "long", "call", _from("short_call", 5.0)),
+        structure="bear_call_spread", structures=3,
+    )
+    seen = await desk.quoted(received, c585=("5.00", "5.04"), c590=("1.89", "1.93"))
+    request = AlpacaPaperDeployRequest.model_validate({
+        **_SETTINGS, "execution_mode": "paper", "sizing": {"preset": "custom", "quantity": 3},
+        "trades": {
+            "kind": "options", "underlying": "SPY", "structure": "bear_call_spread",
+            "legs": [leg.model_dump(mode="json") for leg in received.legs], "order_terms": _TERMS,
+        },
+    })
+    assert request.options is not None
+
+    review = option_deploy.review_of(
+        request, plan_of(request.options), seen, blockers=[], notes=[], budget_cents=100_000
+    )
+
+    rows = {row.key: row for row in review.money_rows}
+    assert [(row.key, row.amount_cents, row.amount_usd) for row in review.money_rows if row.part_of_set_aside] == [
+        ("premium", -92_100, "$921.00"), ("broker_requirement", 150_000, "$1,500.00"), ("fees", 29, "$0.29"),
+    ]
+    assert rows["premium"].note == "received", "the dollars carry no sign: the note says which way"
+    assert (rows["set_aside"].amount_cents, rows["set_aside"].amount_usd) == (57_929, "$579.29")
+    assert sum(row.amount_cents or 0 for row in review.money_rows if row.part_of_set_aside) == 57_929
+    assert (rows["budget_free"].amount_cents, rows["budget_free"].amount_usd) == (42_071, "$420.71")
+    assert [(pick.number, pick.side_label, pick.ratio) for pick in review.picks] == [(1, "Sell", 1), (2, "Buy", 1)]
+    assert review.end_sentence is not None and "10 minutes" in review.end_sentence
+    assert option_deploy.price_of(seen).commitment_cents == 57_929
+
+
+# ── what a request may say ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "trades",
+    [
+        {**_ONE_CALL, "symbol": "QQQ"},
+        {**_ONE_CALL, "traded_symbol": "QQQ"},
+        {"kind": "signal", "symbol": "QQQ"},
+        {"kind": "signal", "order_terms": _TERMS},
+        {**_ONE_CALL, "order_terms": {**_TERMS, "sold_leg_close_lead_minutes": 10}},
+    ],
+    ids=["a stock's field on options", "the old field inside options", "a symbol on the signal's own shares",
+         "terms on the signal's own shares", "a fifth term"],
+)
+async def test_a_choice_that_says_a_field_it_does_not_have_is_a_422(deploy_app, trades: dict[str, Any]) -> None:
+    app, registry = deploy_app
+
+    response = await _post(app, "", execution_mode="dry_run", trades=trades)
+
+    assert response.status_code == 422, response.text
+    assert registry.deploy_calls == []
+
+
+def test_an_option_bots_orders_are_in_its_contracts_underlying_and_not_in_what_it_listens_to() -> None:
+    on_another = AlpacaPaperDeployRequest.model_validate({**_UNTOUCHED, "trades": {**_ONE_CALL, "underlying": "QQQ"}})
+
+    assert (on_another.symbol, on_another.order_symbol, on_another.traded_symbol) == ("SPY", "QQQ", None)

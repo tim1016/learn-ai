@@ -13,7 +13,7 @@ import pytest
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.config import settings
+from app.config import Settings, settings
 from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.services.bot_binding_repository import BrokerBotBinding
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
@@ -54,7 +54,8 @@ def _shadow_clerk(account: _OneAccount) -> SqliteAlpacaClerkFacade:
 
 
 def test_the_setting_is_off_unless_a_deployment_turns_it_on() -> None:
-    assert getattr(settings, _SETTING) is False
+    """The default the code ships, not what this machine's environment happens to say."""
+    assert Settings.model_fields[_SETTING].default is False
 
 
 async def test_with_the_setting_off_a_live_clerk_refuses_the_plan_and_says_what_to_do(

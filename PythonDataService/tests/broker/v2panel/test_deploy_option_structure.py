@@ -121,27 +121,37 @@ def test_an_option_choice_says_every_one_of_its_four_terms(term: str) -> None:
 # ── the floor these Deploys stand on ────────────────────────────────────
 
 
+_AS_IN_FORCE = "as in force"
+
+
 @dataclass
 class _Alpaca:
     """What Alpaca says of the account's option fields and of a contract, and what it was asked."""
 
+    # The level in force. It is the approved level, or a lower one the owner set at Alpaca.
     level: int | None = 2
+    # What Alpaca approved the account for, when a test tells the two apart. ``_AS_IN_FORCE``: the same.
+    approved_level: int | str | None = _AS_IN_FORCE
     buying_power: Decimal | None = Decimal("100000")
     listed: dict[str, Any] = field(default_factory=lambda: {CALL_585.occ_symbol: documented_option_listing(CALL_585)})
     account_error: Exception | None = None
+    listing_error: Exception | None = None
     asked: list[str] = field(default_factory=list)
 
     async def get_option_account(self) -> BrokerOptionAccountSnapshot:
         self.asked.append("account")
         if self.account_error is not None:
             raise self.account_error
+        approved = self.level if self.approved_level == _AS_IN_FORCE else self.approved_level
         return BrokerOptionAccountSnapshot(
             broker="alpaca", account_id=ACCT, account_mode="paper", options_buying_power=self.buying_power,
-            options_approved_level=self.level, options_trading_level=self.level, observed_at_ms=1,
+            options_approved_level=approved, options_trading_level=self.level, observed_at_ms=1,
         )
 
     async def get_option_contract(self, contract: OptionContract) -> Any:
         self.asked.append(contract.occ_symbol)
+        if self.listing_error is not None:
+            raise self.listing_error
         return self.listed.get(contract.occ_symbol)
 
 

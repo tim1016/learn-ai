@@ -735,6 +735,14 @@ def _seal_checks(
             seal.mode == binding.mode,
             "The stored Signal Program seal was issued for a different execution mode.",
         ),
+        # The four order terms of a bot that trades option contracts (ADR 0076 decision 24): the seal's are
+        # what the bot was deployed under, and the binding's are what its runner reads. A bot in shares has
+        # none on either.
+        _SealCheck(
+            "option_order_terms",
+            seal.option_order_terms == binding.option_order_terms,
+            "The stored Signal Program seal carries other option order terms than this instance is bound to.",
+        ),
         _SealCheck(
             "program_key",
             configured.program_key == binding.strategy_key,

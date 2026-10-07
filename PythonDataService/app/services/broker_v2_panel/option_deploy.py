@@ -59,6 +59,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Final
@@ -77,6 +78,7 @@ from app.broker.contract.registry import get_broker_registry
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.structure_catalogue import in_a_sentence, label, orders_in_a_line
+from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, lines_a_plan_can_need
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
@@ -99,7 +101,6 @@ from app.utils.timestamps import now_ms_utc
 
 # ---- reason codes: what stops an option Deploy, where no typed refusal already says it -------------
 
-NO_LEGS: Final = "OPTION_DEPLOY_NO_LEGS"
 LIVE_SWITCHED_OFF: Final = "OPTION_DEPLOY_LIVE_SWITCHED_OFF"
 LIVE_SHADOW_NOT_BUILT: Final = "OPTION_DEPLOY_LIVE_SHADOW_NOT_BUILT"
 APPROVAL_TOO_LOW: Final = "OPTION_DEPLOY_APPROVAL_TOO_LOW"
@@ -107,7 +108,6 @@ APPROVAL_UNKNOWN: Final = "OPTION_DEPLOY_APPROVAL_UNKNOWN"
 ACCOUNT_NOT_READ: Final = "OPTION_DEPLOY_ACCOUNT_NOT_READ"
 BUYING_POWER_SHORT: Final = "OPTION_DEPLOY_BUYING_POWER_SHORT"
 CONTRACT_NOT_READ: Final = "OPTION_DEPLOY_CONTRACT_REFERENCE_NOT_READ"
-NOT_AS_BUILT: Final = "OPTION_DEPLOY_NOT_AS_BUILT"
 NOT_PRICED: Final = "OPTION_DEPLOY_NOT_PRICED"
 
 # ---- note codes -----------------------------------------------------------------------------------
@@ -339,6 +339,18 @@ def approval_blocker(plan: ActionPlan, account: BrokerOptionAccountSnapshot) -> 
         )
     if level >= needed:
         return None
+    approved = account.options_approved_level
+    if approved is not None and approved >= needed:
+        # Alpaca approved enough. The level in force is lower because it was set lower on the account.
+        return OptionDeployBlocker(
+            gate_id=APPROVAL_TOO_LOW,
+            label="Options approval",
+            headline=(
+                f"This account's options trading level is set to {level} at Alpaca, below the level {approved} "
+                f"it is approved for. {what} needs {asks}."
+            ),
+            fix="Raise the options trading level in the account's settings at Alpaca. No new approval is needed.",
+        )
     return OptionDeployBlocker(
         gate_id=APPROVAL_TOO_LOW,
         label="Options approval",
@@ -379,11 +391,17 @@ def buying_power_finding(
         gate_id=BUYING_POWER_SHORT,
         label="Options buying power",
         headline=(
-            f"Alpaca reports ${power:,.2f} of options buying power on this account. An entry of {of} sets aside "
-            f"{usd(commitment_cents)} right now."
+            f"Alpaca reports {_in_dollars(power)} of options buying power on this account. An entry of {of} sets "
+            f"aside {usd(commitment_cents)} right now."
         ),
         fix="Add cash to the account, close other positions, or deploy fewer structures.",
     )
+
+
+def _in_dollars(amount: Decimal) -> str:
+    """A dollar figure a broker reported, written out: the sign before the ``$``, as cents are written."""
+    cents = amount.quantize(Decimal("0.01"))
+    return f"-${-cents:,.2f}" if cents < 0 else f"${cents:,.2f}"
 
 
 async def real_account_findings(
@@ -447,6 +465,10 @@ async def real_account_findings(
     return blockers, notes
 
 
+# The refusals that say the picked contracts are another shape than the one named.
+_SHAPE_REFUSALS: Final = frozenset(str(reason) for reason in StructureRefusal)
+
+
 def preview_blocker(preview: OptionStructurePreview) -> OptionDeployBlocker | None:
     """What the structure preview finds right now that stops a Deploy: a red verdict on a resolution.
 
@@ -456,11 +478,19 @@ def preview_blocker(preview: OptionStructurePreview) -> OptionDeployBlocker | No
     """
     if preview.state != "resolved" or not preview.verdict.red:
         return None
+    reason = preview.verdict.resolves_reason_code
+    assert reason is not None, "a red verdict on a resolution names why"
     return OptionDeployBlocker(
-        gate_id=preview.verdict.resolves_reason_code or NOT_AS_BUILT,
+        gate_id=reason,
         label="Structure",
         headline=preview.verdict.resolves_sentence,
-        fix="Change the structure's rules in the builder, then review the Deploy again.",
+        # Picks that are another shape than the one built are the rules' doing. Money that cannot be set
+        # aside (no fee rate pinned for the day, say) is not, and nothing the owner changes is known to help.
+        fix=(
+            "Change the structure's rules in the builder, then review the Deploy again."
+            if reason in _SHAPE_REFUSALS
+            else None
+        ),
     )
 
 
@@ -486,17 +516,19 @@ async def read_preview(
     ``patience_ms`` is how long to go on asking while the answer is only
     still arriving (its quotes, the listing, the rate, the search): none
     for a review, which the page asks again itself, and a few seconds at
-    the click.
+    the click. It is a deadline on a clock, counted from the first ask, so
+    the time each ask takes is inside it: an ask can itself wait seconds
+    for the rate and the dividends. No new ask begins that could not end
+    its wait before the deadline.
     """
     asked = preview_request_for(account_id, request)
-    waited = 0
+    deadline_s = time.monotonic() + patience_ms / 1000
     while True:
         answer = await option_structure_panel.option_structure_preview(broker, account_id, asked)
         again = answer.ask_again_in_ms
-        if again is None or waited + again > patience_ms:
+        if again is None or time.monotonic() + again / 1000 > deadline_s:
             return answer
         await asyncio.sleep(again / 1000)
-        waited += again
 
 
 # ---- the review -------------------------------------------------------------------------------------------

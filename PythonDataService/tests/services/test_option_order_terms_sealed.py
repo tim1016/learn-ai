@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.engine.live.identity import strategy_instance_artifact_dir
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services import bot_option_run
@@ -34,7 +35,7 @@ from app.services.bot_runner_errors import (
     OptionStartRefusedError,
     require_option_start_configuration,
 )
-from app.services.signal_program_admission import build_start_program_seal
+from app.services.signal_program_admission import _seal_checks, build_start_program_seal
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.schemas.test_signal_program_seal import _sealed_bot_program
 from tests.services.bot_runner._option_floor import STARTING_TERMS, one_call
@@ -228,3 +229,41 @@ def test_a_start_seals_the_terms_its_binding_carries() -> None:
 
     assert sealed is not None and plain is not None
     assert sealed.option_order_terms == _OWN and plain.option_order_terms is None
+
+
+def test_a_seal_made_under_other_order_terms_than_the_bot_is_bound_to_does_not_prove_its_build() -> None:
+    """The seal's terms are what the bot was deployed under and the binding's are what its runner reads. The
+    two are compared, and a difference is said by name."""
+    binding = _program_binding(action_plan=one_call(), option_order_terms=_OWN)
+    in_shares = _program_binding()
+    contract = _STRATEGY_REGISTRY[binding.strategy_key].signal_program_contract
+    assert contract is not None
+
+    def what_fails(bound: BrokerBotBinding) -> str | None:
+        sealed = build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
+        assert sealed is not None
+        return next((check.name for check in _seal_checks(bound, sealed, contract) if not check.holds), None)
+
+    other_terms = binding.model_copy(update={"option_order_terms": _OWN.model_copy(update={"entry_wait_seconds": 21})})
+    plain = build_start_program_seal(in_shares, _validation(), parameter_origins=in_shares.strategy_param_origins)
+    assert plain is not None
+
+    assert what_fails(binding) is None
+    assert what_fails(other_terms) == "option_order_terms"
+    assert all(check.holds for check in _seal_checks(in_shares, plain, contract)), "a bot in shares has none on either"
+
+
+@pytest.mark.parametrize(
+    ("term", "not_a_whole_number"),
+    [("entry_wait_seconds", True), ("expiry_close_lead_minutes", False), ("entry_wait_seconds", 20.0), ("entry_wait_seconds", "20")],
+)
+def test_a_boolean_or_a_number_written_another_way_is_not_sealed_as_a_whole_number_term(
+    term: str, not_a_whole_number: object
+) -> None:
+    """``true`` is not a wait of one second and ``false`` is not a lead of no minutes. A JSON ``20`` is twenty."""
+    said = {"gap_limit_percent": "8", "entry_wait_seconds": 20, "cost_limit_percent": "10", "expiry_close_lead_minutes": 45}
+
+    assert SealedOptionOrderTerms.model_validate(said).entry_wait_seconds == 20
+    assert SealedOptionOrderTerms.model_validate_json(json.dumps(said)).expiry_close_lead_minutes == 45
+    with pytest.raises(ValidationError):
+        SealedOptionOrderTerms.model_validate({**said, term: not_a_whole_number})

@@ -28,10 +28,7 @@ from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.options.named_structures import NamedStructure
 from app.schemas.option_order_terms import SealedOptionOrderTerms
-from app.schemas.option_preview import OptionContractView, OptionLegRules, PreviewState
-
-# More than a structure may have, as the preview's request takes: one leg too many is refused in words.
-_MAX_LEGS_ASKED = 8
+from app.schemas.option_preview import MAX_LEGS_ASKED, OptionContractView, OptionLegRules, PreviewState
 
 
 class TradesTheSignal(BaseModel):
@@ -61,7 +58,7 @@ class TradesOptions(BaseModel):
     underlying: Annotated[str, Field(pattern=US_EQUITY_SYMBOL_PATTERN)]
     # The named structure the legs are still an example of. None: Custom.
     structure: NamedStructure | None = None
-    legs: Annotated[list[OptionLegRules], Field(max_length=_MAX_LEGS_ASKED)]
+    legs: Annotated[list[OptionLegRules], Field(max_length=MAX_LEGS_ASKED)]
     order_terms: SealedOptionOrderTerms
 
 
@@ -110,7 +107,8 @@ class OptionMoneyRow(BaseModel):
     # The same amount written out, to be shown as it is. A premium is written without a sign: ``note``
     # says which way it goes.
     amount_usd: str | None
-    # "paid", "received", "(estimate)", or why there is no figure.
+    # "paid" or "received" beside the premium; the fees' own sentence; what an estimate assumes; or why
+    # there is no figure.
     note: str | None
     # The premium, the requirement and the fees: the three rows that add up to what is set aside.
     part_of_set_aside: bool
