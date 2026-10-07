@@ -972,3 +972,60 @@ async def test_a_bots_second_entry_is_compared_on_its_own_fills_and_not_on_the_f
     assert (found.result, found.premium_paid_cents, found.fall_cents) == ("consistent", 19_400, 19_400)
     assert (found.first_buying_power, found.second_buying_power) == ("99996.00", "99802.00")
     assert len(paper.comparisons(first)) == 1 and len(paper.comparisons(second)) == 1
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_entry_handed_to_the_watch_again_keeps_its_first_reading_and_is_recorded_once(paper: Paper) -> None:
+    order_ref = await paper.resting()
+    watch = paper.clerk._buying_power
+    # The same order is handed over a second time, with no reading of its own, before it is compared...
+    watch.sent(("a", "handed-over-again"), order_ref=order_ref, sent_at_ms=None)
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.account.buying_power = Decimal("99806.00")
+
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.first_buying_power) == ("consistent", "100000")
+    # ...and a third time after its comparison is on the books.
+    watch.sent(("a", "handed-over-once-more"), order_ref=order_ref, sent_at_ms=paper.clock())
+    await paper.pass_and_round()
+    await paper.pass_and_round()
+    assert len(paper.comparisons(order_ref)) == 1 and watch.watching == ()
+
+
+@pytest.mark.usefixtures("judged")
+async def test_an_entry_being_sent_while_a_new_clerks_first_round_runs_is_not_taken_for_one_a_restart_left(
+    paper: Paper,
+) -> None:
+    alpaca_answers = asyncio.Event()
+    send = paper.venue.submit_option_order
+
+    async def a_send_that_waits(order: Any, *, client_order_id: str) -> Any:
+        await alpaca_answers.wait()
+        return await send(order, client_order_id=client_order_id)
+
+    paper.venue.submit_option_order = a_send_that_waits  # type: ignore[method-assign]
+    entering = asyncio.ensure_future(paper.enter())
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert paper.venue.option_submit_calls == [] and not entering.done()
+
+    # The round finds an option entry on the books with no comparison, and leaves it alone: it is being sent.
+    assert await paper.clerk.compare_entries_with_buying_power() == ()
+
+    alpaca_answers.set()
+    [order_ref] = (await entering).child_order_refs
+    assert paper.comparisons(order_ref) == []
+    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    paper.account.buying_power = Decimal("99806.00")
+    assert (await paper.compared(order_ref)).result == "consistent"
+
+
+@pytest.mark.usefixtures("judged")
+async def test_a_full_page_of_cash_transfers_cannot_prove_there_were_no_more(paper: Paper) -> None:
+    paper.account.cash_flows.extend(_cash_flow("CSD", float(amount)) for amount in range(1, 101))
+
+    order_ref = await paper.filled(shows="99806.00")
+    found = await paper.compared(order_ref)
+
+    assert (found.result, found.reason_code) == ("unknown", "CASH_MOVEMENT_UNREAD")
