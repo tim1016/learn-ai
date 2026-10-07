@@ -262,6 +262,22 @@ async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as
     assert (seen.lean.direction, seen.lean.gains_when_underlying_falls) == ("down", True)
 
 
+async def test_the_fee_estimate_is_worked_out_on_the_price_each_leg_is_entered_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 585 call is sold at its bid of 4.85. The SEC fee on $485.00 is 0.9991 of a cent, which rounds up to
+    1; on its ask of 4.89 it would be 1.0073, and round up to 2. With CAT 1, ORF 3 and OCC 5: ten cents."""
+    desk = Desk(monkeypatch)
+    received = _asking(
+        _leg("short_call", "short", "call", _AT_THE_MONEY),
+        _leg("long_call", "long", "call", _from("short_call", 5.0)),
+        structure="bear_call_spread",
+    )
+
+    seen = await desk.quoted(received, c585=("4.85", "4.89"), c590=("1.89", "1.93"))
+
+    assert (seen.money.net_price, seen.money.fee_estimate_cents) == (Decimal("-2.92"), 10)
+    assert seen.money.entry_commitment_cents == 50_000 - 29_200 + 10
+
+
 async def test_more_than_one_structure_multiplies_the_money_and_the_lean(monkeypatch: pytest.MonkeyPatch) -> None:
     desk = Desk(monkeypatch)
 
@@ -271,6 +287,9 @@ async def test_more_than_one_structure_multiplies_the_money_and_the_lean(monkeyp
 
     assert (seen.money.structures, seen.money.net_entry_premium_cents) == (3, 58_200)
     assert seen.money.net_entry_premium_per_structure_cents == 19_400
+    # Six contracts: the SEC fee on the $654.00 sold is 1.35 cents, 2 rounded up; CAT on 600 shares is 0.18
+    # of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 6 x 2.5 = 15. Twenty-seven cents.
+    assert (seen.money.fee_estimate_cents, seen.money.entry_commitment_cents) == (27, 58_227)
     assert (seen.money.round_trip_cost_cents, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (2_400, 58_200, 91_800)
     _close(seen.lean.shares, 3 * seen.lean.shares_per_structure)
 
@@ -569,6 +588,23 @@ async def test_a_preview_gets_no_line_when_none_is_spare_shows_no_figure_and_tak
     assert (seen.watched.line_budget, seen.watched.lines_open) == (5, 5)
     assert bots_lines == feed._symbols(583, 584, 585, 586, 587) == desk.ibkr.open_option_lines()
     assert desk.ibkr.cancelled == []
+
+
+async def test_a_pick_that_was_refused_a_line_is_no_line_to_spare_though_other_strikes_have_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bot's thirteen calls and a budget of fifteen leave a preview two lines: the 585 and 584 puts. Its rule
+    asks for a put near 0.30 delta, further down. The 583 put it would look at next was refused a line."""
+    bot = WatchRequest("SPY", LineClass.CANDIDATE, scenes._one("call", _AT_THE_MONEY), feed.MONEY)
+    desk = Desk(monkeypatch, bot, budget=15, reach=6)
+    by_delta = _asking(_leg("long_put", "long", "put", {"selector": "delta", "target": 0.30}), structure="long_put")
+
+    seen = await desk.quoted(by_delta)
+
+    assert (seen.state, seen.reason_code) == ("no_quote_line", "OPTION_LINE_OVER_BUDGET")
+    assert seen.contract.strike == Decimal(583)
+    assert (seen.watched.lines_wanted, seen.watched.lines_held, seen.watched.lines_refused) == (13, 2, 11)
+    assert _shows_no_figure(seen) and seen.ask_again_in_ms is None
 
 
 async def test_a_clerk_with_no_line_budget_says_so_at_the_first_ask(monkeypatch: pytest.MonkeyPatch) -> None:

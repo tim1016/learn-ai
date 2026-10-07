@@ -157,6 +157,16 @@ def test_a_spread_bought_for_more_than_it_can_be_worth_gains_nothing_and_never_b
     assert (figures.gain_cents, figures.break_evens) == (0, ())
 
 
+def test_a_spread_bought_for_its_whole_width_breaks_even_at_its_upper_strike_and_nowhere_else() -> None:
+    """The 585 call bought and the 590 sold for $5.00. It is worth $5.00 only from 590 up, where it is level:
+    it first gets even exactly at 590, a turning point."""
+    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
+
+    figures = at_expiry(spread, _ONE, net_price=Decimal("5.00"))
+
+    assert (figures.gain_cents, figures.break_evens) == (0, (Fraction(590),))
+
+
 def test_every_structure_of_an_entry_gains_its_own_share() -> None:
     spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
 
