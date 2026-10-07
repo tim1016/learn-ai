@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
 from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OPTION_EVENT_EFFECT_KIND,
     OPTION_EVENT_SHARE_ORDER_ROLE,
     OPTION_POSITION_ENDED,
+    OptionEnding,
     OptionPositionEndedFacts,
 )
 
@@ -106,14 +109,94 @@ def event_share_order_symbol(conn: sqlite3.Connection, order_ref: str) -> str | 
     return None if row is None else row["symbol"]
 
 
+@dataclass(frozen=True, slots=True)
+class RecordedOptionEnding:
+    """One option position the books recorded as ended, for the bot and the run that held it."""
+
+    effect_operation_id: str
+    strategy_instance_id: str
+    # The run whose entry opened the oldest lot it took. None when that entry had none.
+    run_id: str | None
+    recorded_at_ms: int
+    facts: OptionPositionEndedFacts
+
+    @property
+    def sentence(self) -> str:
+        return describe_option_ending(self.facts)
+
+
+def describe_option_ending(facts: OptionPositionEndedFacts) -> str:
+    """How one option position ended, in one sentence the owner reads. Written here, never on a screen."""
+    ended_by = OptionEnding(facts.ended_by)
+    one = facts.contracts == 1
+    what = f"{facts.contracts} {'contract' if one else 'contracts'} of {facts.contract_symbol}"
+    was = "was" if one else "were"
+    if ended_by is OptionEnding.EXPIRED:
+        said = f"{what} expired."
+    elif ended_by is OptionEnding.SOLD_OUTSIDE:
+        done = "sold" if facts.held == "bought" else "bought back"
+        said = f"{what} {was} {done} at {facts.close_price} by an order the Clerk did not place."
+    else:
+        shares = facts.shares or {}
+        quantity = shares.get("quantity", 0)
+        said = (
+            f"{what} {was} {ended_by.value}: {abs(quantity)} {shares.get('symbol', '')} "
+            f"{'bought' if quantity > 0 else 'sold'} at {shares.get('price', '')}."
+        )
+    return f"{said} A simulation settled it by its own rule." if facts.simulated else said
+
+
+def recorded_option_endings(
+    conn: sqlite3.Connection, effect_operation_ids: Sequence[str] | None = None
+) -> list[RecordedOptionEnding]:
+    """Every option position the books recorded as ended, oldest first; or those of the effects named.
+
+    With no effects named it is read from the orders bound to a contract
+    outward, so books with no option order read nothing else.
+    """
+    columns = (
+        "SELECT t.effect_operation_id AS effect_operation_id, t.strategy_instance_id AS sid, t.run_id AS run_id, "
+        "t.recorded_at_ms AS recorded_at_ms, t.facts_json AS facts_json, t.sequence AS sequence "
+    )
+    if effect_operation_ids is None:
+        rows = conn.execute(
+            columns + "FROM order_contracts bound "
+            "JOIN orders o ON o.order_ref = bound.order_ref "
+            "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id AND e.kind = ? "
+            "JOIN custody_transitions t ON t.effect_operation_id = e.effect_operation_id AND t.transition_kind = ? "
+            "ORDER BY t.sequence",
+            (OPTION_EVENT_EFFECT_KIND, OPTION_POSITION_ENDED),
+        ).fetchall()
+    elif not effect_operation_ids:
+        rows = []
+    else:
+        marks = ", ".join("?" for _ in effect_operation_ids)
+        rows = conn.execute(
+            columns + f"FROM custody_transitions t WHERE t.effect_operation_id IN ({marks}) "
+            "AND t.transition_kind = ? ORDER BY t.sequence",
+            (*effect_operation_ids, OPTION_POSITION_ENDED),
+        ).fetchall()
+    return [
+        RecordedOptionEnding(
+            effect_operation_id=row["effect_operation_id"], strategy_instance_id=row["sid"], run_id=row["run_id"],
+            recorded_at_ms=int(row["recorded_at_ms"]),
+            facts=OptionPositionEndedFacts.from_facts_json(row["facts_json"]),
+        )
+        for row in rows
+    ]
+
+
 __all__ = [
     "EVENT_KEY_PREFIX",
     "OUTSIDE_ORDER_BROKER",
     "SALE_KEY_PREFIX",
+    "RecordedOptionEnding",
     "booking_key",
     "bookings",
     "books_record_no_contract",
+    "describe_option_ending",
     "event_share_order_symbol",
     "held_option_positions",
     "outside_order_reduces_a_bots_contract",
+    "recorded_option_endings",
 ]

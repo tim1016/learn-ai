@@ -8292,6 +8292,8 @@ export interface components {
          * @description One run of a bot. ``run_id`` is the run's own identity.
          */
         BotHistoryRun: {
+            /** Option Endings */
+            option_endings?: components["schemas"]["OptionEndingView"][] | null;
             orders: components["schemas"]["BotHistoryOrders"];
             outcome: components["schemas"]["BotHistoryOutcome"] | null;
             /** Run Id */
@@ -10168,6 +10170,7 @@ export interface components {
             native_execution_id?: string | null;
             /** Native Order Id */
             native_order_id?: string | null;
+            option_event?: components["schemas"]["OptionEndingView"] | null;
             /** Order Id */
             order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
@@ -10239,6 +10242,7 @@ export interface components {
             native_execution_id?: string | null;
             /** Native Order Id */
             native_order_id?: string | null;
+            option_event?: components["schemas"]["OptionEndingView"] | null;
             /** Order Id */
             order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
@@ -19787,6 +19791,29 @@ export interface components {
             target?: string | null;
         };
         /**
+         * OptionEndingView
+         * @description One option position that ended with no order of the bot's.
+         */
+        OptionEndingView: {
+            /** Contract */
+            contract: string;
+            /** Contracts */
+            contracts: number;
+            /** Headline */
+            headline: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "expired" | "exercised" | "assigned" | "sold_outside";
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Shares */
+            shares?: number | null;
+            /** Simulated */
+            simulated: boolean;
+        };
+        /**
          * OptionEntryLeg
          * @description Option ``ActionEntity`` — Slice 1C.
          *
@@ -24567,7 +24594,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "OPTION_POSITION_ENDED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */

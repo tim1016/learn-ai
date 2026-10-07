@@ -5146,6 +5146,20 @@
         "additionalProperties": false,
         "description": "One run of a bot. ``run_id`` is the run's own identity.",
         "properties": {
+          "option_endings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OptionEndingView"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Option Endings"
+          },
           "orders": {
             "$ref": "#/components/schemas/BotHistoryOrders"
           },
@@ -10227,6 +10241,16 @@
             ],
             "title": "Native Order Id"
           },
+          "option_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionEndingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "order_id": {
             "anyOf": [
               {
@@ -10509,6 +10533,16 @@
               }
             ],
             "title": "Native Order Id"
+          },
+          "option_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionEndingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "order_id": {
             "anyOf": [
@@ -34113,6 +34147,69 @@
         "title": "OperatorMove",
         "type": "object"
       },
+      "OptionEndingView": {
+        "additionalProperties": false,
+        "description": "One option position that ended with no order of the bot's.",
+        "properties": {
+          "contract": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Contract",
+            "type": "string"
+          },
+          "contracts": {
+            "minimum": 1.0,
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "headline": {
+            "minLength": 1,
+            "title": "Headline",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "expired",
+              "exercised",
+              "assigned",
+              "sold_outside"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "shares": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares"
+          },
+          "simulated": {
+            "title": "Simulated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "contract",
+          "contracts",
+          "simulated",
+          "headline",
+          "recorded_at_ms"
+        ],
+        "title": "OptionEndingView",
+        "type": "object"
+      },
       "OptionEntryLeg": {
         "additionalProperties": false,
         "description": "Option ``ActionEntity`` \u2014 Slice 1C.\n\nAdds ``right``, ``strike``, ``expiry`` on top of the common entry-leg\nfields. ``leg_id`` is the same stable identity stock legs carry \u2014\neach option leg of a multi-leg structure resolves to its own\n``conId`` at consumption time, even when several legs share the same\nexpiry-selector inputs.",
@@ -46249,6 +46346,7 @@
           "MANUAL_TICKET_COMPLETED",
           "MANUAL_TICKET_PAUSED_UNKNOWN",
           "MANUAL_TICKET_RESERVED",
+          "OPTION_POSITION_ENDED",
           "ORDER_CANCEL_REQUESTED",
           "ORDER_CANCEL_UNCERTAIN",
           "ORDER_FILL_OBSERVED",

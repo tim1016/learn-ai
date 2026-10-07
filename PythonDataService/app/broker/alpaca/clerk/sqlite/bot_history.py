@@ -80,6 +80,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import BotConfigResource
+from app.broker.alpaca.clerk.sqlite.option_event_books import RecordedOptionEnding, recorded_option_endings
 from app.broker.alpaca.clerk.sqlite.runtime import decision_id_from_durable
 from app.broker.alpaca.clerk.sqlite.schema import SCHEMA_VERSION, migrate_schema
 from app.broker.alpaca.clerk.sqlite.timeline_query import uncertainty_sequence
@@ -134,6 +135,10 @@ class RunFacts:
     orders: OrderCounts
     #: The owner's flatten after the stop sold what the run held (module doc).
     flattened: bool
+    #: Each option position of the run that ended with no order of the bot's: it expired, was
+    #: exercised or assigned, or was sold by an order the Clerk did not place (ADR 0076
+    #: decision 22). Oldest first; empty for a run that had none.
+    option_endings: tuple[RecordedOptionEnding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -240,6 +245,10 @@ def project_custody_history(
             sold_effects.add(filled_order_effects[fill.order_ref])
 
     flattens = _owner_flatten_instants(conn, sold_effects=sold_effects)
+    option_endings_by_run: dict[str, list[RecordedOptionEnding]] = {}
+    for ending in recorded_option_endings(conn):
+        if ending.run_id is not None:
+            option_endings_by_run.setdefault(ending.run_id, []).append(ending)
     runs_by_bot: dict[str, list[RunFacts]] = {}
     for row in conn.execute(
         "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, stopped_at_ms "
@@ -262,6 +271,7 @@ def project_custody_history(
                 stopped_at_ms <= at_ms and (next_started_at_ms is None or at_ms < next_started_at_ms)
                 for at_ms in flattens.get(sid, ())
             ),
+            option_endings=tuple(option_endings_by_run.get(run_id, ())),
         ))
 
     budgets = {
