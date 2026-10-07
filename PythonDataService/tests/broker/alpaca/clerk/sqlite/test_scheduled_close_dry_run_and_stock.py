@@ -22,7 +22,7 @@ import pytest
 
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite import reads, reconcile
+from app.broker.alpaca.clerk.sqlite import exit_watchdog, reads, reconcile
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS, DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
@@ -272,6 +272,36 @@ async def test_a_pass_and_the_keeper_in_the_moment_a_dry_runs_failed_close_is_re
     )
 
 
+async def test_a_pass_that_read_a_dry_runs_failed_close_as_ready_makes_no_second_try_after_the_keepers(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The pass's watchdog reads the failed close as ready. Before it takes its try, the keeper's whole round runs."""
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+    await keeper.tick()
+    orders_made = dry_run.orders()
+    dry_run.wait(30_000)
+    recover = exit_watchdog._recover_stale_exit
+
+    async def the_keeper_goes_first(repo: ClerkSqliteRepository, stale: object, **how: object) -> object:
+        # The watchdog has made its scan. The keeper takes its try and fails, and only then the watchdog goes on.
+        assert len((await keeper.tick()).closes.taken) == 1
+        return await recover(repo, stale, **how)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(exit_watchdog, "_recover_stale_exit", the_keeper_goes_first)
+    await dry_run.clerk.reconcile_once()
+
+    # One try in that moment, the keeper's: the watchdog is asked the wait again in the run that would take its own.
+    assert dry_run.orders() == orders_made + 1 and dry_run.held() == {SYMBOL: 1.0}
+    assert dry_run.repo.active_run(SID) is not None
+
+    # The next try is thirty seconds on, as after any other.
+    dry_run.wait(30_000)
+    assert len((await keeper.tick()).closes.taken) == 1 and dry_run.orders() == orders_made + 2
+
+
 async def test_a_failed_close_read_as_ready_is_not_taken_again_once_the_bot_has_made_a_newer_exit(
     dry_run: _DryRun,  # noqa: F811
 ) -> None:
@@ -289,6 +319,32 @@ async def test_a_failed_close_read_as_ready_is_not_taken_again_once_the_bot_has_
     taken = _accept_while_still_owed(dry_run.repo, ready)
 
     assert taken is None and dry_run.orders() == orders_made
+
+
+async def test_a_dry_runs_keeper_still_sleeps_while_a_failed_close_is_ready_and_another_exit_keeps_it_from_being_taken(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The close failed. Then the bot's own exit was taken, and nothing has driven it for forty seconds."""
+    bought = await dry_run.enter(dry_run.evidence())
+    [order_ref] = bought.child_order_refs
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "0", "0.05")
+    keeper = _keeper(dry_run)
+    await keeper.tick()
+    dry_run.wait(5_000)
+    accept_exit(
+        dry_run.repo, account_id=dry_run.repo.account_id, strategy_instance_id=SID, decision_id="the-bots-own-exit",
+        lifecycle_run_id=RUN, entry_order_ref=order_ref,
+    )
+    dry_run.wait(40_000)
+    [ready] = held_contracts(dry_run.repo, dry_run.clock()).held
+    assert ready.to_be_taken_again(dry_run.clock())
+
+    looked = await keeper.tick()
+
+    # Nothing is taken while that exit works. The instant the retry came ready is past, and is no reason to wake.
+    assert looked.closes.taken == () and looked.wake_in_ms == IDLE_WAKE_MS
+    assert looked.closes.next_change_ms == CLOSE
 
 
 async def test_a_dry_runs_failed_close_is_not_taken_again_once_its_session_has_ended(

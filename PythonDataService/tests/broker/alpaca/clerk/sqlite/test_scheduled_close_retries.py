@@ -232,6 +232,33 @@ async def test_three_ordinary_tries_that_failed_before_the_close_do_not_make_the
     assert open_exit_stuck(paper.repo, "a") is None
 
 
+async def test_a_pass_that_takes_the_close_just_as_the_ordinary_tries_run_out_does_not_give_the_bot_up(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The bot's own exit fails eight minutes before the close is due. Its third ordinary try fails two minutes
+    before it. So the pass that meets the due time finds the ordinary tries spent, and then takes the close."""
+    await _holds_one_call(paper)
+    _until(paper, DUE - 8 * 60_000)
+    paper.venue.option_submit_error = REFUSED
+    await paper.exit("a")
+    for _ in range(32):  # passes alone: no round of the keeper meets the due time first
+        paper.wait(PASS_MS)
+        await paper.pass_()
+    assert paper.clock() == DUE
+
+    # The exit, its three ordinary tries, and the close that this pass took and Alpaca refused.
+    assert [sent - DUE for sent in _sent_at(paper)] == [-480_000, -360_000, -240_000, -120_000, 0]
+    # The close's own rule holds from the pass that took it: that pass does not give the bot up.
+    assert open_exit_stuck(paper.repo, "a") is None
+
+    await _passes(paper, 12)
+
+    # Three minutes on it is still tried every thirty seconds.
+    since_the_close = [sent - DUE for sent in _sent_at(paper) if sent >= DUE]
+    assert since_the_close == [SCHEDULED_CLOSE_RETRY_AFTER_MS * again for again in range(7)]
+    assert open_exit_stuck(paper.repo, "a") is None
+
+
 # ── what was tried under the rule is not counted against the bot ─────────
 
 
@@ -363,6 +390,39 @@ async def test_a_bot_still_refused_the_next_session_is_given_up_after_three_ordi
     assert afternoon.closes.taken == () and len(_sent_at(paper)) == tried + 3
     [left] = scheduled_close_state(paper.repo, "a")
     assert left.left_to_owner
+
+
+async def test_a_bot_whose_ordinary_tries_ran_out_before_the_close_is_given_up_at_the_next_open_and_nothing_is_sent(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """The bot's own exit fails six and a half minutes before the close is due, and so do three tries after it.
+
+    The next session counts on from those three. Whether it should start from nothing instead is for the
+    slice that opens sold legs to decide (#2913): no other holding has a session after its close.
+    """
+    await _holds_one_call(paper)
+    _its_leg_is_sold(paper, monkeypatch)
+    _until(paper, DAY_ONE_DUE - 6 * 60_000 - 30_000)
+    paper.venue.option_submit_error = REFUSED
+    await paper.exit("a")
+    while paper.clock() + PASS_MS < DAY_ONE_CLOSE:
+        paper.wait(PASS_MS)
+        await paper.pass_()
+        await paper.round()
+    tried = len(_sent_at(paper))
+    # The exit and its three ordinary tries, then the close and nineteen tries under its own rule.
+    assert tried == 4 + 20 and open_exit_stuck(paper.repo, "a") is None
+    _until(paper, DAY_ONE_CLOSE)
+    await paper.pass_()
+    await paper.round()
+    assert _notice(paper) is not None and open_exit_stuck(paper.repo, "a") is None
+
+    # Alpaca would take an order the next morning. The first pass after the open sends none and gives the bot up.
+    paper.venue.option_submit_error = None
+    _until(paper, DAY_TWO_OPEN + 1_000)
+    await paper.pass_()
+
+    assert len(_sent_at(paper)) == tried and open_exit_stuck(paper.repo, "a") is not None
 
 
 async def test_time_failed_under_the_rule_is_not_carried_into_the_next_session(

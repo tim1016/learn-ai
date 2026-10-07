@@ -61,7 +61,9 @@ into it. On a real account the stuck-EXIT watchdog sends the close again,
 on the pass. It neither counts it out nor gives the bot up in that session,
 and what was tried under the rule is not counted in a later session
 (``exit_watchdog``). A Dry Run has no pass on a timer, so there the
-keeper's own step takes the failed close again.
+keeper's own step takes the failed close again. Whichever takes a retry
+asks, in the locked run that takes it, whether the wait has passed since
+the bot's newest exit (:func:`inside_the_retry_wait`).
 
 **A stop loses no close and sends none twice.** A close cut by a stop after
 it was accepted stays accepted, and the next start drives it as it drives
@@ -548,8 +550,7 @@ def _accept_while_still_owed(repo: ClerkSqliteRepository, item: HeldContract) ->
         return None
     decision_id = item.holding.close.decision_id
     if item.holding.state == "failed":
-        newest = repo.last_strategy_transition(strategy_instance_id=sid, transition_kind="EXIT_ACCEPTED")
-        if newest is not None and repo.clock() < newest["clerk_observed_at_ms"] + SCHEDULED_CLOSE_RETRY_AFTER_MS:
+        if inside_the_retry_wait(repo, sid):
             return None
         decision_id = _next_try_of(repo, sid, decision_id)
     return accept_recovery_exit(
@@ -570,6 +571,19 @@ def _next_try_of(repo: ClerkSqliteRepository, strategy_instance_id: str, first_d
     while repo.get_command(f"cmd:{strategy_instance_id}:{first_decision_id}-again-{tries}") is not None:
         tries += 1
     return f"{first_decision_id}-again-{tries}"
+
+
+def inside_the_retry_wait(repo: ClerkSqliteRepository, strategy_instance_id: str) -> bool:
+    """Whether the bot's newest exit was taken less than the retry wait ago, as the books show it now.
+
+    Asked in the locked run that would send a failed scheduled close
+    again, by whichever takes that try: the keeper's step, or the
+    stuck-EXIT watchdog under the close's own rule. So such a try is
+    never closer than the wait to the exit before it, whoever made that
+    one.
+    """
+    newest = repo.last_strategy_transition(strategy_instance_id=strategy_instance_id, transition_kind="EXIT_ACCEPTED")
+    return newest is not None and repo.clock() < newest["clerk_observed_at_ms"] + SCHEDULED_CLOSE_RETRY_AFTER_MS
 
 
 def close_being_retried(
@@ -788,9 +802,12 @@ def _missed_next_step(item: HeldContract, *, simulated: bool, now_ms: int) -> st
             "Stop the bot and flatten the position from its page once the regular session is open: the Clerk "
             "sends nothing for this bot by itself."
         )
+    # The next session counts on from the ordinary tries made before the close was taken (ADR 0076).
     return (
-        "The Clerk sends a close of it in the next regular session. Or stop the bot and flatten the position "
-        "from its page once that session is open."
+        "The Clerk sends a close of it in the next regular session. There is one case where it does not: its "
+        "own retries of this bot's exit had already run out before it took this close. Then it sends nothing, "
+        "and stops exiting the bot by itself when that session opens. Either way you can stop the bot and "
+        "flatten the position from its page once that session is open."
     )
 
 

@@ -64,7 +64,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     MissedScheduledClose,
     ScheduledCloseMissedCause,
 )
-from app.broker.contract.errors import BrokerOrderRejected
+from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
+from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.options.contract import OptionContract
@@ -847,6 +848,36 @@ async def test_no_scheduled_close_is_taken_while_the_clerk_has_stopped_exiting_t
     assert notice is not None and "stopped exiting" in notice["explanation"]
 
 
+async def test_a_failed_close_its_owner_settled_as_never_sent_reads_as_left_to_the_owner_and_no_longer_as_retried(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """Alpaca refuses the close. Its next try gets no answer. The owner stops the bot and says Alpaca has no such order."""
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    paper.venue.option_submit_error = BrokerOrderRejected("the venue refused the close", broker="alpaca")
+    await paper.round()
+    [retried] = scheduled_close_state(paper.repo, "a")
+    paper.venue.option_submit_error = BrokerUnavailable("no answer", broker="alpaca")
+    paper.wait(30_000)
+    await paper.pass_()
+    paper.venue.option_submit_error = None
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+    paper.wait(60_000)
+    (unknown,) = paper.repo.unknown_exit_orders("a")
+    await paper.clerk.settle_unknown_exit_order(
+        strategy_instance_id="a", presented=unknown, attestation=OrderOutcomeAttestation(kind="absent"),
+        operator="owner", reason=None,
+    )
+
+    [left] = scheduled_close_state(paper.repo, "a")
+
+    # Failed both times, and the same contract is still held. Only the first is the Clerk's to try again.
+    assert (retried.standing, retried.left_to_owner) == (CloseStanding.FAILED, False)
+    assert (left.standing, left.left_to_owner, paper.held()) == (CloseStanding.FAILED, True, {SYMBOL: 1.0})
+    # The Clerk now sends nothing more for this bot, so the read no longer says what it said of the retry.
+    assert left.sentence != retried.sentence
+
+
 # ── a position the strategy does not know it holds ───────────────────────
 
 
@@ -1192,6 +1223,42 @@ async def test_one_bots_notice_that_cannot_be_ended_does_not_keep_the_other_bots
     assert _notice(paper, "a") is not None and _notice(paper, "b") is None
     await paper.round()
     assert _notice(paper, "a") is None
+
+
+def _losing_the_lease(paper: PaperOptions) -> Callable[..., object]:  # noqa: F811
+    def loses_the_lease(*_args: object, **_kwargs: object) -> object:
+        raise ExecutionLeaseLost("the Clerk's hold on its account was lost", account_id=paper.repo.account_id)
+
+    return loses_the_lease
+
+
+async def test_a_lost_hold_on_the_account_while_a_missed_close_is_written_is_raised_and_is_no_one_bots_failure(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _holds_one_call(paper)
+    _until(paper, CLOSE + 60_000)
+    monkeypatch.setattr(scheduled_close_module, "raise_uncertainty", _losing_the_lease(paper))
+
+    # Nothing more can be written under a lost hold, so the round ends. It is not logged and passed over.
+    with pytest.raises(ExecutionLeaseLost):
+        await paper.round()
+    assert _notice(paper) is None
+
+
+async def test_a_lost_hold_on_the_account_while_a_missed_close_is_ended_is_raised_and_is_no_one_bots_failure(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _the_clerk_was_down_through_the_close(paper)
+    submit_stop_run(paper.repo, account_id=paper.repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a")
+    await discharge_attributed_residue(
+        paper.repo, read=_FakeReadPort(), intake=paper.clerk.intake, strategy_instance_id="a", symbol=SYMBOL,
+        operator_reason="expired worthless",
+    )
+    monkeypatch.setattr(scheduled_close_module, "_end_missed_notice", _losing_the_lease(paper))
+
+    with pytest.raises(ExecutionLeaseLost):
+        await paper.round()
+    assert _notice(paper) is not None
 
 
 # ── a structure with a sold leg: shown at this level only, until the Clerk takes one ──

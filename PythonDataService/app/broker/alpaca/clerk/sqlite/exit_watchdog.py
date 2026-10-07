@@ -79,15 +79,21 @@ long as the session it was due in is open. The episode is ready again 30
 seconds after it failed, not two minutes. It is not counted out after three
 tries and the bot is not given up: the session's end is the limit, and a
 close its session ended on is recorded as missed (``scheduled_close``). The
-rule is read from the books once, in the scan
+rule is read from the books in the scan
 (``scheduled_close.close_being_retried``): is the contract still held, does
 it owe a close in the session open now, and was that close accepted? It is
 not read from the orders the open notice names, so another exit of the bot
-that fails after the close leaves the rule standing. Every check a re-drive
-passes still stands. Each re-drive made under the rule records the same
-close on its own acceptance, and neither it nor the time it failed for is
-counted toward giving the bot up. So the next session starts from where the
-ordinary count stood before the close was taken.
+that fails after the close leaves the rule standing. It is read once more
+before a bot is given up: a pass that took the close after its scan does
+not give the bot up. Every check a re-drive passes still stands, and under
+the rule one more is asked in the run that accepts it: has the retry wait
+passed since the bot's newest exit? On a Dry Run the keeper retries a
+failed close too, and its try may have come since the scan. Each re-drive
+made under the rule records the same close on its own acceptance, and
+neither it nor the time it failed for is counted toward giving the bot up.
+So the next session starts from where the ordinary count stood before the
+close was taken. A count that was already full then gives the bot up at
+that session's open, with nothing sent.
 """
 
 from __future__ import annotations
@@ -148,7 +154,11 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
-from app.broker.alpaca.clerk.sqlite.scheduled_close import SCHEDULED_CLOSE_RETRY_AFTER_MS, close_being_retried
+from app.broker.alpaca.clerk.sqlite.scheduled_close import (
+    SCHEDULED_CLOSE_RETRY_AFTER_MS,
+    close_being_retried,
+    inside_the_retry_wait,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     AdmissionBlockedError,
@@ -654,6 +664,14 @@ def _accept_admissible_redrive(
             message="An EXIT for this strategy is already working.",
             facts={}, outcome="hold",
         )
+    if scheduled_close is not None and inside_the_retry_wait(repo, strategy_instance_id):
+        # Asked again here, as the keeper's own retry is: on a Dry Run the keeper sends a failed
+        # scheduled close again too, and its try may have been made since the scan (ADR 0076).
+        return _RedriveRefused(
+            action="exit_redrive_deferred_inside_the_retry_wait", reason_code="RECOVERY_RETRY_WAIT",
+            message="Another exit of this bot was tried a moment ago; the Clerk waits before it sends the close again.",
+            facts={}, outcome="hold",
+        )
     if clerk_work_in_flight(repo, symbol):
         unconfirmed_of = bots_with_an_unconfirmed_closing_order(repo, symbol, other_than=strategy_instance_id)
         if unconfirmed_of:
@@ -853,6 +871,10 @@ def _escalate_to_exit_stuck(
         now. Escalating either from obsolete data would leave an
         already-flat strategy paused behind a false operator-visible
         error (#1993 review).
+
+        The same pass can also take the holding's scheduled close after
+        its scan. That close's own retry rule holds from then on, so this
+        pass does not give the bot up (ADR 0076).
         """
         episode_now = repo.active_uncertainty(
             scope="CUSTODY_SUBJECT",
@@ -865,6 +887,8 @@ def _escalate_to_exit_stuck(
             return None
         remaining_now = repo.position(sid, cause.symbol)
         if not position_quantity_is_nonzero(remaining_now):
+            return None
+        if stale_exit.closes_an_option and close_being_retried(repo, sid, cause.symbol, repo.clock()) is not None:
             return None
         return raise_uncertainty(
             repo,
