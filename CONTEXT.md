@@ -1649,6 +1649,11 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Option approval level** — the level, 0 to 3, the broker approved the account for. **Option trading level** is the level in force, which the owner may have set lower. Unknown when the broker does not say; zero is options turned off.
 - **Option buying power** — the broker's account-wide figure for what option orders may still use. It is not what one order costs.
   _Avoid_: reading a change in it as one trade's cost.
+- **Buying power comparison** — for one option entry on a real account: the fall in option buying power between a reading made before the order was sent and one made after its outcome was proven, set beside what the bot set aside. It comes to one of four: **consistent** (the fall is the cost of what filled), **over-reserved** (some other fall, no more than was set aside; harmless), **under-reserved and unexplained** (more than was set aside, across a clean pair), or **unknown**, which always has a reason. A simulation makes none. The screens call it the Alpaca check, and call unknown "not compared".
+  _Avoid_: reconciliation (that compares positions and orders), buying power check passed.
+- **Clean pair** — two readings of option buying power that may be judged: both state a figure in whole cents, the first was fresh when the order was sent, no cash was transferred and no other order of the account was working or recorded about in between, and a pass checked the account afterwards.
+- **Under-reserved hold** — the notice one bot gets when a judged comparison finds Alpaca took more than the bot set aside. It stops that bot opening anything new, leaves its exits free, and ends only when the owner reviews it.
+  _Avoid_: account hold (this is one bot's), loss hold.
 - **Contract multiplier** — the shares one option contract's per-share price stands for. A recorded fact of the contract, kept with the contract in the Clerk's books; never read off the symbol and never assumed to be 100.
   _Avoid_: lot size, contract size (the shares a contract delivers is a different fact).
 - **Contract terms** — what the books record about an option contract when it first enters them: its symbol and its multiplier.

@@ -393,6 +393,8 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
         # #2460: doubts the cost of fills whose quantity both sides agree on,
         # so it cannot move a residue.
         "EXECUTION_PRICE_CONFLICT",
+        # #2913: doubts what an entry cost at the broker, never a quantity the bot holds.
+        "OPTION_BUYING_POWER_UNDER_RESERVED",
     }
     assert residue_discharge_role("NOT_A_REGISTERED_CODE") == "refuses"
 

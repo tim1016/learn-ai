@@ -761,6 +761,29 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "{external_order_id}/acknowledge"
             ),
         ),
+        _op(
+            "custody_option_buying_power_checks",
+            "GET",
+            "/accounts/{account_id}/custody/bots/{sid}/option-buying-power-checks",
+            capability=Capability.CUSTODY_READ,
+            account=True,
+            agent_path=(
+                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
+                "option-buying-power-checks"
+            ),
+        ),
+        _op(
+            "custody_option_buying_power_hold_review",
+            "POST",
+            "/accounts/{account_id}/custody/bots/{sid}/option-buying-power-hold/review",
+            capability=Capability.CUSTODY_COMMAND,
+            idempotency=_DURABLE,
+            account=True,
+            agent_path=(
+                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
+                "option-buying-power-hold/review"
+            ),
+        ),
         # The owner's acknowledgement of an option-event notice (#2913), the
         # account's own or one bot's. Like the review of an outside order it
         # can neither stop a bot nor reduce what it holds, so a draining lane

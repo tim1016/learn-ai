@@ -106,6 +106,10 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     accept_option_enter,
     submit_accepted_enter,
 )
+from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
+    EntryBuyingPowerWatch,
+    review_under_reserved_hold,
+)
 from app.broker.alpaca.clerk.sqlite.entry_outcome import (
     ENTRY_OUTCOME_LIMIT_PAST,
     ENTRY_OUTCOME_LIMIT_TOO_FAR,
@@ -247,7 +251,12 @@ from app.broker.alpaca.live_option_bots import live_option_bots_enabled
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
-from app.broker.contract.options import BrokerOptionOrder, OptionOrderRequest, option_contract_refusal
+from app.broker.contract.options import (
+    BrokerOptionContract,
+    BrokerOptionOrder,
+    OptionOrderRequest,
+    option_contract_refusal,
+)
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
@@ -599,6 +608,18 @@ class SqliteAlpacaClerkFacade:
         self._entry_deadline_nudge = entry_deadline_nudge
         # The pause between two reads of an option entry's outcome.
         self._outcome_pause: Callable[[float], Awaitable[None]] = asyncio.sleep
+        # ADR 0076 decision 26: the readings of the account's option buying power that a real
+        # account's option entries are compared on. ``None`` on a simulation, which has no broker
+        # figure to read. An account whose bots trade shares never asks it for anything.
+        self._buying_power: EntryBuyingPowerWatch | None = (
+            EntryBuyingPowerWatch(
+                repo=repo, read=self._read, intake=self._intake,
+                judged=lambda: settings.ALPACA_OPTION_BUYING_POWER_JUDGED,
+            )
+            if authority_kind == "sqlite" and not trade_port_folds_simulated_evidence(trade)
+            else None
+        )
+        self._buying_power_round: asyncio.Task[tuple[str, ...]] | None = None
         # #2007: the live IBKR bid/ask an operator's extended-hours flatten is
         # priced against -- the process's market-liveness store unless a test
         # states the quote directly.
@@ -1167,8 +1188,8 @@ class SqliteAlpacaClerkFacade:
         ):
             return _LISTING_NOT_ASKED
         try:
-            listing = await asyncio.wait_for(
-                self._read.get_option_contract(contract), timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000
+            listing = await self._listing_beside_the_first_reading(
+                contract, entry=(strategy_instance_id, durable_decision_id)
             )
         except TimeoutError:
             return OptionEntryRefused(
@@ -1184,6 +1205,31 @@ class SqliteAlpacaClerkFacade:
             )
         refused = option_contract_refusal(contract, listing)
         return None if refused is None else OptionEntryRefused(refused.reason.value, str(refused))
+
+    async def _listing_beside_the_first_reading(
+        self, contract: OptionContract, *, entry: tuple[str, str]
+    ) -> BrokerOptionContract | None:
+        """Alpaca's listing of ``contract``, read while the account's option buying power is read too.
+
+        The two reads are made at once, so the reading of the account adds
+        no step to an entry (ADR 0076 decision 26). Each has its own bound,
+        and the reading's is the shorter. The listing's answer, or what its
+        read raised, is the caller's as before; the reading never raises:
+        what it could not read it keeps as that.
+        """
+        reading = None if self._buying_power is None else self._buying_power.begin_first()
+        try:
+            listing = await asyncio.wait_for(
+                self._read.get_option_contract(contract), timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000
+            )
+        except BaseException:
+            if reading is not None:
+                # The entry is refused for its listing: its reading of the account is not wanted.
+                reading.cancel()
+            raise
+        if self._buying_power is not None and reading is not None:
+            await self._buying_power.finish_first(entry, reading)
+        return listing
 
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id."""
@@ -1573,6 +1619,8 @@ class SqliteAlpacaClerkFacade:
         pending = tuple(self._effect_tasks.values())
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        if self._buying_power_round is not None:
+            await asyncio.gather(self._buying_power_round, return_exceptions=True)
 
     async def _execute_effect(
         self,
@@ -2054,7 +2102,10 @@ class SqliteAlpacaClerkFacade:
             # The entry's own terms. One accepted before entries kept theirs is held to the defaults.
             entry_terms = entry.terms.close_terms if entry.terms is not None else ENTRY_CLOSE_TERMS
 
+            handed_over_at_ms: int | None = None
+
             def before_submit() -> EntrySubmissionRefusal | None:
+                nonlocal handed_over_at_ms
                 now_ms = clock()
                 if not market_leg_sendable(now_ms):
                     return EntrySubmissionRefusal(summary_code=MARKET_CLOSED, why=_OPTION_ORDER_OUTSIDE_THE_SESSION)
@@ -2072,6 +2123,7 @@ class SqliteAlpacaClerkFacade:
                 )
                 if unusable is not None:
                     return EntrySubmissionRefusal(summary_code=unusable.reason_code, why=unusable.explanation)
+                handed_over_at_ms = now_ms
                 return None
 
             if accepted_enter.created and self._entry_deadline_nudge is not None:
@@ -2092,6 +2144,13 @@ class SqliteAlpacaClerkFacade:
                 ),
                 before_submit=before_submit,
             )
+            if self._buying_power is not None:
+                # From here the entry's comparison with the account's option buying power is the
+                # Clerk's own round's to make (ADR 0076 decision 26).
+                self._buying_power.sent(
+                    (strategy_instance_id, durable_decision_id), order_ref=submitted_enter.order_ref,
+                    sent_at_ms=handed_over_at_ms,
+                )
             return receipt(
                 submitted_enter.command.state,
                 (submitted_enter.order_ref,) if submitted_enter.order_ref is not None else (),
@@ -2276,18 +2335,23 @@ class SqliteAlpacaClerkFacade:
         if is_option_plan(action_plan):
             # An entry in option contracts is worked out from quotes, not from
             # a bar, and is its own path from here (ADR 0076).
-            return await self._execute_option_effect_once(
-                strategy_instance_id=strategy_instance_id,
-                run_id=run_id,
-                decision_id=decision_id,
-                purpose=purpose,
-                action_plan=action_plan,
-                quantity=quantity,
-                decision_evidence=decision_evidence,
-                reading_outcome=reading_outcome,
-                option_entry=option_entry,
-                option_exit=option_exit,
-            )
+            try:
+                return await self._execute_option_effect_once(
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    decision_id=decision_id,
+                    purpose=purpose,
+                    action_plan=action_plan,
+                    quantity=quantity,
+                    decision_evidence=decision_evidence,
+                    reading_outcome=reading_outcome,
+                    option_entry=option_entry,
+                    option_exit=option_exit,
+                )
+            finally:
+                if self._buying_power is not None:
+                    # A reading of the account taken for an entry that was then not taken is dropped.
+                    self._buying_power.forget((strategy_instance_id, _durable_decision_id(decision_id)))
 
         def rejected(
             *,
@@ -2711,7 +2775,77 @@ class SqliteAlpacaClerkFacade:
         """
         published = self.publish_reconciliation(result)
         self._last_sweep_pass_completed_at_ms = self._repo.clock()
+        self._begin_buying_power_round()
         return published
+
+    def _begin_buying_power_round(self) -> None:
+        """Start one round of the comparison with the account's option buying power, unless one is running.
+
+        After each pass of the periodic sweep (ADR 0076 decision 26). Nothing
+        is started on an account with no option entry to compare, and
+        nothing waits for the round: a pass is published as before.
+        """
+        watch, running = self._buying_power, self._buying_power_round
+        if watch is None or not watch.has_work or (running is not None and not running.done()):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Published from outside an event loop: there is nothing to run a round on. The next pass asks again.
+            return
+        self._buying_power_round = loop.create_task(self.compare_entries_with_buying_power())
+        self._buying_power_round.add_done_callback(self._buying_power_round_done)
+
+    def _buying_power_round_done(self, completed: asyncio.Task[tuple[str, ...]]) -> None:
+        if completed.cancelled():
+            return
+        error = completed.exception()
+        if error is not None:
+            logger.error(
+                "a round of the comparison with the account's option buying power ended with an error",
+                extra={"action": "option_buying_power_round_failed", "account_id": self._repo.account_id},
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    async def compare_entries_with_buying_power(self) -> tuple[str, ...]:
+        """One round of the comparison of this account's option entries with its option buying power (ADR 0076).
+
+        For each sent option entry not yet compared: once the books prove
+        what it came to, the account is read a second time; once a pass of
+        the account has reached its verdict after that reading, the pair is
+        judged and recorded on the ENTER's own timeline. An
+        under-reserved result, judged, raises that bot's notice in the same
+        locked write. Answers the order references recorded this round.
+
+        Nothing on an account that is a simulation, and nothing for an
+        entry in shares.
+        """
+        if self._buying_power is None:
+            return ()
+        published = self._last_published
+        return await self._buying_power.round(
+            last_pass_at_ms=None if published is None or published.cut is None else published.observed_at_ms,
+            last_pass_clean=published is not None and published.result.verdict == "clean",
+        )
+
+    @property
+    def compares_option_buying_power(self) -> bool:
+        """Whether this account's option entries are compared with a broker's option buying power.
+
+        False on a simulation: it has no broker figure to compare with.
+        """
+        return self._buying_power is not None
+
+    async def review_option_buying_power_hold(self, strategy_instance_id: str, *, operator: str) -> bool:
+        """The owner has reviewed one bot's under-reserved notice: end it (ADR 0076 decision 26).
+
+        False when the bot had none open. The bot may enter again from the
+        next decision; the comparisons the notice named stay as recorded.
+        """
+        async with self._intake:
+            return review_under_reserved_hold(
+                self._repo, strategy_instance_id=strategy_instance_id, operator=operator
+            )
 
     def recovery_evaluation_observation(self) -> RecoveryEvaluationObservation:
         """The sweep's evaluation posture, for Start/Resume admission (#1808).
