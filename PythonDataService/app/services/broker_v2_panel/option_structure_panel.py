@@ -14,15 +14,31 @@ from app.broker.alpaca.market_liveness import get_option_quotes
 from app.broker.ibkr.config import get_settings as ibkr_settings
 from app.options.named_structures import NamedStructure
 from app.options.structure import MAX_OPTION_LEGS
-from app.options.structure_catalogue import GROUPS, description, label, starting_plan
+from app.options.structure_catalogue import (
+    EXPIRY_RULES,
+    GROUPS,
+    STRIKE_RULES,
+    RuleOffered,
+    description,
+    label,
+    order_term_starts,
+    starting_plan,
+)
 from app.schemas.action_plan import OptionEntryLeg
 from app.schemas.option_preview import (
     NamedStructureGroup,
     NamedStructureStart,
+    OptionExpiryRule,
     OptionLegRules,
+    OptionOrderTermDefaults,
+    OptionPercentTerm,
+    OptionRuleTolerance,
+    OptionRuleValue,
+    OptionStrikeRule,
     OptionStructureCatalogue,
     OptionStructurePreview,
     OptionStructurePreviewRequest,
+    OptionWholeNumberTerm,
 )
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.services.option_model_inputs import ModelInputsRead, read_option_model_inputs
@@ -82,8 +98,45 @@ def _start(name: NamedStructure) -> NamedStructureStart:
     )
 
 
+def _value(offered: RuleOffered) -> OptionRuleValue | None:
+    if offered.value_field is None:
+        return None
+    return OptionRuleValue(field=offered.value_field, unit=offered.value_unit, unit_label=offered.value_label)
+
+
+def _tolerance(offered: RuleOffered) -> OptionRuleTolerance | None:
+    if offered.tolerance_field is None:
+        return None
+    return OptionRuleTolerance(
+        field=offered.tolerance_field,
+        unit=offered.tolerance_unit,
+        unit_label=offered.tolerance_label,
+        default=offered.tolerance_default,
+    )
+
+
+def _order_terms() -> OptionOrderTermDefaults:
+    starts = order_term_starts()
+
+    def percent(name: str) -> OptionPercentTerm:
+        return OptionPercentTerm(label=starts[name].label, unit_label=starts[name].unit_label, default=starts[name].default)
+
+    def whole(name: str) -> OptionWholeNumberTerm:
+        return OptionWholeNumberTerm(
+            label=starts[name].label, unit_label=starts[name].unit_label, default=int(starts[name].default)
+        )
+
+    return OptionOrderTermDefaults(
+        gap_limit_percent=percent("gap_limit_percent"),
+        entry_wait_seconds=whole("entry_wait_seconds"),
+        cost_limit_percent=percent("cost_limit_percent"),
+        expiry_close_lead_minutes=whole("expiry_close_lead_minutes"),
+    )
+
+
 async def option_structure_catalogue(broker: str, account_id: str) -> OptionStructureCatalogue:
-    """The named structures the builder offers, in its groups, each with the legs it starts from."""
+    """What the builder offers: the named structures in its groups, each with the legs it starts from; the
+    rules a leg may be given; and the order terms a Deploy starts from."""
     await validate_account(broker, account_id)
     return OptionStructureCatalogue(
         groups=[
@@ -92,4 +145,12 @@ async def option_structure_catalogue(broker: str, account_id: str) -> OptionStru
         custom_label="Custom",
         custom_description=f"Start from no legs and add up to {MAX_OPTION_LEGS}.",
         max_legs=MAX_OPTION_LEGS,
+        strike_rules=[
+            OptionStrikeRule(selector=offered.selector, label=offered.label, value=_value(offered), tolerance=_tolerance(offered))
+            for offered in STRIKE_RULES
+        ],
+        expiry_rules=[
+            OptionExpiryRule(selector=offered.selector, label=offered.label, value=_value(offered)) for offered in EXPIRY_RULES
+        ],
+        order_terms=_order_terms(),
     )

@@ -364,8 +364,90 @@ class NamedStructureGroup(BaseModel):
     structures: list[NamedStructureStart]
 
 
+class OptionRuleValue(BaseModel):
+    """What the box beside a rule holds."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The field of the rule's selector the box edits.
+    field: str
+    unit: Literal["delta", "strikes", "dollars", "percent", "days", "date"]
+    # The unit as a screen writes it beside the box.
+    unit_label: str
+
+
+class OptionRuleTolerance(BaseModel):
+    """How far from its target a rule's pick may be: the builder's "Within"."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The field of the rule's selector the "Within" box edits.
+    field: str
+    unit: Literal["delta", "dollars", "percent"]
+    unit_label: str
+    # What a leg starts with: the Action Plan's own default for the rule.
+    default: float
+
+
+class OptionStrikeRule(BaseModel):
+    """One way of choosing a leg's strike, as the builder offers it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # What the leg's ``strike.selector`` says when this rule is chosen.
+    selector: Literal["delta", "atm_offset", "leg_distance", "percent"]
+    label: str
+    value: OptionRuleValue
+    # None: the rule names its strike exactly, and has no "Within".
+    tolerance: OptionRuleTolerance | None
+
+
+class OptionExpiryRule(BaseModel):
+    """One way of choosing a leg's expiry, as the builder offers it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # What the leg's ``expiry.selector`` says when this rule is chosen.
+    selector: Literal["min_dte", "nearest_weekly", "same_day", "absolute"]
+    label: str
+    # None: the rule needs nothing beside it. A ``date`` is the date's 16:00 New York anchor.
+    value: OptionRuleValue | None
+
+
+class OptionPercentTerm(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str
+    unit_label: str
+    default: Decimal
+
+
+class OptionWholeNumberTerm(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str
+    unit_label: str
+    default: int
+
+
+class OptionOrderTermDefaults(BaseModel):
+    """The option order terms a Deploy starts from. Each is fixed for the bot's life once it is deployed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The widest bid-ask gap a leg may have at entry, as a percent of its mid.
+    gap_limit_percent: OptionPercentTerm
+    # How long a resting entry waits for its fill before it is cancelled.
+    entry_wait_seconds: OptionWholeNumberTerm
+    # The most opening and closing at once may cost, as a percent of what the entry sets aside.
+    cost_limit_percent: OptionPercentTerm
+    # How long before the session close on a held contract's expiry date the position is closed.
+    expiry_close_lead_minutes: OptionWholeNumberTerm
+
+
 class OptionStructureCatalogue(BaseModel):
-    """The builder's left column: the named structures in their groups. Custom starts from no legs."""
+    """What the builder offers: the named structures in their groups, the rules a leg may be given, and the
+    order terms a Deploy starts from. Custom starts from no legs."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -373,3 +455,7 @@ class OptionStructureCatalogue(BaseModel):
     custom_label: str
     custom_description: str
     max_legs: int
+    # In the order the builder lists them.
+    strike_rules: list[OptionStrikeRule]
+    expiry_rules: list[OptionExpiryRule]
+    order_terms: OptionOrderTermDefaults

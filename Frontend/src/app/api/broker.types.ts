@@ -19933,6 +19933,20 @@ export interface components {
             /** Strike */
             strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
         };
+        /**
+         * OptionExpiryRule
+         * @description One way of choosing a leg's expiry, as the builder offers it.
+         */
+        OptionExpiryRule: {
+            /** Label */
+            label: string;
+            /**
+             * Selector
+             * @enum {string}
+             */
+            selector: "min_dte" | "nearest_weekly" | "same_day" | "absolute";
+            value: components["schemas"]["OptionRuleValue"] | null;
+        };
         /** OptionInstrument */
         OptionInstrument: {
             /**
@@ -19967,6 +19981,25 @@ export interface components {
             right: "call" | "put";
             /** Strike */
             strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
+        };
+        /**
+         * OptionOrderTermDefaults
+         * @description The option order terms a Deploy starts from. Each is fixed for the bot's life once it is deployed.
+         */
+        OptionOrderTermDefaults: {
+            cost_limit_percent: components["schemas"]["OptionPercentTerm"];
+            entry_wait_seconds: components["schemas"]["OptionWholeNumberTerm"];
+            expiry_close_lead_minutes: components["schemas"]["OptionWholeNumberTerm"];
+            gap_limit_percent: components["schemas"]["OptionPercentTerm"];
+        };
+        /** OptionPercentTerm */
+        OptionPercentTerm: {
+            /** Default */
+            default: string;
+            /** Label */
+            label: string;
+            /** Unit Label */
+            unit_label: string;
         };
         /**
          * OptionPreviewAtExpiry
@@ -20191,18 +20224,71 @@ export interface components {
             right: "call" | "put";
         };
         /**
+         * OptionRuleTolerance
+         * @description How far from its target a rule's pick may be: the builder's "Within".
+         */
+        OptionRuleTolerance: {
+            /** Default */
+            default: number;
+            /** Field */
+            field: string;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "delta" | "dollars" | "percent";
+            /** Unit Label */
+            unit_label: string;
+        };
+        /**
+         * OptionRuleValue
+         * @description What the box beside a rule holds.
+         */
+        OptionRuleValue: {
+            /** Field */
+            field: string;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "delta" | "strikes" | "dollars" | "percent" | "days" | "date";
+            /** Unit Label */
+            unit_label: string;
+        };
+        /**
+         * OptionStrikeRule
+         * @description One way of choosing a leg's strike, as the builder offers it.
+         */
+        OptionStrikeRule: {
+            /** Label */
+            label: string;
+            /**
+             * Selector
+             * @enum {string}
+             */
+            selector: "delta" | "atm_offset" | "leg_distance" | "percent";
+            tolerance: components["schemas"]["OptionRuleTolerance"] | null;
+            value: components["schemas"]["OptionRuleValue"];
+        };
+        /**
          * OptionStructureCatalogue
-         * @description The builder's left column: the named structures in their groups. Custom starts from no legs.
+         * @description What the builder offers: the named structures in their groups, the rules a leg may be given, and the
+         *     order terms a Deploy starts from. Custom starts from no legs.
          */
         OptionStructureCatalogue: {
             /** Custom Description */
             custom_description: string;
             /** Custom Label */
             custom_label: string;
+            /** Expiry Rules */
+            expiry_rules: components["schemas"]["OptionExpiryRule"][];
             /** Groups */
             groups: components["schemas"]["NamedStructureGroup"][];
             /** Max Legs */
             max_legs: number;
+            order_terms: components["schemas"]["OptionOrderTermDefaults"];
+            /** Strike Rules */
+            strike_rules: components["schemas"]["OptionStrikeRule"][];
         };
         /** OptionStructurePreview */
         OptionStructurePreview: {
@@ -20244,7 +20330,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "not_resolved" | "resolved";
+            state: "plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "search_not_done" | "not_resolved" | "resolved";
             structure: components["schemas"]["NamedStructure"] | null;
             /** Structure Label */
             structure_label: string;
@@ -20304,6 +20390,15 @@ export interface components {
             legs?: Record<string, never>[];
             /** Template */
             template: string;
+        };
+        /** OptionWholeNumberTerm */
+        OptionWholeNumberTerm: {
+            /** Default */
+            default: number;
+            /** Label */
+            label: string;
+            /** Unit Label */
+            unit_label: string;
         };
         /**
          * OptionsChainSnapshotRequest

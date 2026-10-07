@@ -52,6 +52,8 @@ from app.schemas.action_plan import ActionPlan
 
 # The structure cost limit an owner starts from: a percent of the entry commitment.
 DEFAULT_COST_LIMIT_PERCENT = Decimal(10)
+# The widest bid-ask gap an owner starts from, for each leg: a percent of the leg's mid.
+DEFAULT_LEG_GAP_LIMIT_PERCENT = Decimal(8)
 
 
 @dataclass(frozen=True, slots=True)

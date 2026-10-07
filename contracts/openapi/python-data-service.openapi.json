@@ -34314,6 +34314,43 @@
         "title": "OptionEntryLeg",
         "type": "object"
       },
+      "OptionExpiryRule": {
+        "additionalProperties": false,
+        "description": "One way of choosing a leg's expiry, as the builder offers it.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "selector": {
+            "enum": [
+              "min_dte",
+              "nearest_weekly",
+              "same_day",
+              "absolute"
+            ],
+            "title": "Selector",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionRuleValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "label",
+          "value"
+        ],
+        "title": "OptionExpiryRule",
+        "type": "object"
+      },
       "OptionInstrument": {
         "additionalProperties": false,
         "properties": {
@@ -34436,6 +34473,56 @@
           "expiry"
         ],
         "title": "OptionLegRules",
+        "type": "object"
+      },
+      "OptionOrderTermDefaults": {
+        "additionalProperties": false,
+        "description": "The option order terms a Deploy starts from. Each is fixed for the bot's life once it is deployed.",
+        "properties": {
+          "cost_limit_percent": {
+            "$ref": "#/components/schemas/OptionPercentTerm"
+          },
+          "entry_wait_seconds": {
+            "$ref": "#/components/schemas/OptionWholeNumberTerm"
+          },
+          "expiry_close_lead_minutes": {
+            "$ref": "#/components/schemas/OptionWholeNumberTerm"
+          },
+          "gap_limit_percent": {
+            "$ref": "#/components/schemas/OptionPercentTerm"
+          }
+        },
+        "required": [
+          "gap_limit_percent",
+          "entry_wait_seconds",
+          "cost_limit_percent",
+          "expiry_close_lead_minutes"
+        ],
+        "title": "OptionOrderTermDefaults",
+        "type": "object"
+      },
+      "OptionPercentTerm": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "unit_label",
+          "default"
+        ],
+        "title": "OptionPercentTerm",
         "type": "object"
       },
       "OptionPreviewAtExpiry": {
@@ -35046,9 +35133,118 @@
         "title": "OptionPreviewWatchedRange",
         "type": "object"
       },
+      "OptionRuleTolerance": {
+        "additionalProperties": false,
+        "description": "How far from its target a rule's pick may be: the builder's \"Within\".",
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "number"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "delta",
+              "dollars",
+              "percent"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "unit",
+          "unit_label",
+          "default"
+        ],
+        "title": "OptionRuleTolerance",
+        "type": "object"
+      },
+      "OptionRuleValue": {
+        "additionalProperties": false,
+        "description": "What the box beside a rule holds.",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "delta",
+              "strikes",
+              "dollars",
+              "percent",
+              "days",
+              "date"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "unit",
+          "unit_label"
+        ],
+        "title": "OptionRuleValue",
+        "type": "object"
+      },
+      "OptionStrikeRule": {
+        "additionalProperties": false,
+        "description": "One way of choosing a leg's strike, as the builder offers it.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "selector": {
+            "enum": [
+              "delta",
+              "atm_offset",
+              "leg_distance",
+              "percent"
+            ],
+            "title": "Selector",
+            "type": "string"
+          },
+          "tolerance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionRuleTolerance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/OptionRuleValue"
+          }
+        },
+        "required": [
+          "selector",
+          "label",
+          "value",
+          "tolerance"
+        ],
+        "title": "OptionStrikeRule",
+        "type": "object"
+      },
       "OptionStructureCatalogue": {
         "additionalProperties": false,
-        "description": "The builder's left column: the named structures in their groups. Custom starts from no legs.",
+        "description": "What the builder offers: the named structures in their groups, the rules a leg may be given, and the\norder terms a Deploy starts from. Custom starts from no legs.",
         "properties": {
           "custom_description": {
             "title": "Custom Description",
@@ -35057,6 +35253,13 @@
           "custom_label": {
             "title": "Custom Label",
             "type": "string"
+          },
+          "expiry_rules": {
+            "items": {
+              "$ref": "#/components/schemas/OptionExpiryRule"
+            },
+            "title": "Expiry Rules",
+            "type": "array"
           },
           "groups": {
             "items": {
@@ -35068,13 +35271,26 @@
           "max_legs": {
             "title": "Max Legs",
             "type": "integer"
+          },
+          "order_terms": {
+            "$ref": "#/components/schemas/OptionOrderTermDefaults"
+          },
+          "strike_rules": {
+            "items": {
+              "$ref": "#/components/schemas/OptionStrikeRule"
+            },
+            "title": "Strike Rules",
+            "type": "array"
           }
         },
         "required": [
           "groups",
           "custom_label",
           "custom_description",
-          "max_legs"
+          "max_legs",
+          "strike_rules",
+          "expiry_rules",
+          "order_terms"
         ],
         "title": "OptionStructureCatalogue",
         "type": "object"
@@ -35259,6 +35475,7 @@
               "quotes_arriving",
               "underlying_quote_unusable",
               "pricing_inputs_unknown",
+              "search_not_done",
               "not_resolved",
               "resolved"
             ],
@@ -35502,6 +35719,30 @@
           "template"
         ],
         "title": "OptionTemplatePosition",
+        "type": "object"
+      },
+      "OptionWholeNumberTerm": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "unit_label": {
+            "title": "Unit Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "unit_label",
+          "default"
+        ],
+        "title": "OptionWholeNumberTerm",
         "type": "object"
       },
       "OptionsChainSnapshotRequest": {

@@ -7,19 +7,26 @@ here it is the request and the answer on the wire.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from pydantic import TypeAdapter
 
+from app.options.deadlines import CloseTerms
+from app.options.entry import DEFAULT_COST_LIMIT_PERCENT, DEFAULT_LEG_GAP_LIMIT_PERCENT
+from app.options.expiry import option_expiry_anchor_ms
 from app.options.named_structures import NamedStructure
-from app.schemas.option_preview import OptionStructurePreview
+from app.options.structure_catalogue import order_term_starts
+from app.schemas.action_plan import ExpirySelector, StrikeSelector
+from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
 from app.services.broker_v2_panel import option_structure_panel
 from tests.broker.v2panel.fixtures import ACCT
 
 # A Clerk's option quotes on a stand-in Gateway, and a bull call spread to ask about.
-from tests.services.test_option_structure_preview import _BULL_CALL_SPREAD, _KNOWN, Desk
+from tests.services.test_option_structure_preview import _BULL_CALL_SPREAD, _KNOWN, FRIDAY, Desk
 
 _BOTS = f"/api/brokers/alpaca/accounts/{ACCT}/bots"
 _PREVIEW = f"{_BOTS}/option-structure-preview"
@@ -80,6 +87,87 @@ async def test_every_start_the_catalogue_gives_is_a_structure_the_preview_takes_
             assert (seen["state"], seen["structure"]) == ("no_quote_source", start["structure"])
 
 
+# What an owner might type into the box beside each rule.
+_TYPED = {"target": 0.30, "offset": -2, "dollars": 5.0, "percent": 1.5, "days": 7}
+
+
+async def test_the_catalogue_offers_the_strike_rules_the_builder_lists_each_with_the_action_plans_own_tolerance(
+    deploy_app,
+) -> None:
+    """A rule's "Within" starts at the tolerance the Action Plan gives the rule when none is said, in the rule's
+    own unit. The catalogue reads it there and keeps no second copy."""
+    app, _registry = deploy_app
+    as_a_strike_rule = TypeAdapter(StrikeSelector)
+
+    rules = (await _get(app, f"{_BOTS}/option-structures")).json()["strike_rules"]
+
+    assert [rule["selector"] for rule in rules] == ["delta", "atm_offset", "leg_distance", "percent"]
+    assert [None if rule["tolerance"] is None else rule["tolerance"]["unit"] for rule in rules] == [
+        "delta", None, "dollars", "percent",
+    ]
+    for rule in rules:
+        assert rule["label"] and rule["value"]["unit_label"]
+        built = {"selector": rule["selector"], rule["value"]["field"]: _TYPED[rule["value"]["field"]]}
+        if rule["selector"] == "leg_distance":
+            built["leg_id"] = "other"
+        left_unsaid = as_a_strike_rule.validate_python(built)
+        if rule["tolerance"] is None:
+            continue
+        assert rule["tolerance"]["unit_label"]
+        # Left unsaid, the plan's own default is what the catalogue said the box starts at.
+        assert getattr(left_unsaid, rule["tolerance"]["field"]) == rule["tolerance"]["default"]
+        said = as_a_strike_rule.validate_python(built | {rule["tolerance"]["field"]: rule["tolerance"]["default"]})
+        assert said == left_unsaid
+
+
+async def test_the_catalogue_offers_the_expiry_rules_the_builder_lists_and_each_makes_a_rule_the_plan_takes(
+    deploy_app,
+) -> None:
+    app, _registry = deploy_app
+    as_an_expiry_rule = TypeAdapter(ExpirySelector)
+    typed = _TYPED | {"expiration_ms": _BULL_CALL_SPREAD.legs[0].expiry.expiration_ms}
+
+    rules = (await _get(app, f"{_BOTS}/option-structures")).json()["expiry_rules"]
+
+    assert [rule["selector"] for rule in rules] == ["min_dte", "nearest_weekly", "same_day", "absolute"]
+    assert [None if rule["value"] is None else rule["value"]["unit"] for rule in rules] == ["days", None, None, "date"]
+    for rule in rules:
+        assert rule["label"]
+        value = {} if rule["value"] is None else {rule["value"]["field"]: typed[rule["value"]["field"]]}
+        assert as_an_expiry_rule.validate_python({"selector": rule["selector"]} | value).selector == rule["selector"]
+    # A fixed date is sent as its 16:00 New York anchor, never as a date's text.
+    assert typed["expiration_ms"] == option_expiry_anchor_ms(FRIDAY)
+
+
+async def test_the_catalogue_gives_the_order_terms_a_deploy_starts_from_each_where_the_code_holds_it(deploy_app) -> None:
+    app, _registry = deploy_app
+
+    terms = (await _get(app, f"{_BOTS}/option-structures")).json()["order_terms"]
+
+    assert set(terms) == {"gap_limit_percent", "entry_wait_seconds", "cost_limit_percent", "expiry_close_lead_minutes"}
+    assert all(term["label"] and term["unit_label"] for term in terms.values())
+    assert Decimal(terms["gap_limit_percent"]["default"]) == DEFAULT_LEG_GAP_LIMIT_PERCENT
+    assert Decimal(terms["cost_limit_percent"]["default"]) == DEFAULT_COST_LIMIT_PERCENT
+    # The cost limit a preview is held to when the page says none is the one the catalogue shows.
+    assert OptionStructurePreviewRequest.model_fields["cost_limit_percent"].default == DEFAULT_COST_LIMIT_PERCENT
+    held_to = CloseTerms()
+    assert terms["entry_wait_seconds"]["default"] * 1_000 == held_to.entry_wait_ms
+    assert terms["expiry_close_lead_minutes"]["default"] * 60_000 == held_to.expiry_close_lead_ms
+    # What the catalogue shows is a limit a preview takes as it is.
+    asked = {**_SPREAD, **{name: terms[name]["default"] for name in ("gap_limit_percent", "cost_limit_percent")}}
+    assert (await _post(app, asked)).status_code == 200
+
+
+def test_an_order_term_follows_the_close_terms_it_is_read_from_and_is_never_shown_rounded() -> None:
+    twenty = order_term_starts(CloseTerms(entry_wait_ms=20_000, expiry_close_lead_ms=30 * 60_000))
+
+    assert (twenty["entry_wait_seconds"].default, twenty["expiry_close_lead_minutes"].default) == (20, 30)
+    with pytest.raises(ValueError):
+        order_term_starts(CloseTerms(entry_wait_ms=20_500))
+    with pytest.raises(ValueError):
+        order_term_starts(CloseTerms(expiry_close_lead_ms=90_000))
+
+
 # ---- the preview -----------------------------------------------------------------
 
 
@@ -125,6 +213,45 @@ async def test_a_preview_answers_in_the_published_shape_with_money_in_cents_and_
     assert OptionStructurePreview.model_validate(seen).state == "resolved"
 
 
+async def _resolved(app, desk: Desk, body: dict) -> dict:
+    """Ask until the spread's lines are quoted, then once more: the answer with figures."""
+    await _post(app, body)
+    await desk.settle()
+    desk.spy()
+    await desk.settle()
+    desk.quote_every_line()
+    desk.quote("call", 585, "4.08", "4.12")
+    desk.quote("call", 590, "2.18", "2.22")
+    desk.ibkr.now += 400
+    response = await _post(app, body)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.mark.parametrize(
+    ("written", "read_as"),
+    [
+        pytest.param("1e1", "10", id="an exponent"),
+        pytest.param("10.000000", "10", id="trailing zeros"),
+        pytest.param("7.50", "7.5", id="one trailing zero"),
+        pytest.param("0.000001", "0.000001", id="a millionth of a percent, the finest there is"),
+    ],
+)
+async def test_a_limit_is_carried_back_and_said_as_the_owner_would_write_it(
+    deploy_app, monkeypatch: pytest.MonkeyPatch, written: str, read_as: str
+) -> None:
+    """``1e1`` is ten percent. It is never printed as ``1E+1%``."""
+    app, _registry = deploy_app
+    desk = Desk(monkeypatch)
+    _on(desk, monkeypatch)
+
+    seen = await _resolved(app, desk, {**_SPREAD, "cost_limit_percent": written, "gap_limit_percent": written})
+
+    assert (seen["state"], seen["cost_limit_percent"], seen["gap_limit_percent"]) == ("resolved", read_as, read_as)
+    assert seen["money"]["cost_limit_percent"] == read_as
+    assert f"{read_as}%" in seen["money"]["cost_sentence"] and "E" not in seen["money"]["cost_sentence"].split("limit")[1]
+
+
 async def test_on_a_process_with_no_option_quote_source_the_preview_says_so_and_shows_no_figure(deploy_app) -> None:
     app, _registry = deploy_app
 
@@ -154,6 +281,11 @@ async def test_a_structure_the_plan_refuses_is_an_answer_and_not_an_error(deploy
         pytest.param({"underlying": "not a ticker"}, id="an underlying that is no ticker"),
         pytest.param({"structures": 0}, id="no structures"),
         pytest.param({"cost_limit_percent": "-1"}, id="a limit below zero"),
+        pytest.param({"cost_limit_percent": "3.3333333"}, id="a cost limit finer than it can be compared in"),
+        pytest.param({"cost_limit_percent": "1e-7"}, id="a cost limit finer than that, written with an exponent"),
+        pytest.param({"cost_limit_percent": "NaN"}, id="a cost limit that is no number"),
+        pytest.param({"gap_limit_percent": "7.1234567"}, id="a gap limit as fine"),
+        pytest.param({"gap_limit_percent": "0"}, id="a gap limit of nothing"),
         pytest.param({"structure": "short_straddle"}, id="a name that is no named structure"),
         pytest.param(
             {"legs": [_SPREAD["legs"][0] | {"strike": {"selector": "delta", "target": 1.5}}]}, id="a delta above one"
