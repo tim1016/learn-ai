@@ -49,6 +49,7 @@ from app.broker.alpaca.clerk.money import (
     normalize_money,
     recorded_dollars,
 )
+from app.broker.alpaca.clerk.option_effects import is_option_plan
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
@@ -416,8 +417,17 @@ class _EntryConfiguration(BaseModel):
 
     @property
     def order_symbol(self) -> str:
-        """The asset an entry buys: the sealed plan's, which is ``symbol`` unless the bot trades something else."""
+        """The asset an entry buys: the sealed plan's, which is ``symbol`` unless the bot trades something else.
+
+        Asked only of a bot in shares. A bot in option contracts buys a
+        contract, picked at the entry, and a share of its underlying is no
+        price of that (``trades_options``).
+        """
         return self.symbol if self.action_plan is None else traded_instrument(self.action_plan).underlying
+
+    @property
+    def trades_options(self) -> bool:
+        return self.action_plan is not None and is_option_plan(self.action_plan)
 
 
 def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
@@ -477,6 +487,13 @@ _HOLDING_COPY: dict[str, tuple[str, str]] = {
     "ENTER_IN_PROGRESS": ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),
 }
 _WAITS = "Its next entry waits"
+_STILL_CHECKED_AT_THE_ORDER = " Account risk is current. Order-time strategy, session and execution checks still apply."
+# An option bot's next position has no price until its contracts are picked from their quotes at the
+# entry (ADR 0076). Nothing is estimated from a share of the underlying, and no figure is shown.
+_OPTION_ENTRY_PRICED_AT_THE_ENTRY = (
+    "Its next entry is in option contracts, and their cost is known only when they are picked at the entry. "
+    "The budget and the account's cash are judged against that cost then."
+)
 
 
 def _next_entry(
@@ -498,6 +515,9 @@ def _next_entry(
     if config is None:
         raise BudgetUnavailable("The immutable position sizing is unavailable. Resolve deployment configuration evidence.")
     terms = _EntryConfiguration.model_validate_json(config.config_json)
+    if terms.trades_options:
+        # As its Deploy asked no minimum of the budget: each entry is admitted on its own commitment.
+        return _NextEntry(True, "Ready for its next entry", _OPTION_ENTRY_PRICED_AT_THE_ENTRY + _STILL_CHECKED_AT_THE_ORDER)
     quote = prepared_top_of_book(terms.order_symbol, repo.clock())
     if quote is None:
         return _NextEntry(False, _WAITS, "Wait for a fresh IBKR price to judge the next position's cost.")
@@ -506,7 +526,7 @@ def _next_entry(
         return _NextEntry(False, _WAITS, decision.detail, decision.required)
     return _NextEntry(
         True, "Ready for its next entry",
-        decision.detail + " Account risk is current. Order-time strategy, session and execution checks still apply.",
+        decision.detail + _STILL_CHECKED_AT_THE_ORDER,
         decision.required,
     )
 
