@@ -13,8 +13,10 @@ whose every leg closes is taken as on any other day. A contract bought while
 the setting was on is still held after it is switched off, and a restart
 that loses the variable is an ordinary accident. Switching it off must never
 leave a held contract with no way out: the bot's own EXIT, the Clerk's
-scheduled close, the close when a run ends, Stop's close and Flatten all
-still go out.
+scheduled close and Flatten can still reduce it. Stop does not itself
+schedule a close. After a restart with the setting off, the option bot
+cannot resume strategy monitoring; the Clerk and the owner can still close
+what it holds.
 
 The setting is read each time it is asked, never at import, so no fence
 outlives a change of it.

@@ -285,7 +285,9 @@ def only_closes(order: OptionOrderRequest) -> bool:
     """
     if isinstance(order, SingleOptionOrderRequest):
         return order.intent is OptionPositionIntent.CLOSE
-    return all(leg.intent is OptionPositionIntent.CLOSE for leg in order.legs)
+    if isinstance(order, MultiLegOptionOrderRequest):
+        return bool(order.legs) and all(leg.intent is OptionPositionIntent.CLOSE for leg in order.legs)
+    return False
 
 
 # ── What the broker says back ───────────────────────────────────────────────

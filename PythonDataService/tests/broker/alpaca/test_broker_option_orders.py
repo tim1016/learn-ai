@@ -174,11 +174,20 @@ def _closes_one_leg_and_opens_another() -> MultiLegOptionOrderRequest:
     return MultiLegOptionOrderRequest(legs=(closing, opening), quantity=1, order_type=OrderType.MARKET)
 
 
+def _single_sell_to_open() -> SingleOptionOrderRequest:
+    return _long_call().model_copy(update={"side": OrderSide.SELL})
+
+
+def _opens_one_leg_and_closes_another() -> MultiLegOptionOrderRequest:
+    order = _closes_one_leg_and_opens_another()
+    return order.model_copy(update={"legs": tuple(reversed(order.legs))})
+
+
 @responses.activate
 @pytest.mark.parametrize(
     "order",
-    [_long_call, _ratio_spread, _closes_one_leg_and_opens_another],
-    ids=["open", "several legs", "one leg opens"],
+    [_long_call, _ratio_spread, _closes_one_leg_and_opens_another, _single_sell_to_open, _opens_one_leg_and_closes_another],
+    ids=["open", "several legs", "one leg opens", "single sell to open", "first leg opens"],
 )
 async def test_a_live_account_is_sent_no_option_order_that_opens_and_the_refusal_says_nothing_was_sent(
     live_broker: AlpacaBroker, order: Any
