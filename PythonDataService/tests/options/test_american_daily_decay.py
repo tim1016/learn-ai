@@ -253,6 +253,13 @@ def test_two_dividends_going_ex_at_one_instant_inside_the_day_count_as_one_of_th
     assert both.price_now == pytest.approx(as_one.price_now, abs=_SAME_PRICE_ATOL, rel=0)
     assert both.decay == pytest.approx(as_one.decay, abs=_SAME_PRICE_ATOL, rel=0)
     assert both.decay < 0
+    # Two of one amount are two dividends, not one.
+    twice_the_same = american_daily_decay(
+        **(_AT_THE_MONEY | {"right": "call", "dividends": (_ex_in(12 * _HOUR_MS, 0.7), _ex_in(12 * _HOUR_MS, 0.7))})
+    )
+    assert twice_the_same is not None
+    assert twice_the_same.cash_gone_ex == 1.4
+    assert twice_the_same.decay == pytest.approx(as_one.decay, abs=_SAME_PRICE_ATOL, rel=0)
 
 
 @pytest.mark.parametrize(
@@ -342,13 +349,13 @@ def test_an_ex_date_exactly_on_a_tree_step_moves_the_later_price_by_no_more_than
     assert worked is not None and from_instants is not None
     assert before_step_5 is not None and after_step_5 is not None
     # Measured figures with headroom, not a bound on the tree: 5.6e-3 on step 100, and 1.11e-2 as
-    # the ex-date crosses step 5.
-    a_steps_error = 2e-2
+    # the ex-date crosses step 5. Each case is held to its own.
+    on_step_100, across_step_5 = 1e-2, 2e-2
     # Each lower bound says its case still shows the edge. The first is expected to fail the day the
     # pricer decides by rule which side of a step an ex-date is on, and the second the day a price
     # no longer jumps as an ex-date crosses a step. This test then goes with the edge it pins.
-    assert 1e-9 < abs(worked.price_a_day_later - from_instants.price) <= a_steps_error
-    assert 1e-9 < abs(after_step_5.price - before_step_5.price) <= a_steps_error
+    assert 1e-9 < abs(worked.price_a_day_later - from_instants.price) <= on_step_100
+    assert 1e-9 < abs(after_step_5.price - before_step_5.price) <= across_step_5
 
 
 @pytest.mark.parametrize(
