@@ -366,20 +366,36 @@ describe('OptionStructureBuilderComponent', () => {
     'underlying_quote_unusable', 'pricing_inputs_unknown', 'search_not_done', 'not_resolved',
   ] as const)('shows the sentence of “%s” and no figures', async (state) => {
     const notice = `Stand-in: the sentence for ${state}.`;
-    // An answer that still carries what was read is shown none of it: only a resolved one has figures.
-    const { legs, money, at_expiry, lean, watched, the_money_sentence } = resolvedPreview();
-    await renderBuilder({ service: previewService(previewWithoutFigures(state, notice, { legs, money, at_expiry, lean, watched, the_money_sentence })) });
+    // An answer that still carries figures is shown none of them: only a resolved one has figures.
+    const { legs, money, at_expiry, lean, watched, the_money_sentence, feed_generation } = resolvedPreview();
+    await renderBuilder({
+      service: previewService(previewWithoutFigures(state, notice, { legs, money, at_expiry, lean, watched, the_money_sentence, feed_generation })),
+    });
 
     const picks = screen.getByRole('region', { name: 'What this picks right now' });
     expect(await within(picks).findByText(notice)).toBeTruthy();
     expect(within(picks).queryByRole('list')).toBeNull();
-    expect(picks.querySelector('dl')).toBeNull();
-    expect(within(picks).queryByText(/IBKR quotes read/)).toBeNull();
+    expect(picks.querySelector('dl.figures__money')).toBeNull();
     expect(within(picks).queryByText(/Stand-in: (which way|at expiry|the most|strikes are counted)/)).toBeNull();
     expect(within(picks).getByText('Stand-in: the bot picks again at every entry.')).toBeTruthy();
+    // Quotes were read for it, so it still says when, and how far the search reached.
+    expect(within(picks).getByText(/IBKR quotes read/).querySelector('app-timestamp-display')).not.toBeNull();
+    const watchedStrikes = picks.querySelector('dl.picks__watched');
+    expect(watchedStrikes?.querySelector('dt')?.textContent).toBe('Watched strikes');
+    expect(watchedStrikes?.querySelector('dd')?.textContent).toMatch(/Calls,.*560 to 610/s);
     // A half the server does not know leaves the verdict neither red nor green.
     const verdict = screen.getByText('Stand-in: what it resolves to is not known.').closest('app-option-verdict');
     expect(verdict?.className).not.toMatch(/option-verdict--(red|green)/);
+  });
+
+  it('names no read time and no watched strikes for an answer that read no quotes', async () => {
+    // The server stamps every answer with a time; it names a feed only when quotes were read.
+    await renderBuilder({ service: previewService(previewWithoutFigures('no_quote_source', 'Stand-in: no quote source.')) });
+
+    const picks = screen.getByRole('region', { name: 'What this picks right now' });
+    expect(await within(picks).findByText('Stand-in: no quote source.')).toBeTruthy();
+    expect(within(picks).queryByText(/IBKR quotes read/)).toBeNull();
+    expect(picks.querySelector('dl')).toBeNull();
   });
 
   it('says in the server’s words, or its own, when the preview could not be read at all', async () => {

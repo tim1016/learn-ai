@@ -15,10 +15,11 @@ let nextTitleId = 0;
  * server sends it.
  *
  * `state` is a closed set, and only `resolved` carries figures. Every other
- * state shows the server's own sentence for it and nothing else, so a state
+ * state shows the server's own sentence for it and no figure, so a state
  * this component has never heard of still reads correctly. A resolved answer
- * shows each picked contract through the shared contract renderer, with the
- * time its quotes were read. An answer is as old as that time says: it is
+ * shows each picked contract through the shared contract renderer. Any
+ * answer that quotes were read for, with figures or without, shows when
+ * they were read and the strikes that were watched. An answer is as old as that time says: it is
  * asked again when the legs change or the owner refreshes. A state that
  * passes by itself is asked again for a while without the owner; once that
  * stops, the panel says so beside Refresh, in its own words.
@@ -55,8 +56,16 @@ export class OptionPreviewPanelComponent {
     return told?.state === 'resolved' ? told : null;
   });
 
+  /**
+   * Quotes were read for this answer, whatever its state: the server names
+   * the feed they came from only then. An answer that got no further than
+   * "no quote source" is stamped with the time it was made, which is not a
+   * time any quote was read.
+   */
+  protected readonly quotesRead = computed(() => (this.preview()?.feed_generation ?? null) !== null);
+
   protected readonly oldestAge = computed(() => {
-    const age = this.resolved()?.oldest_quote_age_ms ?? null;
+    const age = this.preview()?.oldest_quote_age_ms ?? null;
     return age === null ? null : ageSeconds(age);
   });
 
