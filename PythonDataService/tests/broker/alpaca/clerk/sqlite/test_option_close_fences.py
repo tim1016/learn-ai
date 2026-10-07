@@ -638,13 +638,18 @@ async def test_a_flatten_pressed_as_its_contract_expires_is_told_it_expired_and_
     An order sent then would arrive after the contract's last trade. The
     Flatten is refused under the expiry's own code, and nothing in what the
     owner is told says to flatten again.
+
+    The bot is stopped forty seconds before the close with nothing bid, so
+    its closes fail. The bid comes twenty seconds later, sooner than the
+    thirty the Clerk leaves a failed scheduled close before sending it
+    again, so it is the owner's Flatten that meets the expiry.
     """
     await dry_run.enter(dry_run.evidence())
-    _wait_until(dry_run, EXPIRY_CLOSE - 60_000)
+    _wait_until(dry_run, EXPIRY_CLOSE - 40_000)
     _hand_over(dry_run, "0", "0.05")
     await _stop(dry_run)
     await dry_run.clerk.reconcile_once()
-    dry_run.wait(40_000)
+    dry_run.wait(20_000)
     _hand_over(dry_run, "0.80", "0.86")
     plan = await _a_plan_made_while_a_flatten_could_be_sent(dry_run)
     dry_run.wait(16_000)
@@ -1104,7 +1109,8 @@ async def test_a_stopped_bot_the_clerk_gave_up_closing_is_told_its_contract_expi
     await _passes(dry_run, 2)
 
     notices = await _page_notices(dry_run)
-    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK"}
+    # The pass after the expiry also records the close the contract's last session ended on.
+    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK", "SCHEDULED_CLOSE_MISSED"}
     for notice in notices.values():
         _says_only_what_is_true_of_an_expired_contract(
             notice.headline, notice.explanation, notice.operator_impact, notice.next_step
@@ -1169,11 +1175,13 @@ async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_
     await _passes(dry_run, 2)
 
     notices = await _page_notices(dry_run)
-    assert set(notices) == {"EXIT_NOT_FLAT"}
+    # The pass after the expiry also records the close the contract's last session ended on.
+    assert set(notices) == {"EXIT_NOT_FLAT", "SCHEDULED_CLOSE_MISSED"}
+    for said in notices.values():
+        _says_only_what_is_true_of_an_expired_contract(
+            said.headline, said.explanation, said.operator_impact, said.next_step
+        )
     notice = notices["EXIT_NOT_FLAT"]
-    _says_only_what_is_true_of_an_expired_contract(
-        notice.headline, notice.explanation, notice.operator_impact, notice.next_step
-    )
     assert notice.recovery_status is not None
     assert (notice.recovery_status.kind, notice.recovery_status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
     await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)

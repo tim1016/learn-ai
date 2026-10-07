@@ -76,6 +76,7 @@ from app.broker.alpaca.clerk.sqlite.run_ownership import (
     RunOwnership,
     retire_runs_whose_runner_is_gone,
 )
+from app.broker.alpaca.clerk.sqlite.scheduled_close import drive_scheduled_closes
 from app.broker.alpaca.clerk.sqlite.scheduled_end import (
     fence_bots_at_their_end,
     finish_bots_at_their_end,
@@ -1323,6 +1324,13 @@ async def _reconcile_account_serialized(
     await finish_bots_at_their_end(
         repo, ends_due, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
     )
+
+    # An option position is closed when the close it owes comes due, and a
+    # session that ends on one is recorded (ADR 0076). The deadline keeper
+    # runs this same step on time; run here too, a keeper that died or was
+    # late costs one pass and never a close. On books holding no option
+    # contract it reads that once and writes nothing.
+    await drive_scheduled_closes(repo, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread)
 
     # A failed ENTER that filled and closed while trade_updates was down is
     # absent from the open-order snapshot; fold it before the verdict so its

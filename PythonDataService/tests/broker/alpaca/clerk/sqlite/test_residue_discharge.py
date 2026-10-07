@@ -364,6 +364,8 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
     assert {code for code, role in roles.items() if role == "strands"} == {
         "EXIT_NOT_FLAT",
         "EXIT_STUCK",
+        # #2913: an expired contract the broker has taken off its books is a residue no order can close.
+        "SCHEDULED_CLOSE_MISSED",
     }
     assert {code for code, role in roles.items() if role == "admits"} == {
         "POSITION_DRIFT",

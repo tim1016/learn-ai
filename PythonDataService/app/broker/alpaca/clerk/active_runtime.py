@@ -444,6 +444,9 @@ async def compose_repository_runtime(
             entry_reading=None if envelope_sync is None else envelope_sync.read_for_entry,
             entry_deadline_nudge=None if deadline_keeper is None else deadline_keeper.nudge,
         )
+        if deadline_keeper is not None:
+            # A scheduled close is an EXIT, driven with the facade's one pricing seam (ADR 0076).
+            deadline_keeper.keep_scheduled_closes(intake=intake, pricing=facade.recovery_pricing)
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (
             publish if sweep_listener is None else (lambda result: sweep_listener(publish(result)))

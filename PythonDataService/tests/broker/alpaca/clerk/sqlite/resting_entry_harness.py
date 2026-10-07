@@ -286,6 +286,8 @@ def _compose(
         repo=repo, read=account, trade=venue, account_mode="paper", live_envelope=gate,
         entry_reading=sync.read_for_entry, entry_deadline_nudge=keeper.nudge,
     )
+    # As the account's own composition hands it over: every round also runs the scheduled closes.
+    keeper.keep_scheduled_closes(intake=clerk.intake, pricing=clerk.recovery_pricing)
     return sync, keeper, clerk
 
 

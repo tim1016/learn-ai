@@ -20,15 +20,19 @@ order until its next round. The keeper and an EXIT act under different
 effects and can each ask the broker to cancel one order; asking twice for
 the same order is a retry, never a second intent.
 
-**A round is a list of steps.** Today there is one: cancel what has not
-filled of every entry past its wait (``resting_entries``). A position's
-scheduled close is one more step of the same round, not a second task.
+**A round is a list of steps.** There are two. The first cancels what has
+not filled of every entry past its wait (``resting_entries``). The second
+sends every scheduled close of an option position that is due, drives on
+each one not finished, and records each one its session ended on
+(``scheduled_close``). The second is handed its lock and its pricing once
+the Clerk's facade exists (:meth:`DeadlineKeeper.keep_scheduled_closes`).
 
-**One round reads the worklist once.** What is due, and when to wake, both
+**One round reads each worklist once.** What is due, and when to wake, both
 come from that one read.
 
-**How long it sleeps.** Until the next stored deadline, and never longer
-than the idle wake. An entry past its deadline and still not proven is
+**How long it sleeps.** Until the next stored deadline, the next close that
+comes due or the end of the session one is owed in, and never longer than
+the idle wake. An entry past its deadline and still not proven is
 asked about again every second for the first ten seconds past that
 deadline, then no more often than the idle wake, however often the keeper
 wakes for other entries. That pause is kept in memory only. It is not a
@@ -52,8 +56,10 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.resting_entries import (
@@ -63,6 +69,7 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
     cancel_resting_entries,
     resting_entries,
 )
+from app.broker.alpaca.clerk.sqlite.scheduled_close import ScheduledCloseRound, drive_scheduled_closes
 from app.broker.contract.ports import BrokerTradePort
 
 logger = logging.getLogger(__name__)
@@ -96,6 +103,7 @@ class KeeperRound:
 
     entries: WaitEndedRound
     wake_in_ms: int
+    closes: ScheduledCloseRound = field(default_factory=ScheduledCloseRound)
 
 
 class DeadlineKeeper:
@@ -124,6 +132,19 @@ class DeadlineKeeper:
         self._task: asyncio.Task[None] | None = None
         # When each due entry was last asked about, on the Clerk's clock. A pause, not a worklist.
         self._asked_at_ms: dict[str, int] = {}
+        # The lock and the pricing the scheduled closes are accepted under and driven with.
+        self._closes: tuple[ReentrantAsyncLock, RecoveryPricing] | None = None
+
+    def keep_scheduled_closes(self, *, intake: ReentrantAsyncLock, pricing: RecoveryPricing) -> None:
+        """Give the keeper its second step: the scheduled closes of option positions (ADR 0076).
+
+        Handed over once the Clerk's facade exists. A close is an EXIT, and
+        an EXIT is driven with the facade's one pricing seam, while the
+        facade is itself built with this keeper's nudge. A keeper never
+        given them keeps entries only, and the reconciliation pass, which
+        always runs the same step, is then the only one to send a close.
+        """
+        self._closes = (intake, pricing)
 
     def nudge(self) -> None:
         """End the keeper's sleep: a deadline may have been stored that is sooner than it knew."""
@@ -142,7 +163,25 @@ class DeadlineKeeper:
             order_ref: asked for order_ref, asked in self._asked_at_ms.items()
             if order_ref in listed and order_ref not in entries.ended
         }
-        return KeeperRound(entries=entries, wake_in_ms=self._wake_in_ms(resting, ended=entries.ended))
+        closes = ScheduledCloseRound()
+        if self._closes is not None:
+            intake, pricing = self._closes
+            closes = await drive_scheduled_closes(
+                self._repo, trade=self._trade, intake=intake, pricing=pricing, off_loop=self._off_loop
+            )
+        wake_in_ms = min(self._wake_in_ms(resting, ended=entries.ended), self._wake_for_closes(closes))
+        return KeeperRound(entries=entries, wake_in_ms=wake_in_ms, closes=closes)
+
+    def _wake_for_closes(self, closes: ScheduledCloseRound) -> int:
+        """How long until a close comes due or the session it is owed in ends: at most the idle wake.
+
+        A close that is due and not finished is looked at again at the idle
+        wake: a market order fills at once, and a held one waits on a halt
+        or a hold that does not lift by the second.
+        """
+        if closes.next_change_ms is None:
+            return IDLE_WAKE_MS
+        return min(IDLE_WAKE_MS, max(closes.next_change_ms - self._repo.clock(), 0))
 
     def _may_ask_again(self, entry: RestingEntry, now_ms: int) -> bool:
         """Whether a due entry's pause since it was last asked about is over."""

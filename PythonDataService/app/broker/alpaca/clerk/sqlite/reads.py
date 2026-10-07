@@ -1250,6 +1250,55 @@ def working_option_entry_for_strategy(conn: sqlite3.Connection, strategy_instanc
     return OrderResource(**dict(row)) if row is not None else None
 
 
+class HeldOptionContract(NamedTuple):
+    """One option contract a bot holds, and how many: signed, a bought position above zero."""
+
+    strategy_instance_id: str
+    symbol: str
+    quantity: float
+
+
+# Read outward from what is held: the few position rows that are not zero, each
+# asked of the contracts the books have recorded. Books that never traded an
+# option ask an empty table, and no row of the custody log is read.
+HELD_OPTION_CONTRACTS_SQL = (
+    "SELECT p.strategy_instance_id, contract.symbol AS symbol, p.attributed_qty "
+    "FROM positions p "
+    "CROSS JOIN option_contracts contract ON contract.symbol = UPPER(p.symbol) "
+    "WHERE p.strategy_instance_id IS NOT NULL AND p.attributed_qty != 0 "
+    "ORDER BY p.strategy_instance_id ASC, contract.symbol ASC"
+)
+
+
+def held_option_contracts(conn: sqlite3.Connection) -> list[HeldOptionContract]:
+    """Every option contract any bot holds, account-wide, in one read (#2913).
+
+    The worklist of the scheduled closes. A close is owed by what is held,
+    so it starts from the positions, never from a run or an order's state.
+    A position in shares is not listed: its symbol is no recorded contract.
+    """
+    return [
+        HeldOptionContract(row["strategy_instance_id"], row["symbol"], row["attributed_qty"])
+        for row in conn.execute(HELD_OPTION_CONTRACTS_SQL).fetchall()
+    ]
+
+
+def strategies_under_active_uncertainty(conn: sqlite3.Connection, reason_code: str) -> list[str]:
+    """Every bot with an open episode of ``reason_code``, read by the reason's own index (#2913).
+
+    For a step that owns one bot-scoped notice from its raising to its end
+    and must find the ones no longer owed. Books that never raised the
+    reason answer from the index alone.
+    """
+    rows = conn.execute(
+        "SELECT strategy_instance_id FROM uncertainties "
+        "WHERE reason_code = ? AND resolved_at_ms IS NULL AND strategy_instance_id IS NOT NULL "
+        "ORDER BY strategy_instance_id ASC",
+        (reason_code,),
+    ).fetchall()
+    return [row["strategy_instance_id"] for row in rows]
+
+
 def orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:
     """Every order (ENTRY and REDUCING alike) belonging to one strategy.
 

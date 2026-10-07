@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
+    SCHEDULED_CLOSE_MISSED_REASON_CODE,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
     ExecutionPriceConflictCause,
     ExecutionPriceConflictOrder,
@@ -952,6 +953,29 @@ def _failed_enter_filled_proof(
     )
 
 
+def _scheduled_close_missed_proof(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+    strategy_instance_id: str | None,
+) -> bool:
+    """A reduction of anything the bot holds, toward zero without crossing (ADR 0076).
+
+    The notice says a close the Clerk owed was not made. It doubts no
+    quantity, so it never stands in the way of getting out: of a contract it
+    names, or of anything else the bot holds. A proof scoped to the named
+    contracts would refuse the bot's own exit of another one.
+    """
+    return intent is not None and _symbol_scoped_reduction_proof(
+        repo,
+        symbols=frozenset({intent.symbol.upper()}),
+        intent=intent,
+        strategy_instance_id=strategy_instance_id,
+    )
+
+
 def _no_per_symbol_proof(
     repo: ClerkSqliteRepository,
     *,
@@ -1000,6 +1024,7 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     EXIT_NOT_FLAT_REASON_CODE: _exit_not_flat_proof,
     EXIT_STUCK_REASON_CODE: _exit_stuck_proof,
     FAILED_ENTER_FILLED_REASON_CODE: _failed_enter_filled_proof,
+    SCHEDULED_CLOSE_MISSED_REASON_CODE: _scheduled_close_missed_proof,
     # #2460: the price conflict doubts the cost of executions whose quantity
     # both sides agree on, so it has nothing per-symbol to prove before a
     # reduction -- a position stays reduceable while its basis is disputed.

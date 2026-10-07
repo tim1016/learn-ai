@@ -358,10 +358,11 @@ async def test_a_cancel_left_uncertain_at_a_restart_is_proven_by_the_keepers_fir
 # ── where it is composed ─────────────────────────────────────────────────
 
 
-async def test_a_dry_runs_clerk_has_a_keeper_running_and_stores_a_deadline_it_never_needs(dry_run: _DryRun) -> None:  # noqa: F811
+async def test_a_dry_runs_clerk_has_a_keeper_and_stores_a_deadline_it_never_needs(dry_run: _DryRun) -> None:  # noqa: F811
+    # That the keeper is running on an account opened to operate is shown where it is composed
+    # (``test_deadline_keeper_composition``): this scene's clock is the test's, so its task is stopped.
     runtime = get_clerk_runtime(dry_run.binding.sealed_account_id or "")
     assert runtime is not None and isinstance(runtime.deadline_keeper, DeadlineKeeper)
-    assert runtime.deadline_keeper._task is not None and not runtime.deadline_keeper._task.done()
 
     bought = await dry_run.enter(dry_run.evidence())
 

@@ -90,3 +90,62 @@ async def test_a_dry_run_store_opened_only_to_be_read_has_no_keeper_running(tmp_
         assert runtime.deadline_keeper is not None and runtime.deadline_keeper._task is None
     finally:
         await runtime.close()
+
+
+async def test_a_dry_run_store_opened_to_operate_has_its_keeper_running(tmp_path: Path) -> None:
+    """A Dry Run has no pass on a timer, so only its keeper can act at a deadline while its bot runs."""
+    account_id = "sim:ema-1"
+    broker = SyntheticBroker(account_id=account_id)
+    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
+
+    runtime = await select_synthetic_clerk_runtime(
+        account_id=account_id, read=broker, trade=broker, artifacts_root=tmp_path, opening=SyntheticOpening.OPERATE,
+    )
+
+    try:
+        keeper = runtime.deadline_keeper
+        assert isinstance(keeper, DeadlineKeeper)
+        assert keeper._task is not None and not keeper._task.done()
+    finally:
+        await runtime.close()
+
+
+async def test_a_paper_accounts_keeper_is_handed_the_scheduled_closes_with_the_clerks_own_lock_and_pricing(
+    tmp_path: Path,
+) -> None:
+    """Without them the keeper keeps entries only, and a close would wait for the pass."""
+    broker = _Broker()
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+
+    runtime = await select_active_clerk_runtime(
+        read=broker, trade=broker, artifacts_root=tmp_path, activation_store=_ActivationStore(_activation()),
+        repository_opener=lambda _account_id, _root: repo,
+    )
+
+    try:
+        keeper = runtime.deadline_keeper
+        assert isinstance(keeper, DeadlineKeeper) and keeper._closes is not None
+        intake, pricing = keeper._closes
+        assert intake is runtime.clerk.intake and pricing == runtime.clerk.recovery_pricing
+    finally:
+        await runtime.close()
+
+
+async def test_a_dry_runs_keeper_is_handed_the_scheduled_closes_with_the_clerks_own_lock_and_pricing(
+    tmp_path: Path,
+) -> None:
+    account_id = "sim:ema-1"
+    broker = SyntheticBroker(account_id=account_id)
+    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
+
+    runtime = await select_synthetic_clerk_runtime(
+        account_id=account_id, read=broker, trade=broker, artifacts_root=tmp_path, opening=SyntheticOpening.OPERATE,
+    )
+
+    try:
+        keeper = runtime.deadline_keeper
+        assert isinstance(keeper, DeadlineKeeper) and keeper._closes is not None
+        intake, pricing = keeper._closes
+        assert intake is runtime.clerk.intake and pricing == runtime.clerk.recovery_pricing
+    finally:
+        await runtime.close()
