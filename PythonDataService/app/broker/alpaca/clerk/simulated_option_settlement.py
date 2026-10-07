@@ -377,8 +377,9 @@ class SimulatedOptionSettlements:
 
     # Every settlement in the window asked for, the ones made by earlier runs of the step among them.
     settled: tuple[SimulatedSettlement, ...] = ()
-    # Each contract still held past its last session that the step cannot settle, with why. No price
-    # will come for one of these by itself: the owner can end it at their word.
+    # Each contract still held past its last session that the step cannot settle, with why. The
+    # simulation lets go of one at the owner's word only when the why is that it kept no price of
+    # the close. For any other why (a sold or part contract, no store of bars) it does not let go.
     not_settled: Mapping[str, str] = field(default_factory=dict)
     # Each contract still held whose closing bar the step is waiting for, with the instant the wait ends.
     waiting: Mapping[str, int] = field(default_factory=dict)
