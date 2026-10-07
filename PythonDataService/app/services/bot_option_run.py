@@ -244,13 +244,25 @@ class OptionOrderTerms:
 def option_order_terms(binding: BrokerBotBinding) -> OptionOrderTerms:
     """The order terms one option bot runs under: the one place its runner reads them.
 
-    They are a fact of the deployment, never of a decision. Deploy does not
-    store them on the binding yet, so every option bot runs under the terms a
-    Deploy starts from; when it does, this reads them there and nothing else
-    changes.
+    They are a fact of the deployment, never of a decision: the four numbers
+    the owner set at Deploy, sealed with the bot on its binding (ADR 0076
+    decision 24). A bot with none sealed is refused as its run starts.
+    Nothing is assumed in their place, because whatever was assumed would be
+    handed to the Clerk with every entry as if the owner had chosen it.
     """
-    del binding
-    return OptionOrderTerms()
+    sealed = binding.option_order_terms
+    if sealed is None:
+        raise OptionPlanRefused(
+            OptionEffectRefusal.ORDER_TERMS_NOT_SEALED,
+            "This bot trades option contracts and was started with no order terms. The widest gap a leg, the "
+            "entry wait, the whole-structure cost limit and the expiry-day close are set at Deploy and sealed "
+            "with the bot. Deploy it again from the Deploy page.",
+        )
+    return OptionOrderTerms(
+        leg_gap_limit_percent=sealed.gap_limit_percent,
+        cost_limit_percent=sealed.cost_limit_percent,
+        close=sealed.close,
+    )
 
 
 # (underlying, the moment, the latest expiry the plan comes to) -> the rate and the dividends, with sources.

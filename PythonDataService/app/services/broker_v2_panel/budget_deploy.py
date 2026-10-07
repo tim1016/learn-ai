@@ -129,7 +129,33 @@ def request_fingerprint(request: AlpacaPaperDeployRequest, *, custody_account_id
     return request.fingerprint(account=custody_account_id, world=world)
 
 
-def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict) -> DeploymentBudgetPreview:
+@dataclass(frozen=True, slots=True)
+class OptionEntryPrice:
+    """One entry of an option bot as the structure preview prices it now, or why it has no price (ADR 0076 decision 24).
+
+    An option contract has no top of book to price a position from: one
+    entry's cost is what the structure preview's resolution sets aside, and
+    the caller reads that before it asks for the money review.
+    """
+
+    # What one entry of the structures asked sets aside, in whole cents. None: not priced.
+    commitment_cents: int | None
+    # When the quotes it stands on were read.
+    observed_at_ms: int
+    # Not priced, and only for a state that passes by itself: ask again shortly.
+    waiting: bool
+    # Why there is no price, in a sentence. Empty with one.
+    detail: str
+
+
+def preview_budget(
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+    *,
+    resolved_parameters: dict,
+    option_entry: OptionEntryPrice | None = None,
+) -> DeploymentBudgetPreview:
+    """The money review of one Deploy. ``option_entry`` prices a bot that trades option contracts, and only it."""
     runtime = _primary(account_id)
     world, custody_id = _request_world(runtime, request)
     name_note = bot_name_note(request.symbol, request.strategy_key)
@@ -137,6 +163,13 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
     assert repo is not None
     now = repo.clock()
     try:
+        if request.options is not None:
+            # An option entry is priced by the structure preview, never from a
+            # share of its underlying (ADR 0076 decision 24).
+            return _priced_preview(
+                runtime, account_id, request, _option_price(option_entry), world=world, custody_id=custody_id,
+                name_note=name_note, resolved_parameters=resolved_parameters,
+            )
         # The entry is priced from the asset it buys, never from the Signal
         # stream's symbol when the two differ (#2912).
         quote = prepared_top_of_book(request.order_symbol, now)
@@ -165,76 +198,145 @@ def preview_budget(account_id: str, request: AlpacaPaperDeployRequest, *, resolv
                 world=world, custody_account_id=custody_id, bot_name_note=name_note,
             )
         requirement, _ = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
-        minimum = cents_required(requirement)
-        amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
-        # Dry Run never draws on the account's money, so it has no bar.
-        money: AccountMoney | None = None
-        observation: AccountObservation | None = None
-        if world == "synthetic":
-            # Private starting cash is the consent amount, never a copy of
-            # parent cash. No real account risk policy is borrowed.
-            available = None
-            observed_at = quote.observed_at_ms
-            risk_revision = 0
-            risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
-        else:
-            with repo.write_fence():
-                observation, policy = _account_admission(repo, runtime)
-                # One read under the fence: the bar's free to deploy IS this
-                # preview's unreserved cash, by construction.
-                money = _read_account_money(repo, observation)
-                available = money.budget.unreserved_cents
-                observed_at = observation.observed_at_ms
-                risk_revision = policy.revision
-                with money_context():
-                    percent = normalize_money(policy.loss_fraction) * 100
-                    risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${recorded_dollars(policy.loss_usd)}. Existing exit terms stay fixed."
-        with money_context():
-            shortcuts = [DeploymentBudgetShortcut(
-                key="position_headroom", label="1.2 × one position",
-                amount_usd=dollars(cents_required(requirement * Decimal("1.2"))),
-                explanation=f"1.2 × the ${dollars(minimum)} estimated position, including modelled fees. Market fills can cost more.",
-            )]
-            if available is not None:
-                for key, label, fraction in (("quarter", "25%", Decimal("0.25")), ("half", "50%", Decimal("0.5")), ("all", "All unreserved", Decimal(1))):
-                    cents = cents_spendable(Decimal(available) / 100 * fraction)
-                    shortcuts.append(DeploymentBudgetShortcut(key=key, label=label, amount_usd=dollars(cents), explanation=f"{label} of ${dollars(available)} currently unreserved cash."))
-        token = None
-        confirmation = None
-        refusal = None
-        if request.budget is not None and amount is not None:
-            refusal = _amount_refusal(request.budget.risk_revision, amount, risk_revision=risk_revision, minimum=minimum, available=available)
-        if request.budget is not None and amount is not None and refusal is None:
-            registration = _STRATEGY_REGISTRY.get(request.strategy_key)
-            contract = None if registration is None else registration.signal_program_contract
-            token = canonical_sha256({
-                "request": request_fingerprint(request, custody_account_id=runtime.selected_account_id, world=world),
-                "resolved_parameters": resolved_parameters,
-                "program_version": None if contract is None else contract.program_version,
-            })
-            if world == "real_live":
-                confirmation = f"DEPLOY {account_id} ${dollars(amount)}"
-        # A refused amount still returns the bar the Money step draws -- today's,
-        # with no new slice -- beside the refusal; an admitted one is carved in.
-        money_after = None if money is None or observation is None else _money_view(
-            repo, observation, world=world, account_id=account_id, money=money,
-            new_cents=amount if refusal is None else None,
-        )
-        return DeploymentBudgetPreview(
-            state="ready" if refusal is None else "unavailable",
-            detail=refusal or "This is an entry-admission budget. Market fills and losses can exceed it.",
-            world=world, custody_account_id=custody_id, bot_name_note=name_note,
-            budget_usd=None if token is None or amount is None else dollars(amount), observed_at_ms=observed_at,
-            minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
-            estimated_price_usd=recorded_dollars(quote.ask), risk_revision=risk_revision,
-            risk_limits_summary=risk_summary,
-            shortcuts=tuple(shortcuts), review_token=token, confirmation_text=confirmation,
-            money_after=money_after,
+        return _priced_preview(
+            runtime, account_id, request,
+            _PricedEntry(requirement=requirement, observed_at_ms=quote.observed_at_ms, estimated_price_usd=recorded_dollars(quote.ask)),
+            world=world, custody_id=custody_id, name_note=name_note, resolved_parameters=resolved_parameters,
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
         return DeploymentBudgetPreview(
             state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id, bot_name_note=name_note,
         )
+
+
+_STOCK_HEADROOM = "1.2 × the ${minimum} estimated position, including modelled fees. Market fills can cost more."
+_STOCK_TOO_LITTLE = "One estimated position needs at least ${minimum}, including fees."
+_OPTION_HEADROOM = (
+    "1.2 × the ${minimum} one entry sets aside right now, including the fee estimate. The bot picks its "
+    "contracts again at every entry, and their price moves."
+)
+_OPTION_TOO_LITTLE = "One entry sets aside ${minimum} right now, including the fee estimate. Choose a budget of at least that."
+
+
+@dataclass(frozen=True, slots=True)
+class _PricedEntry:
+    """What one entry needs, as the review priced it, and the words that say so."""
+
+    # In dollars: one position's notional and its fee provision, or one option entry's commitment.
+    requirement: Decimal
+    observed_at_ms: int
+    # The price one share was estimated at. None for option contracts, which have no one price.
+    estimated_price_usd: str | None
+    headroom_explanation: str = _STOCK_HEADROOM
+    too_little: str = _STOCK_TOO_LITTLE
+
+
+def _option_price(option_entry: OptionEntryPrice | None) -> OptionEntryPrice:
+    if option_entry is None:
+        raise BudgetUnavailable("This option structure has not been priced. Review the Deploy again.")
+    return option_entry
+
+
+def _priced_preview(
+    runtime: ActiveClerkRuntime,
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+    entry: OptionEntryPrice | _PricedEntry,
+    *,
+    world: AuthorityKind,
+    custody_id: str | None,
+    name_note: str,
+    resolved_parameters: dict,
+) -> DeploymentBudgetPreview:
+    """The review of a budget against one priced entry: the amount, the shortcuts, the token and the bar.
+
+    One body for a bot in shares, priced from its asset's ask, and for a
+    bot in option contracts, priced by the structure preview. An option
+    entry with no price has no review to consent to: it waits, or says why.
+    """
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    if isinstance(entry, OptionEntryPrice):
+        if entry.commitment_cents is None:
+            return DeploymentBudgetPreview(
+                state="awaiting_price" if entry.waiting else "unavailable", detail=entry.detail,
+                world=world, custody_account_id=custody_id, bot_name_note=name_note,
+            )
+        priced = _PricedEntry(
+            requirement=Decimal(entry.commitment_cents) / 100, observed_at_ms=entry.observed_at_ms,
+            estimated_price_usd=None, headroom_explanation=_OPTION_HEADROOM, too_little=_OPTION_TOO_LITTLE,
+        )
+    else:
+        priced = entry
+    minimum = cents_required(priced.requirement)
+    amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
+    # Dry Run never draws on the account's money, so it has no bar.
+    money: AccountMoney | None = None
+    observation: AccountObservation | None = None
+    if world == "synthetic":
+        # Private starting cash is the consent amount, never a copy of
+        # parent cash. No real account risk policy is borrowed.
+        available = None
+        observed_at = priced.observed_at_ms
+        risk_revision = 0
+        risk_summary = "Private simulated starting cash. Real-account daily loss limits and holds do not apply."
+    else:
+        with repo.write_fence():
+            observation, policy = _account_admission(repo, runtime)
+            # One read under the fence: the bar's free to deploy IS this
+            # preview's unreserved cash, by construction.
+            money = _read_account_money(repo, observation)
+            available = money.budget.unreserved_cents
+            observed_at = observation.observed_at_ms
+            risk_revision = policy.revision
+            with money_context():
+                percent = normalize_money(policy.loss_fraction) * 100
+                risk_summary = f"Daily loss limit: the smaller of {percent:f}% of prior-close equity and ${recorded_dollars(policy.loss_usd)}. Existing exit terms stay fixed."
+    with money_context():
+        shortcuts = [DeploymentBudgetShortcut(
+            key="position_headroom", label="1.2 × one position",
+            amount_usd=dollars(cents_required(priced.requirement * Decimal("1.2"))),
+            explanation=priced.headroom_explanation.format(minimum=dollars(minimum)),
+        )]
+        if available is not None:
+            for key, label, fraction in (("quarter", "25%", Decimal("0.25")), ("half", "50%", Decimal("0.5")), ("all", "All unreserved", Decimal(1))):
+                cents = cents_spendable(Decimal(available) / 100 * fraction)
+                shortcuts.append(DeploymentBudgetShortcut(key=key, label=label, amount_usd=dollars(cents), explanation=f"{label} of ${dollars(available)} currently unreserved cash."))
+    token = None
+    confirmation = None
+    refusal = None
+    if request.budget is not None and amount is not None:
+        refusal = _amount_refusal(
+                request.budget.risk_revision, amount, risk_revision=risk_revision, minimum=minimum, available=available,
+                too_little=priced.too_little,
+            )
+    if request.budget is not None and amount is not None and refusal is None:
+        registration = _STRATEGY_REGISTRY.get(request.strategy_key)
+        contract = None if registration is None else registration.signal_program_contract
+        token = canonical_sha256({
+            "request": request_fingerprint(request, custody_account_id=runtime.selected_account_id, world=world),
+            "resolved_parameters": resolved_parameters,
+            "program_version": None if contract is None else contract.program_version,
+        })
+        if world == "real_live":
+            confirmation = f"DEPLOY {account_id} ${dollars(amount)}"
+    # A refused amount still returns the bar the Money step draws -- today's,
+    # with no new slice -- beside the refusal; an admitted one is carved in.
+    money_after = None if money is None or observation is None else _money_view(
+        repo, observation, world=world, account_id=account_id, money=money,
+        new_cents=amount if refusal is None else None,
+    )
+    return DeploymentBudgetPreview(
+        state="ready" if refusal is None else "unavailable",
+        detail=refusal or "This is an entry-admission budget. Market fills and losses can exceed it.",
+        world=world, custody_account_id=custody_id, bot_name_note=name_note,
+        budget_usd=None if token is None or amount is None else dollars(amount), observed_at_ms=observed_at,
+        minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
+        estimated_price_usd=priced.estimated_price_usd, risk_revision=risk_revision,
+        risk_limits_summary=risk_summary,
+        shortcuts=tuple(shortcuts), review_token=token, confirmation_text=confirmation,
+        money_after=money_after,
+    )
 
 
 def same_symbol_note(account_id: str, request: AlpacaPaperDeployRequest) -> str | None:
@@ -304,19 +406,28 @@ def _account_admission(repo: ClerkSqliteRepository, runtime: ActiveClerkRuntime)
     return risk.observation, policy
 
 
-def _amount_refusal(reviewed_revision: int, amount: int, *, risk_revision: int, minimum: int, available: int | None) -> str | None:
+def _amount_refusal(
+    reviewed_revision: int, amount: int, *, risk_revision: int, minimum: int, available: int | None,
+    too_little: str = _STOCK_TOO_LITTLE,
+) -> str | None:
     """Why this amount cannot be reviewed, or ``None``; the bar is drawn either way."""
     if reviewed_revision != risk_revision:
         return "Risk limits changed. Review the current limits and budget again."
     if amount < minimum:
-        return f"One estimated position needs at least ${dollars(minimum)}, including fees."
+        return too_little.format(minimum=dollars(minimum))
     if available is not None and amount > available:
         return f"Only ${dollars(available)} is unreserved. Choose a smaller budget or resolve existing claims."
     return None
 
 
-def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict) -> DeployBudgetConsent:
-    preview = preview_budget(account_id, request, resolved_parameters=resolved_parameters)
+def resolve_consent(
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+    *,
+    resolved_parameters: dict,
+    option_entry: OptionEntryPrice | None = None,
+) -> DeployBudgetConsent:
+    preview = preview_budget(account_id, request, resolved_parameters=resolved_parameters, option_entry=option_entry)
     budget = request.budget
     if budget is None or preview.state != "ready" or preview.review_token is None or budget.review_token != preview.review_token:
         raise BudgetUnavailable(preview.detail if preview.state != "ready" else "Review this exact budget and configuration before Deploy.")

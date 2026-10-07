@@ -133,6 +133,7 @@ NEVER_RETIRED_SETTINGS: Final[tuple[str, ...]] = (
     "ALPACA_FAULT_INJECTION_ENABLED",
     "ALPACA_PAPER_CARRYOVER_ENABLED",
     "ALPACA_OPTION_BUYING_POWER_JUDGED",
+    "ALPACA_LIVE_OPTION_BOTS_ENABLED",
     # Upgrade-only inputs for stamping legacy registrations once (#2504).
     # Runtime pricing reads each bot's sealed exit terms, never these variables.
     "ALPACA_LIVE_XH_EXIT_BAND_MULTIPLE",

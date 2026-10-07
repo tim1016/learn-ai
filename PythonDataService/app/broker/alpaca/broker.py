@@ -30,6 +30,8 @@ from app.broker.alpaca import adapter
 from app.broker.alpaca.active_binding import resolved_alpaca_settings
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings
+from app.broker.alpaca.live_option_bots import SETTING as LIVE_OPTION_BOTS_SETTING
+from app.broker.alpaca.live_option_bots import live_refuses
 from app.broker.contract.capabilities import BrokerCapabilities, ExtendedHoursWindow
 from app.broker.contract.errors import (
     BrokerEvidenceUnavailable,
@@ -965,26 +967,36 @@ class AlpacaBroker:
         could not keep as given, is ``BrokerRequestInvalid``: nothing was
         sent.
 
-        **A live binding sends none** (ADR 0076 decision 19). It raises
+        **A live binding sends no order that opens while Live is switched
+        off** (ADR 0076 decisions 19 and 24). It raises
         ``BrokerOptionsNotSupported`` before anything is built: definitive,
         nothing was sent, so the Clerk records the order as not sent. The
-        Clerk already refuses an option plan on a Live account, at
-        registration and at every effect; this is the second fence, on the
-        port that knows its own endpoint, so that one mistake above it
-        cannot put an option order on real money. It asks the settings of
-        the client that posts, when that client is bound to some, so a
-        broker built around a live client is refused whatever the process's
-        own binding says. An opening order and a closing one are refused
-        alike: a Live account's books can hold no option position to close.
-        Alpaca itself takes option orders on a live account, which is why
-        the capabilities still say so. Opening Live to option bots removes
-        this refusal on purpose (#2913).
+        Clerk already refuses an option plan and an ENTER on a Live account;
+        this is the second fence, on the port that knows its own endpoint,
+        so that one mistake above it cannot open an option position with
+        real money. It asks the settings of the client that posts, when that
+        client is bound to some, so a broker built around a live client is
+        refused whatever the process's own binding says. The one setting the
+        Clerk and Deploy read too lifts it: ``ALPACA_LIVE_OPTION_BOTS_ENABLED``,
+        off unless a deployment turns it on.
+
+        **An order whose every leg closes is always sent.** A Live account
+        can hold a contract bought while the setting was on, and switching
+        it off must leave that contract a way out. The fence reads the
+        order's own legs (``live_option_bots.live_refuses``): one leg that
+        opens and the order is refused whole. Alpaca itself takes option
+        orders on a live account, which is why the capabilities still say
+        so.
         """
-        if self._posting_settings().is_live:
+        if self._posting_settings().is_live and live_refuses(order):
             raise BrokerOptionsNotSupported(
-                "This app sends no option order to a Live Alpaca account yet.",
+                "This app sends no option order that opens a position to a Live Alpaca account yet.",
                 broker=BROKER_ID,
-                detail="Option bots run on a Dry Run and on a Paper account. Nothing was sent.",
+                detail=(
+                    "Option bots run on a Dry Run and on a Paper account. Nothing was sent. Live accounts are "
+                    f"opened to them by {LIVE_OPTION_BOTS_SETTING}, which is off. An order that only closes a "
+                    "position is still sent."
+                ),
             )
         body = _option_order_body(order, client_order_id=client_order_id)
         payload = await self._client.submit_order(body)

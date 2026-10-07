@@ -37,6 +37,7 @@ from app.schemas.action_plan import (
     CloseLegExit,
     StockEntryLeg,
     StockInstrument,
+    is_option_plan,
 )
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
@@ -44,6 +45,7 @@ from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
+from app.schemas.option_order_terms import SealedOptionOrderTerms, strip_absent_option_order_terms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.schemas.traded_asset_acknowledgement import (
@@ -129,6 +131,10 @@ class BrokerBotBinding(BaseModel):
     # configuration hash leaves an absent one out (``exclude_none``).
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     action_plan: ActionPlan
+    # The four order terms an option bot was deployed with, fixed for its
+    # life (ADR 0076 decision 24). ``None`` for every bot in shares; the
+    # configuration hash leaves absent ones out (``exclude_none``).
+    option_order_terms: SealedOptionOrderTerms | None = None
     # The strategy's fully-resolved deploy-time parameter set (registered
     # defaults merged with the deploy request's overrides). `None`, not `{}`,
     # is the absent case — `immutable_configuration_payload`'s
@@ -150,6 +156,18 @@ class BrokerBotBinding(BaseModel):
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     created_at_ms: int
 
+    # No return annotation: the binding's published schema stays this model's own fields.
+    @model_serializer(mode="wrap")
+    def _omit_absent_option_order_terms(self, handler: SerializerFunctionWrapHandler):
+        """A bot in shares is dumped exactly as it was before the terms existed."""
+        return strip_absent_option_order_terms(handler(self))
+
+    @model_validator(mode="after")
+    def _only_an_option_plan_carries_option_order_terms(self) -> BrokerBotBinding:
+        if self.option_order_terms is not None and not is_option_plan(self.action_plan):
+            raise ValueError("option order terms belong to a bot that trades option contracts; this plan trades shares")
+        return self
+
 
 class StrategyInstanceRecord(BaseModel):
     """Create-once strategy configuration shared by every run of an instance."""
@@ -168,6 +186,7 @@ class StrategyInstanceRecord(BaseModel):
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
     action_plan: ActionPlan
+    option_order_terms: SealedOptionOrderTerms | None = None
     strategy_params: dict[str, Any] | None = None
     exit_terms: ExitTerms | None = Field(default=None, exclude=True)
     sealed_account_id: str | None = None
@@ -180,9 +199,10 @@ class StrategyInstanceRecord(BaseModel):
 
         This record refuses unknown fields, so the build that wrote a
         ``null`` here could not be rolled back past: the earlier build would
-        refuse to read every bot deployed since.
+        refuse to read every bot deployed since. A bot in shares has no
+        option order terms, and is written without them for the same reason.
         """
-        return strip_absent_traded_asset_acknowledgement(handler(self))
+        return strip_absent_option_order_terms(strip_absent_traded_asset_acknowledgement(handler(self)))
 
     @classmethod
     def from_binding(cls, binding: BrokerBotBinding) -> StrategyInstanceRecord:
@@ -198,6 +218,7 @@ class StrategyInstanceRecord(BaseModel):
             evidence_override=binding.evidence_override,
             traded_asset_acknowledgement=binding.traded_asset_acknowledgement,
             action_plan=binding.action_plan,
+            option_order_terms=binding.option_order_terms,
             strategy_params=binding.strategy_params,
             sealed_account_id=binding.sealed_account_id,
             configuration_hash=configuration_hash(binding),
@@ -756,6 +777,7 @@ class BotBindingRepository:
             evidence_override=instance.evidence_override,
             traded_asset_acknowledgement=instance.traded_asset_acknowledgement,
             action_plan=instance.action_plan,
+            option_order_terms=instance.option_order_terms,
             strategy_params=instance.strategy_params,
             strategy_param_origins=parameter_origins,
             sealed_program=sealed_program,

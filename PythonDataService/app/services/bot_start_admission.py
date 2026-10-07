@@ -26,6 +26,7 @@ from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.market_liveness import MarketLivenessFact
+from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.run_admission import (
     ExtendedHoursAdmissionFact,
     ExtendedHoursAdmissionState,
@@ -127,6 +128,9 @@ class StartRequest:
     strategy_param_origins: dict[str, ParameterOrigin] | None = None
     # The owner's written acceptance of an untested traded asset (#2912).
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
+    # The four order terms an option bot is deployed with (ADR 0076 decision
+    # 24). ``None`` for every bot in shares.
+    option_order_terms: SealedOptionOrderTerms | None = None
     budget_consent: DeployBudgetConsent | None = None
     # The owner's end for this deployment (#2607): recorded in the bot's
     # desired state at activation, never in the binding, so it enters no
@@ -255,6 +259,7 @@ def make_start_request(
     budget_consent: DeployBudgetConsent | None = None,
     end: BotEnd | None = None,
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
+    option_order_terms: SealedOptionOrderTerms | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -274,6 +279,7 @@ def make_start_request(
         budget_consent=budget_consent,
         end=end,
         traded_asset_acknowledgement=traded_asset_acknowledgement,
+        option_order_terms=option_order_terms,
     )
 
 
@@ -524,6 +530,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         evidence_override=request.evidence_override,
         traded_asset_acknowledgement=request.traded_asset_acknowledgement,
         action_plan=request.action_plan,
+        option_order_terms=request.option_order_terms,
         strategy_params=request.strategy_params,
         exit_terms=request.exit_terms,
         strategy_param_origins=request.strategy_param_origins,

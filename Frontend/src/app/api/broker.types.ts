@@ -6982,6 +6982,8 @@ export interface components {
             traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             /** Traded Symbol */
             traded_symbol?: string | null;
+            /** Trades */
+            trades?: (components["schemas"]["TradesTheSignal"] | components["schemas"]["TradesAnotherStock"] | components["schemas"]["TradesOptions-Input"]) | null;
         };
         /** AlpacaDeskStateResponse */
         AlpacaDeskStateResponse: {
@@ -7201,6 +7203,8 @@ export interface components {
             traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
             /** Traded Symbol */
             traded_symbol?: string | null;
+            /** Trades */
+            trades?: (components["schemas"]["TradesTheSignal"] | components["schemas"]["TradesAnotherStock"] | components["schemas"]["TradesOptions-Input"]) | null;
         };
         /**
          * AlpacaPaperDeployStrategy
@@ -8286,6 +8290,7 @@ export interface components {
             symbol: string;
             /** Traded Symbol */
             traded_symbol?: string | null;
+            trades?: components["schemas"]["TradesOptions-Output"] | null;
         };
         /**
          * BotDutyOutcomeView
@@ -11833,6 +11838,7 @@ export interface components {
             money_after?: components["schemas"]["AccountMoneyView"] | null;
             /** Observed At Ms */
             observed_at_ms?: number | null;
+            option_review?: components["schemas"]["OptionDeployReview"] | null;
             /** Review Token */
             review_token?: string | null;
             /**
@@ -20187,6 +20193,90 @@ export interface components {
             underlying: string;
         };
         /**
+         * OptionDeployBlocker
+         * @description One thing that stops this Deploy, for the "Can't deploy yet" list.
+         */
+        OptionDeployBlocker: {
+            /** Fix */
+            fix: string | null;
+            /** Gate Id */
+            gate_id: string;
+            /** Headline */
+            headline: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * OptionDeployNote
+         * @description Something the owner should read before deploying. Never a refusal.
+         */
+        OptionDeployNote: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Headline */
+            headline: string;
+        };
+        /**
+         * OptionDeployReview
+         * @description What Deploy says of a bot that trades an option structure, beside its budget.
+         */
+        OptionDeployReview: {
+            /** Ask Again In Ms */
+            ask_again_in_ms: number | null;
+            /**
+             * Blockers
+             * @default []
+             */
+            blockers?: components["schemas"]["OptionDeployBlocker"][];
+            /** Custom Structures Explanation */
+            custom_structures_explanation: string;
+            /** End Sentence */
+            end_sentence: string | null;
+            /** Entry Sentence */
+            entry_sentence: string | null;
+            /** Figures Good Until Ms */
+            figures_good_until_ms: number | null;
+            /**
+             * Money Rows
+             * @default []
+             */
+            money_rows?: components["schemas"]["OptionMoneyRow"][];
+            /** Money Sentence */
+            money_sentence: string;
+            /**
+             * Notes
+             * @default []
+             */
+            notes?: components["schemas"]["OptionDeployNote"][];
+            /** One Structure Explanation */
+            one_structure_explanation: string;
+            /** Orders Summary */
+            orders_summary: string;
+            /**
+             * Picks
+             * @default []
+             */
+            picks?: components["schemas"]["OptionPickedContract"][];
+            /** Preview Reason Code */
+            preview_reason_code: string | null;
+            /** Preview Sentence */
+            preview_sentence: string | null;
+            /** Preview State */
+            preview_state: ("plan_refused" | "no_quote_source" | "feed_not_up" | "no_quote_line" | "listing_not_read" | "quotes_arriving" | "underlying_quote_unusable" | "pricing_inputs_unknown" | "search_not_done" | "not_resolved" | "resolved") | "not_asked";
+            /** Quotes Read Ms */
+            quotes_read_ms: number | null;
+            /** Structure In A Sentence */
+            structure_in_a_sentence: string;
+            /** Structure Label */
+            structure_label: string;
+            /** Structures */
+            structures: number;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
          * OptionEndingContract
          * @description The contract, as every option view serves one: for the shared renderer, which writes its name.
          */
@@ -20412,6 +20502,27 @@ export interface components {
             strike: components["schemas"]["AtmStrike"] | components["schemas"]["AtmOffsetStrike"] | components["schemas"]["AbsoluteStrike"] | components["schemas"]["DeltaStrike"] | components["schemas"]["LegDistanceStrike"] | components["schemas"]["PercentStrike"];
         };
         /**
+         * OptionMoneyRow
+         * @description One row of the money an option entry would mean, as the structure preview priced it.
+         */
+        OptionMoneyRow: {
+            /** Amount Cents */
+            amount_cents: number | null;
+            /** Amount Usd */
+            amount_usd: string | null;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "set_aside" | "premium" | "broker_requirement" | "fees" | "loss_at_expiry" | "budget_free";
+            /** Label */
+            label: string;
+            /** Note */
+            note: string | null;
+            /** Part Of Set Aside */
+            part_of_set_aside: boolean;
+        };
+        /**
          * OptionOrderTermDefaults
          * @description The option order terms a Deploy starts from. Each is fixed for the bot's life once it is deployed.
          */
@@ -20448,6 +20559,16 @@ export interface components {
             range_reason: string | null;
             /** Unit Label */
             unit_label: string;
+        };
+        /** OptionPickedContract */
+        OptionPickedContract: {
+            contract: components["schemas"]["OptionContractView"];
+            /** Number */
+            number: number;
+            /** Ratio */
+            ratio: number;
+            /** Side Label */
+            side_label: string;
         };
         /**
          * OptionPreviewAtExpiry
@@ -23810,6 +23931,7 @@ export interface components {
              * @enum {string}
              */
             mode: "log_only" | "dry_run" | "trade";
+            option_order_terms?: components["schemas"]["SealedOptionOrderTerms-Output"] | null;
             /** Quantity */
             quantity: number;
             /**
@@ -23829,6 +23951,34 @@ export interface components {
             validation_event_id: string;
             /** Validation Snapshot Sha256 */
             validation_snapshot_sha256: string;
+        };
+        /**
+         * SealedOptionOrderTerms
+         * @description An option bot's four order terms. Every one is said; none is filled in.
+         */
+        "SealedOptionOrderTerms-Input": {
+            /** Cost Limit Percent */
+            cost_limit_percent: number | string;
+            /** Entry Wait Seconds */
+            entry_wait_seconds: number;
+            /** Expiry Close Lead Minutes */
+            expiry_close_lead_minutes: number;
+            /** Gap Limit Percent */
+            gap_limit_percent: number | string;
+        };
+        /**
+         * SealedOptionOrderTerms
+         * @description An option bot's four order terms. Every one is said; none is filled in.
+         */
+        "SealedOptionOrderTerms-Output": {
+            /** Cost Limit Percent */
+            cost_limit_percent: string;
+            /** Entry Wait Seconds */
+            entry_wait_seconds: number;
+            /** Expiry Close Lead Minutes */
+            expiry_close_lead_minutes: number;
+            /** Gap Limit Percent */
+            gap_limit_percent: string;
         };
         /** SearchOwnerResponse */
         SearchOwnerResponse: {
@@ -25948,13 +26098,75 @@ export interface components {
          *     comparing tickers: options on the bot's own symbol are something else.
          */
         TradedInstrumentView: {
+            /** In A Sentence */
+            in_a_sentence?: string | null;
             /**
              * Kind
              * @enum {string}
              */
             kind: "stock" | "option";
+            /** Label */
+            label?: string | null;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * TradesAnotherStock
+         * @description Another stock or ETF than the symbol the bot listens to (#2912).
+         */
+        TradesAnotherStock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stock";
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * TradesOptions
+         * @description An option structure on one underlying, with the order terms it is deployed under.
+         */
+        "TradesOptions-Input": {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "options";
+            /** Legs */
+            legs: components["schemas"]["OptionLegRules"][];
+            order_terms: components["schemas"]["SealedOptionOrderTerms-Input"];
+            structure?: components["schemas"]["NamedStructure"] | null;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * TradesOptions
+         * @description An option structure on one underlying, with the order terms it is deployed under.
+         */
+        "TradesOptions-Output": {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "options";
+            /** Legs */
+            legs: components["schemas"]["OptionLegRules"][];
+            order_terms: components["schemas"]["SealedOptionOrderTerms-Output"];
+            structure?: components["schemas"]["NamedStructure"] | null;
+            /** Underlying */
+            underlying: string;
+        };
+        /**
+         * TradesTheSignal
+         * @description The shares of the symbol the bot listens to.
+         */
+        TradesTheSignal: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "signal";
         };
         /**
          * TradingCalendarWindow
@@ -29959,6 +30171,8 @@ export interface operations {
                 symbol: string;
                 /** @description What the owner picked to trade. */
                 traded_symbol: string;
+                /** @description Ask about options on what was picked, not its shares. Options on the symbol the bot listens to are something else too. */
+                options?: boolean;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

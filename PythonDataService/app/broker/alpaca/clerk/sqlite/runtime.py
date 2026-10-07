@@ -247,6 +247,7 @@ from app.broker.alpaca.clerk.stream_health import (
     StreamHealthGate,
     stream_health_refusal,
 )
+from app.broker.alpaca.live_option_bots import live_option_bots_enabled
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.errors import BrokerError, BrokerOrderRejected
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
@@ -1085,21 +1086,38 @@ class SqliteAlpacaClerkFacade:
         """
         self._symbol_to_register(action_plan)
 
-    def _option_plan_account_refusal(self) -> str | None:
+    def _option_plan_account_refusal(self, *, only_closes: bool = False) -> str | None:
         """Why this account takes no option plan, or ``None`` when it does: a Dry Run's and a Paper account do.
 
-        A Live Shadow and a Live account are each refused by name. Nothing
-        about an option order has been sent to Alpaca yet, so real money
-        waits for what Paper shows (ADR 0076).
+        A Live Shadow is refused by name: it is not built. A Live account is
+        refused by name while ``ALPACA_LIVE_OPTION_BOTS_ENABLED`` is off,
+        which it is unless a deployment turns it on: nothing about an option
+        order has been sent to Alpaca yet, so real money waits for what
+        Paper shows (ADR 0076 decision 24). The setting is read at every
+        ask, so no registration and no effect outlives a change of it.
+
+        ``only_closes`` is said of an EXIT, which the Clerk builds from the
+        position its own books hold and which can open nothing. A fence
+        against opening never stops a close: a Live account that holds a
+        contract bought while the setting was on closes it with the setting
+        off. A registration and an ENTER open, and are refused.
         """
         if self.authority_kind == "synthetic":
             return None
         if self.authority_kind == "sqlite" and self._account_mode == "paper":
             return None
-        account = "A Live Shadow" if self.authority_kind == "shadow" else "A Live account"
+        if self.authority_kind == "shadow":
+            return (
+                "This bot trades option contracts. A Live Shadow does not take an option bot yet: it is not "
+                "built. A Dry Run and a Paper account do."
+            )
+        if only_closes or live_option_bots_enabled():
+            return None
         return (
-            f"This bot trades option contracts. {account} does not take an option bot yet: a Dry Run and a "
-            "Paper account do. Option orders have not been checked against Alpaca with real money at stake."
+            "This bot trades option contracts. A Live account does not take an option bot yet: option bots are "
+            "switched off on Live accounts, because option orders have not been checked against Alpaca with "
+            "real money at stake. Check the first Paper option orders at Alpaca, then set "
+            "ALPACA_LIVE_OPTION_BOTS_ENABLED=true for this Clerk."
         )
 
     @property
@@ -1823,9 +1841,12 @@ class SqliteAlpacaClerkFacade:
         is made. The fences are the ones an effect in shares passes, in the
         same order.
 
-        A Dry Run's account and a Paper account take either. Every other
-        plan and every other account is refused here by name, before
-        anything is written but the refusal. On a Paper account the picked
+        A Dry Run's account and a Paper account take either, and so does a
+        Live account while its setting is on. With the setting off a Live
+        account still takes an EXIT, which closes what its books hold, and
+        refuses an ENTER (ADR 0076 decision 24). Every other plan and every
+        other account is refused here by name, before anything is written
+        but the refusal. On a Paper account the picked
         contract is first asked of Alpaca's own contract reference
         (:meth:`_contract_reference_refusal`), and the entry then rests at
         Alpaca as a limit order: this call returns once it is sent, and what
@@ -1869,7 +1890,7 @@ class SqliteAlpacaClerkFacade:
                 return rejected(
                     reason_code=LIVE_ENVELOPE_UNOBSERVED, explanation=dropped, next_step=_ENTRY_NOT_RETRIED
                 )
-            not_this_account = self._option_plan_account_refusal()
+            not_this_account = self._option_plan_account_refusal(only_closes=purpose is EffectPurpose.EXIT)
             if not_this_account is not None:
                 return rejected(
                     reason_code=OptionEffectRefusal.ACCOUNT_NOT_OPEN.value,
