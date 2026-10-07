@@ -12,6 +12,8 @@ nothing else, so the two cannot drift apart.
 - Each of the two facts is known or says why it is not. Dividends that are not
   known have another shape than dividends that are, so "not known" can never be
   read as an empty list, which would mean none is declared.
+- A ``sentence`` is the coordinator's own words for the owner, shown as they
+  are. Nothing reads a date or a number out of one.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ class WhyNotKnown(StrEnum):
     POLYGON_ANSWER_UNREADABLE = "polygon_answer_unreadable"
     # What a Clerk says of its own ask. The coordinator never answers with these.
     COORDINATOR_NOT_CONFIGURED = "coordinator_not_configured"
+    COORDINATOR_ADDRESS_REFUSED = "coordinator_address_refused"
     COORDINATOR_NOT_ASKED = "coordinator_not_asked"
     COORDINATOR_UNREACHABLE = "coordinator_unreachable"
     COORDINATOR_TIMED_OUT = "coordinator_timed_out"

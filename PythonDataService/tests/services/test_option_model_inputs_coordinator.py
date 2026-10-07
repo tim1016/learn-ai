@@ -20,6 +20,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.broker.fleet import internal_http
 from app.broker.fleet.internal_http import build_internal_sync_client
 from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH, OPTION_MODEL_INPUTS_READ_TIMEOUT_S
 from app.config import fleet_settings, settings
@@ -476,14 +477,28 @@ def test_a_clerk_not_set_up_to_ask_sends_nothing_and_knows_nothing(monkeypatch: 
     assert (coordinator.sent, coordinator.vendors_asked) == ([], [])
 
 
-def test_a_coordinator_address_outside_the_private_network_is_sent_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+def _does_not_resolve(host: str, _port: object) -> list[tuple]:
+    raise OSError(f"{host} does not resolve")
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        pytest.param("http://8.8.8.8:8000", id="a public address"),
+        pytest.param("http://fleet-coordinator:8000", id="a name that does not resolve, as while it restarts"),
+    ],
+)
+def test_a_coordinator_address_not_shown_to_be_private_is_sent_nothing(
+    monkeypatch: pytest.MonkeyPatch, address: str
+) -> None:
     """The ask carries this Clerk's token in the clear."""
     coordinator = Coordinator(monkeypatch)
-    monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", "http://8.8.8.8:8000")
+    monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", address)
+    monkeypatch.setattr(internal_http.socket, "getaddrinfo", _does_not_resolve)
 
     read = _read()
 
-    assert _nothing_known(read) == (WhyNotKnown.COORDINATOR_NOT_CONFIGURED, WhyNotKnown.COORDINATOR_NOT_CONFIGURED)
+    assert _nothing_known(read) == (WhyNotKnown.COORDINATOR_ADDRESS_REFUSED, WhyNotKnown.COORDINATOR_ADDRESS_REFUSED)
     assert coordinator.sent == []
 
 

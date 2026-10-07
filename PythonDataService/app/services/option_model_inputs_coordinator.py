@@ -73,13 +73,14 @@ def ask_the_coordinator(
     try:
         enforce_private_http_target(base_url)
     except FleetTransportRefused as refused:
+        # A name that does not resolve is refused too, and that is what a coordinator being restarted looks like.
         logger.error(
-            "The coordinator's address is outside the private network; the option model inputs are not asked for",
-            extra={"action": "option_model_inputs_coordinator_address_refused"},
+            "The coordinator's address could not be shown to be private; the option model inputs are not asked for",
+            extra={"action": "option_model_inputs_coordinator_address_refused", "refusal": str(refused)},
         )
         raise CoordinatorDidNotAnswer(
-            WhyNotKnown.COORDINATOR_NOT_CONFIGURED,
-            "the coordinator's address is not inside the private network, so nothing was sent to it",
+            WhyNotKnown.COORDINATOR_ADDRESS_REFUSED,
+            "the coordinator's address could not be shown to be inside the private network, so nothing was sent to it",
         ) from refused
     try:
         request = OptionModelInputsRequest(
