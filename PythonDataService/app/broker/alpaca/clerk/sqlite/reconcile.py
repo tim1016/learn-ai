@@ -51,6 +51,8 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.off_loop import to_thread
 from app.broker.alpaca.clerk.sqlite.open_replacement import has_ready_replacement
+from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
+from app.broker.alpaca.clerk.sqlite.option_events import poll_option_events
 from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
     asked_of_a_real_option_order,
     look_up_by_client_order_id,
@@ -538,9 +540,11 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
         order.order_id
         for order in foreign_orders
         if (
-            observation := repo.external_order_by_broker_order_id(order.order_id)
-        ) is None
-        or observation.acknowledged_at_ms is None
+            (observation := repo.external_order_by_broker_order_id(order.order_id)) is None
+            or observation.acknowledged_at_ms is None
+        )
+        # An order in an option contract a bot holds is held against that bot (ADR 0076 decision 22).
+        and not _held_against_a_bot(repo, order)
     )
     if not evidence_refs:
         resolve_account_hold(
@@ -555,6 +559,13 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
         reason_code=UNEXPLAINED_ORDER_HOLD_REASON_CODE,
         evidence_refs=evidence_refs,
     )
+
+
+def _held_against_a_bot(repo: ClerkSqliteRepository, order: BrokerOrder) -> bool:
+    with repo.write_fence() as conn:
+        return outside_order_reduces_a_bots_contract(
+            conn, symbol=order.symbol, side=order.side, broker_order_id=order.order_id
+        )
 
 
 def _sync_position_drift(
@@ -1310,6 +1321,17 @@ async def _reconcile_account_serialized(
     # or was late costs one pass and never a deadline. On books with no
     # option entry it reads an empty worklist and writes nothing.
     await cancel_entries_past_their_wait(repo, trade=trade, off_loop=to_thread)
+
+    # An assignment, an exercise or an expiry is read from the broker's
+    # activities and booked for the bot that held the contract, before the
+    # final look at the broker (ADR 0076 decision 22). A contract whose
+    # position this pass's snapshot shows differing from the books is read
+    # for at once. On books with no option contract one empty table is read,
+    # the broker is not asked and nothing is written.
+    await poll_option_events(
+        repo, read=read, off_loop=intake.off_loop, broker_positions=broker_positions,
+        act_on_the_books_between_reads=True,
+    )
 
     # A Dry Run never ends holding (owner decision 2026-09-29): on a ``sim:``
     # authority, whatever an ended run left is closed at the last price it saw.

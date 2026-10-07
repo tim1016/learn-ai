@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FAILED_ENTER_FILLED_REASON_CODE,
     HOLD_REASON_CODES,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    OPTION_EVENT_HOLD_REASON_CODES,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -1007,6 +1008,11 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE: _no_per_symbol_proof,
 }
+
+
+# ADR 0076 decision 22: an option-event hold says nothing about how many of
+# any one symbol a bot holds, so a reduction under it has nothing per-symbol to prove.
+_REDUCTION_PROOFS.update(dict.fromkeys(OPTION_EVENT_HOLD_REASON_CODES, _no_per_symbol_proof))
 
 
 def decide_capability(

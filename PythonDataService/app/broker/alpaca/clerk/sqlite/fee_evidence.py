@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import order_total_retain
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import order_total_retained_exact_provenance
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_EVENT_CLOSE_EXECUTION_PREFIX
 from app.broker.alpaca.clerk.sqlite.reads import external_orders as tracked_external_orders
 from app.broker.alpaca.clerk.sqlite.reads import filled_outside_order_ids, governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -458,6 +459,10 @@ def _effective_fills(
         if record.quantity == 0 or (
             simulated_fill_cutoff_ms is not None and record.filled_at_ms > simulated_fill_cutoff_ms
         ):
+            continue
+        if record.event_key.startswith(OPTION_EVENT_CLOSE_EXECUTION_PREFIX):
+            # An option that expired, was exercised or was assigned closed its lot with no trade
+            # (ADR 0076 decision 22). No fee is predicted for it, and no fee row is shared onto it.
             continue
         grouped[et_date_at_ms(record.filled_at_ms)].append(
             FeeFill(

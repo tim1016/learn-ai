@@ -354,6 +354,7 @@ async def test_an_uncertainty_that_doubts_a_fill_refuses_the_discharge(clocked_r
 
 def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
     """Pin the registry's answer, so a new cause is refused until someone decides."""
+    from app.broker.alpaca.clerk.sqlite.uncertainty_causes import OPTION_EVENT_HOLD_REASON_CODES
     from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
         _REASON_POLICIES,
         residue_discharge_role,
@@ -366,6 +367,9 @@ def test_every_registered_reason_declares_its_residue_discharge_role() -> None:
         "EXIT_STUCK",
     }
     assert {code for code, role in roles.items() if role == "admits"} == {
+        # ADR 0076 decision 22: the write-off is the way out of a contract the broker no longer
+        # holds and no row explains. A row that comes afterwards finds no lot to close twice.
+        *OPTION_EVENT_HOLD_REASON_CODES,
         "POSITION_DRIFT",
         "UNFOLDABLE_BROKER_ORDER",
         "LIVE_ENVELOPE_LOSS_HOLD",

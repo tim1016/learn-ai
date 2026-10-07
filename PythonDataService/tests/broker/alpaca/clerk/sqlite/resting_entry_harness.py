@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerPosition
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import BrokerOptionContract
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
@@ -47,6 +48,7 @@ from app.services import market_liveness
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     NOON,
+    ScriptedOptionEvents,
     _FakeTradePort,
     _TestClock,
     documented_option_listing,
@@ -78,6 +80,13 @@ class PaperAccountRead(_Account):
         self.listed: dict[str, BrokerOptionContract] = {SYMBOL: documented_option_listing(CALL)}
         self.listing_error: Exception | None = None
         self.listing_reads: list[str] = []
+        # The account's option events, as a test scripts them: none, read whole, until it does.
+        self.option_events = ScriptedOptionEvents()
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> BrokerOptionEventEvidence:
+        return await self.option_events.read_option_event_activities(after_ms=after_ms, resume=resume)
 
     async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
         self.listing_reads.append(contract.occ_symbol)

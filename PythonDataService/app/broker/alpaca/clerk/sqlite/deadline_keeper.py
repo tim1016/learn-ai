@@ -20,9 +20,11 @@ order until its next round. The keeper and an EXIT act under different
 effects and can each ask the broker to cancel one order; asking twice for
 the same order is a retry, never a second intent.
 
-**A round is a list of steps.** Today there is one: cancel what has not
-filled of every entry past its wait (``resting_entries``). A position's
-scheduled close is one more step of the same round, not a second task.
+**A round is a list of steps.** Cancel what has not filled of every entry
+past its wait (``resting_entries``). Then read and book what ended an option
+position with no order of ours (``option_events``); that step keeps its own
+cadence and reads the broker only when a read is due. A position's scheduled
+close is one more step of the same round, not a second task.
 
 **One round reads the worklist once.** What is due, and when to wake, both
 come from that one read.
@@ -55,6 +57,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
+from app.broker.alpaca.clerk.sqlite.option_events import OptionEventPoll, poll_option_events
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.resting_entries import (
     RestingEntry,
@@ -63,7 +66,7 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
     cancel_resting_entries,
     resting_entries,
 )
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +99,8 @@ class KeeperRound:
 
     entries: WaitEndedRound
     wake_in_ms: int
+    # What the round's read of option events did. None when the keeper has no read port.
+    option_events: OptionEventPoll | None = None
 
 
 class DeadlineKeeper:
@@ -111,12 +116,14 @@ class DeadlineKeeper:
         *,
         repo: ClerkSqliteRepository,
         trade: BrokerTradePort,
+        read: BrokerReadPort | None = None,
         rest: Rest = rest_until_nudged,
         off_loop: OffLoop = to_thread,
         max_rounds: int | None = None,
     ) -> None:
         self._repo = repo
         self._trade = trade
+        self._read = read
         self._rest = rest
         self._off_loop = off_loop
         self._max_rounds = max_rounds
@@ -142,7 +149,15 @@ class DeadlineKeeper:
             order_ref: asked for order_ref, asked in self._asked_at_ms.items()
             if order_ref in listed and order_ref not in entries.ended
         }
-        return KeeperRound(entries=entries, wake_in_ms=self._wake_in_ms(resting, ended=entries.ended))
+        # One more step: an assignment, an exercise or an expiry is read and booked (ADR 0076
+        # decision 22). The step keeps its own cadence; between reads it touches nothing.
+        option_events = (
+            None if self._read is None
+            else await poll_option_events(self._repo, read=self._read, off_loop=self._off_loop)
+        )
+        return KeeperRound(
+            entries=entries, wake_in_ms=self._wake_in_ms(resting, ended=entries.ended), option_events=option_events
+        )
 
     def _may_ask_again(self, entry: RestingEntry, now_ms: int) -> bool:
         """Whether a due entry's pause since it was last asked about is over."""

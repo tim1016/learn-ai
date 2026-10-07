@@ -41,6 +41,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.broker.contract.option_events import BrokerOptionEventEvidence, BrokerOptionEventResume
 from app.broker.contract.options import BrokerOptionContract, BrokerOptionOrder, OptionOrderRequest
 from app.options.contract import OptionContract
 from app.schemas.exit_terms import ExitTerms
@@ -398,8 +399,62 @@ def documented_option_listing(contract: OptionContract, **changes: Any) -> Broke
     return alpaca_adapter.from_alpaca_option_contract(payload)
 
 
+class _ScriptedNonTradeActivities:
+    """The Alpaca client seam for the account's non-trade activities: raw rows, the newest first, in pages."""
+
+    def __init__(self, rows: list[dict[str, Any]], *, page_size: int) -> None:
+        self._rows = sorted(rows, key=lambda row: row.get("date", ""), reverse=True)
+        self._page_size = page_size
+
+    async def list_non_trade_activities(self, *, limit: int, page_token: str | None = None) -> list[Any]:
+        start = 0 if page_token is None else next(
+            index + 1 for index, row in enumerate(self._rows) if row["id"] == page_token
+        )
+        return self._rows[start : start + min(limit, self._page_size)]
+
+
+class ScriptedOptionEvents:
+    """What Alpaca would report of the account's option events: raw rows a test scripts (#2913).
+
+    The rows are Alpaca's documented ones, or those with a contract, a date
+    or a count laid over them. They are read by the real Alpaca port and
+    adapter, so what a test books is what those would hand the Clerk.
+    Nothing here was recorded from Alpaca.
+    """
+
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+        # Raised by the next read, and by every one after it, until it is cleared.
+        self.error: Exception | None = None
+        # The window each read asked for.
+        self.reads: list[int] = []
+        self.page_size = 100
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> BrokerOptionEventEvidence:
+        from app.broker.alpaca.broker import AlpacaBroker
+
+        if resume is None:
+            self.reads.append(after_ms)
+        if self.error is not None:
+            raise self.error
+        client = _ScriptedNonTradeActivities(self.rows, page_size=self.page_size)
+        return await AlpacaBroker(client=client).read_option_event_activities(  # type: ignore[arg-type]
+            after_ms=after_ms, resume=resume
+        )
+
+
+def documented_option_activity(product: str, heading: str, index: int = 0, **changes: Any) -> dict[str, Any]:
+    """One option activity row Alpaca's pages document, with ``changes`` laid over it."""
+    row = dict(documented("option_activities", "documented_activities.json")[product][heading][index])
+    row.update(changes)
+    return row
+
+
 class _FakeReadPort:
-    """A minimal ``BrokerReadPort`` double — list_orders/list_positions, and the option contracts it lists."""
+    """A minimal ``BrokerReadPort`` double — list_orders/list_positions, the option contracts it lists, and
+    the option events a test scripts."""
 
     def __init__(
         self,
@@ -411,6 +466,12 @@ class _FakeReadPort:
         self._orders = orders or []
         self._positions = positions or []
         self._option_contracts = option_contracts or {}
+        self.option_events = ScriptedOptionEvents()
+
+    async def read_option_event_activities(
+        self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
+    ) -> BrokerOptionEventEvidence:
+        return await self.option_events.read_option_event_activities(after_ms=after_ms, resume=resume)
 
     async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
         return self._option_contracts.get(contract.occ_symbol)

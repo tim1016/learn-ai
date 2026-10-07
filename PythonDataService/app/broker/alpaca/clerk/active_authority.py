@@ -458,7 +458,7 @@ async def select_synthetic_clerk_runtime(
             simulation=SimulatedAccountProjection(repo=repository, artifacts_root=artifacts_root, initial_cash=simulation_initial_cash))
         # ADR 0076: a Dry Run has no periodic pass, so only a task of the
         # Clerk's own can act at a deadline while its run is going.
-        deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade)
+        deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade, read=guarded_read)
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,

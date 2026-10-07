@@ -40,6 +40,51 @@ STREAM_HEALTH_HOLD_REASON_CODE = "STREAM_HEALTH_HOLD"
 # every program free to exit.
 LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE = "LIVE_ENVELOPE_LOSS_HOLD"
 
+# What the reading and booking of option events holds a bot for (ADR 0076
+# decision 22): an assignment, an exercise, an expiry, or an order the Clerk
+# did not place in a contract a bot holds. One family, each reason its own
+# code. Each is raised for the bot it can be tied to and account-wide
+# otherwise, blocks entries, and admits reductions and the Flatten.
+OPTION_EVENTS_NOT_READ_REASON_CODE = "OPTION_EVENTS_NOT_READ"
+OPTION_EVENT_UNREADABLE_REASON_CODE = "OPTION_EVENT_UNREADABLE"
+# The six refusals of the allocation rule, under the rule's own codes.
+OPTION_EVENT_NOT_EXECUTED_REASON_CODE = "OPTION_EVENT_NOT_EXECUTED"
+OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE = "OPTION_EVENT_CONTRACT_NOT_HELD"
+OPTION_EVENT_WRONG_SIDE_REASON_CODE = "OPTION_EVENT_WRONG_SIDE"
+OPTION_EVENT_HELD_ON_BOTH_SIDES_REASON_CODE = "OPTION_EVENT_HELD_ON_BOTH_SIDES"
+OPTION_EVENT_MORE_CONTRACTS_THAN_HELD_REASON_CODE = "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD"
+OPTION_EVENT_CASH_NOT_WHOLE_CENTS_REASON_CODE = "OPTION_EVENT_CASH_NOT_WHOLE_CENTS"
+OPTION_EVENT_ROW_CHANGED_REASON_CODE = "OPTION_EVENT_ROW_CHANGED"
+OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL_REASON_CODE = "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL"
+OPTION_SHARE_TRADE_MISSING_REASON_CODE = "OPTION_SHARE_TRADE_MISSING"
+OPTION_SHARE_TRADE_UNPAIRED_REASON_CODE = "OPTION_SHARE_TRADE_UNPAIRED"
+OPTION_SHARE_TRADE_DISAGREES_REASON_CODE = "OPTION_SHARE_TRADE_DISAGREES"
+OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE_REASON_CODE = "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE"
+OPTION_EVENT_AFTER_A_LOT_CLOSED_REASON_CODE = "OPTION_EVENT_AFTER_A_LOT_CLOSED"
+OPTION_EXPIRED_NOT_SETTLED_REASON_CODE = "OPTION_EXPIRED_NOT_SETTLED"
+OPTION_SHARES_HELD_REASON_CODE = "OPTION_SHARES_HELD"
+OPTION_ORDER_NOT_OURS_REASON_CODE = "OPTION_ORDER_NOT_OURS"
+OPTION_EVENT_HOLD_REASON_CODES: tuple[str, ...] = (
+    OPTION_EVENTS_NOT_READ_REASON_CODE,
+    OPTION_EVENT_UNREADABLE_REASON_CODE,
+    OPTION_EVENT_NOT_EXECUTED_REASON_CODE,
+    OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE,
+    OPTION_EVENT_WRONG_SIDE_REASON_CODE,
+    OPTION_EVENT_HELD_ON_BOTH_SIDES_REASON_CODE,
+    OPTION_EVENT_MORE_CONTRACTS_THAN_HELD_REASON_CODE,
+    OPTION_EVENT_CASH_NOT_WHOLE_CENTS_REASON_CODE,
+    OPTION_EVENT_ROW_CHANGED_REASON_CODE,
+    OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL_REASON_CODE,
+    OPTION_SHARE_TRADE_MISSING_REASON_CODE,
+    OPTION_SHARE_TRADE_UNPAIRED_REASON_CODE,
+    OPTION_SHARE_TRADE_DISAGREES_REASON_CODE,
+    OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE_REASON_CODE,
+    OPTION_EVENT_AFTER_A_LOT_CLOSED_REASON_CODE,
+    OPTION_EXPIRED_NOT_SETTLED_REASON_CODE,
+    OPTION_SHARES_HELD_REASON_CODE,
+    OPTION_ORDER_NOT_OURS_REASON_CODE,
+)
+
 # The reason codes whose episodes project as ``holds`` rather than
 # ``uncertainties``. After v12 both live in one table, and this frozenset is
 # the single partition between the two compatibility projections — every
@@ -762,6 +807,58 @@ def broker_snapshot_stale_cause_is_valid(value: Any) -> bool:
     return value == {"snapshot": "open_orders_and_positions"}
 
 
+@dataclass(frozen=True)
+class OptionEventHoldItem:
+    """One thing an option-event hold names: a row, a contract or an outside order."""
+
+    # What it is and its id: ``option-activity:<id>``, ``share-trade:<id>``,
+    # ``contract:<symbol>``, ``outside-order:<id>`` or ``read``.
+    ref: str
+    # The symbol the row or the order carries, as written. None when it has none.
+    symbol: str | None
+    # The row's date, ``int64`` ms UTC, which keeps it inside the next read's window. None when it has none.
+    date_ms: int | None
+    # What is wrong, in plain words.
+    detail: str
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"ref": self.ref, "symbol": self.symbol, "date_ms": self.date_ms, "detail": self.detail}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> OptionEventHoldItem:
+        if not isinstance(value, dict):
+            raise ValueError("an option-event hold names objects")
+        _require_exact_keys(value, {"ref", "symbol", "date_ms", "detail"})
+        ref, symbol, date_ms, detail = value["ref"], value["symbol"], value["date_ms"], value["detail"]
+        if not isinstance(ref, str) or not ref or not isinstance(detail, str) or not detail:
+            raise ValueError("an option-event hold names what it is about and says what is wrong")
+        if symbol is not None and (not isinstance(symbol, str) or not symbol):
+            raise ValueError("an option-event hold's symbol is a non-empty string or absent")
+        if date_ms is not None and (isinstance(date_ms, bool) or not isinstance(date_ms, int) or date_ms < 0):
+            raise ValueError("an option-event hold's date is whole milliseconds or absent")
+        return cls(ref=ref, symbol=symbol, date_ms=date_ms, detail=detail)
+
+
+@dataclass(frozen=True)
+class OptionEventHoldCause:
+    """Everything one option-event hold is about, in the order it was found."""
+
+    items: tuple[OptionEventHoldItem, ...]
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"items": [item.to_mapping() for item in self.items]}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> OptionEventHoldCause:
+        if not isinstance(value, dict):
+            raise ValueError("an option-event hold's cause must be an object")
+        _require_exact_keys(value, {"items"})
+        items = value["items"]
+        if not isinstance(items, list) or not items:
+            raise ValueError("an option-event hold names one thing or more")
+        return cls(items=tuple(OptionEventHoldItem.from_mapping(item) for item in items))
+
+
 def reconciliation_incomplete_cause_is_valid(value: Any) -> bool:
     return value == {"pass": "account_reconciliation"}
 
@@ -776,6 +873,25 @@ __all__ = [
     "HOLD_REASON_CODE_SQL_PARAMS",
     "HOLD_REASON_CODE_SQL_PLACEHOLDERS",
     "LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE",
+    "OPTION_EVENTS_NOT_READ_REASON_CODE",
+    "OPTION_EVENT_AFTER_A_LOT_CLOSED_REASON_CODE",
+    "OPTION_EVENT_CASH_NOT_WHOLE_CENTS_REASON_CODE",
+    "OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE",
+    "OPTION_EVENT_HELD_ON_BOTH_SIDES_REASON_CODE",
+    "OPTION_EVENT_HOLD_REASON_CODES",
+    "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD_REASON_CODE",
+    "OPTION_EVENT_NOT_EXECUTED_REASON_CODE",
+    "OPTION_EVENT_ROW_CHANGED_REASON_CODE",
+    "OPTION_EVENT_SHARES_IN_ANOTHER_SYMBOL_REASON_CODE",
+    "OPTION_EVENT_UNREADABLE_REASON_CODE",
+    "OPTION_EVENT_WRONG_SIDE_REASON_CODE",
+    "OPTION_EXPIRED_NOT_SETTLED_REASON_CODE",
+    "OPTION_EXPIRY_SIGNED_FOR_OTHER_SIDE_REASON_CODE",
+    "OPTION_ORDER_NOT_OURS_REASON_CODE",
+    "OPTION_SHARES_HELD_REASON_CODE",
+    "OPTION_SHARE_TRADE_DISAGREES_REASON_CODE",
+    "OPTION_SHARE_TRADE_MISSING_REASON_CODE",
+    "OPTION_SHARE_TRADE_UNPAIRED_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "RECONCILIATION_INCOMPLETE_REASON_CODE",
@@ -788,6 +904,8 @@ __all__ = [
     "FailedEnterFilledCause",
     "FailedEnterFilledOrder",
     "LossHoldCause",
+    "OptionEventHoldCause",
+    "OptionEventHoldItem",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",
     "PositionDriftObservation",

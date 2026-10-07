@@ -429,7 +429,7 @@ async def compose_repository_runtime(
         # broker, so only it keeps the deadline. A Live Shadow's and a Live
         # Clerk take no option plan, and gain no new task until they do.
         if authority_kind == "sqlite" and account_mode == "paper":
-            deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade)
+            deadline_keeper = DeadlineKeeper(repo=repository, trade=guarded_trade, read=guarded_read)
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,
