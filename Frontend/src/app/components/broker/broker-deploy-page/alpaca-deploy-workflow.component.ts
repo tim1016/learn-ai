@@ -242,6 +242,14 @@ function listeningTo(ticket: AlpacaDeployTicket, symbol: string): AlpacaDeployTi
   };
 }
 
+/** `next`, with its size started over when it no longer counts what
+ * `previous` counted: a size typed in shares is never carried into
+ * structures, nor back. */
+function sizedInItsOwnUnit(previous: AlpacaDeployTicket, next: AlpacaDeployTicket): AlpacaDeployTicket {
+  if ((previous.options === null) === (next.options === null)) return next;
+  return { ...next, sizingPreset: EMPTY_DEPLOY_SETTINGS.sizingPreset, quantity: EMPTY_DEPLOY_SETTINGS.quantity };
+}
+
 type ExitTermSettings = Pick<DeployTicketSettings, 'exitAllowanceBps' | 'bandMultiple' | 'spreadCapBps'>;
 
 /** Exit terms as the form holds them; none leaves them for the view's
@@ -1749,7 +1757,7 @@ export class AlpacaDeployWorkflowComponent {
   protected setTradedSymbol(value: string | null): void {
     this.clearAdmission();
     this.tradedReasonTouched.set(false);
-    this.ticket.update((current) => ({
+    this.ticket.update((current) => sizedInItsOwnUnit(current, {
       ...current,
       tradedSymbol: value,
       // A bot trades one thing: picking a stock leaves Options.
@@ -1761,11 +1769,12 @@ export class AlpacaDeployWorkflowComponent {
 
   /** The owner chose Options, on the symbol the bot listens to until they
    * pick another underlying; or left them, which clears everything set
-   * under them (#2913). */
+   * under them (#2913). Either way the size is counted in another unit, and
+   * starts over. */
   protected setOptionsChosen(chosen: boolean): void {
     this.clearAdmission();
     this.tradedReasonTouched.set(false);
-    this.ticket.update((current) => ({
+    this.ticket.update((current) => sizedInItsOwnUnit(current, {
       ...current,
       tradedSymbol: chosen ? null : current.tradedSymbol,
       options: chosen ? current.options ?? freshOptionSettings(current.symbol) : null,

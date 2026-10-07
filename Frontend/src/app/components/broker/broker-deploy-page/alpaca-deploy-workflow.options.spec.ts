@@ -192,6 +192,72 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     expect(within(how).getByLabelText('Whole structures per entry')).toBeTruthy();
   });
 
+  it('starts the size over when it stops counting shares and counts structures, and back', async () => {
+    const { fixture, service } = await renderWorkflow();
+    const how = step('How');
+    const checked = (name: string): boolean => within(how).getByRole<HTMLInputElement>('radio', { name }).checked;
+    const typeSize = (label: string, size: string): void => {
+      fireEvent.input(within(how).getByLabelText(label), { target: { value: size } });
+    };
+    fireEvent.click(within(how).getByRole('radio', { name: 'Custom shares' }));
+    typeSize('Whole shares per entry', '50');
+
+    // Fifty shares are not fifty structures.
+    await tradeOptions();
+    expect(checked('One structure')).toBe(true);
+    expect(within(how).queryByLabelText('Whole structures per entry')).toBeNull();
+    await useBullCallSpread();
+    await vi.waitFor(() => expect(service.previewOptionStructure.mock.calls.at(-1)?.[1]).toMatchObject({ structures: 1 }));
+    fireEvent.click(within(how).getByRole('radio', { name: 'Custom structures' }));
+    expect(within(how).getByLabelText<HTMLInputElement>('Whole structures per entry').value).toBe('1');
+
+    // And three structures are not three shares, whichever way Options is left.
+    typeSize('Whole structures per entry', '3');
+    trade('Same as signal');
+    fixture.detectChanges();
+    expect(checked('One share')).toBe(true);
+    fireEvent.click(within(how).getByRole('radio', { name: 'Custom shares' }));
+    expect(within(how).getByLabelText<HTMLInputElement>('Whole shares per entry').value).toBe('1');
+
+    await tradeOptions();
+    fireEvent.click(within(how).getByRole('radio', { name: 'Custom structures' }));
+    typeSize('Whole structures per entry', '3');
+    trade('Another stock or ETF');
+    fixture.detectChanges();
+    expect(checked('One share')).toBe(true);
+  });
+
+  it('keeps the size when what the bot trades changes and its unit does not', async () => {
+    const { fixture } = await renderWorkflow();
+    const how = step('How');
+    fireEvent.click(within(how).getByRole('radio', { name: 'Custom shares' }));
+    fireEvent.input(within(how).getByLabelText('Whole shares per entry'), { target: { value: '50' } });
+
+    trade('Another stock or ETF');
+    pickers(fixture)[1].symbol.set('AAPL');
+    fixture.detectChanges();
+
+    expect(within(how).getByLabelText<HTMLInputElement>('Whole shares per entry').value).toBe('50');
+  });
+
+  it('lets go of a stock the owner had picked when they choose Options instead', async () => {
+    const { fixture } = await renderWorkflow();
+    trade('Another stock or ETF');
+    pickers(fixture)[1].symbol.set('AAPL');
+    fixture.detectChanges();
+    const what = step('What');
+    expect(within(what).getByRole('combobox', { name: 'Trades' }).textContent).toContain('AAPL');
+
+    await tradeOptions();
+    // Options are on what the bot listens to, never on the stock that was picked.
+    expect(within(what).getByRole('combobox', { name: 'Options on' }).textContent).toContain('SPY');
+    trade('Another stock or ETF');
+    fixture.detectChanges();
+
+    // Back on a stock, none is picked: the earlier pick did not ride along under Options.
+    expect(within(what).getByRole('combobox', { name: 'Trades' }).textContent).not.toContain('AAPL');
+  });
+
   it('previews the size and the limits the owner set in How', async () => {
     const { service } = await renderWorkflow();
     await tradeOptions();
