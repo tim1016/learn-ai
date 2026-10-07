@@ -37,9 +37,11 @@ from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     held_contracts,
     scheduled_close_state,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, resolve_account_hold
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     SCHEDULED_CLOSE_MISSED_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
 )
 from app.broker.contract.models import OrderSide
 from app.options.simulated_fill import SimulatedFillModel
@@ -179,6 +181,33 @@ async def test_with_nothing_bid_a_dry_runs_close_fails_and_the_sessions_end_reco
     [missed] = scheduled_close_state(dry_run.repo, SID)
     assert (missed.standing, missed.taken_at_ms) == (CloseStanding.MISSED, DUE)
     assert [fill for fill in dry_run.fills() if fill[1] == "sell"] == []
+
+
+async def test_a_dry_runs_keeper_drives_on_a_close_it_took_and_could_not_send_since_no_pass_will(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """A hold on the account refuses reductions when the close comes due. The close is taken and waits."""
+    await dry_run.enter(dry_run.evidence())
+    _until(dry_run, DUE)
+    _hand_over(dry_run, "2.10", "2.16")
+    raise_account_hold(
+        dry_run.repo, reason_code=STREAM_HEALTH_HOLD_REASON_CODE, evidence_refs=["execution: the order stream is down"]
+    )
+    keeper = _keeper(dry_run)
+
+    held_up = await keeper.tick()
+    assert len(held_up.closes.taken) == 1 and held_up.closes.deferred == held_up.closes.taken
+    assert dry_run.held() == {SYMBOL: 1.0} and dry_run.repo.active_exit_for_strategy(SID) is not None
+
+    resolve_account_hold(
+        dry_run.repo, reason_code=STREAM_HEALTH_HOLD_REASON_CODE, summary_code="ACCOUNT_HOLD_RESOLVED_BY_STREAM_RECOVERY"
+    )
+    dry_run.wait(5_000)
+    done = await keeper.tick()
+
+    # The same EXIT, driven on by the keeper: taken once, and now sold.
+    assert done.closes.taken == () and done.closes.driven == held_up.closes.taken
+    assert dry_run.held() == {} and dry_run.fills()[-1] == (SYMBOL, "sell", 1.0, 2.10, 100)
 
 
 async def test_a_stopped_dry_run_whose_run_end_close_sold_its_contract_owes_no_close(dry_run: _DryRun) -> None:  # noqa: F811

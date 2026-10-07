@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
 import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite import scheduled_close as scheduled_close_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS
@@ -42,11 +42,14 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     admit_new_exposure,
     decide_capability,
     open_exit_stuck,
+    raise_account_hold,
+    resolve_account_hold,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     FAILED_ENTER_FILLED_REASON_CODE,
     SCHEDULED_CLOSE_MISSED_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
     MissedScheduledClose,
     ScheduledCloseMissedCause,
 )
@@ -576,10 +579,10 @@ async def test_a_close_still_refused_when_the_session_ends_is_recorded_as_missed
     assert (state.standing, state.taken_at_ms) == (CloseStanding.MISSED, CLOSE - 60_000)
 
 
-# ── a halt ───────────────────────────────────────────────────────────────
+# ── a halt, and a hold on the account ────────────────────────────────────
 
 
-def _halts(paper: PaperOptions, halted: set[str], asked: list[str]) -> None:  # noqa: F811
+def _halts(paper: PaperOptions, monkeypatch: pytest.MonkeyPatch, halted: set[str], asked: list[str]) -> None:  # noqa: F811
     """IBKR reports each symbol in ``halted`` as halted, to the keeper and to the pass alike."""
 
     def status(symbol: str, now_ms: int) -> MarketLivenessFact:
@@ -594,15 +597,17 @@ def _halts(paper: PaperOptions, halted: set[str], asked: list[str]) -> None:  # 
             ),
         })
 
-    paper.keeper.keep_scheduled_closes(
-        intake=paper.clerk.intake, pricing=replace(paper.clerk.recovery_pricing, liveness_source=status)
-    )
+    # The Clerk's one pricing seam reads the market's status here. The keeper is handed that seam again.
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", status)
+    paper.keeper.keep_scheduled_closes(intake=paper.clerk.intake, pricing=paper.clerk.recovery_pricing)
 
 
-async def test_a_halt_of_the_underlying_holds_the_close_and_it_goes_out_when_the_halt_lifts(paper: PaperOptions) -> None:  # noqa: F811
+async def test_a_halt_of_the_underlying_holds_the_close_and_the_next_pass_sends_it_when_the_halt_lifts(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
     await _holds_one_call(paper)
     halted, asked = {"SPY"}, []
-    _halts(paper, halted, asked)
+    _halts(paper, monkeypatch, halted, asked)
     _until(paper, DUE)
 
     taken = await paper.round()
@@ -613,34 +618,81 @@ async def test_a_halt_of_the_underlying_holds_the_close_and_it_goes_out_when_the
     [state] = scheduled_close_state(paper.repo, "a")
     assert (state.standing, state.taken_at_ms) == (CloseStanding.SCHEDULED, DUE)
 
-    paper.wait(60_000)
+    # While the halt stands, a pass and a round send nothing and take nothing more.
+    paper.wait(PASS_MS)
+    await paper.pass_()
     still = await paper.round()
-    assert still.closes.taken == () and still.closes.driven == taken.closes.taken and _closes_sent(paper) == []
+    assert still.closes.taken == () and _closes_sent(paper) == []
 
     halted.clear()
-    paper.wait(5_000)
-    await paper.round()
+    paper.wait(PASS_MS)
+    await paper.pass_()
 
     assert _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
 
 
-async def test_a_halt_that_does_not_lift_before_the_close_leaves_the_position_open_and_the_close_missed(
+async def test_on_a_real_account_the_keeper_leaves_a_close_it_has_taken_to_the_pass_and_looks_nothing_up(
     paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The pass drives every unfinished EXIT on. A keeper that did too would ask Alpaca about it three times as often."""
+    await _holds_one_call(paper)
+    _until(paper, DUE)
+    await paper.round()
+    looked_up = len(paper.venue.option_lookup_calls)
+
+    for _ in range(3):
+        paper.wait(5_000)
+        again = await paper.round()
+        assert again.closes.taken == () and again.closes.driven == ()
+
+    assert len(paper.venue.option_lookup_calls) == looked_up
+
+
+async def test_a_halt_that_does_not_lift_before_the_close_leaves_the_position_open_and_the_close_missed(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
     await _holds_one_call(paper)
     halted, asked = {"SPY"}, []
-    _halts(paper, halted, asked)
+    _halts(paper, monkeypatch, halted, asked)
     _until(paper, DUE)
     await paper.round()
 
     _until(paper, CLOSE)
-    await paper.round()
+    await paper.pass_()
     halted.clear()
-    paper.wait(5_000)
+    paper.wait(PASS_MS)
+    await paper.pass_()
     await paper.round()
 
+    # Nothing was ever sent, the held close ended with the contract's last session, and the miss is on record.
     assert _closes_sent(paper) == [] and paper.held() == {SYMBOL: 1.0}
     assert _notice(paper) is not None and paper.repo.active_exit_for_strategy("a") is None
+
+
+async def test_a_hold_on_the_account_that_refuses_reductions_holds_the_close_and_it_goes_out_once_the_hold_is_gone(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    """The refusal is not weakened: the close is taken, sends nothing, and is tried again on every pass."""
+    await _holds_one_call(paper)
+    raise_account_hold(
+        paper.repo, reason_code=STREAM_HEALTH_HOLD_REASON_CODE, evidence_refs=["execution: the order stream is down"]
+    )
+    _until(paper, DUE)
+
+    held_up = await paper.round()
+    paper.wait(PASS_MS)
+    await paper.pass_()
+
+    assert len(held_up.closes.taken) == 1 and held_up.closes.deferred == held_up.closes.taken
+    assert _closes_sent(paper) == [] and paper.repo.active_exit_for_strategy("a") is not None
+
+    resolve_account_hold(
+        paper.repo, reason_code=STREAM_HEALTH_HOLD_REASON_CODE, summary_code="ACCOUNT_HOLD_RESOLVED_BY_STREAM_RECOVERY"
+    )
+    paper.wait(PASS_MS)
+    await paper.pass_()
+
+    assert _closes_sent(paper) == [SELLS_ONE_TO_CLOSE]
 
 
 # ── the Clerk has stopped exiting the bot by itself ──────────────────────

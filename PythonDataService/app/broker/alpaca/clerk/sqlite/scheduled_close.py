@@ -29,9 +29,11 @@ option close: a market order in the regular session, held on a halt of the
 underlying, never sent for a contract past its last session.
 
 **Who runs it.** The deadline keeper, on time, and the account's
-reconciliation pass, as its backstop (:func:`drive_scheduled_closes`). A
-Dry Run has no pass on a timer, so its keeper also drives again a scheduled
-close that was accepted and has not finished.
+reconciliation pass, as its backstop (:func:`drive_scheduled_closes`). Once
+a close is taken it is an EXIT like any other, and the pass's own recovery
+of unfinished operations drives it on: it sends it when a halt lifts, and
+looks its order up until it has ended. A Dry Run has no pass on a timer, so
+there the keeper drives on a close that was taken and has not finished.
 
 **A close is not an outcome.** A session can end with the contract still
 held: a halt that did not lift, a refusal, nothing bid, the Clerk down. That
@@ -275,14 +277,21 @@ async def drive_scheduled_closes(
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
     off_loop: OffLoop | None = None,
+    drive_unfinished: bool = False,
 ) -> ScheduledCloseRound:
-    """Send every scheduled close that is due, drive on each one not finished, and record each one missed.
+    """Send every scheduled close that is due, and record each one its session ended on.
 
     The deadline keeper's step and the reconciliation pass's. One read of
     what is held, then each contract by itself, a few at once: one that is
     slow or raises does not hold up the others. On books holding no option
     contract and no missed-close notice it reads that once, takes no lock
     and writes nothing.
+
+    ``drive_unfinished`` also drives on a close that was taken and has not
+    finished. The pass does not ask for it: its own recovery of operations
+    has driven every unfinished EXIT earlier in the same pass, and a second
+    look would be a second lookup at the broker. The keeper of an account
+    with no pass on a timer does.
 
     A held operation claim means another owner is driving that EXIT right
     now, and a refused reduction means a hold stands on the account: the
@@ -305,7 +314,8 @@ async def drive_scheduled_closes(
     worked: dict[str, HeldContract] = {}
     for item in read.held:
         if item.unfinished is not None:
-            worked.setdefault(item.unfinished, item)
+            if drive_unfinished:
+                worked.setdefault(item.unfinished, item)
         elif item.to_be_taken(now_ms):
             worked.setdefault(f"{item.strategy_instance_id}:{item.symbol}", item)
     answers = await asyncio.gather(*(one(item) for item in worked.values()), return_exceptions=True)

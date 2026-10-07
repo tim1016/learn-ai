@@ -22,10 +22,11 @@ the same order is a retry, never a second intent.
 
 **A round is a list of steps.** There are two. The first cancels what has
 not filled of every entry past its wait (``resting_entries``). The second
-sends every scheduled close of an option position that is due, drives on
-each one not finished, and records each one its session ended on
-(``scheduled_close``). The second is handed its lock and its pricing once
-the Clerk's facade exists (:meth:`DeadlineKeeper.keep_scheduled_closes`).
+sends every scheduled close of an option position that is due and records
+each one its session ended on (``scheduled_close``). On a Dry Run's
+account, which has no pass on a timer, it also drives on a close that was
+taken and has not finished. The second is handed its lock and its pricing
+once the Clerk's facade exists (:meth:`DeadlineKeeper.keep_scheduled_closes`).
 
 **One round reads each worklist once.** What is due, and when to wake, both
 come from that one read.
@@ -58,6 +59,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 
+from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
@@ -167,7 +169,9 @@ class DeadlineKeeper:
         if self._closes is not None:
             intake, pricing = self._closes
             closes = await drive_scheduled_closes(
-                self._repo, trade=self._trade, intake=intake, pricing=pricing, off_loop=self._off_loop
+                self._repo, trade=self._trade, intake=intake, pricing=pricing, off_loop=self._off_loop,
+                # A real account's pass drives every unfinished EXIT on. A Dry Run has no pass on a timer.
+                drive_unfinished=is_synthetic_account_id(self._repo.account_id),
             )
         wake_in_ms = min(self._wake_in_ms(resting, ended=entries.ended), self._wake_for_closes(closes))
         return KeeperRound(entries=entries, wake_in_ms=wake_in_ms, closes=closes)
@@ -175,9 +179,9 @@ class DeadlineKeeper:
     def _wake_for_closes(self, closes: ScheduledCloseRound) -> int:
         """How long until a close comes due or the session it is owed in ends: at most the idle wake.
 
-        A close that is due and not finished is looked at again at the idle
-        wake: a market order fills at once, and a held one waits on a halt
-        or a hold that does not lift by the second.
+        A close that is due and not yet taken is looked at again at the
+        idle wake: what keeps it from being taken is another EXIT of its bot
+        still working, which does not end by the second.
         """
         if closes.next_change_ms is None:
             return IDLE_WAKE_MS
