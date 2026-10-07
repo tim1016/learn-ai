@@ -44,7 +44,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import StrEnum
-from functools import reduce
 from math import gcd
 from typing import Annotated, Literal
 
@@ -77,11 +76,18 @@ class OptionPositionIntent(StrEnum):
 
 
 class _OptionRequestModel(BaseModel):
-    """Base for a request: frozen, and strict, so nothing is coerced into an order.
+    """Base for a request: frozen, and strict, so no number or side is coerced into an order.
 
-    ``True`` is not one contract and ``1.5`` is not a quantity. Read a stored
-    request back with ``model_validate_json``, which reads JSON's own strings
-    as the enums and decimals they name.
+    A quantity is an ``int``: ``True``, ``1.0`` and ``"1"`` are refused. A
+    price is a ``Decimal``: a float, an int and a string are refused. A side
+    and an intent are their enums, never the bare word, and the legs are a
+    tuple. Strict mode still takes two things as given: the order type's own
+    word (``"limit"`` equals its enum member, and is stored as the member),
+    and a mapping where a contract goes, which is built into an
+    ``OptionContract`` by that type's own rules.
+
+    Read a stored request back with ``model_validate_json``, which reads
+    JSON's own strings as the enums and decimals they name.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -158,7 +164,7 @@ class MultiLegOptionOrderRequest(_OptionRequestModel):
         if len(roots) != 1:
             raise ValueError(f"every leg of a multi-leg order is on one underlying; these are on {roots}")
         ratios = [leg.ratio for leg in self.legs]
-        if reduce(gcd, ratios) != 1:
+        if gcd(*ratios) != 1:
             # Alpaca refuses ratios that share a divisor: 2:4 is 1:2 at twice the quantity.
             raise ValueError(f"leg ratios must share no divisor above one; got {ratios}")
         _require_price_matches_order_type(self.order_type, self.net_limit_price, what="a net limit price")
@@ -223,7 +229,8 @@ def opening_order(structure: ResolvedStructure, *, units: int, net_limit_price: 
         )
     contract, position = _the_one_leg_contract_and_position(structure)
     # A bought option is paid for and a sold one paid to us; the side carries that, so the price is unsigned.
-    paid = net_limit_price if position == "long" else -net_limit_price
+    # ``copy_negate`` and not unary minus, which rounds to the ambient decimal context's precision.
+    paid = net_limit_price if position == "long" else net_limit_price.copy_negate()
     if paid <= 0:
         raise ValueError(
             f"a {position} option {'pays' if position == 'long' else 'receives'} its premium; "
@@ -274,9 +281,20 @@ def closing_order(structure: ResolvedStructure, *, units: int) -> OptionOrderReq
 
 
 class _OptionEvidenceModel(BaseModel):
-    """Base for what a broker reported: frozen, and unknown fields are an adapter's typo."""
+    """Base for what a broker reported: frozen, strict, and unknown fields are an adapter's typo.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    Strict as a request is: an adapter hands over the ``int`` or ``Decimal``
+    it read, and ``True``, ``"2"`` or a float is refused, never read as a
+    quantity or a price.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+def _require_filled_within_quantity(filled: int, quantity: int | None, *, what: str) -> None:
+    """Refuse a fill larger than its order: untrue whatever the two numbers count."""
+    if quantity is not None and filled > quantity:
+        raise ValueError(f"{what} cannot have filled {filled} of a quantity of {quantity}")
 
 
 class BrokerOptionOrderLeg(_OptionEvidenceModel):
@@ -289,9 +307,9 @@ class BrokerOptionOrderLeg(_OptionEvidenceModel):
     side: OrderSide
     # ``None`` when the broker's answer does not say.
     intent: OptionPositionIntent | None
-    ratio: int | None = Field(default=None, ge=1)
-    # Contracts. ``quantity`` is ``None`` when the answer does not say.
-    quantity: int | None = Field(default=None, ge=0)
+    ratio: int | None = Field(ge=1)
+    # ``quantity`` is ``None`` when the answer does not say.
+    quantity: int | None = Field(ge=0)
     filled_quantity: int = Field(ge=0)
     # Dollars a share, as the broker reports this leg's fills.
     filled_avg_price: Decimal | None
@@ -303,15 +321,28 @@ class BrokerOptionOrderLeg(_OptionEvidenceModel):
     canceled_at_ms: int | None
     expired_at_ms: int | None
 
+    @model_validator(mode="after")
+    def _no_more_filled_than_ordered(self) -> BrokerOptionOrderLeg:
+        _require_filled_within_quantity(self.filled_quantity, self.quantity, what="an option order leg")
+        return self
+
 
 class BrokerOptionOrder(_OptionEvidenceModel):
     """An option order and its status, with the legs nested under a multi-leg parent.
 
-    A single-leg order carries its own ``contract``, ``side`` and ``intent``
-    and has no ``legs``. A multi-leg parent has none of the three and two to
-    four ``legs``. Its ``quantity`` and ``filled_quantity`` count structures;
-    a leg's count contracts. Its ``limit_price`` and ``filled_avg_price`` are
-    net, a share, signed as the broker signs them.
+    A single-leg order carries its own ``contract`` and ``side``, its
+    ``intent`` when the broker's answer states one (``None`` when it does
+    not), and no ``legs``. A multi-leg parent has none of the three and two
+    to four ``legs``, each on a contract of its own. Its ``limit_price`` and
+    ``filled_avg_price`` are net, a share, signed as the broker signs them.
+
+    A parent's ``quantity`` and ``filled_quantity`` count structures. A
+    leg's are the broker's own numbers for that leg: in Alpaca's one
+    published answer they are contracts, for an order of one structure, and
+    what it writes for more is not yet recorded (#2913). So no leg is held
+    to its ratio times the parent's quantity. What is held is true whatever
+    the units: nothing fills beyond its quantity, and a single order is for
+    one contract or more.
     """
 
     broker: str
@@ -343,13 +374,19 @@ class BrokerOptionOrder(_OptionEvidenceModel):
         if self.multi_leg:
             if not 2 <= len(self.legs) <= MAX_OPTION_LEGS:
                 raise ValueError(f"a multi-leg order has two to {MAX_OPTION_LEGS} legs; this one has {len(self.legs)}")
-            if self.contract is not None or self.side is not None:
-                raise ValueError("a multi-leg parent names no contract and no side of its own")
+            if self.contract is not None or self.side is not None or self.intent is not None:
+                raise ValueError("a multi-leg parent names no contract, side or intent of its own")
             leg_ids = [leg.order_id for leg in self.legs]
             if len({self.order_id, *leg_ids}) != len(leg_ids) + 1:
                 raise ValueError("a multi-leg parent and each of its legs has an order id of its own")
+            symbols = [leg.contract.occ_symbol for leg in self.legs]
+            if len(set(symbols)) != len(symbols):
+                raise ValueError(f"a multi-leg order has each contract in one leg; these repeat: {sorted(symbols)}")
         elif self.legs or self.contract is None or self.side is None:
             raise ValueError("a single option order names its contract and side and has no legs")
+        elif self.quantity < 1:
+            raise ValueError("a single option order is for one contract or more")
+        _require_filled_within_quantity(self.filled_quantity, self.quantity, what="an option order")
         return self
 
 
@@ -359,7 +396,7 @@ class BrokerOptionOrder(_OptionEvidenceModel):
 class BrokerOptionDeliverable(_OptionEvidenceModel):
     """One thing a contract delivers when it is exercised or assigned."""
 
-    # ``equity`` or ``cash``, in the broker's word.
+    # ``equity`` or ``cash``, in the broker's word, lowercase as its reference lists them.
     kind: str
     symbol: str
     # Shares, or dollars for cash. ``None`` while the broker has not settled the amount.
@@ -378,6 +415,7 @@ class BrokerOptionContract(_OptionEvidenceModel):
     contract_id: str
     symbol: str
     name: str | None
+    # ``active`` or ``inactive``, in the broker's word, lowercase as its reference lists them.
     status: str
     tradable: bool
     # The expiry date's 16:00 New York anchor.
@@ -386,7 +424,7 @@ class BrokerOptionContract(_OptionEvidenceModel):
     underlying_symbol: str
     underlying_asset_id: str | None
     right: OptionRight
-    # ``american`` or ``european``, in the broker's word.
+    # ``american`` or ``european``, in the broker's word, lowercase as its reference lists them.
     style: str
     strike_price: Decimal
     # What a price is multiplied by to give dollars a contract.
@@ -432,7 +470,7 @@ def _is_standard_deliverable(listing: BrokerOptionContract) -> bool:
         return False
     (deliverable,) = listing.deliverables
     return (
-        deliverable.kind.lower() == "equity"
+        deliverable.kind == "equity"
         and deliverable.symbol == listing.underlying_symbol
         and deliverable.amount == STANDARD_SHARES_PER_CONTRACT
     )
@@ -448,6 +486,10 @@ def option_contract_refusal(
     order can exist: the contract is listed, is the one asked about, is
     active and tradable, is American, and delivers 100 shares of its
     underlying at a multiplier of 100. The first failure is the reason given.
+
+    The broker's words are compared as its reference writes them:
+    ``active``, ``american`` and ``equity``, lowercase. Any other spelling is
+    a word the reference does not list, and is refused as not being that one.
 
     The caller raises the refusal or reads it. A share-class ticker is not
     matched to its root here: the listing's root must be the symbol's own.
@@ -471,7 +513,7 @@ def option_contract_refusal(
             f"Asked about {symbol}, the broker described {listing.symbol or 'a contract with no symbol'}: "
             f"a {listing.right} struck at {listing.strike_price} on root {listing.root_symbol!r}.",
         )
-    if listing.status.lower() != "active":
+    if listing.status != "active":
         return OptionContractRefused(
             OptionContractRefusal.NOT_ACTIVE, symbol, f"The broker lists {symbol} as {listing.status}, not active."
         )
@@ -479,7 +521,7 @@ def option_contract_refusal(
         return OptionContractRefused(
             OptionContractRefusal.NOT_TRADABLE, symbol, f"The broker lists {symbol} as not tradable."
         )
-    if listing.style.lower() != "american":
+    if listing.style != "american":
         return OptionContractRefused(
             OptionContractRefusal.NOT_AMERICAN, symbol, f"{symbol} is {listing.style} style, not American."
         )

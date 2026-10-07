@@ -98,7 +98,40 @@ class SimulatedPriceUnavailableError(RuntimeError):
     """No retained bar exists from which a synthetic fill may be derived."""
 
 
-class SyntheticBroker:
+class OptionOrdersNotTaken:
+    """The option methods of a trade port that takes no option order and holds none (#2913).
+
+    Each refuses by type. "Absent" would be an answer about an order, and
+    such a port never held one to answer about.
+    """
+
+    broker_id: str
+    # How a refusal names the port: "The simulated broker".
+    _named_in_option_refusals: str
+
+    async def submit_option_order(
+        self, order: OptionOrderRequest, *, client_order_id: str
+    ) -> BrokerOptionOrder:
+        del order, client_order_id
+        raise self._option_orders_not_taken("takes no option orders")
+
+    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
+        del client_order_id
+        raise self._option_orders_not_taken("holds no option orders")
+
+    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
+        del order_id
+        raise self._option_orders_not_taken("holds no option orders")
+
+    def _option_orders_not_taken(self, what: str) -> BrokerOptionsNotSupported:
+        return BrokerOptionsNotSupported(
+            f"{self._named_in_option_refusals} {what}.",
+            broker=self.broker_id,
+            detail="Its capabilities say so; nothing was sent and no order exists.",
+        )
+
+
+class SyntheticBroker(OptionOrdersNotTaken):
     """Durable immediate-fill port that derives prices only from retained bars.
 
     A market leg, or a limit leg marketable against the decision bar's close,
@@ -114,6 +147,7 @@ class SyntheticBroker:
     """
 
     broker_id = SYNTHETIC_BROKER_ID
+    _named_in_option_refusals = "The simulated broker"
 
     def __init__(
         self, *, account_id: str, source_bars: SourceBarLedger | None = None, clock: Clock = now_ms_utc,
@@ -197,7 +231,11 @@ class SyntheticBroker:
     async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
         # "Not listed" would be a claim about a listing; the simulation has none to consult.
         del contract
-        raise self._options_not_supported("has no option contract reference")
+        raise BrokerOptionsNotSupported(
+            "The simulated broker has no option contract reference.",
+            broker=self.broker_id,
+            detail="It holds no listing of option contracts, so it cannot say whether this one is listed.",
+        )
 
     async def get_option_account(self) -> BrokerOptionAccountSnapshot:
         """The simulated account states no option buying power and no approval level."""
@@ -434,27 +472,6 @@ class SyntheticBroker:
 
     async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
         return next((order for order in self._latest_orders() if order.order_id == order_id), None)
-
-    async def submit_option_order(
-        self, order: OptionOrderRequest, *, client_order_id: str
-    ) -> BrokerOptionOrder:
-        del order, client_order_id
-        raise self._options_not_supported("takes no option orders")
-
-    async def get_option_order_by_client_order_id(self, client_order_id: str) -> BrokerOptionOrder | None:
-        del client_order_id
-        raise self._options_not_supported("holds no option orders")
-
-    async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
-        del order_id
-        raise self._options_not_supported("holds no option orders")
-
-    def _options_not_supported(self, what: str) -> BrokerOptionsNotSupported:
-        return BrokerOptionsNotSupported(
-            f"The simulated broker {what}.",
-            broker=self.broker_id,
-            detail="Its capabilities say so; nothing was sent and no order exists.",
-        )
 
     def _latest_orders(self) -> list[BrokerOrder]:
         return [] if self._ledger is None else self._ledger.latest_orders()

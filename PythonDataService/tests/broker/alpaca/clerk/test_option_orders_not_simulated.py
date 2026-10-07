@@ -28,6 +28,7 @@ from app.broker.contract.options import (
     SingleOptionOrderRequest,
 )
 from app.options.contract import OptionContract
+from app.services.source_bar_ledger import SourceBarLedger
 
 _REF = "learn-ai/spy-options/v1:enter-1"
 _CALL = OptionContract.from_occ_symbol("SPY261218C00450000")
@@ -93,8 +94,12 @@ def test_a_shadow_world_says_it_takes_no_option_orders_though_its_live_broker_do
 
 
 @pytest.mark.parametrize("order", [_LONG_CALL, _CALL_SPREAD], ids=["one leg", "several legs"])
-async def test_the_simulation_refuses_an_option_order_definitively(order: OptionOrderRequest) -> None:
-    broker = SyntheticBroker(account_id="sim:options-1")
+async def test_the_simulation_refuses_an_option_order_definitively(tmp_path: Path, order: OptionOrderRequest) -> None:
+    # A real order ledger, as a running simulation has: without one, "no orders" is all it could ever answer.
+    account_id = "sim:options-1"
+    broker = SyntheticBroker(
+        account_id=account_id, source_bars=SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
+    )
 
     with pytest.raises(BrokerOptionsNotSupported, match="takes no option orders") as refused:
         await broker.submit_option_order(order, client_order_id=_REF)
@@ -103,6 +108,8 @@ async def test_the_simulation_refuses_an_option_order_definitively(order: Option
     assert not isinstance(refused.value, BrokerUnavailable)
     assert refused.value.broker == "synthetic"
     assert await broker.list_orders() == []
+    assert await broker.get_order_by_client_order_id(_REF) is None
+    assert broker.synthesized_fill_anchors() == {}
 
 
 @pytest.mark.parametrize("order", [_LONG_CALL, _CALL_SPREAD], ids=["one leg", "several legs"])
@@ -133,8 +140,11 @@ async def test_a_simulated_broker_holds_no_option_order_to_look_up(tmp_path: Pat
 async def test_the_simulation_has_no_contract_reference_and_does_not_call_a_contract_unlisted() -> None:
     simulation = SyntheticBroker(account_id="sim:options-1")
 
-    with pytest.raises(BrokerOptionsNotSupported, match="no option contract reference"):
+    with pytest.raises(BrokerOptionsNotSupported, match="no option contract reference") as refused:
         await simulation.get_option_contract(_CALL)
+
+    # No capability describes the contract reference, so the refusal must not say one does.
+    assert "capabilities" not in (refused.value.detail or "")
 
 
 async def test_the_simulated_account_states_no_option_buying_power_and_no_level() -> None:
