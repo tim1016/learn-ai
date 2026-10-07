@@ -16,8 +16,8 @@ by its place:
 
 - the structure is one the account Clerk does not take yet. The Clerk's own
   rule is asked (``the_one_bought_option_leg``), so the two cannot differ;
-- the account's mode. A Dry Run and a Paper account are open. A Live Shadow
-  is refused: it is not built yet. A Live account is refused while
+- the account's mode. A Dry Run, Live Shadow and Paper account are open.
+  A Live account is refused while
   ``ALPACA_LIVE_OPTION_BOTS_ENABLED`` is off, which it is unless a
   deployment turns it on (ADR 0076 decision 24);
 - this Clerk has no option quotes of its own, or counts no quote line free
@@ -102,7 +102,6 @@ from app.utils.timestamps import now_ms_utc
 # ---- reason codes: what stops an option Deploy, where no typed refusal already says it -------------
 
 LIVE_SWITCHED_OFF: Final = "OPTION_DEPLOY_LIVE_SWITCHED_OFF"
-LIVE_SHADOW_NOT_BUILT: Final = "OPTION_DEPLOY_LIVE_SHADOW_NOT_BUILT"
 APPROVAL_TOO_LOW: Final = "OPTION_DEPLOY_APPROVAL_TOO_LOW"
 APPROVAL_UNKNOWN: Final = "OPTION_DEPLOY_APPROVAL_UNKNOWN"
 ACCOUNT_NOT_READ: Final = "OPTION_DEPLOY_ACCOUNT_NOT_READ"
@@ -139,8 +138,6 @@ LIVE_SWITCHED_OFF_FIX: Final = (
     "Run an option bot on Paper and check its first option orders at Alpaca. Then set "
     f"{LIVE_SETTING}=true for this Clerk and restart it."
 )
-LIVE_SHADOW_SENTENCE: Final = "A Live Shadow does not take an option bot yet. It is not built."
-LIVE_SHADOW_FIX: Final = "Deploy this bot as a Dry Run, or on a Paper account."
 
 
 # ---- the request as the preview takes it --------------------------------------------------------------
@@ -241,11 +238,7 @@ def structure_not_taken(request: AlpacaPaperDeployRequest, plan: ActionPlan) -> 
 
 
 def mode_blocker(request: AlpacaPaperDeployRequest) -> OptionDeployBlocker | None:
-    """Why this account's mode takes no option bot, or ``None``: a Dry Run and a Paper account do."""
-    if request.execution_mode == "shadow":
-        return OptionDeployBlocker(
-            gate_id=LIVE_SHADOW_NOT_BUILT, label="Live Shadow", headline=LIVE_SHADOW_SENTENCE, fix=LIVE_SHADOW_FIX
-        )
+    """Why this account's mode takes no option bot, or ``None``: a Dry Run, Live Shadow and Paper account do."""
     if request.execution_mode == "live" and not live_option_bots_enabled():
         return OptionDeployBlocker(
             gate_id=LIVE_SWITCHED_OFF, label="Live", headline=LIVE_SWITCHED_OFF_SENTENCE, fix=LIVE_SWITCHED_OFF_FIX
@@ -864,7 +857,6 @@ async def require_deployable(
 
 
 __all__ = [
-    "LIVE_SHADOW_NOT_BUILT",
     "LIVE_SWITCHED_OFF",
     "OptionEntryPrice",
     "approval_blocker",

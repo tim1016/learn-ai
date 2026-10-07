@@ -53,7 +53,7 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, SHADOW_ACCT, TEST_ENVELOPE_VALUES, _LiveBroker
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
 
-from ._option_floor import CALL_585, Clock, Floor, Ran, ScriptedFeed, Step, one_call
+from ._option_floor import CALL_585, STARTING_TERMS, Clock, Floor, Ran, ScriptedFeed, Step, one_call
 
 SHADOW_SID = "shadow-buys-a-call"
 SHADOW_RUN = "run-shadow"
@@ -66,7 +66,7 @@ def shadow_binding_for(
     return BrokerBotBinding(
         strategy_instance_id=SHADOW_SID, strategy_key="deployment_validation", broker="alpaca", symbol=listens_to,
         mode="trade", quantity=contracts, action_plan=plan, run_id=run_id, created_at_ms=0,
-        sealed_account_id=SHADOW_ACCT, exit_terms=DEPLOY_EXIT_TERMS,
+        sealed_account_id=SHADOW_ACCT, exit_terms=DEPLOY_EXIT_TERMS, option_order_terms=STARTING_TERMS,
         budget_consent=DeployBudgetConsent(
             committed_cents=budget_cents, risk_revision=1, actor="owner", request_fingerprint="reviewed",
             world="shadow",

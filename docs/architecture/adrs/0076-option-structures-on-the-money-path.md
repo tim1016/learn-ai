@@ -916,7 +916,7 @@ A Deploy is refused for the first of these, and asks nobody further. The money r
 - **Three fences read it, through one accessor.** Deploy refuses a Live option bot by name and says what to do: check the first Paper option orders, then turn the setting on. The account Clerk refuses the plan at registration and refuses an ENTER. The Alpaca port refuses to send an option order with a leg that opens on a live binding.
 - **A fence against opening never stops a close.** A Live account can hold a contract bought while the setting was on, and a restart that loses the variable is an ordinary accident. Off, every order that only closes still goes out: the bot's own EXIT, the Clerk's scheduled close (decision 20), and Flatten. Stop does not itself schedule a close. After a restart with this setting off, strategy monitoring cannot resume for the held option bot; the Clerk's scheduled close and the owner's Flatten remain available. The Clerk tells a close by the effect's purpose: an EXIT is built from the position its books hold and can open nothing. The port tells it by the order's own legs: every leg carries the closing intent it is sent to Alpaca with, and one leg that opens makes the order an opening one. Neither reads a flag a caller sets beside the order. Off, a bot that holds a contract cannot be started again, so its contract is closed by the Clerk on its day or by the owner.
 - **Turning it on is the only change.** A test holds each fence off and on, the Clerk's and the port's on stand-ins.
-- **A Live Shadow is refused whatever the setting says,** at Deploy and at the Clerk, an EXIT included. It never took an option plan, so its books hold none to close.
+- **A Live Shadow takes one bought option whatever the setting says** (decision 25). It rehearses real-account admission and fills only its own book, never an order at Alpaca.
 
 **What the screens are told**
 
@@ -929,7 +929,6 @@ A Deploy is refused for the first of these, and asks nobody further. The money r
 
 **Not yet**
 
-- Live Shadow for an option plan.
 - The comparison of Alpaca's option buying power around an entry with what was set aside.
 - Several legs and sold legs through the Clerk, so every such structure is refused at Deploy.
 - A list of the other bots on the same underlying that names option bots as such: the one-line note about the same symbol is the existing one.
@@ -937,11 +936,9 @@ A Deploy is refused for the first of these, and asks nobody further. The money r
 
 ### 25. A Live Shadow takes an option plan
 
-Decision 24 is other work's, and is written where that work lands.
-
 A Live Shadow sends nothing. For an option bot it is a real account's rules over a Dry Run's fill: its Clerk asks, refuses and schedules as a Paper account's does, and its order book fills as a Dry Run's simulation does. Almost all of both was already there, because the Clerk asks "does this port fill inside the send", and a shadow port always did. What was missing was the port's own option fill, the quotes behind it, and the places that said a Dry Run where they meant a simulation.
 
-- **Who takes an option plan.** A Dry Run's account, a Live Shadow and a Paper account, and only one bought call or put. A Live account is still refused by name, at registration and at every effect (decision 15).
+- **Who takes an option plan.** A Dry Run's account, a Live Shadow and a Paper account, and only one bought call or put. A Live account refuses new option openings while its setting is off, and continues taking closes (decision 24).
 - **One fill for both simulations.** The option order of one leg that a no-submit port fills is one piece of code, used by a Dry Run's simulation and by a shadow order book: at once, in full, at the natural price of the quote the Clerk bound to the order, with every refusal of decision 16. A Shadow's fill goes into the shadow book, under the contract's own symbol and the shadow's own execution identity, so the Clerk folds it as it folds a Shadow's fill in shares. It is never priced from a bar. It never rests: a shadow book rests a limit in shares outside regular hours, and an option order whose limit the quote does not reach ends on the spot. An order of several legs is refused by name, and the Shadow's capabilities say one leg yes, several no.
 - **The quotes are the account's.** They are kept in the shadow account's own folder, beside its order book: an entry's as its order is sent, an exit decision's, and the marks of the keeping. A Shadow's fill in shares is priced only from bars its own bot retained. An option close is priced from the newest quote kept for the contract in the account, whichever bot's entry or which round of the keeping wrote it. One contract has one market.
 - **The Clerk's keeping follows a Shadow's books** as it follows a Dry Run's (decision 16). In the ordinary course a held contract is asked for as a quote line and marked every 15 seconds whether a run is alive or not, and a Shadow's run names no held line of its own. The account's reading marks a bought contract at the bid last stated, good for 80 seconds. A contract with no mark leaves the Shadow account with no reading, and every bot on that Shadow then waits for one, as it does for a share with no fresh bar.
@@ -953,7 +950,7 @@ A Live Shadow sends nothing. For an option bot it is a real account's rules over
 - **A notice says that nothing real is held.** A missed close, the step after a close that was not taken, and the write-off that is not offered each speak of a Live Shadow, and never send the owner to look at Alpaca for an exercise or a sale that cannot have happened.
 - **A contract held past its expiry settles as on a Dry Run.** The shared simulation step of decision 22 settles it in cash at its exercise value or at zero, never into shares, and the owner can end a bought contract for which no closing price was retained. Nothing is sent to Alpaca. A held contract no longer blocks the whole Shadow for good. A session close with no mark for a held contract still costs the whole Shadow its reading for the next session, as it does for shares; the next complete session repairs that baseline.
 - **An unavailable reading says why.** When a held option, missing mark or damaged kept quote leaves a simulation without a reading, a bot's refused entry carries that reading's own sentence. Real-account words are unchanged.
-- **Not built:** several legs on a Shadow; the PRD's note of whether a limit stayed marketable through the wait a real order would have had; Deploy for a Shadow's option bot, whose readiness still refuses a Shadow by name.
+- **Not built:** several legs on a Shadow; the PRD's note of whether a limit stayed marketable through the wait a real order would have had.
 - **Not checked against Alpaca:** nothing here has been. The listing read on a live account is the request the Paper path makes, and that has never been sent.
 
 ## Where it lives
