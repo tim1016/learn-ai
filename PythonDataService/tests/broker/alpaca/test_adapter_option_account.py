@@ -130,6 +130,26 @@ async def test_the_broker_reads_the_option_fields_without_changing_the_served_ac
     assert not any(name.startswith("options_") for name in served.model_dump())
 
 
+async def test_a_live_accounts_option_fields_are_read_as_a_live_accounts(captured: dict[str, Any]) -> None:
+    """The mode is the one the broker is bound to, never assumed to be paper."""
+    captured["account_number"] = "9LIVE0001"
+    live = AlpacaSettings(
+        api_key_id="k",
+        api_secret_key="s",
+        mode="live",
+        # Every live envelope value is required configuration (ADR 0059 D4).
+        live_loss_fraction=0.02,
+        live_loss_usd=500.0,
+        live_xh_entry_bps=10.0,
+        live_xh_exit_bps=10.0,
+    )
+
+    options = await AlpacaBroker(client=_AccountClient(captured), settings=live).get_option_account()  # type: ignore[arg-type]
+
+    assert (options.account_mode, options.account_id) == ("live", "9LIVE0001")
+    assert options.options_trading_level == 3
+
+
 async def test_the_broker_names_unreadable_option_fields_as_unavailable_evidence(captured: dict[str, Any]) -> None:
     captured["options_trading_level"] = "three"
 

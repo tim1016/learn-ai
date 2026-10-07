@@ -156,6 +156,29 @@ class BrokerEvidenceUnavailable(BrokerUnavailable):
     """
 
 
+class BrokerOrderAnswerUnreadable(BrokerEvidenceUnavailable):
+    """The broker answered about one order, and the answer could not be read whole (#2913).
+
+    The outcome is unknown, as for any :class:`BrokerEvidenceUnavailable`.
+    ``broker_order_id`` is the order's own id when the answer still carried
+    one and was plainly about the order asked for, so the order can be
+    cancelled, or read again, by that id. ``None`` when that could not be
+    told: another order's id is never given as this one's.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        broker: str | None = None,
+        detail: str | None = None,
+        code: int | None = None,
+        broker_order_id: str | None = None,
+    ) -> None:
+        super().__init__(message, broker=broker, detail=detail, code=code)
+        self.broker_order_id = broker_order_id
+
+
 class BrokerSubmissionHeld(BrokerError):
     """New submission is refused by the account-level exposure hold (phase-2 S6).
 

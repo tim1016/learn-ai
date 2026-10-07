@@ -337,12 +337,12 @@ class BrokerOptionOrder(_OptionEvidenceModel):
     ``filled_avg_price`` are net, a share, signed as the broker signs them.
 
     A parent's ``quantity`` and ``filled_quantity`` count structures. A
-    leg's are the broker's own numbers for that leg: in Alpaca's one
-    published answer they are contracts, for an order of one structure, and
-    what it writes for more is not yet recorded (#2913). So no leg is held
-    to its ratio times the parent's quantity. What is held is true whatever
-    the units: nothing fills beyond its quantity, and a single order is for
-    one contract or more.
+    leg's are the broker's own numbers for that leg. Alpaca's one published
+    answer is for one structure, where a leg's ratio and the contracts it
+    comes to are the same number; what a leg says for more is not yet
+    recorded (#2913). So no leg is held to its ratio times the parent's
+    quantity. What is held is true whatever the units: nothing fills beyond
+    its quantity, and a single order is for one contract or more.
     """
 
     broker: str

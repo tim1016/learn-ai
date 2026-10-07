@@ -654,24 +654,7 @@ class AlpacaTradingClient:
         raises a bare ``ValueError`` for one it cannot parse, which no caller
         of an order read expects.
         """
-        try:
-            UUID(order_id)
-        except ValueError as exc:
-            raise BrokerRequestInvalid(
-                f"{order_id!r} is not an Alpaca order id.",
-                broker=self.broker_id,
-                detail="An Alpaca order id is a UUID; nothing was asked of Alpaca.",
-            ) from exc
-
-        def _get(client: Any) -> dict[str, Any] | None:
-            try:
-                return client.get_order_by_id(order_id)
-            except APIError as exc:
-                if status_of(exc) == 404:
-                    return None
-                raise
-
-        return await self._call(_get, describe="order lookup by broker order id")
+        return await self._order_by_broker_order_id(order_id, nested=False)
 
     async def get_nested_order_by_broker_order_id(self, order_id: str) -> dict[str, Any] | None:
         """GET ``/v2/orders/{order_id}?nested=true``: one order with its legs nested under it.
@@ -682,6 +665,15 @@ class AlpacaTradingClient:
         :meth:`get_order_by_broker_order_id`: the raw payload, ``None`` on a
         definitive 404, and an id that is not a UUID refused before anything
         is asked of Alpaca.
+        """
+        return await self._order_by_broker_order_id(order_id, nested=True)
+
+    async def _order_by_broker_order_id(self, order_id: str, *, nested: bool) -> dict[str, Any] | None:
+        """The one read of ``/v2/orders/{order_id}``, plain or with its legs nested.
+
+        The UUID gate, the 404 that means absent and the error taxonomy are
+        the same read's, so they are written once. Only ``nested`` adds the
+        query parameter; without it the SDK is called as it always was.
         """
         try:
             UUID(order_id)
@@ -694,10 +686,13 @@ class AlpacaTradingClient:
 
         def _get(client: Any) -> dict[str, Any] | None:
             try:
-                return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+                if nested:
+                    return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+                return client.get_order_by_id(order_id)
             except APIError as exc:
                 if status_of(exc) == 404:
                     return None
                 raise
 
-        return await self._call(_get, describe="nested order lookup by broker order id")
+        describe = "nested order lookup by broker order id" if nested else "order lookup by broker order id"
+        return await self._call(_get, describe=describe)

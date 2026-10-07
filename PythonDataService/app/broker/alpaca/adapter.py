@@ -7,7 +7,9 @@ models. Every vendor→contract conversion happens here, exactly once:
 - RFC-3339 timestamp strings → ``int64`` ms UTC (the one
   conversion boundary on ingestion).
 - Decimal money/quantity strings → ``float`` (read-only display surface; the
-  verbatim decimals remain in the capture journal).
+  verbatim decimals remain in the capture journal). The option mappers are
+  the exception: an option price stays an exact ``Decimal`` and a quantity a
+  whole ``int``, because they are compared with money set aside in cents.
 
 This module holds the shared helpers; each read-path slice adds its per-model
 mapper (``from_alpaca_account``, ``from_alpaca_position``, …) built on them.
@@ -735,6 +737,8 @@ _ALPACA_MULTI_LEG_ORDER_CLASS = "mleg"
 _ALPACA_SINGLE_ORDER_CLASSES = frozenset({"simple", ""})
 # An option order is good for the day (#2913); Alpaca also takes ``gtc``.
 _ALPACA_OPTION_TIME_IN_FORCE = "day"
+# The order reference's limit on ``client_order_id``: "<= 128 characters".
+_ALPACA_CLIENT_ORDER_ID_MAX_LENGTH = 128
 
 _ALPACA_POSITION_INTENT: dict[tuple[OrderSide, OptionPositionIntent], str] = {
     (OrderSide.BUY, OptionPositionIntent.OPEN): "buy_to_open",
@@ -762,9 +766,22 @@ def to_alpaca_option_order_request(order: OptionOrderRequest, *, client_order_id
 
     ``client_order_id`` must be the caller's own. Alpaca makes one up for an
     order sent without, and no lookup of ours could then find that order.
+    One with a space before or after it, or longer than the 128 characters
+    Alpaca's reference allows, is refused too: whether Alpaca would trim it,
+    cut it or refuse it, the id it kept might not be the id asked for.
+
+    Anything refused here raises ``ValueError`` or ``TypeError`` before a
+    body exists; the broker port turns that into ``BrokerRequestInvalid``.
     """
     if not isinstance(client_order_id, str) or not client_order_id.strip():
         raise ValueError("an option order is sent under the client order id its caller minted; none was given")
+    if client_order_id != client_order_id.strip():
+        raise ValueError(f"a client order id has no space before or after it; got {client_order_id!r}")
+    if len(client_order_id) > _ALPACA_CLIENT_ORDER_ID_MAX_LENGTH:
+        raise ValueError(
+            f"Alpaca takes a client order id of at most {_ALPACA_CLIENT_ORDER_ID_MAX_LENGTH} characters; "
+            f"this one has {len(client_order_id)}"
+        )
     if isinstance(order, SingleOptionOrderRequest):
         body: dict[str, Any] = {
             "symbol": order.contract.occ_symbol,
