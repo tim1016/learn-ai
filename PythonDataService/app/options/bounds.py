@@ -76,8 +76,9 @@ def _written(value: Decimal) -> tuple[tuple[int, ...], int]:
     """A finite number's digits with its trailing zeros taken off, and the place of the last digit left:
     0 for ones, -3 for thousandths, 2 for hundreds. ``7.50`` is ``(7, 5)`` at -1, and nothing is no digits.
 
-    Read off the number as it is held. ``Decimal.normalize`` gives the same answer by rounding to the decimal
-    context, and raises on a number the context cannot hold, such as ``1e1000000``.
+    Read off the number as it is held. ``Decimal.normalize`` rounds to the decimal context first: it drops
+    every digit past the context's twenty-eighth, so a part that small reads as none, and it raises on a
+    number the context cannot hold, such as ``1e1000000``.
     """
     _sign, digits, exponent = value.as_tuple()
     if not isinstance(exponent, int):
