@@ -8,10 +8,12 @@ recorded separately. Polling never renews any of these receipts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
 from app.broker.ibkr.models import _coerce_quote, _coerce_size
+from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.schemas.market_liveness import (
     MarketStatusSource,
     SymbolMarketDataEvidence,
@@ -133,6 +135,23 @@ class MarketSubscription:
             symbol=self.symbol, bid=bid, ask=ask,
             bid_size=_coerce_size(self.ticker.bidSize), ask_size=_coerce_size(self.ticker.askSize),
             source=SOURCE, observed_at_ms=received,
+        )
+
+    def held(self, generation: int) -> HeldQuote | None:
+        """The book as it was received, each side with its own receipt time, untested: for a reader that
+        asks the usability tests itself (ADR 0076). None until both sides have been received live."""
+        if self.ticker is None or self.failure or self.ticker.marketDataType != 1:
+            return None
+        if self.bid_received_at_ms is None or self.ask_received_at_ms is None:
+            return None
+        bid, ask = _coerce_quote(self.ticker.bid), _coerce_quote(self.ticker.ask)
+        if bid is None or ask is None:
+            return None
+        return HeldQuote(
+            bid=QuoteSide(Decimal(str(bid)), self.bid_received_at_ms),
+            ask=QuoteSide(Decimal(str(ask)), self.ask_received_at_ms),
+            data_type=QuoteDataType.LIVE,
+            generation=generation,
         )
 
     def evidence(self, now: int, *, recovering: bool = False) -> SymbolMarketDataEvidence:

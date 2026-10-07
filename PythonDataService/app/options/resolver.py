@@ -30,6 +30,11 @@ of three ways for a leg:
 ``NOTHING_CLOSE_ENOUGH``  the chain lists nothing within the rule's
     tolerance.
 
+A chain may name its expiries before the contracts of each are known
+(``Chain.expiries``). An expiry rule chooses among every date named, and a
+leg that comes to an expiry whose contracts are not known yet is incomplete
+as well.
+
 A rule by strike knows every listed strike, so its search is incomplete only
 when a listed strike within its tolerance, nearer than the pick would be, has
 a quote that has not arrived. A rule by delta cannot know the delta of a
@@ -143,6 +148,10 @@ class Chain:
 
     listings: tuple[Listing, ...]
     watched: Mapping[str, WatchedContract]
+    # Every date the underlying lists standard contracts for, when ``listings`` holds the contracts of only
+    # some of them: a provider names a chain's expiries at once and its contracts one expiry at a time.
+    # None: the listings are the whole chain, and its expiries are theirs.
+    expiries: tuple[date, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,9 +540,10 @@ def _awaited(listing: Listing, stood: _Stood) -> str:
     return f"only one side of {_symbol(listing)}'s quote has arrived"
 
 
-def _listed_expiries(standard: Sequence[Listing], today: date) -> list[date]:
+def _listed_expiries(chain: Chain, standard: Sequence[Listing], today: date) -> list[date]:
     """The expiries listed from ``today`` on, soonest first."""
-    return sorted({listing.contract.expiry_date for listing in standard if listing.contract.expiry_date >= today})
+    listed = chain.expiries if chain.expiries is not None else {listing.contract.expiry_date for listing in standard}
+    return sorted({day for day in listed if day >= today})
 
 
 def _expiry_date(leg: OptionEntryLeg, offered: Sequence[date], today: date) -> date:
@@ -563,6 +573,18 @@ def _expiry_date(leg: OptionEntryLeg, offered: Sequence[date], today: date) -> d
             leg_ids=(leg.leg_id,),
         )
     return expiry
+
+
+def expiry_a_rule_comes_to(leg: OptionEntryLeg, listed: Sequence[date], today: date) -> date | None:
+    """The expiry ``leg``'s rule picks among the dates ``listed`` on ``today``, or None when it picks none.
+
+    The question a resolution asks, for a caller that must know which expiry's contracts to watch before
+    any quote is held.
+    """
+    try:
+        return _expiry_date(leg, sorted({day for day in listed if day >= today}), today)
+    except _NoPick:
+        return None
 
 
 def _require_open_long_enough(leg: OptionEntryLeg, expiry: date, market: _Market) -> None:
@@ -949,7 +971,7 @@ def resolve_contracts(
                 if listing.contract.root == root and listing.contract.right == leg.right
             ]
             standard = [listing for listing in of_its_right if listing.is_standard]
-            offered = _listed_expiries(standard, today)
+            offered = _listed_expiries(chain, standard, today)
             expiry: date | None = None
             strikes: list[Listing] = []
             candidates: tuple[Candidate, ...] = ()
@@ -958,6 +980,13 @@ def resolve_contracts(
                 expiry = _expiry_date(leg, offered, today)
                 strikes = sorted((listing for listing in standard if listing.contract.expiry_date == expiry), key=_strike)
                 _require_open_long_enough(leg, expiry, market)
+                if not strikes:
+                    raise _NoPick(
+                        ResolverRefusal.SEARCH_INCOMPLETE,
+                        f"leg {leg.leg_id!r} comes to the {leg.right}s expiring {expiry}, and the chain's "
+                        "contracts for that expiry are not known yet",
+                        leg_ids=(leg.leg_id,),
+                    )
                 search = _Search(leg, market)
                 try:
                     pick = _pick(search, strikes, picked)

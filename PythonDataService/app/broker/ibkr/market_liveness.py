@@ -11,6 +11,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from copy import copy
+from decimal import Decimal
 from inspect import isawaitable
 from pathlib import Path
 from typing import Any
@@ -20,11 +21,15 @@ from pydantic import TypeAdapter
 from app.broker.ibkr.client import IbkrClient, get_client
 from app.broker.ibkr.contracts import qualify_underlying
 from app.broker.ibkr.market_subscription import (
+    DECISION_DATA_MAX_AGE_MS,
     SOURCE,
     SUBSCRIPTION_TIMEOUT_MS,
     MarketSubscription,
     install_market_data_callbacks,
 )
+from app.broker.ibkr.option_quotes import OptionQuoteLines
+from app.options.quotes import HeldQuote, quote_fault
+from app.options.resolver import FeedState
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import Clock, now_ms_utc
@@ -46,8 +51,11 @@ class IbkrMarketStatusSource:
         clock: Clock = now_ms_utc,
         publish: Callable[[MarketStatusSnapshot], None] | None = None,
         halt_path: Path | None = None,
+        options: OptionQuoteLines | None = None,
     ) -> None:
         self._symbols, self._client, self._clock = symbols, client, clock
+        # The option side of this supervisor (ADR 0076). None: this Clerk watches no option contract.
+        self._options = options
         self._publish_snapshot = publish
         self._halt_path = halt_path
         self._halted = self._load_halts()
@@ -132,6 +140,8 @@ class IbkrMarketStatusSource:
         for subscription in self._subscriptions.values():
             self._release(subscription)
         self._subscriptions.clear()
+        if self._options is not None:
+            self._options.release()
         if self._owner is not None:
             self._owner.ib.errorEvent -= self._on_error
         self._owner = None
@@ -159,6 +169,9 @@ class IbkrMarketStatusSource:
         await self._flush_halts()
         requested = self._symbols()
         symbols = await requested if isawaitable(requested) else requested
+        if self._options is not None:
+            # An option contract is watched beside its underlying's own quote.
+            symbols = (*symbols, *self._options.underlyings())
         self._demand = tuple(dict.fromkeys(symbol.upper() for symbol in symbols))
         client, now = self._client(), self._clock()
         if client is None or not client.is_connected():
@@ -190,6 +203,8 @@ class IbkrMarketStatusSource:
             self._connection_changed_at_ms = now
             self._attempts.clear()
             self._retry_at.clear()
+            if self._options is not None:
+                self._options.adopt(client, now, maintained=maintained)
             if maintained:
                 for subscription in self._subscriptions.values():
                     if subscription.ticker is not None:
@@ -222,7 +237,41 @@ class IbkrMarketStatusSource:
                 subscription = MarketSubscription(symbol, now)
                 self._subscriptions[symbol] = subscription
                 self._pending[symbol] = asyncio.create_task(self._subscribe(subscription, client, generation))
+        if self._options is not None:
+            await self._options.reconcile(client, now, self._underlying_mid)
         return self._snapshot(self._clock(), connected=self._connected())
+
+    def underlying_quote(self, symbol: str) -> HeldQuote | None:
+        """The underlying's quote as it was received, in the option feed's generation. None while this
+        Clerk watches no option contract, or nothing whole has been received for the symbol."""
+        subscription = self._subscriptions.get(symbol.upper())
+        if self._options is None or subscription is None or not self._connected():
+            return None
+        return subscription.held(self._options.generation)
+
+    def option_feed(self) -> FeedState | None:
+        """The option feed's generation and health, as a contract resolution is handed them. None while
+        this Clerk watches no option contract."""
+        if self._options is None:
+            return None
+        return FeedState(
+            generation=self._options.generation,
+            unhealthy=None if self._connected() else "the IBKR market-data connection is not up",
+        )
+
+    def _underlying_mid(self, symbol: str) -> Decimal | None:
+        """Where a window is centred when no bar close is given: the mid of a quote a decision could use."""
+        quote = self.underlying_quote(symbol)
+        if quote is None or quote.bid is None or quote.ask is None:
+            return None
+        fault = quote_fault(
+            quote,
+            at_ms=self._clock(),
+            generation=quote.generation,
+            max_age_ms=DECISION_DATA_MAX_AGE_MS,
+            needs_a_bid=True,
+        )
+        return None if fault is not None else (quote.bid.price + quote.ask.price) / 2
 
     def _retry_delay(self, symbol: str) -> int:
         attempt = self._attempts.get(symbol, 0)
@@ -267,6 +316,8 @@ class IbkrMarketStatusSource:
         subscription.request_id = request_id if isinstance(request_id, int) else None
 
     def _on_error(self, req_id: int, code: int, _message: str, _contract: Any) -> None:
+        if self._options is not None:
+            self._options.on_error(req_id, code)
         if code in _REQUEST_FAILURE_CODES:
             for subscription in self._subscriptions.values():
                 if subscription.request_id == req_id:
