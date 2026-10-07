@@ -164,6 +164,30 @@ describe('GoldenSearchRunsComponent', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('a filter whose read fails shows no rows of the filter before it, and a failed re-read of the same list keeps them', async () => {
+    let fails = false;
+    const { view } = await renderRuns(studyDetail('awaiting_candidate'), () => {
+      if (fails) throw new Error('down');
+      return runsPage();
+    });
+
+    // The study moves on and the same list cannot be read again: its rows still answer the controls.
+    fails = true;
+    view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate'), revision: 99 });
+    expect((await screen.findByRole('alert')).textContent).toContain('The study’s runs could not be loaded.');
+    expect(screen.getByRole('table')).not.toBeNull();
+
+    // Another filter cannot be read: the rows on screen are the earlier filter's, so they go.
+    fireEvent.click(within(screen.getByRole('group', { name: 'What asked for the runs' })).getByRole('button', { name: /Fold test/ }));
+    await waitFor(() => expect(screen.queryByRole('table')).toBeNull());
+    expect(screen.getByRole('alert')).not.toBeNull();
+    expect((screen.getByRole('button', { name: 'Draw every run on this page' }) as HTMLButtonElement).disabled).toBe(true);
+
+    fails = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('table')).not.toBeNull();
+  });
+
   it('says so when the study has recorded no run yet', async () => {
     const service = { runs: vi.fn(async () => runsPage({ total: 0, groups: [], rows: [] })), runCurves: vi.fn() };
     await render(GoldenSearchRunsComponent, {

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, signal, untracked } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { ButtonModule } from 'primeng/button';
 
@@ -89,13 +89,15 @@ export class GoldenSearchRunsComponent {
     params: () => ({ studyId: this.studyId(), query: this.query() }),
     loader: ({ params }) => this.service.runs(params.studyId, params.query),
   });
-  /** The page last read; it stays shown while the next one loads. */
-  private readonly shown = signal<RunsPage | null>(null);
-  protected readonly runs = this.shown.asReadonly();
+  /** The page last read and the filter, sort and page it answers; it stays shown while the next one loads. */
+  private readonly shown = signal<{ readonly page: RunsPage; readonly query: RunsQuery } | null>(null);
+  protected readonly runs = computed(() => this.shown()?.page ?? null);
   protected readonly listError = computed(() => {
     const error = this.listing.error();
     return error === undefined ? null : extractServerMessage(error, 'The study’s runs could not be loaded.');
   });
+  /** The read for the controls now set failed, so the page last read answers other controls: its rows are not shown. */
+  protected readonly mismatched = computed(() => this.listError() !== null && this.shown()?.query !== this.query());
 
   /** Each read curve by run; null for a run that kept none. Curves never change once recorded. */
   private readonly cache = signal<ReadonlyMap<string, RunCurve | null>>(new Map());
@@ -136,7 +138,7 @@ export class GoldenSearchRunsComponent {
   private readonly tickedKeys = computed(() => new Set(this.ticked().map((run) => run.evaluation_key)));
   protected readonly full = computed(() => this.ticked().length >= MAX_DRAWN);
   protected readonly rows = computed<RunRow[]>(() =>
-    (this.runs()?.rows ?? []).map((run) => ({
+    (this.mismatched() ? [] : (this.runs()?.rows ?? [])).map((run) => ({
       run,
       ticked: this.tickedKeys().has(run.evaluation_key),
       netReturn: signedPercentText(run.total_return_pct),
@@ -162,7 +164,7 @@ export class GoldenSearchRunsComponent {
 
   constructor() {
     effect(() => {
-      if (this.listing.hasValue()) this.shown.set(this.listing.value());
+      if (this.listing.hasValue()) this.shown.set({ page: this.listing.value(), query: untracked(this.query) });
     });
     reloadOnProgress(() => `${this.study().revision}|${this.study().consumed_evaluations}`, this.listing);
   }
