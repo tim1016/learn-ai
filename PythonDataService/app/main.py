@@ -1111,6 +1111,10 @@ async def _service_lifespan(
         from app.services.option_search import close_option_searches
 
         close_option_searches()
+        # And the threads the rate and the dividends are looked up in.
+        from app.services.option_model_inputs import close_lookup_threads
+
+        close_lookup_threads()
         # The installed primary, which a reconnect may have replaced since boot.
         installed_alpaca_runtime = get_active_clerk_runtime()
         await close_synthetic_clerk_runtimes()

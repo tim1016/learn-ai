@@ -906,6 +906,25 @@ async def test_a_page_that_hung_up_does_not_stop_its_search_and_its_next_ask_wai
     assert isinstance(await after, Resolution) and len(worker.searches) == 2
 
 
+async def test_a_search_that_fails_after_its_ask_stopped_waiting_leaves_the_page_free_to_search_again() -> None:
+    """What was asked could not describe a market, which the lane raises as the caller's mistake. Here nobody
+    is waiting to be told: the failure is not handed to the page's next ask, and does not stand in its way."""
+    workers = Workers()
+    previews = _previews(workers, wait_s=0.05)
+    scene = scenes._scene()
+    backwards = replace(_ask(_AT_THE_MONEY, scene), selection_ms=scene.decision_bar_close_ms - 1)
+
+    told = await previews.search("page-1", backwards)
+    worker = await workers.handed()
+    worker.let_go(0)
+    await _moments()
+    next_ask = asyncio.ensure_future(previews.search("page-1", _ask(_AT_THE_MONEY, scene)))
+    (await workers.handed(2)).let_go(1)
+
+    assert isinstance(told, SearchNotRun) and told.reason is SearchNotRunReason.NOT_DONE_IN_TIME
+    assert await next_ask == scene.resolve(_AT_THE_MONEY)
+
+
 async def test_a_worker_lost_to_a_preview_is_told_as_not_run_and_the_next_ask_searches_again() -> None:
     made: list[Executor] = []
 
@@ -980,3 +999,19 @@ def test_only_the_search_worker_calls_the_resolver_and_nothing_outside_the_optio
             callers[module.relative_to(app).as_posix()] = reached
 
     assert callers == {"services/option_search.py": {"resolve_contracts"}}
+
+
+def test_the_app_stops_the_search_workers_and_the_lookup_threads_where_it_shuts_down() -> None:
+    """Read off the app's own source, as the rest of its shutdown wiring is checked: the lanes and the lookups'
+    threads are this process's own, and nothing but the app's shutdown ends them."""
+    main = ast.parse((Path(option_search.__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8"))
+    called_in = {
+        function.name: {
+            node.func.id for node in ast.walk(function) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        for function in ast.walk(main)
+        if isinstance(function, ast.AsyncFunctionDef)
+    }
+
+    # Both, and in the service's own lifespan: the one place everything it started is taken down.
+    assert {"close_option_searches", "close_lookup_threads"} <= called_in["_service_lifespan"]

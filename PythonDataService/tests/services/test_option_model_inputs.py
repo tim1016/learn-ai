@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import contextvars
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -23,8 +25,10 @@ from app.services.option_model_inputs import (
     DeclaredDividend,
     DividendsUnknown,
     ModelInputsBeingRead,
+    ModelInputsRead,
     declared_dividend_lookup,
     declared_dividends_from_polygon,
+    off_the_loop,
     read_option_model_inputs,
 )
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
@@ -523,6 +527,81 @@ def test_only_so_many_answers_are_kept_and_the_oldest_go_first(monkeypatch: pyte
     assert asked_for_the_newest == 1
     assert lookups.dividends_asked.count(("AAPL", _TUESDAY, _NEXT_FRIDAY)) == 2
     assert len(option_model_inputs._dividends) <= 3
+
+
+def test_a_lookup_given_up_on_while_it_still_waits_for_a_thread_is_never_begun(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eight lookups of the dividends hang, and between them hold every thread kept for those. A ninth is given
+    up on at its bound, before a thread was free for it. When the eight end, the ninth is not begun: nobody is
+    waiting for what it would learn, and its vendor is not asked late for it."""
+    option_model_inputs.close_lookup_threads()
+    lookups = Lookups([])
+    begun: list[str] = []
+    one_more_began, let_go = threading.Semaphore(0), threading.Event()
+
+    def dividends(underlying: str, _first: date, _last: date) -> list[DeclaredDividend]:
+        begun.append(underlying)
+        one_more_began.release()
+        if underlying.startswith("HUNG"):
+            let_go.wait(timeout=20)
+        return []
+
+    def read(underlying: str) -> ModelInputsRead:
+        return read_option_model_inputs(
+            underlying, at_ms=NOW, latest_expiry=_NEXT_FRIDAY, rate=lookups.rate, dividends=dividends
+        )
+
+    hung = [f"HUNG{letter}" for letter in "ABCDEFGH"]
+    readers = [threading.Thread(target=read, args=(underlying,), daemon=True) for underlying in hung]
+    for reader in readers:
+        reader.start()
+    try:
+        assert all(one_more_began.acquire(timeout=10) for _ in hung)
+        with monkeypatch.context() as a_short_wait:
+            a_short_wait.setattr(option_model_inputs, "VENDOR_LOOKUP_BOUND_S", 0.05)
+            given_up_on = read("NINTH")
+    finally:
+        let_go.set()
+        for reader in readers:
+            reader.join(timeout=10)
+    after = read("LAST")
+
+    assert given_up_on.dividends is None and given_up_on.dividends_unknown_why == WhyNotKnown.LOOKUP_TOO_SLOW
+    # A lookup handed over after the ninth has been made, so the ninth's turn for a thread has come and gone.
+    assert after.dividends == ()
+    assert sorted(begun) == sorted([*hung, "LAST"])
+
+
+_ASKED_BY: contextvars.ContextVar[str] = contextvars.ContextVar("asked_by", default="nobody")
+
+
+async def test_a_read_for_a_caller_on_the_event_loop_runs_in_the_threads_kept_for_reads_and_as_that_caller() -> None:
+    """Never in the loop's own default threads, where the Clerk's execution-lease heartbeat runs."""
+    _ASKED_BY.set("this caller")
+
+    ran_in, ran_as = await off_the_loop(lambda: (threading.current_thread().name, _ASKED_BY.get()))
+
+    assert ran_in.startswith("option-model-inputs-read") and ran_in != threading.current_thread().name
+    assert ran_as == "this caller"
+
+
+def test_the_threads_lookups_run_in_end_when_they_are_closed_and_the_next_read_starts_them_again() -> None:
+    lookups = Lookups([DeclaredDividend(_FRIDAY, 1.80)])
+    kept_for_lookups = ("option-rate-lookup", "option-dividend-lookup", "option-model-inputs-read")
+
+    first = lookups.read()
+    started = [thread for thread in threading.enumerate() if thread.name.startswith(kept_for_lookups)]
+    option_model_inputs.close_lookup_threads()
+    give_up_at = time.monotonic() + 10
+    for thread in started:
+        thread.join(timeout=max(give_up_at - time.monotonic(), 0))
+    still_running = [thread.name for thread in started if thread.is_alive()]
+    # Closing what is closed does nothing, and the next read is served as the first was.
+    option_model_inputs.close_lookup_threads()
+    option_model_inputs.clear_cache()
+    again = lookups.read()
+
+    assert started and still_running == []
+    assert again == first and len(lookups.dividends_asked) == 2
 
 
 @pytest.mark.usefixtures("own_clock")
