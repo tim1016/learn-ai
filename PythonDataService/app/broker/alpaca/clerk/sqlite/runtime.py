@@ -1487,6 +1487,9 @@ class SqliteAlpacaClerkFacade:
                 reason_code=reason_code, explanation=explanation, next_step=next_step,
             )
 
+        if isinstance(quantity, bool) or not 1 <= quantity <= 100:
+            # Checked before anything is written: a receipt cannot carry a quantity outside these.
+            raise ValueError(f"an option effect is for 1 to 100 structures; got {quantity!r}")
         accepted_enter: EnterSubmission | None = None
         accepted_exit: ExitSubmission | None = None
         entry: OptionEntryFacts | None = None

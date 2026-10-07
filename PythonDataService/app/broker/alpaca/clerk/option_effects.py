@@ -44,6 +44,8 @@ class OptionEffectRefusal(StrEnum):
     ENTRY_EVIDENCE_MISSING = "OPTION_ENTRY_QUOTES_NOT_KEPT"
     # What came does not cover the plan's legs.
     ENTRY_EVIDENCE_INCOMPLETE = "OPTION_ENTRY_EVIDENCE_INCOMPLETE"
+    # The picked contract's expiry date is already past.
+    CONTRACT_EXPIRED = "OPTION_CONTRACT_EXPIRED"
     # The fee model has no rate for the day, so the entry's fees cannot be set aside.
     FEE_RATE_NOT_PINNED = "OPTION_FEE_RATE_NOT_PINNED"
     # A simulated close has no quote kept to price it from.

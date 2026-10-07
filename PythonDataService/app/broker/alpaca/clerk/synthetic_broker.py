@@ -38,7 +38,7 @@ from typing import Literal, NamedTuple
 from app.broker.alpaca.broker import ALPACA_EXTENDED_HOURS_WINDOW
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
 from app.broker.alpaca.clerk.fill_models import immediate_fill_price
-from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuote, KeptOptionQuotes
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.money import normalize_money
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -315,14 +315,6 @@ class SyntheticBroker:
         now_ms = self._clock()
         for symbol, quote in quotes.items():
             self._kept_quotes.keep(symbol, quote, kept_at_ms=now_ms)
-
-    def newest_option_quote(
-        self, symbol: str, *, at_or_before_ms: int | None = None, with_side: Literal["bid", "ask"] | None = None
-    ) -> KeptOptionQuote | None:
-        """The newest quote kept for a contract, or None when none was ever handed over."""
-        if self._kept_quotes is None:
-            return None
-        return self._kept_quotes.newest(symbol, at_or_before_ms=at_or_before_ms, with_side=with_side)
 
     def bind_option_entry_quote(self, client_order_id: str, *, symbol: str, quote: HeldQuote) -> None:
         """Bind an opening order to the one quote its limit price was worked out from, and keep that quote."""

@@ -404,6 +404,26 @@ async def test_an_entry_whose_quote_is_from_before_a_reconnect_is_refused(dry_ru
     await _refused(await dry_run.enter(dry_run.evidence(generation=GENERATION + 1)), "QUOTE_OLD_GENERATION", dry_run)
 
 
+async def test_a_contract_that_is_not_the_plans_leg_is_refused(dry_run: _DryRun) -> None:
+    """The plan buys a SPY call. A put handed over for that leg is not what the plan opens."""
+    put = OptionContract.of(root="SPY", expiry_date=date(2026, 9, 18), right="put", strike=585)
+
+    await _refused(await dry_run.enter(dry_run.evidence(picked={LEG: put})), "OPTION_STRUCTURE_NOT_THE_PLANS_LEGS", dry_run)
+
+
+async def test_a_contract_already_expired_is_refused(dry_run: _DryRun) -> None:
+    expired = OptionContract.of(root="SPY", expiry_date=date(2026, 9, 4), right="call", strike=585)
+
+    await _refused(await dry_run.enter(dry_run.evidence(picked={LEG: expired})), "OPTION_CONTRACT_EXPIRED", dry_run)
+
+
+async def test_more_than_a_hundred_structures_is_the_callers_mistake_and_writes_nothing(dry_run: _DryRun) -> None:
+    with pytest.raises(ValueError, match="1 to 100"):
+        await dry_run.enter(dry_run.evidence(), units=101)
+
+    assert dry_run.orders() == 0
+
+
 async def test_an_entry_sent_after_the_regular_session_is_refused(dry_run: _DryRun) -> None:
     dry_run.wait(5 * 3_600_000)
 
@@ -727,6 +747,42 @@ async def test_a_dry_run_goes_on_trading_after_its_first_option_round_trip(dry_r
     assert dry_run.fills()[-1] == (SYMBOL, "buy", 1.0, 2.44, 100)
 
 
+async def test_a_contract_held_overnight_starts_the_next_day_from_its_mark_at_the_close(dry_run: _DryRun) -> None:
+    """The day's starting equity is yesterday's close. For a contract that is the last bid handed over before it.
+
+    Bought at $1.94. Thirty seconds before Tuesday's close the bid handed
+    over is $2.00, so the day ends $6.00 up, less six cents of fees now
+    settled. Wednesday at 9:31 the bid is $2.50.
+    """
+    await dry_run.enter(dry_run.evidence())
+    dry_run.wait(4 * 3_600_000 - 31_000)  # 15:59:30 New York time
+    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.00", "2.06", received_ms=dry_run.clock() - 5_000)})
+    dry_run.wait(17 * 3_600_000 + 31 * 60_000 + 30_000)  # 09:31:00 the next morning
+    dry_run.clerk.keep_option_quotes({SYMBOL: _quote("2.50", "2.56", received_ms=dry_run.clock() - 200)})
+
+    reading = dry_run.account_reading()
+
+    assert reading.last_equity_usd == Decimal("1000") + Decimal("6") - Decimal("0.06")
+    assert reading.unrealized_pl_usd == Decimal("56")
+    assert reading.equity_usd == Decimal("1000") + Decimal("56") - Decimal("0.06")
+
+
+async def test_a_quote_handed_over_the_next_morning_does_not_stand_in_for_the_close_it_missed(
+    dry_run: _DryRun,
+) -> None:
+    """Nothing was handed over in the last minute of the day. The same old quote, handed over at 9:31, was
+    received before the close, but it is a statement made after it: the close has no mark, and says so."""
+    await dry_run.enter(dry_run.evidence())
+    quiet = _quote("2.00", "2.06", received_ms=dry_run.clock())
+    dry_run.wait(3 * 3_600_000)  # 15:00, an hour before the close
+    dry_run.clerk.keep_option_quotes({SYMBOL: quiet})
+    dry_run.wait(18 * 3_600_000 + 31 * 60_000 - 1_000)  # 09:31:00 the next morning
+    dry_run.clerk.keep_option_quotes({SYMBOL: quiet})
+
+    with pytest.raises(SimulationEvidenceUnavailable, match=SYMBOL):
+        dry_run.account_reading()
+
+
 # ── a close the simulation cannot price ──────────────────────────────────
 
 
@@ -745,6 +801,9 @@ async def test_a_close_with_nothing_bid_is_not_recorded_as_a_sale_for_nothing_an
         scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID
     )
     assert still_open is not None, "the failed close is on the books as a position still open"
+    # It is marked at what was last seen bid for it, nothing: the whole $194.00 paid is an open loss.
+    # The entry's own quote, handed back to price the close, is not taken for a fresh one.
+    assert dry_run.account_reading().unrealized_pl_usd == Decimal("-194")
 
 
 async def test_a_close_is_still_priced_from_the_entrys_own_quote_when_the_quotes_kept_are_lost(

@@ -6,8 +6,9 @@ money. Here the Clerk asks, in order, and the first "no" refuses the entry:
 
 1. Is the plan one the Clerk takes today: one bought call or put?
 2. Did the facts come, and do they cover the plan's leg?
-3. Is each quote usable at the Clerk's own clock: one generation, both
-   sides, live, not crossed, and no side older than the decision-data budget?
+3. Has the picked contract's expiry date already passed, and is each quote
+   usable at the Clerk's own clock: one generation, both sides, live, not
+   crossed, and no side older than the decision-data budget?
 4. What would its fees be? The provision is the entry's own fills settled as
    a day of their own.
 5. Is it a structure the plan may open, is each leg's market inside the
@@ -82,6 +83,13 @@ def work_out_option_entry(
             f"leg; what came names {sorted({name for by_leg in handed for name in by_leg})}.",
         )
     contract, quote = evidence.picked[leg.leg_id], evidence.quotes[leg.leg_id]
+    if contract.expiry_date < et_date_at_ms(now_ms):
+        # How long before its last trade an entry is still taken is the
+        # runner's recheck to say; a contract already expired never is.
+        return OptionEntryRefused(
+            OptionEffectRefusal.CONTRACT_EXPIRED.value,
+            f"{contract.occ_symbol} expired on {contract.expiry_date.isoformat()}; nothing can be bought in it.",
+        )
     fault = quote_fault(
         quote, at_ms=now_ms, generation=evidence.generation, max_age_ms=QUOTE_MAX_AGE_MS,
         needs_a_bid=leg.position == "short",
