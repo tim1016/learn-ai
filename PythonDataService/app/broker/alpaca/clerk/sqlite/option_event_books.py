@@ -315,6 +315,18 @@ def event_share_order_symbol(conn: sqlite3.Connection, order_ref: str) -> str | 
     return None if row is None else row["symbol"]
 
 
+def option_ending_that_left_shares(conn: sqlite3.Connection, order_ref: str) -> OptionPositionEndedFacts | None:
+    """The record of the exercise or assignment whose shares arrived on ``order_ref``, or None when it is no such order."""
+    row = conn.execute(
+        "SELECT t.facts_json FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN custody_transitions t ON t.effect_operation_id = e.effect_operation_id AND t.transition_kind = ? "
+        "WHERE o.order_ref = ? AND o.role = ? AND e.kind = ? ORDER BY t.sequence LIMIT 1",
+        (OPTION_POSITION_ENDED, order_ref, OPTION_EVENT_SHARE_ORDER_ROLE, OPTION_EVENT_EFFECT_KIND),
+    ).fetchone()
+    return None if row is None else OptionPositionEndedFacts.from_facts_json(row["facts_json"])
+
+
 @dataclass(frozen=True, slots=True)
 class RecordedOptionEnding:
     """One option position the books recorded as ended, for the bot and the run that held it."""
@@ -377,6 +389,7 @@ __all__ = [
     "books_record_no_contract",
     "event_share_order_symbol",
     "held_option_positions",
+    "option_ending_that_left_shares",
     "outside_order_reduces_a_bots_contract",
     "recorded_option_endings",
 ]
