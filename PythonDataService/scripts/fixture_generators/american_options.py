@@ -88,9 +88,10 @@ DECAY_DIVIDEND_CASES: list[tuple[str, int, list[tuple[int, float]], tuple[float,
     ("30d_ex_inside_the_day", 30, [(1, 1.75)], (90.0, 95.0, 100.0, 105.0, 110.0)),
     ("60d_ex_inside_the_day_and_on_day_40", 60, [(1, 0.9), (40, 0.9)], (90.0, 100.0, 110.0)),
 ]
-# The step counts AM-005 is compared at, both prime. An ex-date exactly on a tree step is counted
-# before or after that step by the last bit of the two times, so no case may put one there, now or a
-# day later. At 2,001 steps, 69 to the day over 29 days, every whole day of a 29-day span would be.
+# The step counts AM-005 is compared at, both prime and over the days to any expiry here. An ex-date
+# exactly on a tree step is counted before or after that step by the last bit of the two times, so
+# no case may put one there, now or a day later. At 2,001 steps, 69 to the day over 29 days, every
+# whole day of a 29-day span would be.
 DECAY_DIVIDEND_TREE_STEPS = (401, 2003)
 
 

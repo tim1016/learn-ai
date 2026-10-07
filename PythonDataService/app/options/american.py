@@ -71,10 +71,11 @@ zero, at any time to expiry. The price there moves in steps of up to about
 about 2e-7/√T: 1e-6 at thirty days, 1e-4 at one minute.
 A dividend whose ex-date falls exactly on a tree step is counted before or
 after that step by the last bit of the two times, and the price can move by
-a step's error for it: 5.6e-3 was measured at 401 steps. A time in whole
-days never lands on a step of the default 401, which is prime. The daily
-decay takes a day off each time as a float, so there its later price can
-differ that much from a price worked a day later from instants.
+a step's error for it: 5.6e-3 was measured at 401 steps. The default 401 is
+prime, so with under 401 days to expiry no ex-date a whole number of days
+out lands on a step. The daily decay takes a day off each time as a float,
+so there its later price can differ that much from a price worked a day
+later from instants.
 """
 
 from __future__ import annotations

@@ -248,7 +248,7 @@ def test_a_days_decay_without_dividends_matches_the_difference_of_two_quantlib_t
 # tests/options/test_american_daily_decay.py pins that choice directly.
 # The step counts are prime. An ex-date exactly on a tree step is counted before or after that step
 # by the last bit of the two times, and at AM-002's 2,001 steps, 69 to the day over 29 days, every
-# whole day of a 29-day span is on one. No whole day lands on a step of a prime count.
+# whole day of a 29-day span is on one. A prime count over the days to expiry has no whole day on a step.
 _FINE_DECAY_TREE_STEPS = 2003
 _FINE_TREE_DECAY_ATOL = 2e-3
 _DEFAULT_STEPS_DECAY_ATOL = 1e-2

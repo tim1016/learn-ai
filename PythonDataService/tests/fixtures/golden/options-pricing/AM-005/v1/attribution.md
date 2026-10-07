@@ -25,7 +25,7 @@ The engine and the dividend model are AM-002's. That fixture's attribution descr
 - A dividend going ex exactly a day from now has gone ex a day later: the generator takes it off the stock price and leaves it out of the later schedule. QuantLib is not asked what it does with a dividend on the valuation date.
 - A dividend's time is the whole number of days to its ex-date, over 365. Every time here is a whole number of days, so nothing is restated.
 - This is a second engine for the same model, not the same algorithm. QuantLib's binomial engines take no cash dividends, so the tree cannot be compared with a tree here.
-- The step counts the canonical tree is run at, 401 and 2,003, are prime, where AM-002 uses 2,001. An ex-date that falls exactly on a tree step is counted before or after that step by the last bit of the two times, and the price moves by up to a step's error for it. At 2,001 steps, 69 to the day over 29 days, every whole day of a 29-day span is on a step. No whole day lands on a step of a prime count, and the generator refuses a case that would.
+- The step counts the canonical tree is run at, 401 and 2,003, are prime, where AM-002 uses 2,001. An ex-date that falls exactly on a tree step is counted before or after that step by the last bit of the two times, and the price moves by up to a step's error for it. At 2,001 steps, 69 to the day over 29 days, every whole day of a 29-day span is on a step. A prime count greater than the days to expiry has no whole day on a step, and the generator refuses a case that would put one there.
 
 ## Independent numerical oracle
 
