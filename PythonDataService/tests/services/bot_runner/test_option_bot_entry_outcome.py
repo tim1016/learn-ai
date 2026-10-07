@@ -35,6 +35,8 @@ from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runti
 from app.broker.alpaca.clerk.held_option_quotes import reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
+from app.broker.alpaca.clerk.sqlite import decision_receipts as decision_receipts_module
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -42,11 +44,18 @@ from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.ibkr.bars import REALTIME_BAR_STALL_TIMEOUT_S
 from app.broker.ibkr.config import reset_settings_for_testing
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.options.deadlines import CloseTerms
 from app.services import bot_option_run, market_liveness
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
-from app.services.bot_option_run import ENTRY_OUTCOME_WAIT_MS, EntryCameTo, OptionOrderTerms, entry_came_to
+from app.services.bot_option_run import (
+    ENTRY_OUTCOME_WAIT_MS,
+    EntryCameTo,
+    OptionOrderTerms,
+    OptionRun,
+    entry_came_to,
+)
 from app.services.bot_trade_strategy_warmup import ENTRY_DISCARDED
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils import timestamps
@@ -58,6 +67,7 @@ from ._option_floor import (
     ENTER_MS,
     EXIT_MS,
     FIRST_GREEN_MS,
+    FRIDAY,
     MINUTE,
     SID,
     Floor,
@@ -534,6 +544,42 @@ async def test_a_later_start_names_no_exit_of_a_position_an_unfilled_entry_never
     ] == named
 
 
+@pytest.mark.parametrize(
+    ("alpaca_answers_in_time", "held"),
+    [
+        pytest.param(False, True, id="settled as entered before it was proven, and unfilled in the end"),
+        pytest.param(True, False, id="cancelled unfilled at its deadline"),
+    ],
+)
+async def test_the_entry_a_later_start_replays_as_held_is_the_one_the_strategy_was_settled_as_in(
+    on_paper: Callable[..., PaperFloor], monkeypatch: pytest.MonkeyPatch, alpaca_answers_in_time: bool, held: bool
+) -> None:
+    """The ENTER is older than the receipts a Start still reads. Whether its position is replayed as open is
+    asked of its settlement. Settled as entered while Alpaca would not answer, the live run went on as in a
+    position, though the order was proven unfilled in the end and its ENTER then ended failed: it is still
+    replayed as held. Cancelled unfilled inside the wait, the live run went on flat: nothing is held."""
+    monkeypatch.setattr(decision_receipts_module, "MAX_DECISION_RECEIPTS_PER_STRATEGY", 2)
+    paper = await on_paper().open()
+    if not alpaca_answers_in_time:
+        paper.venue.cancel_error = BrokerUnavailable("cancel timed out", broker="alpaca")
+        paper.venue.option_lookup_error = BrokerUnavailable("lookup timed out", broker="alpaca")
+
+    ran = await paper.run([*_two_greens(), Step(red(ENTER_MS + MINUTE)), Step(red(ENTER_MS + 2 * MINUTE))])
+
+    paper.venue.cancel_error = paper.venue.option_lookup_error = None
+    await paper.keeper.tick()
+    assert paper.entry().standing is EntryStanding.UNFILLED and paper.holds() == {}
+    receipts = SqliteDecisionReceipts(paper.repo, strategy_instance_id=PAPER_SID)
+    window = receipts.retained_window()
+    assert [receipt.outcome for receipt in window] == ["no_action", "no_action"], "the ENTER is older than the read"
+
+    entry = receipts.entry_held_into(window)
+
+    assert (entry is not None) is held
+    replayed = paper.replayed_dispositions().outcomes
+    assert replayed.get(_decision(ran, ENTER_MS)) == ("enter_intent" if held else None)
+
+
 # ---- The bot's own order terms -----------------------------------------------------------------------
 
 
@@ -568,6 +614,27 @@ async def test_a_dry_runs_entry_is_handed_the_bots_own_order_terms_too(
     entry = floor.entry_as_the_clerk_kept_it()
     assert entry.terms is not None and entry.terms.close_terms == terms
     assert entry.cancel_at_ms == TAKEN_MS + 7_000
+
+
+@pytest.mark.parametrize(
+    ("asked_at", "named"),
+    [
+        pytest.param(session_close_ms_utc(FRIDAY) - 1, (CALL_585,), id="in its last session"),
+        pytest.param(session_close_ms_utc(FRIDAY), (), id="once its last session has closed"),
+    ],
+)
+async def test_a_paper_run_asks_for_what_its_bot_holds_until_the_contracts_last_session_closes(
+    paper: PaperFloor, asked_at: int, named: tuple[Any, ...]
+) -> None:
+    """Nothing trades in a contract after its last session, so no quote line is spent on it."""
+    run = OptionRun(
+        paper.binding, paper.market(clock=lambda: asked_at), held_contracts=lambda: (CALL,), names_what_it_holds=True
+    )
+
+    async with run:
+        assert paper.watched_as_held() == named
+
+    assert paper.watch.requests() == ()
 
 
 # ---- Which accounts run an option bot ----------------------------------------------------------------
@@ -652,8 +719,20 @@ async def test_in_a_dry_run_an_entry_is_settled_at_once_through_the_same_wait(dr
 
     dry_run.clerk._outcome_pause = no_pause
 
-    ran = await dry_run.run(_round_trip())
+    asked_for_while_held: list[Any] = []
 
+    async def a_minute_on(floor: Floor) -> None:
+        await floor.bar_arrives(ENTER_MS + MINUTE + DELIVERY_MS)
+        asked_for_while_held.extend(floor.watch.requests())
+
+    script = _round_trip()
+    script[2] = Step(script[2].bar, before=a_minute_on)
+
+    ran = await dry_run.run(script)
+
+    # What a Dry Run's bot holds is its Clerk's to ask for, not its run's.
+    (the_runs_own,) = asked_for_while_held
+    assert the_runs_own.plan is not None and the_runs_own.held == ()
     assert dry_run.transitions("ENTRY_SETTLED") == 1
     (order_ref,) = [row.order_ref for row in ran.journal if row.intent == "ENTER"]
     recorded = dry_run.repo.last_order_transition(order_ref=order_ref, transition_kind="ENTRY_SETTLED")
