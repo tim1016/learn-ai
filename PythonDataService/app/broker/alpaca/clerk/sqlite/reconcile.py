@@ -1320,7 +1320,8 @@ async def _reconcile_account_serialized(
 
     # The owner-scheduled end sells what a SELL end owes -- at market in the
     # regular session, else at the next open -- and is recorded carried out
-    # (#2607). The one sale a dead run makes by itself (ADR 0045).
+    # (#2607). One of the two sales a dead run makes by itself (ADR 0045); the
+    # other is an option position's scheduled close, the step after this one.
     await finish_bots_at_their_end(
         repo, ends_due, trade=trade, intake=intake, pricing=pricing, off_loop=to_thread
     )
