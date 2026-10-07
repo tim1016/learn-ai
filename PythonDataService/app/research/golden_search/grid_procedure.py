@@ -269,3 +269,16 @@ def neighbor_probes(
     below = _audit_cell(declaration, base, {knob_name: base[knob_name] - step}, build)
     above = _audit_cell(declaration, base, {knob_name: base[knob_name] + step}, build)
     return below, above
+
+
+def neighbor_at(
+    declaration: SearchDeclaration,
+    center: Mapping[str, Any],
+    knob_name: str,
+    value: float,
+    *,
+    canonicalize: Canonicalize | None = None,
+) -> AuditCell:
+    """``center`` with one knob at ``value``: a neighbor found by the value an audit recorded, whatever the knob's step is now."""
+    build = canonicalize or canonicalizer(declaration.strategy_key, str(center["symbol"]))
+    return _audit_cell(declaration, knob_values(declaration, center), {knob_name: to_decimal(value)}, build)

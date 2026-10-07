@@ -4,6 +4,7 @@ import { DecimalPipe } from '@angular/common';
 import { extractServerMessage } from '../broker/operation-error';
 import { reloadOnProgress } from './charts/golden-search-reload';
 import { pairAudit } from './golden-search-compare';
+import { GoldenSearchCurveSetComponent } from './golden-search-curve-set.component';
 import { GoldenSearchProcedureChartsComponent } from './golden-search-procedure-charts.component';
 import { GoldenSearchProcedureComponent } from './golden-search-procedure.component';
 import { GoldenSearchService } from './golden-search.service';
@@ -20,7 +21,7 @@ import { isLive, type SearchCharts, type StrategyCapability, type StudyDetail } 
  */
 @Component({
   selector: 'app-golden-search-search-step',
-  imports: [DecimalPipe, GoldenSearchProcedureChartsComponent, GoldenSearchProcedureComponent],
+  imports: [DecimalPipe, GoldenSearchCurveSetComponent, GoldenSearchProcedureChartsComponent, GoldenSearchProcedureComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-search-step.component.html',
   styleUrl: './golden-search-search-step.component.scss',

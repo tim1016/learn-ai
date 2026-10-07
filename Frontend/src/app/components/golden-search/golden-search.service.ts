@@ -8,6 +8,8 @@ import type {
   CandidateDetail,
   CandidateKey,
   CreateStudyRequest,
+  CurveSet,
+  CurveSetKey,
   DefaultsLayout,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
@@ -162,6 +164,13 @@ export class GoldenSearchService {
   async runCurves(id: string, keys: readonly string[]): Promise<RunCurves> {
     const params = new HttpParams({ fromObject: { key: [...keys] } });
     return firstValueFrom(this.http.get<RunCurves>(`${this.base}/studies/${encodeURIComponent(id)}/runs/curves`, { params }));
+  }
+
+  /** The runs one step draws, each with its role and curve; `candidate` names whose runs the candidate set holds. */
+  async curveSet(id: string, set: CurveSetKey, candidate: CandidateKey | null = null): Promise<CurveSet> {
+    let params = new HttpParams({ fromObject: { set } });
+    if (candidate !== null) params = params.set('candidate', candidate);
+    return firstValueFrom(this.http.get<CurveSet>(`${this.base}/studies/${encodeURIComponent(id)}/charts/run-curves`, { params }));
   }
 
   /** The Plan step's charts for a locked study. */

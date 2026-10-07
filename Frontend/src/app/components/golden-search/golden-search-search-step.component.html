@@ -17,6 +17,8 @@
     }
     @if (procedures().get('search'); as charts) {
       <app-golden-search-procedure-charts [procedure]="charts" [capability]="capability()" [maps]="pairMaps()" [center]="search.winner" />
+      <app-golden-search-curve-set [study]="s" curves="search" chart="search-curves"
+        caption="Every point the all-period search scored, on the development period: the winner bold, the current settings dashed, the rest faint." />
     } @else if (!chartsError()) {
       <p class="muted" role="status">Loading the search charts…</p>
     }
@@ -42,6 +44,8 @@
         <app-golden-search-procedure headingId="gs-search-recent" heading="Recent window" [description]="recentDescription()" [procedure]="recent" [method]="s.method" [capability]="capability()" />
         @if (procedures().get('recent'); as charts) {
           <app-golden-search-procedure-charts [procedure]="charts" [capability]="capability()" />
+          <app-golden-search-curve-set [study]="s" curves="recent" chart="search-curves" instance="Recent window"
+            caption="Every point the recent-window search scored, on the recent window only: the winner bold, the current settings dashed, the rest faint." />
         }
       } @else {
         <p class="muted">The recent-window procedure has no result yet.</p>

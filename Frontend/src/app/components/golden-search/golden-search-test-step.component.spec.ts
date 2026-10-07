@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchTestStepComponent } from './golden-search-test-step.component';
 import { GoldenSearchService } from './golden-search.service';
-import type { StudyDetail, TestOverTimeCharts } from './golden-search.types';
+import type { CurveSetKey, StudyDetail, TestOverTimeCharts } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { emaCapability, plannedTestOverTimeCharts, studyDetail, testOverTimeCharts, validationView } from './testing/fixtures';
+import { curveSet, emaCapability, plannedTestOverTimeCharts, studyDetail, testOverTimeCharts, validationView } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail, charts: () => Promise<TestOverTimeCharts> = async () => testOverTimeCharts()) {
   const library = fakeCharts();
-  const service = { testOverTimeCharts: vi.fn(charts) };
+  const service = { testOverTimeCharts: vi.fn(charts), curveSet: vi.fn(async (_id: string, set: CurveSetKey) => curveSet(set)) };
   const view = await render(GoldenSearchTestStepComponent, {
     inputs: { study, capability: emaCapability() },
     providers: [{ provide: GoldenSearchService, useValue: service }, ...library.providers],

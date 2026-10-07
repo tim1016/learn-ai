@@ -11,6 +11,7 @@ import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-a
 import { GoldenSearchCandidateCardsComponent } from './golden-search-candidate-cards.component';
 import { candidateRows, initialRowKey, rowKeyFor, rowSummary, type CandidateRow } from './golden-search-compare';
 import { sideBySideSpec, stressSpec, tornadoSpec } from './golden-search-compare-charts';
+import { GoldenSearchCurveSetComponent } from './golden-search-curve-set.component';
 import { GoldenSearchDecisionSummaryComponent } from './golden-search-decision-summary.component';
 import { studyTradeFloor } from './golden-search-display';
 import { GoldenSearchEquityChartComponent } from './golden-search-equity-chart.component';
@@ -45,6 +46,7 @@ interface DetailRequest {
     GoldenSearchCandidateAsideComponent,
     GoldenSearchCandidateCardsComponent,
     GoldenSearchChartComponent,
+    GoldenSearchCurveSetComponent,
     GoldenSearchDecisionSummaryComponent,
     GoldenSearchEquityChartComponent,
     GoldenSearchEvidenceTabsComponent,
@@ -130,6 +132,13 @@ export class GoldenSearchCompareStepComponent {
     },
     { equal: sameChart },
   );
+  /** What the candidate's curves panel draws: neighbors only where an audit recorded some. */
+  protected readonly curvesCaption = computed(() => {
+    const source = this.selectedRow()?.neighborSource;
+    if (source === undefined) return '';
+    const neighbors = source.neighbors.length > 0 ? ' and each tested one-step neighbor' : '';
+    return `${source.label} on the development period, with each cost stress${neighbors} drawn beside it.`;
+  });
   /** Room for each knob's two bars, and each stress's one. */
   protected readonly tornadoHeight = computed(() => 72 + 40 * (this.selectedRow()?.neighborSource.neighbors.length ?? 0));
   protected readonly stressHeight = computed(() => 44 + 42 * (1 + (this.selectedRow()?.candidate.stress.length ?? 0)));

@@ -81,7 +81,16 @@ from app.research.golden_search.protocol import (
     GoldenSearchProtocol,
     IncumbentRef,
 )
-from app.research.golden_search.run_curves import MAX_CURVES, RunGroup, RunSort, curves_view, runs_page
+from app.research.golden_search.run_curves import (
+    MAX_CURVES,
+    CurveSet,
+    RunGroup,
+    RunSort,
+    curve_set_lines,
+    curve_set_view,
+    curves_view,
+    runs_page,
+)
 from app.research.golden_search.search_charts import procedure_windows, search_charts
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
@@ -669,6 +678,22 @@ async def run_curves(study_id: str, evaluation_keys: Sequence[str]) -> dict[str,
         raise GoldenSearchRefusal(f"Name between 1 and {MAX_CURVES} runs.", code="RUNS_QUERY_INVALID", field="key")
     stored = await with_connection(repo.evaluation_curves, study_id, keys)
     return curves_view(keys, stored, float(row.protocol["execution"]["initial_cash"]))
+
+
+async def curve_set(study_id: str, *, curve_set: CurveSet, candidate_key: str | None = None) -> dict[str, Any]:
+    """The runs one step draws, each with its role and its curve (#2930)."""
+    row = await get_row(study_id)
+    declaration = declaration_for(row.strategy_key)
+    if declaration is None:
+        raise GoldenSearchRefusal(f"{row.strategy_key} no longer declares its search knobs, so its runs cannot be described.", code="STRATEGY_UNAVAILABLE", kind="unavailable")
+    if (curve_set == "candidate") != (candidate_key is not None):
+        raise GoldenSearchRefusal("Name the candidate for the candidate set, and only for it.", code="RUNS_QUERY_INVALID", field="candidate")
+    records = await with_connection(repo.list_runs, study_id)
+    chosen = curve_set_lines(
+        row, records, folds=[FoldWindow(**fold) for fold in row.receipt["folds"]], declaration=declaration, curve_set=curve_set, candidate_key=candidate_key
+    )
+    stored = await with_connection(repo.evaluation_curves, study_id, [line.record.evaluation_key for line in chosen.lines])
+    return curve_set_view(row, chosen, stored, declaration=declaration)
 
 
 async def hide(study_id: str, *, liveness: Liveness = job_is_live) -> None:

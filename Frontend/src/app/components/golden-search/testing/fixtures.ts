@@ -6,6 +6,8 @@ import type {
   EvidenceCandidate,
   EvidenceView,
   ExamOutcome,
+  CurveSet,
+  CurveSetKey,
   ExamFit,
   ExamView,
   RunCurve,
@@ -1084,4 +1086,27 @@ export function runCurve(key: string, end = 0.087): RunCurve {
 
 export function runCurves(keys: readonly string[], notRecorded: readonly string[] = []): RunCurves {
   return { curves: keys.map((key, i) => runCurve(key, 0.087 - i * 0.02)), not_recorded: [...notRecorded] };
+}
+
+/** A step's set of lines: a search's winner, the current settings and one other scored point, unless the set is another. */
+export function curveSet(set: CurveSetKey = 'search', overrides: Partial<CurveSet> = {}): CurveSet {
+  const settings = 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars';
+  const lines: Record<CurveSetKey, CurveSet['lines']> = {
+    search: [
+      { role: 'incumbent', label: 'Current settings', current_settings: true, params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars', curve: runCurve('run-incumbent', 0.052) },
+      { role: 'other', label: 'Scored point', current_settings: false, params_sentence: 'Gap $0.10 · RSI 48–72 · EMA 8/21 · hold 4 bars', curve: runCurve('run-second', 0.041) },
+      { role: 'winner', label: 'Winner', current_settings: false, params_sentence: settings, curve: runCurve('run-winner', 0.087) },
+    ],
+    recent: [{ role: 'winner', label: 'Winner', current_settings: false, params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars', curve: runCurve('run-recent', 0.116) }],
+    fold_tests: [
+      { role: 'winner', label: 'Fold 1 winner', current_settings: false, params_sentence: settings, curve: runCurve('run-fold', 0.02) },
+      { role: 'incumbent', label: 'Fold 1 current settings', current_settings: true, params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars', curve: runCurve('run-fold-inc', 0.01) },
+    ],
+    candidate: [
+      { role: 'candidate', label: 'All-period fit', current_settings: false, params_sentence: settings, curve: runCurve('run-candidate', 0.087) },
+      { role: 'stress', label: 'Extra 1¢/share slippage', current_settings: false, params_sentence: settings, curve: runCurve('run-stress', 0.041) },
+      { role: 'neighbor', label: 'Fast EMA length one step below (7)', current_settings: false, params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 7/21 · hold 4 bars', curve: runCurve('run-neighbor', 0.052) },
+    ],
+  };
+  return { lines: lines[set], left_out: 0, not_recorded: 0, failed: 0, notes: [], ...overrides };
 }
