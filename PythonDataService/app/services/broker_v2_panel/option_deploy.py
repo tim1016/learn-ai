@@ -753,14 +753,15 @@ async def review_for(
 
 
 async def require_deployable(
-    broker: str, account_id: str, request: AlpacaPaperDeployRequest
+    broker: str, account_id: str, request: AlpacaPaperDeployRequest, *, at_the_click: bool
 ) -> tuple[ActionPlan, OptionEntryPrice]:
     """The plan and the price of an option Deploy that nothing stops, or the first thing that stops it, by name.
 
-    Asked at the click, so a preview that is only still arriving is waited
-    for, for ``PRICE_PATIENCE_MS``.
+    At the click a preview that is only still arriving is waited for, for
+    ``PRICE_PATIENCE_MS``. A read made before the click waits for nothing:
+    the page asks it again.
     """
-    judged = await _judge(broker, account_id, request, patience_ms=PRICE_PATIENCE_MS)
+    judged = await _judge(broker, account_id, request, patience_ms=PRICE_PATIENCE_MS if at_the_click else 0)
     if judged.blockers:
         raise _refused(judged.blockers[0])
     assert judged.plan is not None

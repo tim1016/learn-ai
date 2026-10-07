@@ -506,7 +506,7 @@ async def deploy_alpaca_paper_bot(
             view, resolved_params = await _deploy_preflight(broker, account_id, request)
             _require_traded_asset_acknowledgement(request)
             end = resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
-            traded = await _what_it_trades(broker, account_id, request)
+            traded = await _what_it_trades(broker, account_id, request, at_the_click=True)
             try:
                 consent = None if request.budget is None else budget_deploy.resolve_consent(
                     account_id, request, resolved_parameters=resolved_params.effective, **traded.priced,
@@ -656,7 +656,7 @@ async def preview_alpaca_paper_start_admission(
         )
     except BotNameUnavailable as exc:
         raise _unnamed(exc) from exc
-    traded = await _what_it_trades(broker, account_id, request)
+    traded = await _what_it_trades(broker, account_id, request, at_the_click=False)
     try:
         consent = None if request.budget is None else budget_deploy.resolve_consent(
             account_id, request, resolved_parameters=resolved_params.effective, **traded.priced,
@@ -763,16 +763,19 @@ class _Traded:
     priced: dict[str, object]
 
 
-async def _what_it_trades(broker: str, account_id: str, request: AlpacaPaperDeployRequest) -> _Traded:
+async def _what_it_trades(
+    broker: str, account_id: str, request: AlpacaPaperDeployRequest, *, at_the_click: bool
+) -> _Traded:
     """The plan and the sealed terms of a bot that trades options, priced now; nothing for a bot in shares.
 
     Raises the first thing that stops an option Deploy, by name: asked at
     the click and at the admission preview, after the checks every Deploy
-    makes (ADR 0076 decision 24).
+    makes (ADR 0076 decision 24). Only the click waits for a price that is
+    still arriving.
     """
     if request.options is None:
         return _Traded(start={}, priced={})
-    plan, price = await option_deploy.require_deployable(broker, account_id, request)
+    plan, price = await option_deploy.require_deployable(broker, account_id, request, at_the_click=at_the_click)
     return _Traded(start=option_deploy.sealed_terms_and_plan(request, plan), priced={"option_entry": price})
 
 

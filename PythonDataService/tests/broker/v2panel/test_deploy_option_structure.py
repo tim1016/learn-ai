@@ -768,3 +768,23 @@ async def test_at_the_click_a_preview_that_is_only_arriving_is_waited_for_and_a_
     at_the_click = await option_deploy.read_preview("alpaca", ACCT, request, patience_ms=3_000)
 
     assert at_the_click.state == "resolved" and slept and sum(slept) <= 3.0
+
+
+async def test_the_admission_preview_holds_an_option_deploy_to_the_same_fences_and_waits_for_no_price(
+    deploy_app, floor: _Floor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read made before the click refuses what the click would, by the same name, and is answered at
+    once: it never waits for quotes that are still arriving."""
+    app, _registry = deploy_app
+    monkeypatch.setattr(option_deploy, "PRICE_PATIENCE_MS", 60_000)
+
+    async def never(_seconds: float) -> None:
+        raise AssertionError("a read before the click waited for a price")
+
+    monkeypatch.setattr(option_deploy, "asyncio", SimpleNamespace(sleep=never))
+
+    taken = await _post(app, "/admission", execution_mode="dry_run", trades=_ONE_CALL)
+    refused = _refusal(await _post(app, "/admission", execution_mode="dry_run", trades=_SPREAD))
+
+    assert taken.status_code == 200, taken.text
+    assert refused["reason_code"] == "OPTION_STRUCTURE_NOT_SUPPORTED"
