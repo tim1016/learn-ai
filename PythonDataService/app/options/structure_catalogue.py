@@ -173,6 +173,11 @@ def label(name: NamedStructure) -> str:
     return name.in_words.capitalize()
 
 
+def with_its_article(name: NamedStructure) -> str:
+    """The name as a sentence takes it: "a bull call spread", "an iron condor"."""
+    return f"{'an' if name.in_words[0] in 'aeiou' else 'a'} {name.in_words}"
+
+
 def description(name: NamedStructure) -> str:
     """What the named structure is, in one line."""
     return _DESCRIPTIONS[name]

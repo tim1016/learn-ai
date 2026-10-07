@@ -18,38 +18,56 @@ later (#2913).
 
 A fleet Clerk holds no Polygon key and no FRED key, by design (ADR 0062). It
 asks the coordinator, which holds both and answers with what this same
-function read there (``app.services.option_model_inputs_coordinator``). When
-the coordinator cannot be reached, or its answer cannot be read, the
-dividends are unknown with that reason, and the rate is the fixed default,
-which says so and says why.
+function read there (``app.services.option_model_inputs_client``). When the
+coordinator cannot be reached, or its answer cannot be read, the dividends
+are unknown with that reason, and the rate is the fixed default, which says
+so and says why.
 
-Both lookups block, so a caller on an event loop runs this in a thread. What
-it learns is kept for an hour. What it could not learn, and a rate that is
-only the default, is asked again after half a minute.
+**Each of the two is looked up apart from the other.** The rate and the
+dividends are asked for at the same time, each in a thread kept for it, and
+a read waits for each no longer than its bound. A vendor that hangs leaves
+its own fact not known, with that reason, and takes nothing from the other:
+dividends Polygon answered at once are known however long FRED takes. A
+whole read at a vendor ends inside the bound, well inside the time a Clerk
+waits for the coordinator.
+
+**One lookup runs at a time for one thing asked**, and none waits behind a
+lookup of something else: a slow answer about one ticker holds up nobody
+asking about another. A caller that finds its own lookup already running
+waits for it to its bound, or, when it said it would not wait, is told at
+once that it is running.
+
+What is learned is kept for an hour. What could not be learned, and a rate
+that is only the default, is asked again half a minute after its lookup
+ended. Only so many answers are kept; the oldest go first.
+
+Both lookups block. A caller on an event loop runs a read through
+``off_the_loop``, in threads kept for it: never the loop's default ones,
+where the Clerk's execution-lease heartbeat runs.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
 import math
+import operator
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.config import fleet_settings, settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.options.model_input_reasons import WhyNotKnown
 from app.options.resolver import DividendOn, ModelInputs
-from app.schemas.fleet_option_model_inputs import (
-    DividendsNotKnown,
-    ModelInputsAnswer,
-    ModelInputsBeingLookedUp,
-    WhyNotKnown,
-)
 from app.services.fred_service import RATE_SOURCE_FRED, get_risk_free_rate_and_source
-from app.services.option_model_inputs_coordinator import CoordinatorDidNotAnswer, ask_the_coordinator
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import et_date_at_ms
 
@@ -58,9 +76,29 @@ logger = logging.getLogger(__name__)
 _NY = ZoneInfo("America/New_York")
 _KNOWN_FOR_MS = 60 * 60_000
 _ASKED_AGAIN_AFTER_MS = 30_000
+# How long a read waits for a vendor before it answers that the fact is not known. Both vendors are asked at
+# once, so a whole read ends inside this: well inside the 20 seconds a Clerk waits for the coordinator
+# (``app.broker.fleet.option_model_inputs``).
+VENDOR_LOOKUP_BOUND_S = 8.0
+# The most answers kept for each of the two facts. Past it the oldest go first.
+MOST_KEPT = 256
 # The roles that hold a Polygon key and a FRED key of their own, and read the vendors themselves. Named one by
 # one: a role added later holds neither until it says so, and asks the coordinator.
 _ROLES_THAT_READ_THE_VENDORS = frozenset({"combined", "fleet_coordinator"})
+
+# The threads the lookups and the reads run in. A lookup that hangs holds one of its own vendor's threads and
+# no other's, so a slow FRED cannot keep Polygon from being asked.
+_RATE_THREADS = ThreadPoolExecutor(max_workers=4, thread_name_prefix="option-rate-lookup")
+_DIVIDEND_THREADS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="option-dividend-lookup")
+_READ_THREADS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="option-model-inputs-read")
+
+# This process's own clock, for how long a lookup took. Never a time of day.
+_monotonic = time.monotonic
+
+
+def off_the_loop[T](read: Callable[[], T]) -> asyncio.Future[T]:
+    """Run a blocking read of the model's inputs for a caller on an event loop, in the threads kept for it."""
+    return asyncio.get_running_loop().run_in_executor(_READ_THREADS, contextvars.copy_context().run, read)
 
 
 class DividendsUnknown(Exception):
@@ -207,7 +245,7 @@ def declared_dividend_lookup() -> DividendLookup:
 
 
 @dataclass(frozen=True, slots=True)
-class _RateLearned:
+class RateLearned:
     rate: float
     told: str
     # None: the rate is FRED's. Otherwise it is the fixed default, and this is why.
@@ -215,7 +253,7 @@ class _RateLearned:
 
 
 @dataclass(frozen=True, slots=True)
-class _DividendsLearned:
+class DividendsLearned:
     # Each at the open of its ex-date's session. None: they could not be looked up.
     declared: tuple[DividendOn, ...] | None
     told: str
@@ -223,33 +261,28 @@ class _DividendsLearned:
     why_unknown: WhyNotKnown | None
 
 
-# (days to the latest expiry, the New York date) -> the rate, from one source.
-_RateSource = Callable[[int, date], _RateLearned]
-# (underlying, first ex-date, last ex-date, the moment asked) -> the declared dividends, from one source.
-_DividendSource = Callable[[str, date, date, int], _DividendsLearned]
-
-
-def _the_default(because: str, why: WhyNotKnown) -> _RateLearned:
+def the_default(because: str, why: WhyNotKnown) -> RateLearned:
+    """The fixed default rate, standing in for one that is not known, and saying so."""
     told = f"The fixed default of {DEFAULT_RISK_FREE_RATE:.1%}, because {because}. The default has no recorded origin."
-    return _RateLearned(DEFAULT_RISK_FREE_RATE, told, why)
+    return RateLearned(DEFAULT_RISK_FREE_RATE, told, why)
 
 
-def _rate_from(lookup: RateLookup) -> _RateSource:
-    def learn(days: int, today: date) -> _RateLearned:
+def _rate_from(lookup: RateLookup) -> Callable[[int, date], RateLearned]:
+    def learn(days: int, today: date) -> RateLearned:
         rate, source = lookup(days, today)
         if source != RATE_SOURCE_FRED:
-            return _the_default("FRED gave no rate", WhyNotKnown.FRED_GAVE_NO_RATE)
-        return _RateLearned(rate, f"FRED Treasury bill rates, interpolated to {days} days, as published by {today}.", None)
+            return the_default("FRED gave no rate", WhyNotKnown.FRED_GAVE_NO_RATE)
+        return RateLearned(rate, f"FRED Treasury bill rates, interpolated to {days} days, as published by {today}.", None)
 
     return learn
 
 
-def _dividends_from(lookup: DividendLookup) -> _DividendSource:
-    def learn(underlying: str, first: date, last: date, at_ms: int) -> _DividendsLearned:
+def _dividends_from(lookup: DividendLookup) -> Callable[[str, date, date, int], DividendsLearned]:
+    def learn(underlying: str, first: date, last: date, at_ms: int) -> DividendsLearned:
         try:
             declared = tuple(lookup(underlying, first, last))
         except DividendsUnknown as unknown:
-            return _DividendsLearned(None, str(unknown), at_ms, unknown.why)
+            return DividendsLearned(None, str(unknown), at_ms, unknown.why)
         span = f"an ex-date from {first} to {last}"
         told = (
             f"{len(declared)} cash dividend{'' if len(declared) == 1 else 's'} declared for {underlying} with "
@@ -261,56 +294,47 @@ def _dividends_from(lookup: DividendLookup) -> _DividendSource:
         going_ex = tuple(
             DividendOn(ex_ms=session_open_ms_utc(dividend.ex_date), cash=dividend.cash) for dividend in declared
         )
-        return _DividendsLearned(going_ex, told, at_ms, None)
+        return DividendsLearned(going_ex, told, at_ms, None)
 
     return learn
 
 
-class _AskedOfTheCoordinator:
-    """One read's ask of the coordinator. Its answer holds both facts, so it is asked for once."""
+@dataclass(frozen=True, slots=True)
+class _Sources:
+    """Where one read learns each fact, and how long it waits for each."""
 
-    def __init__(self, underlying: str, at_ms: int, latest_expiry: date, wait: bool) -> None:
-        self._asking = (underlying, at_ms, latest_expiry, wait)
-        self._heard: ModelInputsAnswer | CoordinatorDidNotAnswer | None = None
-
-    def _answer(self) -> ModelInputsAnswer | CoordinatorDidNotAnswer:
-        if self._heard is None:
-            underlying, at_ms, latest_expiry, wait = self._asking
-            try:
-                heard = ask_the_coordinator(underlying, at_ms=at_ms, latest_expiry=latest_expiry, wait=wait)
-            except CoordinatorDidNotAnswer as silent:
-                heard = silent
-            if isinstance(heard, ModelInputsBeingLookedUp):
-                raise ModelInputsBeingRead(f"the coordinator is looking up the rate and the dividends for {underlying}")
-            self._heard = heard
-        return self._heard
-
-    def rate(self, _days: int, _today: date) -> _RateLearned:
-        heard = self._answer()
-        if isinstance(heard, CoordinatorDidNotAnswer):
-            return _the_default(str(heard), heard.why)
-        return _RateLearned(float(heard.rate.value), heard.rate.sentence, heard.rate.why_default)
-
-    def dividends(self, underlying: str, _first: date, _last: date, at_ms: int) -> _DividendsLearned:
-        heard = self._answer()
-        if isinstance(heard, CoordinatorDidNotAnswer):
-            return _DividendsLearned(None, f"{underlying}'s declared dividends are not known: {heard}.", at_ms, heard.why)
-        said = heard.dividends
-        if isinstance(said, DividendsNotKnown):
-            return _DividendsLearned(None, said.sentence, at_ms, said.why)
-        going_ex = tuple(DividendOn(ex_ms=dividend.ex_ms, cash=float(dividend.cash)) for dividend in said.declared)
-        return _DividendsLearned(going_ex, said.sentence, said.read_ms, None)
+    rate: Callable[[int, date], RateLearned]
+    dividends: Callable[[str, date, date, int], DividendsLearned]
+    # None: the source ends itself in bounded time. The coordinator's client has timeouts of its own.
+    rate_bound_s: float | None
+    dividends_bound_s: float | None
 
 
 def _sources(
     underlying: str, at_ms: int, latest_expiry: date, wait: bool, rate: RateLookup | None, dividends: DividendLookup | None
-) -> tuple[_RateSource, _DividendSource]:
+) -> _Sources:
     """Where this read learns each fact: from a lookup handed in; else from the vendors, in a process that holds
     their keys; else from the coordinator."""
     if fleet_settings.ROLE in _ROLES_THAT_READ_THE_VENDORS:
-        return _rate_from(rate or _fred_rate), _dividends_from(dividends or declared_dividend_lookup())
-    asked = _AskedOfTheCoordinator(underlying, at_ms, latest_expiry, wait)
-    return (_rate_from(rate) if rate else asked.rate), (_dividends_from(dividends) if dividends else asked.dividends)
+        return _Sources(
+            _rate_from(rate or _fred_rate),
+            _dividends_from(dividends or declared_dividend_lookup()),
+            VENDOR_LOOKUP_BOUND_S,
+            VENDOR_LOOKUP_BOUND_S,
+        )
+    # A process that reads the vendors itself never loads what a Clerk asks the coordinator with.
+    from app.services.option_model_inputs_client import AskedOfTheCoordinator
+
+    asked = AskedOfTheCoordinator(underlying, at_ms, latest_expiry, wait)
+    return _Sources(
+        _rate_from(rate) if rate else asked.rate,
+        _dividends_from(dividends) if dividends else asked.dividends,
+        VENDOR_LOOKUP_BOUND_S if rate else None,
+        VENDOR_LOOKUP_BOUND_S if dividends else None,
+    )
+
+
+# ---- what is kept, and what is being looked up ---------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,45 +343,162 @@ class _Kept[T]:
     until_ms: int
 
 
-_lookups = threading.Lock()
-_rates: dict[tuple[int, date], _Kept[_RateLearned]] = {}
-_dividends: dict[tuple[str, date, date], _Kept[_DividendsLearned]] = {}
+@dataclass(frozen=True, slots=True)
+class _Running[T]:
+    """One lookup in a thread of its own."""
+
+    answer: Future[T]
+    # The moment it was asked about, and when it began on this process's own clock.
+    asked_at_ms: int
+    began: float
+    # How long a read waits for it, counted from when it began. None: it ends itself.
+    bound_s: float | None
+
+
+class _Shelf[K, T]:
+    """One of the two facts: what is kept of it and what is being looked up now, each by what was asked.
+
+    A lookup runs in a thread from ``threads``, one at a time for one thing
+    asked. A read waits for it no longer than its bound. Past the bound the
+    read answers ``too_slow``, and that is kept as a failure is: the lookup
+    is over as far as any reader goes. Should it still learn the fact, that
+    is kept in its place.
+    """
+
+    def __init__(
+        self,
+        threads: ThreadPoolExecutor,
+        *,
+        known: Callable[[T], bool],
+        kept_until_ms: Callable[[T, int], int],
+        too_slow: Callable[[K, int, float], T],
+    ) -> None:
+        self._threads, self._known, self._kept_until_ms, self._too_slow = threads, known, kept_until_ms, too_slow
+        self._guard = threading.Lock()
+        self._kept: dict[K, _Kept[T]] = {}
+        self._running: dict[K, _Running[T]] = {}
+
+    def kept(self, key: K, at_ms: int) -> T | None:
+        with self._guard:
+            kept = self._kept.get(key)
+        return None if kept is None or at_ms >= kept.until_ms else kept.value
+
+    def look_up(self, key: K, at_ms: int, lookup: Callable[[], T], bound_s: float | None) -> tuple[_Running[T], bool]:
+        """Begin looking ``key`` up, or join the lookup already running for it. Returns the lookup, and whether
+        it was begun here."""
+        with self._guard:
+            running = self._running.get(key)
+            if running is not None:
+                return running, False
+            running = self._running[key] = _Running(Future(), at_ms, _monotonic(), bound_s)
+        self._threads.submit(self._run, key, lookup, running)
+        return running, True
+
+    def wait_for(self, key: K, at_ms: int, running: _Running[T]) -> T:
+        """What the lookup learned, or that it was too slow. Raises what it raised."""
+        timeout = None if running.bound_s is None else max(running.began + running.bound_s - _monotonic(), 0.0)
+        try:
+            return running.answer.result(timeout=timeout)
+        except TimeoutError:
+            if running.answer.done():
+                return running.answer.result()
+        assert running.bound_s is not None
+        gave_up = self._too_slow(key, at_ms, running.bound_s)
+        with self._guard:
+            if self._running.get(key) is running:
+                del self._running[key]
+                self._keep(key, gave_up, self._ended_ms(running))
+        return gave_up
+
+    def clear(self) -> None:
+        with self._guard:
+            self._kept.clear()
+            self._running.clear()
+
+    def __len__(self) -> int:
+        return len(self._kept)
+
+    @staticmethod
+    def _ended_ms(running: _Running[T]) -> int:
+        """When a lookup ended, as a moment: the moment it was asked about, and how long it has run since."""
+        return running.asked_at_ms + round((_monotonic() - running.began) * 1000)
+
+    def _run(self, key: K, lookup: Callable[[], T], running: _Running[T]) -> None:
+        try:
+            learned = lookup()
+        except Exception as failed:
+            # Whoever waits is told, and nothing is kept: a lookup the coordinator is still making, or a fault.
+            with self._guard:
+                if self._running.get(key) is running:
+                    del self._running[key]
+            running.answer.set_exception(failed)
+            return
+        with self._guard:
+            still_waited_for = self._running.get(key) is running
+            if still_waited_for:
+                del self._running[key]
+            # Given up on at its bound, it may still have learned the fact. That it failed after all is not news.
+            if still_waited_for or self._known(learned):
+                self._keep(key, learned, self._ended_ms(running))
+        running.answer.set_result(learned)
+
+    def _keep(self, key: K, learned: T, ended_ms: int) -> None:
+        self._kept.pop(key, None)
+        self._kept[key] = _Kept(learned, self._kept_until_ms(learned, ended_ms))
+        for other in [other for other, kept in self._kept.items() if kept.until_ms <= ended_ms]:
+            del self._kept[other]
+        for oldest in list(self._kept)[: max(len(self._kept) - MOST_KEPT, 0)]:
+            del self._kept[oldest]
+
+
+def _rate_too_slow(_key: tuple[int, date], _at_ms: int, bound_s: float) -> RateLearned:
+    return the_default(f"the rate's lookup had not answered after {bound_s:g} seconds", WhyNotKnown.LOOKUP_TOO_SLOW)
+
+
+def _dividends_too_slow(key: tuple[str, date, date], at_ms: int, bound_s: float) -> DividendsLearned:
+    return DividendsLearned(
+        None,
+        f"{key[0]}'s declared dividends are not known: their lookup had not answered after {bound_s:g} seconds.",
+        at_ms,
+        WhyNotKnown.LOOKUP_TOO_SLOW,
+    )
+
+
+# (days to the latest expiry, the New York date) -> the rate.
+_rates: _Shelf[tuple[int, date], RateLearned] = _Shelf(
+    _RATE_THREADS,
+    known=lambda learned: learned.why_default is None,
+    kept_until_ms=lambda learned, ended_ms: ended_ms + (_KNOWN_FOR_MS if learned.why_default is None else _ASKED_AGAIN_AFTER_MS),
+    too_slow=_rate_too_slow,
+)
+# (underlying, first ex-date, last ex-date) -> the dividends declared in that span. The hour runs from when
+# the vendor was read: what the coordinator had already kept a while is kept on a Clerk only for the rest of it.
+_dividends: _Shelf[tuple[str, date, date], DividendsLearned] = _Shelf(
+    _DIVIDEND_THREADS,
+    known=lambda learned: learned.declared is not None,
+    kept_until_ms=lambda learned, ended_ms: (
+        ended_ms + _ASKED_AGAIN_AFTER_MS if learned.declared is None else learned.read_ms + _KNOWN_FOR_MS
+    ),
+    too_slow=_dividends_too_slow,
+)
 
 
 def clear_cache() -> None:
     """Forget every lookup kept (test helper)."""
-    with _lookups:
-        _rates.clear()
-        _dividends.clear()
-
-
-def _still_kept[T](kept: _Kept[T] | None, at_ms: int) -> _Kept[T] | None:
-    return None if kept is None or at_ms >= kept.until_ms else kept
+    _rates.clear()
+    _dividends.clear()
 
 
 def _when(at_ms: int) -> str:
     return f"{datetime.fromtimestamp(at_ms / 1000, tz=UTC).astimezone(_NY):%Y-%m-%d %H:%M:%S} New York time"
 
 
-def _rate(days: int, today: date, at_ms: int, source: _RateSource) -> _RateLearned:
-    kept = _still_kept(_rates.get((days, today)), at_ms)
-    if kept is None:
-        learned = source(days, today)
-        kept = _rates[(days, today)] = _Kept(
-            learned, at_ms + (_KNOWN_FOR_MS if learned.why_default is None else _ASKED_AGAIN_AFTER_MS)
-        )
-    return kept.value
-
-
-def _declared(underlying: str, first: date, last: date, at_ms: int, source: _DividendSource) -> _DividendsLearned:
-    kept = _still_kept(_dividends.get((underlying, first, last)), at_ms)
-    if kept is None:
-        learned = source(underlying, first, last, at_ms)
-        # The hour runs from when the vendor was read. What the coordinator had already kept a while is kept
-        # here only for the rest of it.
-        until_ms = at_ms + _ASKED_AGAIN_AFTER_MS if learned.declared is None else learned.read_ms + _KNOWN_FOR_MS
-        kept = _dividends[(underlying, first, last)] = _Kept(learned, until_ms)
-    return kept.value
+def _a_plain_whole_number(at_ms: int) -> int:
+    """``at_ms`` as a plain ``int``. A moment read off a bar or an array is often a numpy integer, which is the
+    same moment and which a strict reader of the wire refuses."""
+    if isinstance(at_ms, bool):
+        raise TypeError("at_ms is a moment in whole milliseconds, not a flag")
+    return operator.index(at_ms)
 
 
 def read_option_model_inputs(
@@ -376,34 +517,48 @@ def read_option_model_inputs(
     with an ex-date from today to it. A dividend whose ex-date's session has
     already opened is in the stock's price, and is left out.
 
-    One lookup runs at a time. A caller that finds one running waits for it,
-    or with ``wait`` false raises ``ModelInputsBeingRead`` at once: a page
-    that asks every second must not stack a waiting thread on each ask.
-    What is already kept is answered without waiting either way. On a Clerk
-    the lookup is one ask of the coordinator, which is told whether this
-    caller waits and holds to it the same way.
+    What is already kept is answered at once. What is not is looked up, the
+    rate and the dividends at the same time, and each is waited for no longer
+    than its bound: one that is too slow is answered as not known, with that
+    reason, beside whatever the other learned. A caller that finds a lookup
+    of what it asks already running waits for that one, or with ``wait``
+    false raises ``ModelInputsBeingRead`` at once: a page that asks every
+    second must not stack a waiting thread on each ask. On a Clerk the lookup
+    is one ask of the coordinator, which is told whether this caller waits
+    and holds to it the same way.
     """
+    at_ms = _a_plain_whole_number(at_ms)
     symbol = underlying.upper()
     today = et_date_at_ms(at_ms)
     days = max((latest_expiry - today).days, 1)
+    rate_asked, dividends_asked = (days, today), (symbol, today, latest_expiry)
     nothing_to_look_up = latest_expiry < today
-    kept_rate = _still_kept(_rates.get((days, today)), at_ms)
-    kept_dividends = _still_kept(_dividends.get((symbol, today, latest_expiry)), at_ms)
-    if kept_rate is None or (kept_dividends is None and not nothing_to_look_up):
-        if not _lookups.acquire(blocking=wait):
-            raise ModelInputsBeingRead(f"the rate and the dividends for {symbol} are being looked up")
-        try:
-            rate_source, dividend_source = _sources(symbol, at_ms, latest_expiry, wait, rate, dividends)
-            learned_rate = _rate(days, today, at_ms, rate_source)
-            learned_dividends = (
-                None if nothing_to_look_up else _declared(symbol, today, latest_expiry, at_ms, dividend_source)
+    learned_rate = _rates.kept(rate_asked, at_ms)
+    learned_dividends = None if nothing_to_look_up else _dividends.kept(dividends_asked, at_ms)
+    if learned_rate is None or not (nothing_to_look_up or learned_dividends is not None):
+        sources = _sources(symbol, at_ms, latest_expiry, wait, rate, dividends)
+        # Both are asked for before either is waited for: a slow one does not hold the other up.
+        looking_rate = looking_dividends = None
+        joined = False
+        if learned_rate is None:
+            looking_rate, begun = _rates.look_up(rate_asked, at_ms, partial(sources.rate, days, today), sources.rate_bound_s)
+            joined |= not begun
+        if learned_dividends is None and not nothing_to_look_up:
+            looking_dividends, begun = _dividends.look_up(
+                dividends_asked,
+                at_ms,
+                partial(sources.dividends, symbol, today, latest_expiry, at_ms),
+                sources.dividends_bound_s,
             )
-        finally:
-            _lookups.release()
-    else:
-        learned_rate = kept_rate.value
-        learned_dividends = None if kept_dividends is None else kept_dividends.value
-    going_ex = learned_dividends or _DividendsLearned(
+            joined |= not begun
+        if joined and not wait:
+            raise ModelInputsBeingRead(f"the rate and the dividends for {symbol} are being looked up")
+        if looking_rate is not None:
+            learned_rate = _rates.wait_for(rate_asked, at_ms, looking_rate)
+        if looking_dividends is not None:
+            learned_dividends = _dividends.wait_for(dividends_asked, at_ms, looking_dividends)
+    assert learned_rate is not None
+    going_ex = learned_dividends or DividendsLearned(
         (), f"Nothing was looked up: {latest_expiry} is already past.", at_ms, None
     )
     still_to_go_ex = None

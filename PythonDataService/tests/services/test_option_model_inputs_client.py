@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
+import numpy as np
 import pytest
 from fastapi import FastAPI
 
@@ -26,15 +28,14 @@ from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PA
 from app.config import fleet_settings, settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.expiry import option_expiry_anchor_ms
+from app.options.model_input_reasons import WhyNotKnown
 from app.options.resolver import DividendOn
 from app.routers import internal_fleet
-from app.schemas.fleet_option_model_inputs import WhyNotKnown
-from app.services import option_model_inputs, option_model_inputs_coordinator, polygon_client
+from app.services import option_model_inputs, option_model_inputs_client, polygon_client
 from app.services.fred_service import RATE_SOURCE_FRED
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead, read_option_model_inputs
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.error_handlers import install_fleet_control_error_handler
-from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import to_ms_utc
 
 # A real server on a loopback port, as the fleet's lane tests start one.
@@ -107,9 +108,8 @@ class Coordinator:
         monkeypatch.setattr(fleet_settings, "CLERK_ID", CLERK_ID)
         monkeypatch.setattr(fleet_settings, "AGENT_SERVICE_TOKEN", TOKEN)
         monkeypatch.setattr(settings, "POLYGON_API_KEY", "")
-        monkeypatch.setattr(option_model_inputs_coordinator, "build_internal_sync_client", self._client)
-        monkeypatch.setattr(option_model_inputs, "_rates", {})
-        monkeypatch.setattr(option_model_inputs, "_dividends", {})
+        monkeypatch.setattr(option_model_inputs_client, "build_internal_sync_client", self._client)
+        option_model_inputs.clear_cache()
         monkeypatch.setattr(option_model_inputs, "_polygon", None)
         monkeypatch.setattr(option_model_inputs, "_fred_rate", self._fred_asked)
         monkeypatch.setattr(polygon_client, "PolygonClientService", self._polygon_client_built)
@@ -151,6 +151,12 @@ class Coordinator:
         with ThreadPoolExecutor(max_workers=1) as apart:
             answered = apart.submit(asyncio.run, call()).result()
         return httpx.Response(answered.status_code, headers=answered.headers, content=answered.content)
+
+
+@pytest.fixture(autouse=True)
+def _nothing_kept_afterwards() -> Iterator[None]:
+    yield
+    option_model_inputs.clear_cache()
 
 
 def _read(*, at_ms: int = NOW, latest_expiry: date = _NEXT_FRIDAY, wait: bool = True) -> ModelInputsRead:
@@ -224,12 +230,11 @@ def test_the_answer_on_the_wire_has_its_numbers_as_text_and_its_dates_as_moments
         "value": "0.30000000000000004",
         "source": "FRED",
         "why_default": None,
-        "published_by_ms": et_midnight_ms(_TUESDAY),
         "sentence": READ.rate_source,
     }
     assert answer["dividends"]["declared"] == [
-        {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "USD"},
-        {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.470625", "currency": "USD"},
+        {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8"},
+        {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.470625"},
     ]
 
 
@@ -240,7 +245,7 @@ def test_over_a_real_socket_the_fleets_own_client_reads_the_same_answer(monkeypa
     server.start()
     try:
         monkeypatch.setattr(fleet_settings, "COORDINATOR_URL", server.base_url)
-        monkeypatch.setattr(option_model_inputs_coordinator, "build_internal_sync_client", build_internal_sync_client)
+        monkeypatch.setattr(option_model_inputs_client, "build_internal_sync_client", build_internal_sync_client)
         read = _read()
     finally:
         server.stop()
@@ -297,32 +302,28 @@ def _refuses_the_connection(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("connection refused", request=request)
 
 
-def _another_question(_request: httpx.Request) -> httpx.Response:
-    """A well-formed answer, about another underlying."""
-    return httpx.Response(
-        200,
-        json={
-            "status": "answered",
-            "underlying": "QQQ",
-            "at_ms": NOW,
-            "latest_expiry_ms": option_expiry_anchor_ms(_NEXT_FRIDAY),
-            "rate": {
-                "value": "0.05",
-                "source": "FRED",
-                "why_default": None,
-                "published_by_ms": et_midnight_ms(_TUESDAY),
-                "sentence": "a rate",
-            },
-            "dividends": {"status": "known", "declared": [], "read_ms": NOW, "sentence": "none declared"},
-        },
-    )
+def _to_this_very_ask() -> dict:
+    """A well-formed answer to the ask every test here makes."""
+    return {
+        "status": "answered",
+        "underlying": "SPY",
+        "at_ms": NOW,
+        "latest_expiry_ms": option_expiry_anchor_ms(_NEXT_FRIDAY),
+        "rate": {"value": "0.05", "source": "FRED", "why_default": None, "sentence": "a rate"},
+        "dividends": {"status": "known", "declared": [], "read_ms": NOW, "sentence": "none declared"},
+    }
+
+
+def _to_another_question(**asked: object) -> Callable[[httpx.Request], httpx.Response]:
+    """A well-formed answer, to a question that differs from the one asked in one thing."""
+    return lambda _request: httpx.Response(200, json=_to_this_very_ask() | asked)
 
 
 def _in_the_answer(*, rate: dict | None = None, **dividends: object) -> Callable[[httpx.Request], httpx.Response]:
     """The answer to this very ask, with its ``rate`` or its ``dividends`` changed."""
 
-    def answer(request: httpx.Request) -> httpx.Response:
-        body = json.loads(_another_question(request).content) | {"underlying": "SPY"}
+    def answer(_request: httpx.Request) -> httpx.Response:
+        body = _to_this_very_ask()
         body["rate"] = body["rate"] | (rate or {})
         body["dividends"] = body["dividends"] | dividends
         return httpx.Response(200, json=body)
@@ -364,41 +365,55 @@ def test_an_answer_to_this_very_ask_is_read(monkeypatch: pytest.MonkeyPatch) -> 
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
             id="a body of another shape",
         ),
-        pytest.param(_another_question, WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE, id="an answer to another question"),
         pytest.param(
-            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": 1.8, "currency": "USD"}]),
+            _to_another_question(underlying="QQQ"),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="an answer about another underlying",
+        ),
+        pytest.param(
+            _to_another_question(at_ms=NOW + 1),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="an answer about another moment",
+        ),
+        pytest.param(
+            _to_another_question(latest_expiry_ms=option_expiry_anchor_ms(_FRIDAY)),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="an answer up to another expiry",
+        ),
+        pytest.param(
+            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": 1.8}]),
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
             id="an amount written as a number, not as text",
         ),
         pytest.param(
-            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "CAD"}]),
+            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "USD"}]),
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
-            id="a dividend not in dollars",
+            id="a field the answer does not have",
         ),
         pytest.param(
-            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_TUESDAY), "cash": "1.8", "currency": "USD"}]),
+            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_TUESDAY), "cash": "1.8"}]),
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
             id="a dividend that went ex before the moment asked",
         ),
         pytest.param(
-            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "0", "currency": "USD"}]),
+            _in_the_answer(declared=[{"ex_ms": NOW, "cash": "1.8"}]),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="a dividend that goes ex at the very moment asked, when it is in the price already",
+        ),
+        pytest.param(
+            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "0"}]),
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
             id="a dividend of nothing",
         ),
         pytest.param(
             _in_the_answer(
                 declared=[
-                    {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.25", "currency": "USD"},
-                    {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "USD"},
+                    {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.25"},
+                    {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8"},
                 ]
             ),
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
             id="dividends out of the order they go ex",
-        ),
-        pytest.param(
-            _in_the_answer(rate={"published_by_ms": et_midnight_ms(_WEDNESDAY)}),
-            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
-            id="a rate published by another date than the one asked",
         ),
         pytest.param(
             _in_the_answer(rate={"value": 0.05}),
@@ -477,6 +492,29 @@ def test_a_clerk_not_set_up_to_ask_sends_nothing_and_knows_nothing(monkeypatch: 
     assert (coordinator.sent, coordinator.vendors_asked) == ([], [])
 
 
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        pytest.param("COORDINATOR_URL", "http://127.0.0.1:port", id="an address whose port is no number"),
+        pytest.param("COORDINATOR_URL", "http://[::1", id="an address that is half a bracket"),
+        pytest.param("AGENT_SERVICE_TOKEN", "svct_" + "é" * 32, id="a token no header can carry"),
+        pytest.param("CLERK_ID", "clrk_ünïcode", id="a Clerk id no header can carry"),
+    ],
+)
+def test_settings_no_request_can_be_made_with_read_as_not_set_up_and_never_escape_as_an_error(
+    monkeypatch: pytest.MonkeyPatch, setting: str, value: str
+) -> None:
+    coordinator = Coordinator(monkeypatch)
+    monkeypatch.setattr(fleet_settings, setting, value)
+
+    read = _read()
+
+    assert _nothing_known(read) == (WhyNotKnown.COORDINATOR_NOT_CONFIGURED, WhyNotKnown.COORDINATOR_NOT_CONFIGURED)
+    assert coordinator.sent == []
+    # The reason names the setting, never what it was set to.
+    assert value not in read.rate_source and value not in read.dividends_source
+
+
 def _does_not_resolve(host: str, _port: object) -> list[tuple]:
     raise OSError(f"{host} does not resolve")
 
@@ -518,6 +556,17 @@ def test_a_question_the_coordinator_does_not_answer_is_not_sent_and_nothing_is_k
 
     assert _nothing_known(read) == (WhyNotKnown.COORDINATOR_NOT_ASKED, WhyNotKnown.COORDINATOR_NOT_ASKED)
     assert coordinator.sent == []
+
+
+def test_a_moment_read_off_an_array_is_asked_about_as_the_plain_number_it_is(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bar's time is often a numpy integer. The wire is strict, and would refuse it on a Clerk alone."""
+    coordinator = Coordinator(monkeypatch)
+
+    read = _read(at_ms=np.int64(NOW))
+
+    assert read.dividends == READ.dividends and read.rate_is_default is False
+    assert coordinator.asked == [("SPY", NOW, _NEXT_FRIDAY, True)]
+    assert type(json.loads(coordinator.sent[0].content)["at_ms"]) is int
 
 
 def test_a_reason_never_names_the_coordinators_address_or_this_clerks_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -608,15 +657,74 @@ def test_a_caller_that_will_not_wait_is_not_made_to_while_this_clerk_is_already_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     coordinator = Coordinator(monkeypatch)
+    asked, let_go = threading.Event(), threading.Event()
 
-    assert option_model_inputs._lookups.acquire(blocking=False)
+    def slow(request: httpx.Request) -> httpx.Response:
+        asked.set()
+        let_go.wait(timeout=20)
+        return coordinator._through_the_route(request)
+
+    coordinator.answer = slow
+    first: list[ModelInputsRead] = []
+    asking = threading.Thread(target=lambda: first.append(_read()), daemon=True)
+    asking.start()
+    assert asked.wait(timeout=5)
     try:
         with pytest.raises(ModelInputsBeingRead):
             _read(wait=False)
     finally:
-        option_model_inputs._lookups.release()
+        let_go.set()
+        asking.join(timeout=5)
 
-    assert coordinator.sent == []
+    # The one ask already on its way is the only one made, and its answer is the first caller's.
+    assert len(coordinator.sent) == 1
+    assert [read.dividends for read in first] == [READ.dividends]
+
+
+def test_one_ask_of_the_coordinator_answers_for_the_rate_and_the_dividends_both(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The two are looked up apart, each in a thread of its own. On a Clerk both come from the one answer."""
+    coordinator = Coordinator(monkeypatch)
+
+    for _ in range(5):
+        option_model_inputs.clear_cache()
+        _read()
+
+    assert len(coordinator.sent) == 5
+
+
+def test_a_coordinator_still_looking_is_asked_once_and_told_to_both_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    coordinator = Coordinator(monkeypatch, ModelInputsBeingRead("another Clerk's lookup is running"))
+
+    with pytest.raises(ModelInputsBeingRead):
+        _read(wait=False)
+
+    assert len(coordinator.sent) == 1
+
+
+def test_a_default_rate_from_the_coordinator_is_asked_again_half_a_minute_after_the_ask_ended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The coordinator took eight seconds to say FRED had not answered. The half minute runs from then."""
+    coordinator = Coordinator(monkeypatch, replace(_RATE_ONLY_THE_DEFAULT, rate_default_why=WhyNotKnown.LOOKUP_TOO_SLOW))
+    own_clock = [500.0]
+    monkeypatch.setattr(option_model_inputs, "_monotonic", lambda: own_clock[0])
+
+    def eight_seconds_later(request: httpx.Request) -> httpx.Response:
+        own_clock[0] += 8.0
+        return coordinator._through_the_route(request)
+
+    coordinator.answer = eight_seconds_later
+    first = _read()
+    _read(at_ms=NOW + 8_000 + 29_999)
+    asked_inside_the_half_minute = len(coordinator.sent)
+    _read(at_ms=NOW + 8_000 + 30_000)
+
+    # Known dividends, and a rate marked as the default with the coordinator's own reason.
+    assert first.dividends == READ.dividends and first.dividends_unknown_why is None
+    assert (first.rate, first.rate_is_default, first.rate_default_why) == (
+        DEFAULT_RISK_FREE_RATE, True, WhyNotKnown.LOOKUP_TOO_SLOW,
+    )
+    assert (asked_inside_the_half_minute, len(coordinator.sent)) == (1, 2)
 
 
 def test_an_expiry_already_past_still_reads_the_rate_and_has_no_dividends_to_look_up(
@@ -643,6 +751,7 @@ def test_a_process_with_keys_of_its_own_reads_the_vendors_and_never_asks_the_coo
 
     read = _read()
 
-    assert coordinator.vendors_asked == ["FRED", "Polygon"]
+    # Each once, and at the same time: neither waits for the other.
+    assert sorted(coordinator.vendors_asked) == ["FRED", "Polygon"]
     assert (coordinator.sent, coordinator.asked) == ([], [])
     assert (read.rate, read.dividends) == (0.0, ())

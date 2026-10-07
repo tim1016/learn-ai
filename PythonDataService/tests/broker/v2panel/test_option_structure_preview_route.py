@@ -42,6 +42,7 @@ def _on(desk: Desk, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(option_structure_panel, "get_option_watch_list", lambda: desk.watch)
     monkeypatch.setattr(option_structure_panel, "now_ms_utc", lambda: desk.ibkr.now)
     monkeypatch.setattr(option_structure_panel, "_model_inputs", lambda *_: _KNOWN)
+    monkeypatch.setattr(option_structure_panel, "_preview_searches", lambda: desk.searches)
     monkeypatch.setattr(
         option_structure_panel, "ibkr_settings", lambda: SimpleNamespace(option_window_strikes_each_side=desk.reach)
     )

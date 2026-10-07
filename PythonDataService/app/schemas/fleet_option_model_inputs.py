@@ -6,6 +6,9 @@ nothing else, so the two cannot drift apart.
 
 - Every moment is ``int64 ms UTC``. A date is one too: an expiry is its 16:00
   New York anchor, and a dividend's ex-date is the open of that date's session.
+- Every field carries a fact the other side could not work out. The date a
+  rate was published by is the New York date of the moment asked, and every
+  dividend served is in dollars, so neither is sent.
 - A number that is not a whole number is text, ``"0.0512"``: the shortest
   decimal that reads back to the same float. A JSON number is refused, because
   a reader may round one.
@@ -19,19 +22,17 @@ nothing else, so the two cannot drift apart.
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
-from app.options.expiry import OptionExpiryMs, option_expiry_anchor_ms
+from app.options.expiry import OptionExpiryMs
+from app.options.model_input_reasons import WhyNotKnown
 from app.schemas.broker_bots import normalized_symbol
 from app.schemas.fleet_history_batch import MAX_HISTORY_BATCH_AS_OF_MS, MIN_HISTORY_BATCH_AS_OF_MS
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
-    from datetime import date
-
     from app.services.option_model_inputs import ModelInputsRead
 
 _WIRE = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -45,26 +46,6 @@ _Moment = Annotated[int, Field(ge=MIN_HISTORY_BATCH_AS_OF_MS, le=MAX_HISTORY_BAT
 def decimal_text(number: float) -> str:
     """``number`` as the shortest decimal text that reads back, with ``float``, to the same float."""
     return format(Decimal(repr(number)), "f")
-
-
-class WhyNotKnown(StrEnum):
-    """Why the rate is only the default, or why the dividends are not known. The code beside the sentence."""
-
-    FRED_GAVE_NO_RATE = "fred_gave_no_rate"
-    NO_POLYGON_KEY = "no_polygon_key"
-    POLYGON_DID_NOT_ANSWER = "polygon_did_not_answer"
-    POLYGON_ANSWER_UNREADABLE = "polygon_answer_unreadable"
-    # What a Clerk says of its own ask. The coordinator never answers with these.
-    COORDINATOR_NOT_CONFIGURED = "coordinator_not_configured"
-    COORDINATOR_ADDRESS_REFUSED = "coordinator_address_refused"
-    COORDINATOR_NOT_ASKED = "coordinator_not_asked"
-    COORDINATOR_UNREACHABLE = "coordinator_unreachable"
-    COORDINATOR_TIMED_OUT = "coordinator_timed_out"
-    COORDINATOR_REFUSED = "coordinator_refused"
-    COORDINATOR_FAILED = "coordinator_failed"
-    COORDINATOR_ANSWER_UNREADABLE = "coordinator_answer_unreadable"
-    # A lookup that failed and gave no code of its own.
-    LOOKUP_FAILED = "lookup_failed"
 
 
 class OptionModelInputsQuery(BaseModel):
@@ -83,10 +64,6 @@ class OptionModelInputsQuery(BaseModel):
     def _normalize_underlying(cls, value: str) -> str:
         return normalized_symbol(value)
 
-    @classmethod
-    def asking(cls, underlying: str, *, at_ms: int, latest_expiry: date, wait: bool) -> OptionModelInputsQuery:
-        return cls(underlying=underlying, at_ms=at_ms, latest_expiry_ms=option_expiry_anchor_ms(latest_expiry), wait=wait)
-
 
 class OptionModelInputsRequest(OptionModelInputsQuery):
     """The ask as it crosses from a Clerk to the coordinator, with the Clerk it is authenticated as."""
@@ -103,8 +80,6 @@ class ServedRate(BaseModel):
     value: DecimalText
     source: Literal["FRED", "default"]
     why_default: WhyNotKnown | None
-    # The New York date the rate is the latest published by, as New York midnight beginning that date.
-    published_by_ms: int = Field(gt=0, le=MAX_TIMESTAMP_MS)
     sentence: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -115,7 +90,7 @@ class ServedRate(BaseModel):
 
 
 class ServedDividend(BaseModel):
-    """One declared cash dividend still to go ex."""
+    """One declared cash dividend still to go ex, in dollars."""
 
     model_config = _WIRE
 
@@ -123,7 +98,6 @@ class ServedDividend(BaseModel):
     ex_ms: int = Field(gt=0, le=MAX_TIMESTAMP_MS)
     # Dollars a share.
     cash: DecimalText
-    currency: Literal["USD"]
 
     @field_validator("cash")
     @classmethod
@@ -169,8 +143,6 @@ class ModelInputsAnswer(BaseModel):
 
     @model_validator(mode="after")
     def _is_an_answer_for_its_own_moment(self) -> ModelInputsAnswer:
-        if self.rate.published_by_ms != et_midnight_ms(et_date_at_ms(self.at_ms)):
-            raise ValueError("the rate is not the one published by the New York date of at_ms")
         if isinstance(self.dividends, DividendsKnown):
             # Two may share an ex-date: a special dividend can go ex with a regular one.
             went_ex = [dividend.ex_ms for dividend in self.dividends.declared]
@@ -188,10 +160,7 @@ class ModelInputsAnswer(BaseModel):
         else:
             dividends = DividendsKnown(
                 status="known",
-                declared=[
-                    ServedDividend(ex_ms=paid.ex_ms, cash=decimal_text(paid.cash), currency="USD")
-                    for paid in read.dividends
-                ],
+                declared=[ServedDividend(ex_ms=paid.ex_ms, cash=decimal_text(paid.cash)) for paid in read.dividends],
                 read_ms=read.dividends_read_ms,
                 sentence=read.dividends_source,
             )
@@ -205,7 +174,6 @@ class ModelInputsAnswer(BaseModel):
                 value=decimal_text(read.rate),
                 source="default" if read.rate_is_default else "FRED",
                 why_default=why_default,
-                published_by_ms=et_midnight_ms(et_date_at_ms(query.at_ms)),
                 sentence=read.rate_source,
             ),
             dividends=dividends,
@@ -233,6 +201,5 @@ __all__ = [
     "OptionModelInputsResponse",
     "ServedDividend",
     "ServedRate",
-    "WhyNotKnown",
     "decimal_text",
 ]

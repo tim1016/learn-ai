@@ -13,9 +13,9 @@ exact decimals. A time is ``int64 ms UTC``, and an age is milliseconds at
 ``state`` is a closed set. Only ``resolved`` carries figures; every other
 state carries its sentence and its reason code and no figure. A reason code
 is the value of the typed refusal it came from (the resolver's, the
-structure check's, the money's, a quote line's) or one of
-``OPTION_PREVIEW_…``; it is a plain string here so that a refusal added
-later does not move this contract.
+structure check's, the money's, a quote line's, a search that was not run)
+or one of ``OPTION_PREVIEW_…``; it is a plain string here so that a refusal
+added later does not move this contract.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.models import EpochMs
 from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
@@ -34,6 +34,16 @@ from app.schemas.action_plan import ExpirySelector, StrikeSelector
 # The most legs a request may carry. More than a structure may have, so that one leg too many is answered
 # with the plan's own verdict and not with a malformed request.
 _MAX_LEGS_ASKED = 8
+
+
+def _as_an_owner_writes_it(percent: Decimal) -> Decimal:
+    """``1e1`` is 10, and ``10.000`` is 10: a percent is carried back and printed as written out."""
+    return Decimal(format(percent.normalize(), "f"))
+
+
+# A percent the owner sets. No finer than a millionth of a percent: a limit is compared exactly, in that unit
+# (``app.options.requirement.round_trip_cost_is_over_limit``), and a finer one has no meaning there.
+_OwnersPercent = Annotated[Decimal, Field(decimal_places=6), AfterValidator(_as_an_owner_writes_it)]
 
 
 class OptionLegRules(BaseModel):
@@ -66,9 +76,9 @@ class OptionStructurePreviewRequest(BaseModel):
     legs: Annotated[list[OptionLegRules], Field(max_length=_MAX_LEGS_ASKED)]
     structures: Annotated[int, Field(ge=1, le=100)] = 1
     # The widest bid-ask gap a leg may have, as a percent of its mid. Carried back; no leg is judged by it yet.
-    gap_limit_percent: Annotated[Decimal, Field(gt=0, le=100)] | None = None
+    gap_limit_percent: Annotated[_OwnersPercent, Field(gt=0, le=100)] | None = None
     # The most opening and closing at once may cost, as a percent of what the entry sets aside.
-    cost_limit_percent: Annotated[Decimal, Field(ge=0, le=100)] = DEFAULT_COST_LIMIT_PERCENT
+    cost_limit_percent: Annotated[_OwnersPercent, Field(ge=0, le=100)] = DEFAULT_COST_LIMIT_PERCENT
 
 
 PreviewState = Literal[
@@ -77,7 +87,8 @@ PreviewState = Literal[
     # This process has no IBKR quote source for options.
     "no_quote_source",
     "feed_not_up",
-    # No quote line could be had for the preview's contracts.
+    # No quote line could be had for the preview's contracts: none is spare, IBKR refused one, or too many
+    # previews are open and this one's window was given up.
     "no_quote_line",
     # IBKR's list of the underlying's expiries or contracts has not been read yet. Ask again.
     "listing_not_read",
@@ -87,6 +98,9 @@ PreviewState = Literal[
     # The rate and the dividends are not read yet (ask again), or the dividends could not be looked up and
     # a leg picks by delta.
     "pricing_inputs_unknown",
+    # The search for the contracts has not finished, or could not be run. ``reason_code`` says which, and
+    # ``ask_again_in_ms`` is set while it is only still running. Never a refusal of the structure.
+    "search_not_done",
     # The rules did not come to a contract for every leg: the resolver's own refusal.
     "not_resolved",
     "resolved",

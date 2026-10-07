@@ -36,9 +36,9 @@ default ``app/main.py`` installs for every non-qualifying process.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+from functools import partial
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Header, Request, Response
@@ -64,7 +64,7 @@ from app.schemas.fleet_option_model_inputs import (
     OptionModelInputsResponse,
 )
 from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
-from app.services.option_model_inputs import ModelInputsBeingRead, read_option_model_inputs
+from app.services.option_model_inputs import ModelInputsBeingRead, off_the_loop, read_option_model_inputs
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
@@ -491,20 +491,24 @@ async def option_model_inputs(
     answered as not known, with its reason, at status 200: a Clerk is never
     left to tell a vendor's failure from "none is declared" by a status code.
 
-    The lookup blocks, so it runs in a thread. An ask that will not wait is
-    answered at once when another lookup is running, so a page that asks
-    every second stacks no thread here either.
+    The lookup blocks, so it runs in a thread kept for it. It ends inside
+    its own bound, well inside the time a Clerk waits: a vendor that hangs
+    leaves its fact not known and the other as it was learned. An ask that
+    will not wait is answered at once when another lookup is running, so a
+    page that asks every second stacks no thread here either.
     """
     _authorized_agent(
         request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id
     )
     try:
-        read = await asyncio.to_thread(
-            read_option_model_inputs,
-            payload.underlying,
-            at_ms=payload.at_ms,
-            latest_expiry=option_expiry_date(payload.latest_expiry_ms),
-            wait=payload.wait,
+        read = await off_the_loop(
+            partial(
+                read_option_model_inputs,
+                payload.underlying,
+                at_ms=payload.at_ms,
+                latest_expiry=option_expiry_date(payload.latest_expiry_ms),
+                wait=payload.wait,
+            )
         )
     except ModelInputsBeingRead:
         return ModelInputsBeingLookedUp(status="being_looked_up")

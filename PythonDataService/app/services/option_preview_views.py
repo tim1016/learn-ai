@@ -2,10 +2,13 @@
 
 Every function here is a pure view of something already worked out
 (``app.options.preview``'s figures, a quote as it was held, the pricing
-inputs as they were read). Nothing here computes a figure of its own beyond
-rounding one for the eye, and no limit is ever judged on a rounded number.
-The sentences are the server's: no screen composes prose about money
-(#2913, #2915).
+inputs as they were read). Beyond rounding a figure for the eye, two things
+are worked out here, each a restatement in another unit: the premium for one
+structure, which is the whole premium over the structures asked, and the
+shares a structure must move like to be called anything but flat, which is
+the lean's own threshold times the multiplier. No limit is ever judged on a
+rounded number. The sentences are the server's: no screen composes prose
+about money (#2913, #2915).
 """
 
 from __future__ import annotations
@@ -94,8 +97,16 @@ def money_view(figures: StructureFigures, cost_limit_percent: Decimal) -> Option
     assert figures.round_trip_cost_cents is not None and figures.round_trip_cost_percent is not None
     assert figures.over_cost_limit is not None
     percent = rounded(figures.round_trip_cost_percent)
+    # The verdict is the exact comparison. Rounded for the eye, a cost a hair past the limit would print as
+    # the limit itself, and the sentence would call two equal numbers over.
+    if figures.over_cost_limit and percent <= cost_limit_percent:
+        which_is = f"just over {cost_limit_percent}%"
+    elif not figures.over_cost_limit and percent > cost_limit_percent:
+        which_is = f"just under {cost_limit_percent}%"
+    else:
+        which_is = f"{percent}%"
     cost = (
-        f"Opening and closing at once would cost {usd(figures.round_trip_cost_cents)}, which is {percent}% of the "
+        f"Opening and closing at once would cost {usd(figures.round_trip_cost_cents)}, which is {which_is} of the "
         f"{usd(money.entry_commitment_cents)} set aside. Your limit is {cost_limit_percent}%."
     )
     return OptionPreviewMoney(
@@ -121,7 +132,10 @@ def where_in_words(holds: Sequence[PriceRange]) -> str:
     """Stretches of underlying price, in words: "at 585 or below", "from 575 to 595", "at 600 or above"."""
     said = []
     for held in holds:
-        if held.high is None:
+        if held.high is None and held.low == 0:
+            # A payoff that is level everywhere: every price there is, not "zero or above".
+            said.append("at any price")
+        elif held.high is None:
             said.append(f"at {held.low:f} or above")
         elif held.high == 0:
             said.append("at zero")

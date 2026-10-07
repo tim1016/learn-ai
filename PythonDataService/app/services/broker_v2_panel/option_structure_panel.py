@@ -8,6 +8,7 @@ from lives in ``app.options.structure_catalogue``.
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from app.broker.alpaca.market_liveness import get_option_quotes
 from app.broker.ibkr.config import get_settings as ibkr_settings
@@ -25,6 +26,7 @@ from app.schemas.option_preview import (
 )
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.services.option_model_inputs import ModelInputsRead, read_option_model_inputs
+from app.services.option_search import PreviewSearches, get_option_searches
 from app.services.option_structure_preview import preview_option_structure
 from app.services.option_watch import get_option_watch_list
 from app.utils.timestamps import now_ms_utc
@@ -39,6 +41,11 @@ def _model_inputs(underlying: str, at_ms: int, latest_expiry: date) -> ModelInpu
     return read_option_model_inputs(underlying, at_ms=at_ms, latest_expiry=latest_expiry, wait=False)
 
 
+def _preview_searches() -> PreviewSearches[Any]:
+    """Where a page's search for its contracts runs: this process's preview lane, a worker process of its own."""
+    return get_option_searches().preview
+
+
 async def option_structure_preview(
     broker: str, account_id: str, request: OptionStructurePreviewRequest
 ) -> OptionStructurePreview:
@@ -49,6 +56,7 @@ async def option_structure_preview(
         quotes=get_option_quotes(),
         watch=get_option_watch_list(),
         model_inputs=_model_inputs,
+        searches=_preview_searches(),
         strikes_each_side=ibkr_settings().option_window_strikes_each_side,
         clock=now_ms_utc,
     )

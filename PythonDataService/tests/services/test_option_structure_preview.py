@@ -42,7 +42,10 @@ from tests.broker.ibkr import test_option_quotes as feed
 from tests.options import test_resolver as scenes
 
 # The stand-in coordinator a fleet Clerk asks for the rate and the dividends.
-from tests.services import test_option_model_inputs_coordinator as fleet
+from tests.services import test_option_model_inputs_client as fleet
+
+# A preview lane that searches in this process, through the pickling a worker process's pipe does.
+from tests.services.test_option_search import searches_in_this_process
 
 NOW = feed.NOW
 FRIDAY = scenes._FRIDAY
@@ -97,6 +100,8 @@ class Desk:
         self.status = IbkrMarketStatusSource(
             symbols=lambda: (), client=lambda: self.ibkr.client, clock=lambda: self.ibkr.now, options=self.lines
         )
+        # Where the search for the contracts runs. A test of the real worker process puts its own here.
+        self.searches = searches_in_this_process()
 
     def _model_inputs(self, _underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
         if isinstance(self.inputs, Exception):
@@ -109,6 +114,7 @@ class Desk:
             quotes=self.status,
             watch=self.watch,
             model_inputs=self._model_inputs,
+            searches=self.searches,
             strikes_each_side=self.reach,
             clock=lambda: self.ibkr.now,
         )
@@ -481,7 +487,12 @@ async def test_a_process_with_no_ibkr_source_says_so_and_asks_for_nothing(monkey
     watch = OptionWatchList()
 
     seen = await preview_option_structure(
-        _BULL_CALL_SPREAD, quotes=None, watch=watch, model_inputs=lambda *_: _KNOWN, strikes_each_side=2
+        _BULL_CALL_SPREAD,
+        quotes=None,
+        watch=watch,
+        model_inputs=lambda *_: _KNOWN,
+        searches=searches_in_this_process(),
+        strikes_each_side=2,
     )
 
     assert (seen.state, seen.reason_code, seen.ask_again_in_ms) == ("no_quote_source", "OPTION_PREVIEW_NO_QUOTE_SOURCE", None)

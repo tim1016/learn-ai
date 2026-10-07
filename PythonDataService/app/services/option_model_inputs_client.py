@@ -13,11 +13,18 @@ so the client is the synchronous one.
 Every way the ask can fail raises ``CoordinatorDidNotAnswer`` with a code and
 a clause saying what happened. The clause names no host, token or response
 body. Those go to the log.
+
+``AskedOfTheCoordinator`` is that ask as the reading takes it: one ask for
+both facts, each turned into what the reading keeps. The wire's own models
+stop here. The reading itself (``app.services.option_model_inputs``) knows
+only the facts, so a process that reads the vendors never loads them.
 """
 
 from __future__ import annotations
 
 import logging
+import operator
+import threading
 from datetime import date
 
 import httpx
@@ -34,13 +41,16 @@ from app.broker.fleet.option_model_inputs import (
 )
 from app.config import fleet_settings
 from app.options.expiry import option_expiry_anchor_ms
+from app.options.model_input_reasons import WhyNotKnown
+from app.options.resolver import DividendOn
 from app.schemas.fleet_option_model_inputs import (
+    DividendsNotKnown,
     ModelInputsAnswer,
     ModelInputsBeingLookedUp,
     OptionModelInputsRequest,
     OptionModelInputsResponse,
-    WhyNotKnown,
 )
+from app.services.option_model_inputs import DividendsLearned, ModelInputsBeingRead, RateLearned, the_default
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +82,9 @@ def ask_the_coordinator(
         )
     try:
         enforce_private_http_target(base_url)
+    except ValueError as unreadable:
+        # Not an address at all, such as one with half a bracket.
+        raise _not_set_up_to_ask(unreadable) from unreadable
     except FleetTransportRefused as refused:
         # A name that does not resolve is refused too, and that is what a coordinator being restarted looks like.
         logger.error(
@@ -86,7 +99,8 @@ def ask_the_coordinator(
         request = OptionModelInputsRequest(
             clerk_id=clerk_id,
             underlying=underlying,
-            at_ms=at_ms,
+            # A moment read off a bar is often a numpy integer: the same moment, which the strict wire refuses.
+            at_ms=operator.index(at_ms),
             latest_expiry_ms=option_expiry_anchor_ms(latest_expiry),
             wait=wait,
         )
@@ -111,6 +125,9 @@ def ask_the_coordinator(
         raise CoordinatorDidNotAnswer(
             WhyNotKnown.COORDINATOR_UNREACHABLE, "the coordinator could not be reached"
         ) from unreachable
+    except (httpx.InvalidURL, UnicodeError) as unusable:
+        # An address no request can be made to, or an id or a token no header can carry.
+        raise _not_set_up_to_ask(unusable) from unusable
     finally:
         client.close()
 
@@ -161,4 +178,56 @@ def _log_no_answer(action: str, **details: object) -> None:
     )
 
 
-__all__ = ["CoordinatorDidNotAnswer", "ask_the_coordinator"]
+def _not_set_up_to_ask(cause: Exception) -> CoordinatorDidNotAnswer:
+    """What this Clerk was given to ask with cannot be used. The values themselves go nowhere, the log included."""
+    logger.error(
+        "This Clerk's coordinator address, id or token cannot be used to ask for the option model inputs",
+        extra={"action": "option_model_inputs_coordinator_settings_unusable", "error_type": type(cause).__name__},
+    )
+    return CoordinatorDidNotAnswer(
+        WhyNotKnown.COORDINATOR_NOT_CONFIGURED,
+        "this Clerk is not set up to ask the coordinator: FLEET_COORDINATOR_URL is not an address a request can be "
+        "made to, or FLEET_AGENT_SERVICE_TOKEN or FLEET_CLERK_ID cannot be sent",
+    )
+
+
+class AskedOfTheCoordinator:
+    """One read's ask of the coordinator. Its answer holds both facts, so it is asked once, whichever fact's
+    lookup comes for it first."""
+
+    def __init__(self, underlying: str, at_ms: int, latest_expiry: date, wait: bool) -> None:
+        self._asking = (underlying, at_ms, latest_expiry, wait)
+        self._once = threading.Lock()
+        self._heard: ModelInputsAnswer | ModelInputsBeingLookedUp | CoordinatorDidNotAnswer | None = None
+
+    def _answer(self) -> ModelInputsAnswer | CoordinatorDidNotAnswer:
+        underlying, at_ms, latest_expiry, wait = self._asking
+        with self._once:
+            if self._heard is None:
+                try:
+                    self._heard = ask_the_coordinator(underlying, at_ms=at_ms, latest_expiry=latest_expiry, wait=wait)
+                except CoordinatorDidNotAnswer as silent:
+                    self._heard = silent
+            heard = self._heard
+        if isinstance(heard, ModelInputsBeingLookedUp):
+            raise ModelInputsBeingRead(f"the coordinator is looking up the rate and the dividends for {underlying}")
+        return heard
+
+    def rate(self, _days: int, _today: date) -> RateLearned:
+        heard = self._answer()
+        if isinstance(heard, CoordinatorDidNotAnswer):
+            return the_default(str(heard), heard.why)
+        return RateLearned(float(heard.rate.value), heard.rate.sentence, heard.rate.why_default)
+
+    def dividends(self, underlying: str, _first: date, _last: date, at_ms: int) -> DividendsLearned:
+        heard = self._answer()
+        if isinstance(heard, CoordinatorDidNotAnswer):
+            return DividendsLearned(None, f"{underlying}'s declared dividends are not known: {heard}.", at_ms, heard.why)
+        said = heard.dividends
+        if isinstance(said, DividendsNotKnown):
+            return DividendsLearned(None, said.sentence, at_ms, said.why)
+        going_ex = tuple(DividendOn(ex_ms=dividend.ex_ms, cash=float(dividend.cash)) for dividend in said.declared)
+        return DividendsLearned(going_ex, said.sentence, said.read_ms, None)
+
+
+__all__ = ["AskedOfTheCoordinator", "CoordinatorDidNotAnswer", "ask_the_coordinator"]

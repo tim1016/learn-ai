@@ -19,22 +19,25 @@ its answer says so.
 function's own typed refusal or one of the states named here: no quote
 source in this process, the feed not up, no quote line, the listing not read
 yet, quotes still arriving, no usable quote for the underlying, pricing
-inputs not known. Only a resolution carries figures.
+inputs not known, the search not done. Only a resolution carries figures.
 
-The supervisor is read on the event loop, where its callbacks write. The
-lookups of the rate and the dividends, and the resolution itself, block, and
-run off it.
+The supervisor is read on the event loop, where its callbacks write, and
+nothing here holds the loop for long. The lookups of the rate and the
+dividends block, and run in threads kept for them. The search for the
+contracts prices every watched strike, and runs in another process
+(``app.services.option_search``): in this one it would stop the loop for as
+long as it ran (ADR 0076).
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from functools import partial
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -46,7 +49,7 @@ from app.broker.ibkr.option_quotes import LineUse, WatchRequest
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.options.preview import StructureFigures, structure_figures
-from app.options.quotes import HeldQuote, quote_fault
+from app.options.quotes import HeldQuote, quote_fault, receipt_times
 from app.options.requirement import EntrySize, LegQuote
 from app.options.resolver import (
     Chain,
@@ -55,14 +58,17 @@ from app.options.resolver import (
     ResolverLimits,
     ResolverRefusal,
     UnderlyingObservation,
-    resolve_contracts,
 )
 from app.options.structure import ResolvedStructure
-from app.options.structure_catalogue import label
+from app.options.structure_catalogue import label, with_its_article
 from app.options.structure_check import StructureRefusal
 from app.options.watch import LineClass, NoLine, WindowContract, expiries_wanted, watched_window
 from app.schemas.action_plan import ActionPlan, DeltaStrike, OptionEntryLeg
 from app.schemas.option_preview import (
+    OptionPreviewAtExpiry,
+    OptionPreviewLean,
+    OptionPreviewLeg,
+    OptionPreviewMoney,
     OptionPreviewVerdict,
     OptionPreviewWatched,
     OptionPreviewWatchedRange,
@@ -70,7 +76,7 @@ from app.schemas.option_preview import (
     OptionStructurePreviewRequest,
     PreviewState,
 )
-from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
+from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead, off_the_loop
 from app.services.option_preview_views import (
     at_expiry_view,
     contract_view,
@@ -81,6 +87,7 @@ from app.services.option_preview_views import (
     quote_view,
     sentence,
 )
+from app.services.option_search import PreviewSearches, SearchAsk, SearchNotRun
 from app.services.option_watch import OptionWatchList
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import Clock, now_ms_utc
@@ -88,14 +95,12 @@ from app.utils.timestamps import Clock, now_ms_utc
 if TYPE_CHECKING:
     from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 
-logger = logging.getLogger(__name__)
-
 # How long a page's request for quotes stands after its last ask.
 PREVIEW_LEASE_MS = 60_000
 # How long after a window is first asked for its quotes are said to be arriving. After that, a quote that
 # has not come is reported as what it is.
 ARRIVAL_GRACE_MS = 10_000
-# The most windows pages may hold at once. One more gives up the one asked for longest ago.
+# The most windows pages may hold at once. One more takes the one asked for longest ago.
 MAX_PREVIEW_WINDOWS = 4
 # How long one ask waits for the rate and the dividends to be looked up before it answers that they are
 # not read yet. The lookup goes on, and a later ask finds what it learned.
@@ -126,6 +131,8 @@ class PreviewReason(StrEnum):
     DIVIDENDS_UNKNOWN = "OPTION_PREVIEW_DIVIDENDS_UNKNOWN"
     # The rate and the dividends are still being looked up.
     PRICING_INPUTS_NOT_READ = "OPTION_PREVIEW_PRICING_INPUTS_NOT_READ"
+    # Too many pages hold windows, and this one's was given up to a newer one.
+    TOO_MANY_OPEN = "OPTION_PREVIEW_TOO_MANY_OPEN"
 
 
 def plan_of(request: OptionStructurePreviewRequest) -> ActionPlan:
@@ -214,6 +221,8 @@ class _Reading:
     # The contracts this preview asked to have watched.
     window: tuple[WindowContract, ...]
     latest_expiry: date
+    # True while the window was asked for so lately that its quotes may still be on their way.
+    arriving: bool
 
     @property
     def wanted(self) -> frozenset[str]:
@@ -240,14 +249,11 @@ class _NoFigures:
 
 
 def _watched_view(reading: _Reading) -> OptionPreviewWatched:
+    watched = [OptionContract.from_occ_symbol(symbol) for symbol in reading.chain.watched]
     kinds = sorted({(seen.contract.right, seen.contract.expiry_ms) for seen in reading.window})
     ranges = []
     for right, expiry_ms in kinds:
-        strikes = sorted(
-            contract.strike
-            for contract in map(OptionContract.from_occ_symbol, reading.chain.watched)
-            if (contract.right, contract.expiry_ms) == (right, expiry_ms)
-        )
+        strikes = sorted(contract.strike for contract in watched if (contract.right, contract.expiry_ms) == (right, expiry_ms))
         if strikes:
             ranges.append(
                 OptionPreviewWatchedRange(
@@ -270,10 +276,14 @@ def _read(
     *,
     quotes: IbkrMarketStatusSource,
     strikes_each_side: int,
-    arriving: bool,
+    since_ms: int,
     now: int,
 ) -> _Reading | _NoFigures:
-    """Read the supervisor once. Everything a resolution is handed comes from this one moment."""
+    """Read the supervisor once. Everything a resolution is handed comes from this one moment.
+
+    ``since_ms`` is when this window was first asked for: how long its
+    quotes have had to arrive.
+    """
     feed, use = quotes.option_feed(), quotes.option_line_use()
     if feed is None or use is None:
         return _NoFigures(
@@ -286,10 +296,16 @@ def _read(
             sentence(f"The quote feed is not up: {feed.unhealthy}"),
             passes_by_itself=True,
         )
-    if use.budget == 0:
-        return _NoFigures("no_quote_line", *_no_line_words(NoLine.OVER_BUDGET, use))
+    arriving = now - since_ms <= ARRIVAL_GRACE_MS
+    # With no line spare for a page the supervisor asks IBKR for nothing on its account, so what is missing
+    # below is not on its way: it is missing for that reason.
+    no_line = (
+        None
+        if use.pages_not_served is None
+        else _NoFigures("no_quote_line", *_no_line_words(use.pages_not_served, use))
+    )
     chain = quotes.option_chain(underlying)
-    not_read = _NoFigures(
+    not_read = no_line or _NoFigures(
         "listing_not_read",
         PreviewReason.LISTING_NOT_READ,
         f"IBKR's list of {underlying} option contracts has not been read yet.",
@@ -306,6 +322,8 @@ def _read(
         )
     )
     if held is None or fault is not None:
+        if no_line is not None:
+            return no_line
         if arriving:
             return _NoFigures(
                 "quotes_arriving",
@@ -344,10 +362,11 @@ def _read(
         today=today,
         window=watched_window(plan, chain=chain, money=money, today=today, strikes_each_side=strikes_each_side),
         latest_expiry=max(come_to, default=today),
+        arriving=arriving,
     )
 
 
-def _lines_stand_in_the_way(reading: _Reading, arriving: bool) -> _NoFigures | None:
+def _lines_stand_in_the_way(reading: _Reading) -> _NoFigures | None:
     """When none of the preview's contracts holds a line: why there is nothing to resolve against."""
     if not reading.wanted or reading.wanted & reading.chain.watched.keys():
         return None
@@ -355,7 +374,7 @@ def _lines_stand_in_the_way(reading: _Reading, arriving: bool) -> _NoFigures | N
         return _NoFigures(
             "no_quote_line", *_no_line_words(next(iter(reading.refused.values())), reading.use), reading=reading
         )
-    if arriving:
+    if reading.arriving:
         return _NoFigures(
             "quotes_arriving",
             PreviewReason.QUOTES_ARRIVING,
@@ -366,7 +385,7 @@ def _lines_stand_in_the_way(reading: _Reading, arriving: bool) -> _NoFigures | N
     return None
 
 
-def _not_resolved(refused: ContractsNotResolved, reading: _Reading, arriving: bool) -> _NoFigures:
+def _not_resolved(refused: ContractsNotResolved, reading: _Reading) -> _NoFigures:
     """A resolver's refusal, as the state a preview names it by."""
     contract = refused.contract
     fault = None if refused.fault is None else str(refused.fault)
@@ -378,7 +397,7 @@ def _not_resolved(refused: ContractsNotResolved, reading: _Reading, arriving: bo
             return _NoFigures(
                 "no_quote_line", *_no_line_words(without, reading.use), leg_ids=refused.leg_ids, contract=contract, reading=reading
             )
-        if arriving and (symbol is None or symbol in reading.wanted or symbol in reading.chain.watched):
+        if reading.arriving and (symbol is None or symbol in reading.wanted or symbol in reading.chain.watched):
             return _NoFigures(
                 "quotes_arriving",
                 PreviewReason.QUOTES_ARRIVING,
@@ -400,7 +419,54 @@ def _not_resolved(refused: ContractsNotResolved, reading: _Reading, arriving: bo
     )
 
 
+def _search_not_done(not_run: SearchNotRun, reading: _Reading) -> _NoFigures:
+    """A search with no answer for this ask. Never a refusal of the structure, and never a figure."""
+    reason = not_run.reason
+    if reason is reason.LANE_BUSY:
+        notice = "Other previews' contracts are being worked out first. This one's turn has not come."
+    elif reason.still_running:
+        notice = "The contracts these rules pick are still being worked out."
+    else:
+        notice = sentence(f"The search for these contracts could not be run: {not_run.detail}. Nothing is shown on a guess")
+    return _NoFigures("search_not_done", str(reason), notice, passes_by_itself=reason.still_running, reading=reading)
+
+
+@dataclass(frozen=True, slots=True)
+class _Standing:
+    """What an answer is built from beside the search's own. Two asks of one page stand on the same thing when
+    the page built the same structure and the feed has not reconnected between them."""
+
+    request: OptionStructurePreviewRequest
+    generation: int
+    reading: _Reading = field(compare=False)
+    inputs: ModelInputsRead = field(compare=False)
+
+
 # ---- the answer -----------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Found:
+    """What one answer found. A state carries its own parts, and the rest stay empty."""
+
+    state: PreviewState
+    verdict: OptionPreviewVerdict
+    reason_code: str | None = None
+    notice: str | None = None
+    fault: str | None = None
+    leg_ids: tuple[str, ...] = ()
+    contract: OptionContract | None = None
+    # Set for a state that passes by itself: ask again after this long.
+    ask_again_in_ms: int | None = None
+    # The reading the answer stands on, when the supervisor was read far enough for one.
+    reading: _Reading | None = None
+    inputs: ModelInputsRead | None = None
+    oldest_quote_age_ms: int | None = None
+    legs: tuple[OptionPreviewLeg, ...] = ()
+    money: OptionPreviewMoney | None = None
+    at_expiry: OptionPreviewAtExpiry | None = None
+    lean: OptionPreviewLean | None = None
+    lean_unknown_sentence: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,42 +474,46 @@ class _Asked:
     """What was asked, and the parts of every answer that do not depend on what was found."""
 
     request: OptionStructurePreviewRequest
+    # When the ask was taken up: what an answer with no reading of the supervisor is stamped with.
     now: int
 
-    def _answer(self, **found: object) -> OptionStructurePreview:
-        request = self.request
-        answer: dict[str, object] = {
-            "reason_code": None,
-            "notice": None,
-            "fault": None,
-            "leg_ids": [],
-            "contract": None,
-            "ask_again_in_ms": None,
-            "underlying": request.underlying,
-            "structure": request.structure,
-            "structure_label": "Custom" if request.structure is None else label(request.structure),
-            "structures": request.structures,
-            "gap_limit_percent": request.gap_limit_percent,
-            "cost_limit_percent": request.cost_limit_percent,
-            "quotes_read_ms": self.now,
-            "feed_generation": None,
-            "oldest_quote_age_ms": None,
-            "underlying_quote": None,
-            "the_money": None,
-            "the_money_sentence": None,
-            "legs": [],
-            "money": None,
-            "at_expiry": None,
-            "lean": None,
-            "lean_unknown_sentence": None,
-            "watched": None,
-            "pricing_inputs": None,
-            "preview_sentence": "A preview. The bot picks again at every entry.",
-        }
-        answer |= found
-        if answer["reason_code"] is not None:
-            answer["reason_code"] = str(answer["reason_code"])
-        return OptionStructurePreview.model_validate(answer)
+    def _answer(self, found: _Found) -> OptionStructurePreview:
+        request, reading = self.request, found.reading
+        return OptionStructurePreview(
+            state=found.state,
+            reason_code=found.reason_code,
+            notice=found.notice,
+            fault=found.fault,
+            leg_ids=list(found.leg_ids),
+            contract=None if found.contract is None else contract_view(found.contract),
+            ask_again_in_ms=found.ask_again_in_ms,
+            underlying=request.underlying,
+            structure=request.structure,
+            structure_label="Custom" if request.structure is None else label(request.structure),
+            structures=request.structures,
+            gap_limit_percent=request.gap_limit_percent,
+            cost_limit_percent=request.cost_limit_percent,
+            quotes_read_ms=self.now if reading is None else reading.now,
+            feed_generation=None if reading is None else reading.feed.generation,
+            oldest_quote_age_ms=found.oldest_quote_age_ms,
+            underlying_quote=None if reading is None else quote_view(reading.underlying_quote, reading.now),
+            the_money=None if reading is None else reading.money,
+            the_money_sentence=(
+                None
+                if reading is None
+                else f"Strikes are counted from {request.underlying}'s live mid quote, {reading.money}. "
+                "A bot counts from the close of the bar it decided on."
+            ),
+            verdict=found.verdict,
+            legs=list(found.legs),
+            money=found.money,
+            at_expiry=found.at_expiry,
+            lean=found.lean,
+            lean_unknown_sentence=found.lean_unknown_sentence,
+            watched=None if reading is None else _watched_view(reading),
+            pricing_inputs=None if found.inputs is None else pricing_inputs_view(found.inputs),
+            preview_sentence="A preview. The bot picks again at every entry.",
+        )
 
     def _deployable(self, plan: ActionPlan) -> dict[str, object]:
         legs = [leg for leg in plan.on_enter if isinstance(leg, OptionEntryLeg)]
@@ -455,62 +525,52 @@ class _Asked:
         )
         return {"can_be_deployed": True, "deploy_sentence": " ".join(said), "deploy_reason_code": None}
 
-    def _of_the_reading(self, reading: _Reading) -> dict[str, object]:
-        underlying = self.request.underlying
-        return {
-            "quotes_read_ms": reading.now,
-            "feed_generation": reading.feed.generation,
-            "underlying_quote": quote_view(reading.underlying_quote, reading.now),
-            "the_money": reading.money,
-            "the_money_sentence": (
-                f"Strikes are counted from {underlying}'s live mid quote, {reading.money}. "
-                "A bot counts from the close of the bar it decided on."
-            ),
-            "watched": _watched_view(reading),
-        }
-
     def plan_refused(self, reason: PreviewReason, why: str) -> OptionStructurePreview:
         return self._answer(
-            state="plan_refused",
-            reason_code=reason,
-            notice=why,
-            verdict=OptionPreviewVerdict(
-                can_be_deployed=False,
-                deploy_sentence=f"This structure cannot be deployed. {why}",
-                deploy_reason_code=str(reason),
-                resolves_as_built=None,
-                resolves_sentence="Nothing is resolved for a structure that cannot be deployed.",
-                resolves_reason_code=None,
-                leg_ids=[],
-                red=True,
-            ),
+            _Found(
+                state="plan_refused",
+                reason_code=str(reason),
+                notice=why,
+                verdict=OptionPreviewVerdict(
+                    can_be_deployed=False,
+                    deploy_sentence=f"This structure cannot be deployed. {why}",
+                    deploy_reason_code=str(reason),
+                    resolves_as_built=None,
+                    resolves_sentence="Nothing is resolved for a structure that cannot be deployed.",
+                    resolves_reason_code=None,
+                    leg_ids=[],
+                    red=True,
+                ),
+            )
         )
 
     def without_figures(
         self, plan: ActionPlan, why: _NoFigures, inputs: ModelInputsRead | None = None
     ) -> OptionStructurePreview:
         return self._answer(
-            state=why.state,
-            reason_code=why.reason_code,
-            notice=why.notice,
-            fault=why.fault,
-            leg_ids=list(why.leg_ids),
-            contract=None if why.contract is None else contract_view(why.contract),
-            ask_again_in_ms=_ASK_AGAIN_MS if why.passes_by_itself else None,
-            verdict=OptionPreviewVerdict(
-                **self._deployable(plan),
-                resolves_as_built=None,
-                resolves_sentence=(
-                    "Right now its rules do not come to a contract for every leg."
-                    if why.state == "not_resolved"
-                    else "What it resolves to right now is not known."
+            _Found(
+                state=why.state,
+                reason_code=str(why.reason_code),
+                notice=why.notice,
+                fault=why.fault,
+                leg_ids=why.leg_ids,
+                contract=why.contract,
+                ask_again_in_ms=_ASK_AGAIN_MS if why.passes_by_itself else None,
+                verdict=OptionPreviewVerdict(
+                    **self._deployable(plan),
+                    resolves_as_built=None,
+                    resolves_sentence=(
+                        "Right now its rules do not come to a contract for every leg."
+                        if why.state == "not_resolved"
+                        else "What it resolves to right now is not known."
+                    ),
+                    resolves_reason_code=None,
+                    leg_ids=[],
+                    red=False,
                 ),
-                resolves_reason_code=None,
-                leg_ids=[],
-                red=False,
-            ),
-            pricing_inputs=None if inputs is None else pricing_inputs_view(inputs),
-            **({} if why.reading is None else self._of_the_reading(why.reading)),
+                reading=why.reading,
+                inputs=inputs,
+            )
         )
 
     def resolved(
@@ -522,10 +582,10 @@ class _Asked:
             resolves = (
                 "Right now every leg comes to a contract, and the structure can be entered."
                 if name is None
-                else f"Right now it resolves to a {name.in_words}."
+                else f"Right now it resolves to {with_its_article(name)}."
             )
         elif name is not None and broken.reason in _SHAPE_REFUSALS:
-            resolves = sentence(f"Right now this is not a {name.in_words}: {broken.detail}")
+            resolves = sentence(f"Right now this is not {with_its_article(name)}: {broken.detail}")
         else:
             resolves = sentence(f"Right now this cannot be entered as built: {broken.detail}")
         lean_unknown = None
@@ -535,36 +595,28 @@ class _Asked:
                 if inputs.dividends is None
                 else f"No lean is shown: no delta could be worked out for leg {figures.lean_unknown_leg_id} from its quote."
             )
+        stood_on = (reading.underlying_quote, *(leg.quote for leg in figures.legs))
         return self._answer(
-            state="resolved",
-            verdict=OptionPreviewVerdict(
-                **self._deployable(plan),
-                resolves_as_built=broken is None,
-                resolves_sentence=resolves,
-                resolves_reason_code=None if broken is None else broken.reason,
-                leg_ids=[] if broken is None else list(broken.leg_ids),
-                red=broken is not None,
-            ),
-            legs=[leg_view(leg, reading.now) for leg in figures.legs],
-            money=money_view(figures, request.cost_limit_percent),
-            at_expiry=at_expiry_view(figures, request.underlying),
-            oldest_quote_age_ms=max(
-                age
-                for quote in (reading.underlying_quote, *(leg.quote for leg in figures.legs))
-                for age in (reading.now - side.received_ms for side in (quote.bid, quote.ask) if side is not None)
-            ),
-            lean=lean_view(figures, request.underlying, request.listens_to),
-            lean_unknown_sentence=lean_unknown,
-            pricing_inputs=pricing_inputs_view(inputs),
-            **self._of_the_reading(reading),
+            _Found(
+                state="resolved",
+                verdict=OptionPreviewVerdict(
+                    **self._deployable(plan),
+                    resolves_as_built=broken is None,
+                    resolves_sentence=resolves,
+                    resolves_reason_code=None if broken is None else broken.reason,
+                    leg_ids=[] if broken is None else list(broken.leg_ids),
+                    red=broken is not None,
+                ),
+                reading=reading,
+                inputs=inputs,
+                oldest_quote_age_ms=reading.now - min(when for quote in stood_on for when in receipt_times(quote)),
+                legs=tuple(leg_view(leg, reading.now) for leg in figures.legs),
+                money=money_view(figures, request.cost_limit_percent),
+                at_expiry=at_expiry_view(figures, request.underlying),
+                lean=lean_view(figures, request.underlying, request.listens_to),
+                lean_unknown_sentence=lean_unknown,
+            )
         )
-
-
-def _make_room(watch: OptionWatchList, key: str) -> None:
-    """Keep pages to ``MAX_PREVIEW_WINDOWS`` windows: a new one gives up the one asked for longest ago."""
-    others = [held for held in watch.on_lease() if held.startswith(_KEY_PREFIX) and held != key]
-    for stale in others[: max(len(others) - (MAX_PREVIEW_WINDOWS - 1), 0)]:
-        watch.unwatch(stale)
 
 
 async def preview_option_structure(
@@ -573,6 +625,7 @@ async def preview_option_structure(
     quotes: IbkrMarketStatusSource | None,
     watch: OptionWatchList,
     model_inputs: ModelInputsReader,
+    searches: PreviewSearches[_Standing],
     strikes_each_side: int,
     clock: Clock = now_ms_utc,
 ) -> OptionStructurePreview:
@@ -581,7 +634,8 @@ async def preview_option_structure(
     ``watch`` is the list ``quotes`` keeps its lines to: the preview's window
     is put on it, on a lease. ``strikes_each_side`` is the reach that
     supervisor watches a window with, so that the preview knows which
-    contracts it asked for.
+    contracts it asked for. ``searches`` is where the search for the
+    contracts runs: a worker process, never this one.
     """
     key = _KEY_PREFIX + request.preview_key
     asked = _Asked(request, clock())
@@ -605,34 +659,40 @@ async def preview_option_structure(
             plan,
             _NoFigures("no_quote_source", PreviewReason.NO_QUOTE_SOURCE, "This process has no IBKR quote source for options."),
         )
-    _make_room(watch, key)
     since_ms = watch.watch_on_lease(
         key,
         WatchRequest(underlying=request.underlying, line_class=LineClass.PREVIEW, plan=plan),
         lease_ms=PREVIEW_LEASE_MS,
+        at_most=MAX_PREVIEW_WINDOWS,
     )
+    if since_ms is None:
+        return asked.without_figures(
+            plan,
+            _NoFigures(
+                "no_quote_line",
+                PreviewReason.TOO_MANY_OPEN,
+                f"Too many previews are open. {MAX_PREVIEW_WINDOWS} may hold quote lines at once, and this one's "
+                "were given up to a newer one. Close another, then refresh this one.",
+            ),
+        )
+    # The search's worker loads while the quotes arrive.
+    searches.warm()
 
     def read() -> _Reading | _NoFigures:
-        now = clock()
         return _read(
-            plan,
-            request.underlying,
-            quotes=quotes,
-            strikes_each_side=strikes_each_side,
-            arriving=now - since_ms <= ARRIVAL_GRACE_MS,
-            now=now,
+            plan, request.underlying, quotes=quotes, strikes_each_side=strikes_each_side, since_ms=since_ms, now=clock()
         )
 
     # Read once to learn which expiries the plan comes to, look the model's inputs up for them, which can
     # take seconds the first time, then read again: a resolution is handed quotes as they stand now.
     first = read()
     if isinstance(first, _Reading):
-        first = _lines_stand_in_the_way(first, first.now - since_ms <= ARRIVAL_GRACE_MS) or first
+        first = _lines_stand_in_the_way(first) or first
     if isinstance(first, _NoFigures):
         return asked.without_figures(plan, first)
     try:
         inputs = await asyncio.wait_for(
-            asyncio.to_thread(model_inputs, request.underlying, first.now, first.latest_expiry),
+            off_the_loop(partial(model_inputs, request.underlying, first.now, first.latest_expiry)),
             timeout=MODEL_INPUTS_WAIT_S,
         )
     except (TimeoutError, ModelInputsBeingRead):
@@ -647,9 +707,7 @@ async def preview_option_structure(
     reading = read()
     if isinstance(reading, _NoFigures):
         return _Asked(request, clock()).without_figures(plan, reading, inputs)
-    asked = _Asked(request, reading.now)
-    arriving = reading.now - since_ms <= ARRIVAL_GRACE_MS
-    blocked = _lines_stand_in_the_way(reading, arriving)
+    blocked = _lines_stand_in_the_way(reading)
     if blocked is not None:
         return asked.without_figures(plan, blocked, inputs)
 
@@ -666,10 +724,10 @@ async def preview_option_structure(
             return asked.without_figures(plan, unknown, inputs)
         # No rule here picks by delta, so the picks do not depend on the model. Nothing it says is shown.
         model = inputs.unverified_model()
-    try:
-        resolution = await asyncio.to_thread(
-            resolve_contracts,
-            plan,
+    found = await searches.search(
+        key,
+        SearchAsk(
+            plan=plan,
             chain=reading.chain,
             underlying=UnderlyingObservation(pricing_bar_close=reading.money, quote=reading.underlying_quote),
             feed=reading.feed,
@@ -679,15 +737,22 @@ async def preview_option_structure(
             ),
             decision_bar_close_ms=reading.now,
             selection_ms=reading.now,
-        )
-    except ContractsNotResolved as refused:
-        return asked.without_figures(plan, _not_resolved(refused, reading, arriving), inputs)
+        ),
+        standing_on=_Standing(request, reading.feed.generation, reading, inputs),
+    )
+    if isinstance(found, SearchNotRun):
+        return asked.without_figures(plan, _search_not_done(found, reading), inputs)
+    # The answer may be an earlier ask's, kept for this one. It is shown as of the quotes that ask read.
+    reading, inputs = found.standing_on.reading, found.standing_on.inputs
+    if isinstance(found.outcome, ContractsNotResolved):
+        return asked.without_figures(plan, _not_resolved(found.outcome, reading), inputs)
+    today = reading.today
     figures = structure_figures(
         plan,
-        resolution,
+        found.outcome,
         units=request.structures,
         cost_limit_percent=request.cost_limit_percent,
-        fee_provision=lambda structure, markets, size: _fee_provision(reading.today, structure, dict(markets), size),
+        fee_provision=lambda structure, markets, size: _fee_provision(today, structure, dict(markets), size),
         model_is_known=inputs.dividends is not None,
     )
     return asked.resolved(plan, reading, figures, inputs)

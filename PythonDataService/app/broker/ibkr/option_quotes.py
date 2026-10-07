@@ -29,7 +29,12 @@ asked on every pass. When IBKR refuses a line because the account's allowance
 is in use, the number of lines open at that moment becomes the ceiling until
 the next reconnect, so the lowest classes give way and a held contract is
 asked for again. The ceiling is tried one line higher once a minute while
-something is waiting for capacity. A line IBKR refuses for another reason
+something is waiting for capacity.
+
+A page asks IBKR for nothing while no line is spare for it. Its request
+stands on the list, but with every line taken by the contracts bots hold and
+the windows they watch, its underlying is not quoted and its chain is not read
+on its account. A bot's claim on its own underlying is untouched. A line IBKR refuses for another reason
 stays refused until nothing wants it or the connection changes; it is not
 asked for again and again. A line that has gone the subscription timeout with
 no whole quote, since it was opened or since it last lost a side, is asked for
@@ -134,6 +139,9 @@ class LineUse:
     ceiling: int | None
     # Wanted contracts with no line, by contract symbol, and why.
     without: Mapping[str, str]
+    # Why no page's request is being served: no line is left after the contracts bots hold and the windows
+    # they watch. None while one is.
+    pages_not_served: NoLine | None = None
 
 
 def _priced(price: Any, now: int) -> QuoteSide | None:
@@ -269,6 +277,8 @@ class OptionQuoteLines:
             raise ValueError(f"a window cannot reach {strikes_each_side} strikes either side")
         self._requests, self._budget, self._reach, self._clock = requests, budget, strikes_each_side, clock
         self._wanted: tuple[WatchRequest, ...] = ()
+        # Why no line is spare for a page, as the last pass left it. None: one is.
+        self._pages_not_served: NoLine | None = NoLine.OVER_BUDGET if budget == 0 else None
         self._generation = 0
         self._owner: IbkrClient | None = None
         self._lines: dict[str, OptionLine] = {}
@@ -294,7 +304,12 @@ class OptionQuoteLines:
         except Exception:
             # What was wanted a moment ago stands: a held contract keeps its line while the asking fails.
             logger.exception("Could not read what option quotes are wanted", extra={"action": "option_demand_failed"})
-        return tuple(dict.fromkeys(request.underlying.upper() for request in self._wanted))
+        return tuple(dict.fromkeys(request.underlying.upper() for request in self._wanted if self._serves(request)))
+
+    def _serves(self, request: WatchRequest) -> bool:
+        """Whether IBKR is asked anything on this request's account: its underlying's quote, its chain's
+        listing. A page's is not, while no line is spare for one."""
+        return request.line_class is not LineClass.PREVIEW or self._pages_not_served is None
 
     def adopt(self, client: IbkrClient, now: int, *, maintained: bool) -> None:
         """A new connection epoch: no quote from before it is kept.
@@ -331,6 +346,7 @@ class OptionQuoteLines:
         decision could use one."""
         wants, listed, read = self._wants(client, now, money_of)
         wanted = {want.contract.occ_symbol for want in wants}
+        self._pages_not_served = self._no_line_for_a_page(wants)
         self._line_backoff.keep_only(wanted)
         for symbol in [symbol for symbol in self._refused if symbol not in wanted]:
             del self._refused[symbol]
@@ -344,6 +360,15 @@ class OptionQuoteLines:
             self._ceiling_set_at_ms = now
         if self._ceiling is not None and self._ceiling >= self._budget:
             self._ceiling = None
+
+    def _no_line_for_a_page(self, wants: Sequence[LineWant]) -> NoLine | None:
+        """Why no line is spare for a page once bots have theirs, or None when one is. A page comes last, so
+        what is left for it is what the contracts bots hold and the windows they watch do not take."""
+        taken = len({want.contract.occ_symbol for want in wants if want.line_class is not LineClass.PREVIEW})
+        if taken >= self._budget:
+            return NoLine.OVER_BUDGET
+        # Inside the Clerk's own budget, and past what IBKR last showed it would grant.
+        return NoLine.NO_CAPACITY if self._ceiling is not None and taken >= self._ceiling else None
 
     def on_error(self, req_id: int, code: int) -> None:
         """IBKR's answer to a request for a line."""
@@ -392,6 +417,7 @@ class OptionQuoteLines:
             open=len(self._lines),
             ceiling=self._ceiling,
             without=MappingProxyType(self._without | self._refused),
+            pages_not_served=self._pages_not_served,
         )
 
     # ---- what is wanted -------------------------------------------------------
@@ -408,7 +434,9 @@ class OptionQuoteLines:
         read: dict[tuple[str, date], bool] = {}
         for request in self._wanted:
             underlying = request.underlying.upper()
-            listing = self._listing(underlying, client, today, now)
+            asks = self._serves(request)
+            # A page with no line to be had starts no read. What a bot's request has had read is its to use too.
+            listing = self._listing(underlying, client, today, now) if asks else self._listings.get(underlying, _Listing())
             # A held contract is wanted whatever is known of the chain: its line is asked for when it can be.
             wants.extend(LineWant(contract, LineClass.HELD) for contract in request.held)
             needed = {contract.expiry_date for contract in request.held}
@@ -416,7 +444,7 @@ class OptionQuoteLines:
                 needed |= expiries_wanted(request.plan, listing.expiries, today)
             for expiry in sorted(needed):
                 # A date gone by lists nothing any more; what was read of it stays as it was.
-                if expiry >= today and listing.contracts_read_on.get(expiry) != today:
+                if asks and expiry >= today and listing.contracts_read_on.get(expiry) != today:
                     self._read(
                         (underlying, expiry), partial(self._read_contracts, client, underlying, expiry, today), now
                     )

@@ -7,7 +7,10 @@ answer is the code a coordinator runs.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+from collections.abc import Iterator
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -17,7 +20,7 @@ from httpx import ASGITransport, AsyncClient, Response
 
 from app.broker.fleet.errors import FleetAgentTokenRefused
 from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
-from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
+from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH, OPTION_MODEL_INPUTS_READ_TIMEOUT_S
 from app.config import fleet_settings, settings
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.expiry import option_expiry_anchor_ms
@@ -26,17 +29,18 @@ from app.services import option_model_inputs
 from app.services.fred_service import RATE_SOURCE_DEFAULT, RATE_SOURCE_FRED
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.error_handlers import install_fleet_control_error_handler
-from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import to_ms_utc
 
 _CLERK_ID = "clrk_inputs000000000000000000aa"
 _OTHER_CLERK_ID = "clrk_other0000000000000000000bb"
 _TOKEN = "svct_" + "4" * 32
+_OTHER_TOKEN = "svct_" + "5" * 32
 _PATH = INTERNAL_OPTION_MODEL_INPUTS_PATH
 _AS_THIS_CLERK = {"X-Fleet-Clerk-Id": _CLERK_ID, "X-Fleet-Agent-Token": _TOKEN}
 
 _NY = ZoneInfo("America/New_York")
 _TUESDAY = date(2026, 10, 6)
+_WEDNESDAY = date(2026, 10, 7)
 _FRIDAY = date(2026, 10, 9)
 _NEXT_FRIDAY = date(2026, 10, 16)
 # Tuesday 2026-10-06 at 10:31:02 New York time: the session has been open an hour.
@@ -57,15 +61,29 @@ class Vendors:
         self.rows = rows
         self.fred_asked: list[tuple[int, date]] = []
         self.polygon_asked: list[dict] = []
+        # A vendor named here does not answer until the test lets it go.
+        self.hanging: set[str] = set()
+        self.reached = {"FRED": threading.Event(), "Polygon": threading.Event()}
+        self.let_go = threading.Event()
+        # What a vendor does to this process's own clock as it is asked: how long it is taken to have hung.
+        self.on_asked = lambda _vendor: None
         monkeypatch.setattr(option_model_inputs, "_fred_rate", self._fred)
         monkeypatch.setattr(option_model_inputs, "_polygon", self)
 
+    def _asked(self, vendor: str) -> None:
+        self.on_asked(vendor)
+        self.reached[vendor].set()
+        if vendor in self.hanging:
+            self.let_go.wait(timeout=20)
+
     def _fred(self, days: int, today: date) -> tuple[float, str]:
         self.fred_asked.append((days, today))
+        self._asked("FRED")
         return self.rate
 
     def list_dividends(self, **query: object) -> list[dict]:
         self.polygon_asked.append(query)
+        self._asked("Polygon")
         if isinstance(self.rows, Exception):
             raise self.rows
         return list(self.rows)
@@ -76,11 +94,20 @@ class Vendors:
 
 
 @pytest.fixture(autouse=True)
-def _a_coordinator_that_keeps_nothing_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+def _a_coordinator_that_keeps_nothing_yet(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(fleet_settings, "ROLE", "fleet_coordinator")
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "a-key")
-    monkeypatch.setattr(option_model_inputs, "_rates", {})
-    monkeypatch.setattr(option_model_inputs, "_dividends", {})
+    option_model_inputs.clear_cache()
+    yield
+    option_model_inputs.clear_cache()
+
+
+@pytest.fixture
+def hung(monkeypatch: pytest.MonkeyPatch) -> Iterator[Vendors]:
+    """Stand-in vendors a test may leave hanging. They are let go when it ends."""
+    vendors = Vendors(monkeypatch, rows=[{"ex_dividend_date": "2026-10-09", "cash_amount": 1.8, "currency": "USD"}])
+    yield vendors
+    vendors.let_go.set()
 
 
 def _app(tokens: dict[str, str] | None = None) -> FastAPI:
@@ -134,13 +161,14 @@ async def test_a_clerk_is_answered_with_the_rate_and_the_dividends_still_to_go_e
         "answered", "SPY", NOW, option_expiry_anchor_ms(_NEXT_FRIDAY),
     )
     rate = answer["rate"]
+    assert set(rate) == {"value", "source", "why_default", "sentence"}
     assert (rate["value"], rate["source"], rate["why_default"]) == ("0.0512", "FRED", None)
-    assert rate["published_by_ms"] == et_midnight_ms(_TUESDAY)
     dividends = answer["dividends"]
     assert (dividends["status"], dividends["read_ms"]) == ("known", NOW)
+    # Every one served is in dollars, so none says so.
     assert dividends["declared"] == [
-        {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "USD"},
-        {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.470625", "currency": "USD"},
+        {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8"},
+        {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.470625"},
     ]
     assert rate["sentence"] and dividends["sentence"]
     # Ten days to the latest expiry, and the dividends from today to it.
@@ -221,20 +249,112 @@ async def test_what_the_coordinator_already_keeps_is_answered_without_asking_the
     assert (a_minute_later["at_ms"], a_minute_later["dividends"]["read_ms"]) == (NOW + 60_000, NOW)
 
 
-async def test_an_ask_that_will_not_wait_is_answered_at_once_while_another_lookup_runs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_an_ask_that_will_not_wait_is_answered_at_once_while_another_lookup_runs(hung: Vendors) -> None:
     """A page asks every second. Its ask stacks no waiting thread on the coordinator either."""
-    vendors = Vendors(monkeypatch)
+    hung.hanging = {"Polygon"}
+    app = _app()
+    waiting = asyncio.ensure_future(_post(_ask(wait=True), app=app))
+    assert await asyncio.to_thread(hung.reached["Polygon"].wait, 5)
 
-    assert option_model_inputs._lookups.acquire(blocking=False)
-    try:
-        response = await _post(_ask(wait=False))
-    finally:
-        option_model_inputs._lookups.release()
+    response = await _post(_ask(wait=False), app=app)
+    asked_while_it_hung = hung.asked
+    hung.let_go.set()
+    waited = await waiting
 
     assert (response.status_code, response.json()) == (200, {"status": "being_looked_up"})
-    assert vendors.asked == 0
+    # The ask that would not wait began no lookup of its own.
+    assert asked_while_it_hung == 2 == hung.asked
+    assert waited.json()["dividends"]["status"] == "known"
+
+
+async def test_an_ask_about_another_underlying_is_answered_about_that_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    vendors = Vendors(monkeypatch, rows=[{"ex_dividend_date": "2026-10-09", "cash_amount": 0.72, "currency": "USD"}])
+
+    answer = (await _post(_ask(underlying="qqq"))).json()
+
+    assert (answer["status"], answer["underlying"]) == ("answered", "QQQ")
+    assert [query["ticker"] for query in vendors.polygon_asked] == ["QQQ"]
+    assert [paid["cash"] for paid in answer["dividends"]["declared"]] == ["0.72"]
+
+
+async def test_a_dividend_is_served_until_the_open_of_its_ex_date_and_not_from_that_moment_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At the open the stock already trades without it: it is in the price, to the millisecond."""
+    Vendors(monkeypatch, rows=[{"ex_dividend_date": "2026-10-07", "cash_amount": 0.4, "currency": "USD"}])
+    the_open = session_open_ms_utc(_WEDNESDAY)
+
+    a_millisecond_before = (await _post(_ask(at_ms=the_open - 1))).json()["dividends"]
+    option_model_inputs.clear_cache()
+    at_the_open = (await _post(_ask(at_ms=the_open))).json()["dividends"]
+
+    assert a_millisecond_before["declared"] == [{"ex_ms": the_open, "cash": "0.4"}]
+    assert (at_the_open["status"], at_the_open["declared"]) == ("known", [])
+
+
+# ---- A vendor that hangs ---------------------------------------------------------------
+
+
+def test_a_whole_lookup_ends_well_inside_the_time_a_clerk_waits_for_it() -> None:
+    """Both vendors are asked at once and each is waited for no longer than the bound."""
+    assert 2 * option_model_inputs.VENDOR_LOOKUP_BOUND_S <= OPTION_MODEL_INPUTS_READ_TIMEOUT_S
+
+
+async def test_with_fred_hanging_a_clerk_is_still_answered_the_dividends_polygon_gave_at_once_and_a_default_rate(
+    monkeypatch: pytest.MonkeyPatch, hung: Vendors
+) -> None:
+    """FRED does not answer. Polygon answered at once. The Clerk is not left knowing neither."""
+    monkeypatch.setattr(option_model_inputs, "VENDOR_LOOKUP_BOUND_S", 0.2)
+    hung.hanging = {"FRED"}
+
+    response = await _post(_ask())
+
+    assert response.status_code == 200
+    answer = response.json()
+    assert (answer["dividends"]["status"], [paid["cash"] for paid in answer["dividends"]["declared"]]) == ("known", ["1.8"])
+    rate = answer["rate"]
+    assert (rate["source"], rate["why_default"]) == ("default", "lookup_too_slow")
+    assert float(rate["value"]) == DEFAULT_RISK_FREE_RATE and rate["sentence"]
+
+
+async def test_a_rate_fred_was_too_slow_to_give_is_asked_for_again_half_a_minute_after_the_wait_for_it_ended(
+    monkeypatch: pytest.MonkeyPatch, hung: Vendors
+) -> None:
+    """Eight seconds waited, then thirty kept: FRED is asked again at thirty-eight, not at thirty and not on every ask."""
+    monkeypatch.setattr(option_model_inputs, "VENDOR_LOOKUP_BOUND_S", 0.2)
+    own_clock = [500.0]
+    monkeypatch.setattr(option_model_inputs, "_monotonic", lambda: own_clock[0])
+    hung.hanging = {"FRED"}
+
+    def eight_seconds_pass(vendor: str) -> None:
+        if vendor == "FRED":
+            own_clock[0] += 8.0
+
+    hung.on_asked = eight_seconds_pass
+    app = _app()
+
+    await _post(_ask(), app=app)
+    kept = (await _post(_ask(at_ms=NOW + 8_000 + 29_999), app=app)).json()
+    asked_inside_the_half_minute = len(hung.fred_asked)
+    await _post(_ask(at_ms=NOW + 8_000 + 30_000), app=app)
+
+    assert (kept["rate"]["source"], kept["dividends"]["status"]) == ("default", "known")
+    assert (asked_inside_the_half_minute, len(hung.fred_asked)) == (1, 2)
+    # Polygon was read once and is kept its hour.
+    assert len(hung.polygon_asked) == 1
+
+
+async def test_with_both_vendors_hanging_a_clerk_is_answered_inside_the_bound_that_neither_is_known(
+    monkeypatch: pytest.MonkeyPatch, hung: Vendors
+) -> None:
+    monkeypatch.setattr(option_model_inputs, "VENDOR_LOOKUP_BOUND_S", 0.2)
+    hung.hanging = {"FRED", "Polygon"}
+
+    answer = (await asyncio.wait_for(_post(_ask()), timeout=5)).json()
+
+    assert (answer["rate"]["source"], answer["rate"]["why_default"]) == ("default", "lookup_too_slow")
+    assert (answer["dividends"]["status"], answer["dividends"]["why"]) == ("unknown", "lookup_too_slow")
+    assert "declared" not in answer["dividends"]
 
 
 # ---- Who is answered ------------------------------------------------------------------
@@ -259,7 +379,7 @@ async def test_a_caller_that_is_not_this_clerk_is_refused_as_the_history_read_re
     monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
 ) -> None:
     vendors = Vendors(monkeypatch)
-    app = _app({_CLERK_ID: _TOKEN, _OTHER_CLERK_ID: "svct_" + "5" * 32})
+    app = _app({_CLERK_ID: _TOKEN, _OTHER_CLERK_ID: _OTHER_TOKEN})
     a_history_ask = {"clerk_id": _CLERK_ID, "symbol": "SPY", "timeframe": "1m", "required_bar_count": 300, "as_of_ms": NOW}
 
     refused = await _post(_ask(), headers, app=app)
@@ -269,6 +389,20 @@ async def test_a_caller_that_is_not_this_clerk_is_refused_as_the_history_read_re
     assert refused.json()["reason"] == FleetAgentTokenRefused.reason
     assert (refused.status_code, refused.json()) == (by_the_history_read.status_code, by_the_history_read.json())
     assert vendors.asked == 0
+
+
+async def test_another_clerks_own_header_and_token_do_not_ask_in_this_clerks_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other Clerk is who it says it is. The ask names this one, and is not that Clerk's to make."""
+    vendors = Vendors(monkeypatch)
+    app = _app({_CLERK_ID: _TOKEN, _OTHER_CLERK_ID: _OTHER_TOKEN})
+    as_the_other_clerk = {"X-Fleet-Clerk-Id": _OTHER_CLERK_ID, "X-Fleet-Agent-Token": _OTHER_TOKEN}
+
+    in_this_clerks_name = await _post(_ask(clerk_id=_CLERK_ID), as_the_other_clerk, app=app)
+    in_its_own_name = await _post(_ask(clerk_id=_OTHER_CLERK_ID), as_the_other_clerk, app=app)
+
+    assert (in_this_clerks_name.status_code, in_this_clerks_name.json()["reason"]) == (403, FleetAgentTokenRefused.reason)
+    assert in_its_own_name.status_code == 200
+    assert vendors.asked == 2
 
 
 async def test_a_clerk_the_coordinator_holds_no_token_for_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
