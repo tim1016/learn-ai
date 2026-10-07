@@ -152,6 +152,16 @@ def test_a_bid_of_zero_is_a_market() -> None:
     assert natural_net_price(_sold_call_spread(), quotes) == Decimal("-5.15")
 
 
+def test_a_round_trip_cost_is_refused_only_when_the_whole_gap_is_not_whole_cents() -> None:
+    """On a one-share contract a half-cent bid and a cent-and-a-half ask are a one-cent gap."""
+    one_share = EntrySize(multiplier=1, units=3)
+    half_cents = _SOLD_FOR_3_07 | {"sold": LegQuote(Decimal("0.005"), Decimal("0.015"))}
+
+    assert round_trip_cost(_sold_call_spread(), half_cents, one_share) == 3 * (1 + 4)
+    with pytest.raises(ValueError, match="whole number of cents"):
+        round_trip_cost(_sold_call_spread(), half_cents | {"bought": LegQuote(Decimal("2.09"), Decimal("2.135"))}, one_share)
+
+
 def test_a_net_price_is_exact_whatever_decimal_context_the_caller_is_in() -> None:
     """A quote one part in 10^31 too fine is kept, not rounded to a tidy price, so the entry is refused;
     and a caller working at three digits still gets every digit of an ordinary net price."""
@@ -241,6 +251,11 @@ def test_a_cost_is_not_judged_against_figures_that_cannot_be_an_entrys(
             (_leg("a", "long", "call", "450"), _leg("a", "short", "call", "455")),
             "names each leg once",
             id="two legs under one id, whose prices could not be told apart",
+        ),
+        pytest.param(
+            (_leg("a", "long", "call", "450"), _leg("b", "long", "call", "450.000", ratio=2)),
+            "each contract in one leg",
+            id="two legs on one contract, which one order cannot carry",
         ),
         pytest.param(
             tuple(_leg(f"leg_{index}", "long", "call", str(440 + 5 * index)) for index in range(5)),

@@ -46,6 +46,10 @@ class ResolvedStructure(BaseModel):
         leg_ids = [leg.leg_id for leg in self.legs]
         if len(set(leg_ids)) != len(leg_ids):
             raise ValueError(f"a structure names each leg once; these repeat: {sorted(leg_ids)}")
+        symbols = [leg.contract.occ_symbol for leg in self.legs]
+        if len(set(symbols)) != len(symbols):
+            # Two legs on one contract are one leg at another ratio, or nothing; one order carries a contract once.
+            raise ValueError(f"a structure holds each contract in one leg; these repeat: {sorted(symbols)}")
         roots = sorted({leg.contract.root for leg in self.legs})
         if len(roots) != 1:
             # Its money is worked out against one underlying price.

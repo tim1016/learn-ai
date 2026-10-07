@@ -207,13 +207,12 @@ def natural_net_price(structure: ResolvedStructure, quotes: Mapping[str, LegQuot
 def round_trip_cost(structure: ResolvedStructure, quotes: Mapping[str, LegQuote], size: EntrySize) -> int:
     """What opening the entry and closing it at once would cost, in cents: every leg's bid-ask gap, by its ratio."""
     markets = _markets(structure, quotes)
-    total = 0
-    for leg in structure.legs:
-        quote = markets[leg.leg_id]
-        bid = _contract_cents(quote.bid, size, what=f"the bid of leg {leg.leg_id!r}")
-        ask = _contract_cents(quote.ask, size, what=f"the ask of leg {leg.leg_id!r}")
-        total += leg.ratio * (ask - bid)
-    return size.units * total
+    gap = exact_sum(
+        term
+        for leg in structure.legs
+        for term in ((leg.ratio, markets[leg.leg_id].ask), (-leg.ratio, markets[leg.leg_id].bid))
+    )
+    return size.units * _contract_cents(gap, size, what="one structure's bid-ask gap")
 
 
 def entry_money(

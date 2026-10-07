@@ -62,7 +62,7 @@ A per-leg limit on the bid-ask gap does not bound what a structure costs to trad
 
 ## Where it lives
 
-`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
+`PythonDataService/app/options/`: `contract.py` (decision 1), `structure.py` (a resolved structure: one underlying, each contract in one leg, as one order carries it), `requirement.py` (decisions 2 to 5), `exact.py` (the one exact decimal conversion they share). Golden fixture `OSM-001` pins the requirement, premium, commitment, loss estimate and round-trip cost against Alpaca's two documented examples and hand-derived cases, in exact cents.
 
 Nothing on the money path calls these yet.
 
