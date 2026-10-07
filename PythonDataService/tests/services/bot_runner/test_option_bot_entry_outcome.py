@@ -76,6 +76,7 @@ from app.services.market_liveness import QUOTE_MAX_AGE_MS
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils import timestamps
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.options import test_resolver as scenes
 
 from ._option_floor import (
     CALL_585,
@@ -1413,23 +1414,31 @@ class _NothingToStream:
 
 
 @pytest.mark.parametrize(
-    ("account_id", "authority_kind", "named"),
+    ("account_id", "authority_kind", "plan", "reason", "named"),
     [
-        pytest.param("LIVE-OPTIONS", "sqlite", "A Live account", id="a Live account"),
-        pytest.param("shadow:LIVE-OPTIONS", "shadow", "A Live Shadow", id="a Live Shadow"),
+        pytest.param(
+            "LIVE-OPTIONS", "sqlite", one_call, OptionEffectRefusal.ACCOUNT_NOT_OPEN, "A Live account",
+            id="a Live account, any option plan",
+        ),
+        pytest.param(
+            "shadow:LIVE-OPTIONS", "shadow", scenes._spread, OptionEffectRefusal.STRUCTURE_NOT_SUPPORTED,
+            "2 option legs", id="a Live Shadow, a plan of several legs",
+        ),
     ],
 )
 async def test_the_runner_raises_the_clerks_own_refusal_of_an_option_plan_before_anything_is_asked_for(
-    paper: PaperFloor, tmp_path: Path, account_id: str, authority_kind: Any, named: str
+    paper: PaperFloor, tmp_path: Path, account_id: str, authority_kind: Any, plan: Callable[[], Any],
+    reason: OptionEffectRefusal, named: str,
 ) -> None:
-    """Only a Dry Run and a Paper account take an option bot. The runner asks the account's Clerk, and its
-    refusal comes out by name before a stream is opened or a quote line asked for."""
+    """A Live account takes no option bot. A Live Shadow takes what a Dry Run takes, one bought option, and
+    no plan of several legs. The runner asks the account's Clerk, and its refusal comes out by name before
+    a stream is opened or a quote line asked for."""
     repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path / "live")
     clerk = SqliteAlpacaClerkFacade(
         repo=repo, read=paper.account, trade=paper.venue, account_mode="live", authority_kind=authority_kind,
         live_envelope=LiveEnvelopeGate(values=TEST_ENVELOPE_VALUES, custody_is_simulated=authority_kind == "shadow"),
     )
-    binding = replace_account(paper, account_id)
+    binding = paper_binding_for(plan()).model_copy(update={"sealed_account_id": account_id})
     ledger = SourceBarLedger(artifacts_root=tmp_path / "live-ledger", account_id=account_id)
     feed = _NothingToStream()
     set_alpaca_clerk(clerk)
@@ -1443,14 +1452,10 @@ async def test_the_runner_raises_the_clerks_own_refusal_of_an_option_plan_before
         ledger.close()
         repo.close()
 
-    assert refused.value.reason is OptionEffectRefusal.ACCOUNT_NOT_OPEN
+    assert refused.value.reason is reason
     assert named in refused.value.detail
     assert feed.symbols_asked_for == [] and paper.watch.requests() == ()
     assert paper.venue.option_submit_calls == []
-
-
-def replace_account(paper: PaperFloor, account_id: str) -> Any:
-    return paper_binding_for(one_call()).model_copy(update={"sealed_account_id": account_id})
 
 
 async def test_an_option_bot_on_paper_without_its_source_bar_ledger_does_not_start(paper: PaperFloor) -> None:

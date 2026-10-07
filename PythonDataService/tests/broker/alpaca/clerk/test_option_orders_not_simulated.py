@@ -1,9 +1,10 @@
-"""Who takes an option order: Alpaca does, a Dry Run's simulation takes one of a single leg, a shadow world none.
+"""Who takes an option order: Alpaca does, and a Dry Run's simulation and a shadow world each take one of a single leg.
 
 A caller that gates on capabilities is told so, and one that asks for what
 is not taken gets a refusal that can never be mistaken for an order of
 unknown outcome. How the simulation fills the single-leg order it does take
-is ``test_synthetic_broker_option_orders.py``.
+is ``test_synthetic_broker_option_orders.py``, and how a shadow order book
+does is ``test_shadow_option_orders.py``.
 """
 
 from __future__ import annotations
@@ -82,15 +83,15 @@ def test_the_simulation_says_it_takes_an_option_order_of_one_leg_and_none_of_sev
     assert SyntheticBroker(account_id="sim:options-1").capabilities() is SYNTHETIC_CAPABILITIES
 
 
-def test_a_shadow_world_says_it_takes_no_option_orders_though_its_live_broker_does(tmp_path: Path) -> None:
-    """Its trade port synthesizes stock fills only, so Alpaca's "yes" is not passed through as its own."""
+def test_a_shadow_world_says_it_takes_an_option_order_of_one_leg_and_none_of_several(tmp_path: Path) -> None:
+    """Its order book fills an order of one leg, so Alpaca's "yes" to several is not passed through as its own."""
     ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
 
     shadow = ports.read.capabilities()
 
-    assert (shadow.supports_option_orders, shadow.supports_multi_leg_option_orders) == (False, False)
+    assert (shadow.supports_option_orders, shadow.supports_multi_leg_option_orders) == (True, False)
     # Every other fact is still the live broker's own.
-    unchanged = {"supports_option_orders", "supports_multi_leg_option_orders"}
+    unchanged = {"supports_multi_leg_option_orders"}
     assert shadow.model_dump(exclude=unchanged) == ALPACA_LIVE_CAPABILITIES.model_dump(exclude=unchanged)
 
 
@@ -125,27 +126,23 @@ async def test_the_simulation_refuses_an_option_order_definitively(
     assert broker.synthesized_fill_anchors() == {}
 
 
-@pytest.mark.parametrize("order", [_LONG_CALL, _CALL_SPREAD], ids=["one leg", "several legs"])
-async def test_a_shadow_order_book_refuses_an_option_order_definitively(
-    tmp_path: Path, order: OptionOrderRequest
-) -> None:
+async def test_a_shadow_order_book_refuses_an_option_order_of_several_legs_definitively(tmp_path: Path) -> None:
     ports = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path)
 
-    with pytest.raises(BrokerOptionsNotSupported, match="takes no option orders") as refused:
-        await ports.trade.submit_option_order(order, client_order_id=_REF)
+    with pytest.raises(BrokerOptionsNotSupported, match="takes no option orders of several legs") as refused:
+        await ports.trade.submit_option_order(_CALL_SPREAD, client_order_id=_REF)
 
     assert not isinstance(refused.value, BrokerUnavailable)
+    assert refused.value.broker == "shadow"
     assert ports.book.orders() == []
 
 
-async def test_a_shadow_order_book_holds_no_option_order_to_look_up(tmp_path: Path) -> None:
-    """ "Absent" would be an answer about an order; a shadow world never held one to answer about."""
+async def test_a_shadow_order_book_answers_that_it_holds_no_such_option_order(tmp_path: Path) -> None:
+    """It can hold option orders now, so "none by that id" is an answer it can give."""
     shadow = compose_shadow_ports(live_read=_LiveRead(), live_account_id="9LIVE0001", artifacts_root=tmp_path).trade
 
-    with pytest.raises(BrokerOptionsNotSupported, match="holds no option orders"):
-        await shadow.get_option_order_by_client_order_id(_REF)
-    with pytest.raises(BrokerOptionsNotSupported, match="holds no option orders"):
-        await shadow.get_option_order_by_broker_order_id("83f37e9f-6b1f-49ed-8fc6-3e6af716323f")
+    assert await shadow.get_option_order_by_client_order_id(_REF) is None
+    assert await shadow.get_option_order_by_broker_order_id("83f37e9f-6b1f-49ed-8fc6-3e6af716323f") is None
 
 
 async def test_the_simulation_answers_that_it_holds_no_such_option_order(tmp_path: Path) -> None:

@@ -226,11 +226,12 @@ def _option_close_not_taken_next_step(repo: ClerkSqliteRepository) -> str:
 
     Never "flatten with a priced limit": an option position is closed by a
     market order in the regular session, and takes no limit. A Dry Run's
-    close is priced from a quote kept for the contract, so its Flatten
-    waits for one with something bid. A real account's close is a market
-    order the broker fills, and waits for no quote of ours.
+    close and a Live Shadow's are priced from a quote kept for the
+    contract, so their Flatten waits for one with something bid. A real
+    account's close is a market order the broker fills, and waits for no
+    quote of ours.
     """
-    if repo.account_id.startswith("sim:"):
+    if repo.account_id.startswith(("sim:", "shadow:")):
         return (
             f"{_OPTION_CLOSE_RETRIED} Or flatten it yourself once a quote of the contract with something bid "
             "has been kept."

@@ -167,9 +167,10 @@ class RecoveryPolicyContext:
     # This bot's closing orders whose outcome is unknown and that an operator
     # may settle (#2854); empty for an account-scoped context.
     unknown_exit_orders: tuple[ProjectedUnknownExitOrder, ...] = ()
-    # A Dry Run's positions in option contracts that nothing kept can price a
-    # close of now, each as its contract and the side that closes it
-    # (ADR 0076). Empty on every other account, which keeps no option quotes.
+    # A Dry Run's or a Live Shadow's positions in option contracts that nothing
+    # kept can price a close of now, each as its contract and the side that
+    # closes it (ADR 0076). Empty on every other account, which keeps no
+    # option quotes.
     unpriced_option_closes: tuple[tuple[str, str], ...] = ()
 
 
@@ -1098,7 +1099,8 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     0076): its simulation is the account's broker and holds the contract
     too, so the executor would refuse. Nothing can be done about that
     position until a simulation settles an expired contract, and the step
-    says so.
+    says so. A Live Shadow is the same: its order book is what holds the
+    contract.
     """
     positions = _relevant_positions(ctx)
     relevant = _relevant_uncertainties(ctx)
@@ -1117,13 +1119,18 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     reason_code: str | None = None
     reason: str | None = None
     next_step = "Confirm at the broker that the symbol is flat, then discharge the residue."
-    # A Dry Run's expired option contract (ADR 0076). The simulation is the
-    # account's broker and holds the contract too, so there is no residue,
-    # whatever a reconciliation has or has not yet seen: asked before
-    # everything else, so the write-off is never offered and then refused.
+    # A Dry Run's expired option contract, or a Live Shadow's (ADR 0076). The
+    # simulation is the account's broker and holds the contract too, so there
+    # is no residue, whatever a reconciliation has or has not yet seen: asked
+    # before everything else, so the write-off is never offered and then refused.
+    held_by = (
+        "Dry Run's simulation" if is_synthetic_account_id(ctx.account_id)
+        else "Live Shadow's order book" if is_shadow_account_id(ctx.account_id)
+        else None
+    )
     simulated_expired = (
         expired_option_close(positions[0].symbol, ctx.now_ms)
-        if len(positions) == 1 and is_synthetic_account_id(ctx.account_id)
+        if len(positions) == 1 and held_by is not None
         else None
     )
     if ctx.strategy_instance_id is None or len(positions) != 1:
@@ -1133,7 +1140,7 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif simulated_expired is not None:
         reason_code = "BROKER_AGREES_WITH_CUSTODY"
         reason = (
-            f"{positions[0].symbol.upper()} has expired, and this Dry Run's simulation, which is the account's "
+            f"{positions[0].symbol.upper()} has expired, and this {held_by}, which is the account's "
             "broker, still holds it. A write-off removes only what the broker does not hold."
         )
         next_step = simulated_expired.next_step

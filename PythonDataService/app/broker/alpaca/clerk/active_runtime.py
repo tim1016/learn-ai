@@ -214,13 +214,13 @@ class ActiveClerkRuntime:
     envelope_sync: LiveEnvelopeSync | None = None
     fee_sync: FeeEvidenceSync | None = None
     # ADR 0076: cancels what has not filled of a resting option entry when its
-    # wait runs out. ``None`` where no option entry can rest: a Live Shadow's
-    # and a Live authority, which take no option plan yet.
+    # wait runs out, and takes an option position's scheduled close on time.
+    # ``None`` on a Live authority, which takes no option plan yet.
     deadline_keeper: BackgroundSweep | None = None
     evidence_sink: TradeUpdateEvidenceSink | None = None
     startup_failure: ClerkStartupFailure | None = None
-    # A Dry Run's books, followed for the option contracts its bots hold (ADR 0076). None for an
-    # authority whose held contracts nobody keeps quotes for.
+    # A Dry Run's or a Live Shadow's books, followed for the option contracts its bots hold (ADR 0076).
+    # None for an authority whose held contracts nobody keeps quotes for.
     option_books: FollowedBooks | None = None
     _sqlite_repository: ClerkSqliteRepository | None = None
     account_id: str | None = None
@@ -288,8 +288,8 @@ class ActiveClerkRuntime:
         if isinstance(self.clerk, SqliteAlpacaClerkFacade):
             await self.clerk.drain_effects()
         if self.option_books is not None:
-            # After the last effect has finished and before the books close: what a Dry Run holds
-            # now is what the process goes on keeping quotes for.
+            # After the last effect has finished and before the books close: what a simulated
+            # account holds now is what the process goes on keeping quotes for.
             self.option_books.close()
             self.option_books = None
         if self._sqlite_repository is not None:
@@ -310,7 +310,7 @@ class ActiveClerkRuntime:
 
         Only a real account's Clerk makes the round. A simulation fills at
         once and rests nothing, so a Dry Run's keeper is only stopped, for a
-        read and for a run alike. A Live Shadow has no keeper. The sweep is
+        read and for a run alike, and so is a Live Shadow's. The sweep is
         stopped after this: its heartbeat keeps the lease the round writes
         under.
         """
@@ -464,12 +464,14 @@ async def compose_repository_runtime(
                     if repository.account_id.startswith(("sim:", "shadow:")) else None),
             )
         )
-        # ADR 0076: only a Paper account's Clerk rests an option entry at the
-        # broker, so only it keeps the deadline. A Live Shadow's and a Live
-        # Clerk take no option plan, and gain no new task until they do. The
-        # keeper's nudge is made first: the facade is built with it, and the
-        # keeper with the facade's pricing.
-        keeper_nudge = Nudge() if authority_kind == "sqlite" and account_mode == "paper" else None
+        # ADR 0076: an account that takes an option plan has a keeper. A Paper
+        # account's Clerk rests an option entry at the broker and keeps its
+        # deadline. A Live Shadow's rests none, and its keeper takes an option
+        # position's scheduled close on time, where the pass alone could be
+        # minutes late (decision 25). A Live Clerk takes no option plan, and
+        # gains no new task until it does. The keeper's nudge is made first:
+        # the facade is built with it, and the keeper with the facade's pricing.
+        keeper_nudge = Nudge() if authority_kind == "shadow" or account_mode == "paper" else None
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
             read=guarded_read,

@@ -1,8 +1,9 @@
 """Which account authorities get a deadline keeper (#2913).
 
 A Paper account's Clerk rests an option entry at Alpaca, so it keeps the
-entry's deadline. A Live Shadow's and a Live Clerk take no option plan yet,
-and gain no new background task until they do.
+entry's deadline. A Live Shadow's takes an option plan and rests nothing:
+its keeper takes a scheduled close on time. A Live Clerk takes no option
+plan yet, and gains no new background task until it does.
 """
 
 from __future__ import annotations
@@ -18,9 +19,11 @@ from app.broker.alpaca.clerk.active_authority import (
     select_synthetic_clerk_runtime,
 )
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
+from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
+from tests.broker.alpaca.clerk.live_envelope_fixtures import SHADOW_ACCT
 from tests.broker.alpaca.clerk.test_active_authority import _activation, _ActivationStore, _Broker
 from tests.broker.alpaca.clerk.test_live_authority_runtime import (
     _RecordingLiveBroker,
@@ -65,13 +68,41 @@ async def test_a_live_accounts_clerk_gets_no_keeper(
     assert runtime.deadline_keeper is None and runtime.clerk._entry_deadline_nudge is None
 
 
-async def test_a_live_shadows_clerk_gets_no_keeper(
+async def test_a_live_shadows_clerk_is_composed_with_a_keeper_that_is_started_with_its_other_taps(
     shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811
 ) -> None:
+    """A Shadow holds option contracts now. The close one owes on its expiry day is taken on time by a task
+    of the Clerk's own, with the Clerk's own lock and pricing, as on a Paper account."""
     runtime, _broker = shadow_runtime
 
     assert runtime.authority_kind == "shadow"
-    assert runtime.deadline_keeper is None and runtime.clerk._entry_deadline_nudge is None
+    keeper = runtime.deadline_keeper
+    assert isinstance(keeper, DeadlineKeeper)
+    assert runtime.clerk._entry_deadline_nudge is keeper._nudge
+    assert keeper._trade is runtime.clerk._trade and keeper._task is None
+    assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
+
+    runtime.start_background_taps()
+
+    assert keeper._task is not None and not keeper._task.done()
+
+
+async def test_a_live_shadows_books_are_followed_for_the_option_contracts_its_bots_hold(
+    shadow_runtime: tuple[ActiveClerkRuntime, _LiveBroker],  # noqa: F811
+) -> None:
+    """A held contract keeps its quote line and its mark with no runner alive, on a Shadow as in a Dry Run:
+    the Clerk's keeping reads the Shadow's books, and stops as the Shadow's runtime closes."""
+    runtime, _broker = shadow_runtime
+    followed = get_held_option_quotes()._accounts[SHADOW_ACCT]
+
+    assert runtime.option_books is not None
+    assert followed.books is not None and followed.kept.path.parent.name == SHADOW_ACCT
+    # Its own runs name none: a line asked for by the keeping is not asked for twice.
+    assert runtime.clerk.option_contracts_to_watch() == ()
+
+    await runtime.close()
+
+    assert followed.books is None and runtime.option_books is None
 
 
 @pytest.mark.parametrize("opening", [SyntheticOpening.READ_ONLY, SyntheticOpening.PROJECT])

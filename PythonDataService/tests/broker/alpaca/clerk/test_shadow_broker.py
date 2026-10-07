@@ -349,10 +349,8 @@ async def test_read_port_serves_live_account_truth_and_synthesized_custody(world
     ports, _bars, _live, _clock = world
     assert (await ports.read.get_account()).account_mode == "live"
     assert (await ports.read.get_clock_evidence()).vendor_timestamp_ms == 7
-    # The live broker's own descriptor, less the option orders the shadow book does not take (#2913).
-    assert ports.read.capabilities() == ALPACA_LIVE_CAPABILITIES.revised(
-        supports_option_orders=False, supports_multi_leg_option_orders=False
-    )
+    # The live broker's own descriptor, less the option orders of several legs the shadow book does not take (#2913).
+    assert ports.read.capabilities() == ALPACA_LIVE_CAPABILITIES.revised(supports_multi_leg_option_orders=False)
     assert await ports.read.list_positions() == []
     assert await ports.read.list_orders() == []
     assert ports.account_id == "shadow:9LIVE0001"
