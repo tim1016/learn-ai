@@ -23,6 +23,7 @@ _PERCENT = Bounds(Decimal(0), False, Decimal(100), True, Decimal("0.000001"))
         pytest.param("7.50", None, id="trailing zeros are not finer digits"),
         pytest.param("0", "below", id="the bottom, which is not taken"),
         pytest.param("-0", "below", id="nothing, signed"),
+        pytest.param("0E-30", "below", id="nothing, written to thirty places: still nothing, and not too fine"),
         pytest.param("-1", "below", id="under the bottom"),
         pytest.param("100.000001", "above", id="a step over the top"),
         pytest.param("1e999999999", "above", id="a number too large to write out"),
@@ -39,8 +40,8 @@ def test_a_number_is_inside_a_range_or_outside_it_one_way(number: str, fault: st
 def test_a_range_with_no_bound_on_a_side_refuses_nothing_there_and_a_whole_number_range_refuses_a_part() -> None:
     whole, any_number = Bounds(step=Decimal(1)), Bounds(Decimal(0), True)
 
-    assert [whole.fault(Decimal(number)) for number in ("-1000000000000", "0", "7", "2.5", "1e30")] == [
-        None, None, None, "finer", None,
+    assert [whole.fault(Decimal(number)) for number in ("-1000000000000", "0", "0.000", "7", "2.5", "1e30")] == [
+        None, None, None, None, "finer", None,
     ]
     assert [any_number.fault(Decimal(number)) for number in ("0", "0.0000000001", "1e30", "-0.1")] == [None, None, None, "below"]
 

@@ -51,7 +51,8 @@ class Bounds:
             return "below"
         if self.highest is not None and (value > self.highest or (value == self.highest and not self.highest_included)):
             return "above"
-        if self.step is not None and value and value.normalize().as_tuple().exponent < self.step.normalize().as_tuple().exponent:
+        # Nothing, however it was written, is a whole number of every step: its digits come to none.
+        if self.step is not None and value.normalize().as_tuple().exponent < self.step.normalize().as_tuple().exponent:
             return "finer"
         return None
 
