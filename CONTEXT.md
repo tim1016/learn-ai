@@ -1668,7 +1668,7 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Whole read (of option events)** — a read that reached the start of its window, with no unreadable activity and none the broker does not report as executed. Only a whole read's silence means nothing happened.
 - **Activity date** — the date an activity carries, held as 00:00 New York time on it. No time of day is known.
 - **Option entry evidence** — what a runner hands the Clerk with an option ENTER: for each leg the contract picked, its listed multiplier and the quote read just before; the quotes' generation; the bot's two limits. Facts, never a price or a commitment.
-- **Leg gap limit** — the widest bid-ask gap the owner allows any one leg at an entry, as a percent of that leg's mid. Starts at 8.
+- **Leg gap limit** — the widest bid-ask gap the owner allows any one leg at an entry, as a percent of that leg's mid. Starts at 8. An entry is refused by the first leg over it; a preview names every such leg.
 - **Order line** — an option order as the books write it beside a stock leg: the contract's symbol, the side, contracts, the limit a share. The exact order is kept with it.
 - **Quotes kept** — the option quotes a Dry Run's Clerk was handed, kept so a later close or mark can be priced from them. Cut back as they grow to what a later reader can still ask for.
 - **Hand-over** — the runner passing the Clerk the newest quote it holds for a contract. It says "this is still the newest", which a quiet contract's old receipt time cannot.
@@ -1677,7 +1677,7 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
   _Avoid_: expiry (that names the date), close deadline (when the bot closes, earlier).
 - **Expired contract (held)** — a position in a contract past its last session. No order can close it. It stays on the books under a notice until expired contracts are settled, which is not built.
 - **Entry wait** — how long a resting entry waits for its fill before it is cancelled. Starts at 20 seconds.
-- **Preview (option structure)** — what a structure's rules would pick right now from the quotes a Clerk holds, with its money and what it leans. It needs no bot and changes nothing, and the bot picks again at every entry.
+- **Preview (option structure)** — what a structure's rules would pick right now from the quotes a Clerk holds, with its money, what it leans and what a day takes from it. It needs no bot and changes nothing, and the bot picks again at every entry. Its figures are a reading of one moment and are good for a minute.
   _Avoid_: quote (that is a bid and an ask), simulation, estimate of the fill.
 - **Quote-line lease** — how a page holds quote lines: for a minute, renewed by each ask. A bot's request stands until the bot takes it away.
 - **The money (in a preview)** — the underlying's live mid quote. A bot's is the close of the bar it decided on.
@@ -1686,6 +1686,12 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Break-even (at expiry)** — an underlying price at which a structure held to expiry neither gains nor loses, before fees. An estimate under the same assumptions.
 - **Lean** — which way a structure gains for a small move of the underlying now, and the shares of the underlying it moves like: its net delta times the contract multiplier. Up, down, or about flat (a net delta under 0.05).
   _Avoid_: direction of the trade, bullish or bearish (the signal stays ENTER and EXIT), exposure.
+- **Daily decay (of a structure)** — what the next 24 hours take from a structure by this system's own model, with the underlying's price, each leg's volatility and the rate held: each leg's own decay, signed by its side, summed. Per 24 hours by the clock, so a weekend is three of them. "Not estimated" when any leg has no figure; never a part-sum, never a zero.
+  _Avoid_: theta (a yearly rate), time value (what a price holds, not what a day takes).
+- **Entry refusal (in a preview)** — one reason an entry on the previewed picks and quotes would be refused, from the function an entry itself is prepared by: picks that are not the structure built, a leg over the gap limit, money that cannot be set aside, a cost over its limit. A gap or a cost over its limit is flagged and is not a red verdict.
+- **Leg number** — a leg's place in a structure as the builder lists it, counted from one. Every sentence the server writes names a leg by it ("leg 2"); typed fields keep the leg's id.
+  _Avoid_: naming a leg by its id in words an owner reads.
+- **Bounds (of a number an owner types)** — the lowest and highest a number may be, whether each end is taken, and the finest step. Read from where the number is validated and served with the catalogue; a number outside them is refused in words.
 - **Search (for option contracts)** — one run of the resolver: a plan's rules against the quotes held, to one contract for every leg or one refusal. It runs in a worker process, never in the Clerk's own.
   _Avoid_: lookup (that is the rate and the dividends), scan.
 - **Search lane** — where the searches of one kind run, one at a time, in a worker process of their own. There are two: one for bots' entries, which nothing uses yet, and one for pages' previews. A lane has one worker process at most, and ends it when it does not come up or does not answer in time.
@@ -1693,7 +1699,7 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Search not run** — a search that gave no answer because its worker could not be started, did not come up in time, died, or did not answer in time; or because the search itself failed. Not a refusal of the plan, and never a guess. For a page it also covers a search still running: a search too slow to wait for is never shown later, and the page's next ask searches again.
 - **Pricing inputs** — the rate and the cash dividends the option model is given, each with its source. Dividends that could not be looked up are unknown, never none. A process with its own Polygon and FRED keys reads them there; a fleet Clerk asks the coordinator.
 - **Declared dividend** — a cash dividend a company has announced, with its ex-date. Only a declared dividend can be known; none declared is not none paid.
-- **Option order terms** — the four settings an owner is to fix for an option bot at Deploy: the widest bid-ask gap each leg may have, how long an entry waits for its fill, the structure cost limit, and how long before the close an expiring position is closed. The builder is given the default each starts from; nothing holds a bot to them yet.
+- **Option order terms** — the four settings an owner is to fix for an option bot at Deploy: the widest bid-ask gap each leg may have, how long an entry waits for its fill, the structure cost limit, and how long before the close an expiring position is closed. The builder is given what each starts from and what each may be. A preview is held to them as asked; no deployed bot carries its own yet.
 
 ## Market-data readiness (resolved 2026-09-22)
 

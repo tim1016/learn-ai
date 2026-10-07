@@ -27,7 +27,9 @@ Reference: ADR 0076 decisions 2, 5 and 7; the leg gap limit is #2913's
 Canonical implementation: ``app/options/requirement.py`` and
   ``app/options/structure_check.py`` for everything but the leg gap, which is
   this file's.
-Validated against: tests/options/test_entry.py.
+Validated against: tests/options/test_entry.py, and
+  tests/options/test_preview_and_entry_agree.py for an entry and a preview
+  never disagreeing over the same picks and quotes.
 
 A leg can pass its own gap limit and the structure still cost most of itself
 to trade, which is why both limits are asked: two legs with mids of $5.00 and
