@@ -40,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     FAILED_ENTER_FILLED_REASON_CODE,
     HOLD_REASON_CODES,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
@@ -1006,6 +1007,9 @@ _REDUCTION_PROOFS: dict[str, ReductionProof] = {
     EXECUTION_PRICE_CONFLICT_REASON_CODE: _no_per_symbol_proof,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: _no_per_symbol_proof,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE: _no_per_symbol_proof,
+    # ADR 0076 decision 26: the notice is about what an entry cost, never about what
+    # the bot holds, so a reduction has nothing per-symbol to prove.
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE: _no_per_symbol_proof,
 }
 
 

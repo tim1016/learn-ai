@@ -103,6 +103,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Entry settled",
         "The Clerk recorded whether the strategy counts itself in after this option entry.",
     ),
+    "ENTRY_BUYING_POWER_COMPARED": (
+        "Entry compared with Alpaca",
+        "The Clerk recorded how Alpaca's option buying power moved across this entry, beside what the bot set aside.",
+    ),
     "ORDER_CANCEL_REQUESTED": (
         "Order cancellation requested",
         "The Account Clerk recorded the exact cancellation target before broker contact.",

@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AttributedResidueDischargedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
+    EntryBuyingPowerComparedFacts,
     EntrySettledFacts,
     ExecutionCoverageQuarantinedFacts,
     ExecutionCoverageResolvedFacts,
@@ -1653,6 +1654,17 @@ def _fold_entry_settled(_conn: sqlite3.Connection, payload: dict[str, Any]) -> N
 
 
 DEFAULT_FOLD_REGISTRY.register("ENTRY_SETTLED", _fold_entry_settled)
+
+
+def _fold_entry_buying_power_compared(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Audit-only: what an option entry's comparison with the broker's option buying power came to (ADR 0076).
+
+    It moves no order, no effect and no money. A notice it leads to is its own record.
+    """
+    EntryBuyingPowerComparedFacts.from_facts_json(payload["facts_json"])
+
+
+DEFAULT_FOLD_REGISTRY.register("ENTRY_BUYING_POWER_COMPARED", _fold_entry_buying_power_compared)
 
 
 def _fold_order_outcome_attested(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

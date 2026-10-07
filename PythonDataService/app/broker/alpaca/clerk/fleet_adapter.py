@@ -761,6 +761,32 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "{external_order_id}/acknowledge"
             ),
         ),
+        # ADR 0076 decision 26: each option entry of a bot beside Alpaca's option
+        # buying power, and the owner's review of the notice an under-reserved
+        # one raises. The review is the notice's only exit.
+        _op(
+            "custody_option_buying_power_checks",
+            "GET",
+            "/accounts/{account_id}/custody/bots/{sid}/option-buying-power-checks",
+            capability=Capability.CUSTODY_READ,
+            account=True,
+            agent_path=(
+                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
+                "option-buying-power-checks"
+            ),
+        ),
+        _op(
+            "custody_option_buying_power_hold_review",
+            "POST",
+            "/accounts/{account_id}/custody/bots/{sid}/option-buying-power-hold/review",
+            capability=Capability.CUSTODY_COMMAND,
+            idempotency=_DURABLE,
+            account=True,
+            agent_path=(
+                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
+                "option-buying-power-hold/review"
+            ),
+        ),
         # ── Manual orders family ──────────────────────────────────────────
         _op(
             "manual_orders_capability",

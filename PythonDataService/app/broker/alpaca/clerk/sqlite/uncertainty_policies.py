@@ -27,12 +27,14 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
     FAILED_ENTER_FILLED_REASON_CODE,
     LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
     RECONCILIATION_INCOMPLETE_REASON_CODE,
     STREAM_HEALTH_HOLD_REASON_CODE,
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
     UNFOLDABLE_BROKER_ORDER_REASON_CODE,
+    BuyingPowerUnderReservedCause,
     ExecutionCoverageConflictCause,
     ExecutionPriceConflictCause,
     ExitNotFlatCause,
@@ -182,6 +184,14 @@ def _failed_enter_filled_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _buying_power_under_reserved_cause_is_valid(value: Any) -> bool:
+    try:
+        BuyingPowerUnderReservedCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
     try:
         ExecutionCoverageConflictCause.from_mapping(value)
@@ -314,6 +324,24 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # through ``reconcile_now`` -- a quiesce action a draining lane still
         # routes (#2351). A flat broker with no open orders is a clean verdict.
         blocks_lane_quiet=True,
+    ),
+    # ADR 0076 decision 26: across one option entry the broker's option buying
+    # power fell by more than the bot had set aside, between two readings that
+    # nothing else on the account explains. That bot opens nothing new until
+    # the owner has reviewed it (``entry_buying_power.review_under_reserved_hold``);
+    # nothing else ends it, and never a clock. It says nothing about what the
+    # bot holds, so its exits, a Flatten and a residue discharge all go on.
+    OPTION_BUYING_POWER_UNDER_RESERVED_REASON_CODE: ReasonPolicy(
+        scope="CUSTODY_SUBJECT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        admits_safe_flatten=True,
+        cause_is_valid=_buying_power_under_reserved_cause_is_valid,
+        age=CauseCleared(),
+        # Does not block lane quiet: it doubts no held quantity, and its only
+        # exit is the owner's review, so blocking would wedge a flat lane.
+        blocks_lane_quiet=False,
+        residue_discharge="admits",
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
