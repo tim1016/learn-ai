@@ -37,6 +37,15 @@ more can be written, so it ends the round too.
 own pricing, and the facade is built with the keeper's nudge. So the nudge
 is made first (:class:`Nudge`), the facade with it, and the keeper last.
 
+**One thing the round starts and does not wait for:** the read of what ended
+an option position with no order of ours (``option_events``, ADR 0076
+decision 22). It walks the account's activities at the broker, which can
+take seconds, and neither a resting entry's cancel nor a scheduled close
+may wait behind it. So the round starts it once both steps have had their
+turn, when none is running, and goes on. It keeps its own cadence,
+and between reads it touches nothing. It keeps no list either: a read that
+is lost with the task is made again by the next one, and by the pass.
+
 **One round reads each worklist once.** What is due, and when to wake, both
 come from that one read.
 
@@ -65,7 +74,8 @@ cancel it at its deadline. It is the same step, handed the whole worklist.
 It has a few seconds and no more, so a broker that does not answer cannot
 hold the process's shutdown. What is not proven by then is left as any
 unproven cancel is left, and the next start finishes it. No other step of
-a round runs in it: a closing Clerk sends no new order.
+a round runs in it, and no read of option events is started: a closing
+Clerk sends no new order.
 
 The keeper evaluates no reason's age policy, and no reason gains a clock
 from it.
@@ -81,8 +91,10 @@ from dataclasses import dataclass, field
 
 from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.simulated_option_settlement import option_settlement_simulation
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, to_thread
+from app.broker.alpaca.clerk.sqlite.option_events import OptionEventPoll, poll_option_events
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.resting_entries import (
     RestingEntry,
@@ -93,7 +105,7 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
     resting_entries,
 )
 from app.broker.alpaca.clerk.sqlite.scheduled_close import ScheduledCloseRound, drive_scheduled_closes
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +175,7 @@ class DeadlineKeeper:
         trade: BrokerTradePort,
         intake: ReentrantAsyncLock,
         pricing: RecoveryPricing,
+        read: BrokerReadPort | None = None,
         nudge: Nudge | None = None,
         rest: Rest = rest_until_nudged,
         off_loop: OffLoop = to_thread,
@@ -170,6 +183,7 @@ class DeadlineKeeper:
     ) -> None:
         self._repo = repo
         self._trade = trade
+        self._read = read
         # The lock a scheduled close is accepted under and the pricing it is driven with: the
         # facade's own (ADR 0076). A close is an EXIT like any other.
         self._intake = intake
@@ -182,6 +196,8 @@ class DeadlineKeeper:
         self._task: asyncio.Task[None] | None = None
         # When each due entry was last asked about, on the Clerk's clock. A pause, not a worklist.
         self._asked_at_ms: dict[str, int] = {}
+        # The read of option events the last round started, while it runs.
+        self._option_events: asyncio.Task[OptionEventPoll | None] | None = None
 
     def nudge(self) -> None:
         """End the keeper's sleep: a deadline may have been stored that is sooner than it knew."""
@@ -194,6 +210,8 @@ class DeadlineKeeper:
             "resting_entries", self._cancel_entries_past_their_wait, ([], WaitEndedRound()), failed
         )
         closes = await self._step("scheduled_closes", self._take_scheduled_closes, ScheduledCloseRound(), failed)
+        # Started once both steps have had their turn, and never waited for: a deadline comes first.
+        self._start_reading_option_events()
         wake_in_ms = min(self._wake_in_ms(resting, ended=entries.ended), self._wake_for_closes(closes))
         return KeeperRound(entries=entries, wake_in_ms=wake_in_ms, closes=closes, failed=tuple(failed))
 
@@ -255,6 +273,35 @@ class DeadlineKeeper:
             return IDLE_WAKE_MS
         return min(IDLE_WAKE_MS, max(closes.next_change_ms - self._repo.clock(), 0))
 
+    def _start_reading_option_events(self) -> None:
+        """Start the read of option events when none is running. Never waited for: a deadline comes first."""
+        if self._read is None or (self._option_events is not None and not self._option_events.done()):
+            return
+        self._option_events = asyncio.create_task(
+            self._read_option_events(self._read), name="alpaca-sqlite-option-events"
+        )
+
+    async def _read_option_events(self, read: BrokerReadPort) -> OptionEventPoll | None:
+        try:
+            return await poll_option_events(
+                self._repo, read=read, simulation=option_settlement_simulation(self._trade), off_loop=self._off_loop
+            )
+        except Exception:
+            # Its own failure, not the round's: the next read, and the pass, book what this one did not.
+            logger.exception(
+                "the keeper's read of option events failed",
+                extra={"action": "deadline_keeper_option_events_failed", "account_id": self._repo.account_id},
+            )
+            return None
+
+    async def option_events_read(self) -> OptionEventPoll | None:
+        """Wait for the read of option events the last round started, and say what it did.
+
+        For a caller that must see it finished. ``None`` when the keeper has
+        no read port, when no round has run, or when the read failed.
+        """
+        return None if self._option_events is None else await self._option_events
+
     def _may_ask_again(self, entry: RestingEntry, now_ms: int) -> bool:
         """Whether a due entry's pause since it was last asked about is over."""
         asked_at_ms = self._asked_at_ms.get(entry.order.order_ref)
@@ -310,6 +357,11 @@ class DeadlineKeeper:
             self._task = asyncio.create_task(self.run(), name="alpaca-sqlite-deadline-keeper")
 
     async def stop(self) -> None:
+        reading, self._option_events = self._option_events, None
+        if reading is not None:
+            reading.cancel()
+            with suppress(asyncio.CancelledError):
+                await reading
         task, self._task = self._task, None
         if task is None:
             return

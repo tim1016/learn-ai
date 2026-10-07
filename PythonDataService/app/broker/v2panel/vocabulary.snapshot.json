@@ -32,6 +32,7 @@
     "cancel_verified_working_orders",
     "clean",
     "discharge_attributed_residue",
+    "end_expired_option",
     "execute_safe_flatten",
     "healthy",
     "missing_intent",
@@ -159,6 +160,10 @@
     "discharge_attributed_residue": {
       "label": "Discharge stranded residue",
       "explanation": "Write off an attributed position the broker does not hold. The Clerk re-reads the broker first and sends no order."
+    },
+    "end_expired_option": {
+      "label": "End the expired contract",
+      "explanation": "Count an expired option contract that nothing will settle as worth nothing, at your word. The Clerk looks once more for a settlement first and sends no order."
     },
     "execute_safe_flatten": {
       "label": "Execute safe flatten",

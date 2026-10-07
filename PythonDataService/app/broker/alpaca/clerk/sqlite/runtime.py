@@ -80,6 +80,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     recovery_reduction_shape,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.simulated_option_settlement import option_settlement_simulation
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
     guard_broker_ports,
@@ -184,6 +185,16 @@ from app.broker.alpaca.clerk.sqlite.option_entry import (
     option_entry_contracts,
     option_entry_of_order,
 )
+from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import (
+    HoldAcknowledgementReceipt,
+    HoldAcknowledgementRequest,
+)
+from app.broker.alpaca.clerk.sqlite.option_events import (
+    OwnerEndingReceipt,
+    acknowledge_option_event_hold_after_a_pass,
+    end_option_at_the_owners_word,
+)
+from app.broker.alpaca.clerk.sqlite.option_owner_ending import OwnerEndingRequest
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     is_working_order,
     trade_port_folds_simulated_evidence,
@@ -2955,6 +2966,51 @@ class SqliteAlpacaClerkFacade:
             strategy_instance_id=strategy_instance_id,
             symbol=symbol,
             operator_reason=reason,
+        )
+
+    async def end_expired_option(
+        self,
+        *,
+        strategy_instance_id: str,
+        symbol: str,
+        operator: str,
+        reason: str | None,
+    ) -> OwnerEndingReceipt:
+        """End one bot's expired option contract at the owner's word, after one look more (ADR 0076 decision 22).
+
+        The look is this Clerk's own poll of option events, made now on its
+        own ports: a Dry Run's simulation is asked for its price once more,
+        and a real account's option events and positions are read. A
+        settlement that has come is booked in the ending's place.
+        """
+        return await end_option_at_the_owners_word(
+            self._repo,
+            read=self._read,
+            simulation=option_settlement_simulation(self._trade),
+            off_loop=self._intake.off_loop,
+            request=OwnerEndingRequest(
+                strategy_instance_id=strategy_instance_id, symbol=symbol, operator=operator, reason=reason
+            ),
+        )
+
+    async def acknowledge_option_event_hold(
+        self, *, request: HoldAcknowledgementRequest, operator: str
+    ) -> HoldAcknowledgementReceipt:
+        """Acknowledge one option-event hold, on a reconciliation pass made now for it (ADR 0076 decision 22).
+
+        The pass is this Clerk's own, on its own ports. It reads and books
+        the account's option events as every pass does and compares the
+        account with the broker. The acknowledgement is refused, and
+        nothing written, unless that comparison shows the books agree with
+        the broker in everything the hold names
+        (``option_event_acknowledgement``).
+        """
+        return await acknowledge_option_event_hold_after_a_pass(
+            self._repo,
+            reconcile=lambda: self.reconcile_account(trigger="AUTOMATIC"),
+            off_loop=self._intake.off_loop,
+            request=request,
+            operator=operator,
         )
 
     async def settle_unknown_exit_order(

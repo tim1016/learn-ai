@@ -487,8 +487,8 @@ async def compose_repository_runtime(
         if keeper_nudge is not None:
             # A scheduled close is an EXIT, driven with the facade's one pricing seam (ADR 0076).
             deadline_keeper = DeadlineKeeper(
-                repo=repository, trade=guarded_trade, intake=intake, pricing=facade.recovery_pricing,
-                nudge=keeper_nudge,
+                repo=repository, trade=guarded_trade, read=guarded_read, intake=intake,
+                pricing=facade.recovery_pricing, nudge=keeper_nudge,
             )
         publish = facade.publish_sweep_reconciliation
         on_result: ReconciliationListener = (

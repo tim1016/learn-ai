@@ -990,11 +990,11 @@ async def test_the_simulation_itself_will_not_price_an_expired_contract_when_the
 
 
 async def test_what_the_owner_can_still_do_about_an_expired_contract_is_said_as_it_is(dry_run: _DryRun) -> None:  # noqa: F811
-    """The write-off is the owner's last resort for a position no order can close.
+    """An expired contract is never written off: that would leave what it cost on the books for good.
 
-    On a Dry Run it is refused: it writes off only what the broker does not
-    hold, and the simulation is this account's broker and holds the contract
-    too. So the notice does not send the owner to it, or to a flatten.
+    So the notice does not send the owner to a write-off, or to a flatten.
+    What is offered, once the simulation has said it has no price to settle
+    the contract from, is to end it at the owner's word.
     """
     await dry_run.enter(dry_run.evidence())
     _wait_until(dry_run, SATURDAY_NOON)
@@ -1006,10 +1006,11 @@ async def test_what_the_owner_can_still_do_about_an_expired_contract_is_said_as_
     write_off = await _offered(dry_run, "discharge_attributed_residue")
 
     assert not write_off.available
-    assert write_off.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
+    assert write_off.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_IS_NOT_WRITTEN_OFF"
     # Neither the notice nor the refused write-off sends the owner to a flatten, which is refused too.
     for words in (_notice_words(dry_run).lower(), write_off.next_step.lower()):
         assert "flatten" not in words and "discharg" not in words and "write" not in words
+    assert (await _offered(dry_run, "end_expired_option")).available
 
 
 # ── a stopped bot whose close failed before the contract expired ──────────
@@ -1058,7 +1059,7 @@ def _transitions(account: _DryRun, kind: str | None = None) -> int:
         ).fetchone()[0]
 
 
-async def _nothing_can_be_done_and_nothing_offered_says_otherwise(account: _DryRun) -> None:
+async def _no_order_can_be_sent_and_nothing_offered_says_otherwise(account: _DryRun) -> None:
     """The Flatten and the write-off are both not offered, each under its own true reason, with nothing pressed."""
     for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
         flatten = await _offered(account, action_id)
@@ -1066,7 +1067,7 @@ async def _nothing_can_be_done_and_nothing_offered_says_otherwise(account: _DryR
         assert flatten.unavailable_reason_code == "OPTION_CONTRACT_EXPIRED"
     write_off = await _offered(account, "discharge_attributed_residue")
     assert not write_off.available and not write_off.needed
-    assert write_off.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
+    assert write_off.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_IS_NOT_WRITTEN_OFF"
     _says_only_what_is_true_of_an_expired_contract(write_off.unavailable_reason or "", write_off.next_step)
 
 
@@ -1097,7 +1098,8 @@ async def test_a_stopped_bot_the_clerk_gave_up_closing_is_told_its_contract_expi
     expires. On Monday the owner opens the bot's page, having pressed
     nothing. Both notices say the contract expired. Neither sends the owner
     to a flatten or says the Clerk will try again. No Flatten and no
-    write-off is offered, and what is offered does not fail when pressed.
+    write-off is offered, and what is offered does not fail when pressed:
+    a check against the simulation, and the owner's ending of the contract.
     """
     await _stopped_on_thursday_with_nothing_bid(dry_run)
     await _passes(dry_run, 50)  # twelve and a half minutes of Thursday's session
@@ -1109,26 +1111,29 @@ async def test_a_stopped_bot_the_clerk_gave_up_closing_is_told_its_contract_expi
     await _passes(dry_run, 2)
 
     notices = await _page_notices(dry_run)
+    # The simulation kept no price of the underlying from the last session, so it settled nothing and says so.
     # The pass after the expiry also records the close the contract's last session ended on.
-    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK", "SCHEDULED_CLOSE_MISSED"}
+    assert set(notices) == {"EXIT_NOT_FLAT", "EXIT_STUCK", "OPTION_EXPIRED_NOT_SETTLED", "SCHEDULED_CLOSE_MISSED"}
     for notice in notices.values():
         _says_only_what_is_true_of_an_expired_contract(
             notice.headline, notice.explanation, notice.operator_impact, notice.next_step
         )
     status = notices["EXIT_NOT_FLAT"].recovery_status
     assert status is not None and (status.kind, status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
-    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
-    # The one thing the page offers that writes anything is Reconcile now. Pressed, it works, and
-    # the page reads the same after it.
+    await _no_order_can_be_sent_and_nothing_offered_says_otherwise(dry_run)
+    # Two things the page offers write anything. Reconcile now: pressed, it works, and the page reads
+    # the same after it. And the owner's ending of the contract, which the simulation has no price for.
     catalog = build_recovery_catalog(await _context(dry_run))
-    assert {item.action_id for item in catalog if item.available and item.mutation} == {"reconcile_now"}
+    assert {item.action_id for item in catalog if item.available and item.mutation} == {
+        "reconcile_now", "end_expired_option"
+    }
     assert (await _press(dry_run, "reconcile_now")).applied
-    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    await _no_order_can_be_sent_and_nothing_offered_says_otherwise(dry_run)
     # A write-off pressed from a page shown before the expiry is answered "not available", by
     # name and before anything is done. It is never taken up and then failed.
     with pytest.raises(RecoveryActionUnavailableError) as not_available:
         await _press(dry_run, "discharge_attributed_residue")
-    assert not_available.value.capability.unavailable_reason_code == "BROKER_AGREES_WITH_CUSTODY"
+    assert not_available.value.capability.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_IS_NOT_WRITTEN_OFF"
     await _expired_and_unsold(dry_run, fills=1)
 
 
@@ -1175,8 +1180,9 @@ async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_
     await _passes(dry_run, 2)
 
     notices = await _page_notices(dry_run)
+    # The simulation kept no price of the underlying from the last session, so it settled nothing and says so.
     # The pass after the expiry also records the close the contract's last session ended on.
-    assert set(notices) == {"EXIT_NOT_FLAT", "SCHEDULED_CLOSE_MISSED"}
+    assert set(notices) == {"EXIT_NOT_FLAT", "OPTION_EXPIRED_NOT_SETTLED", "SCHEDULED_CLOSE_MISSED"}
     for said in notices.values():
         _says_only_what_is_true_of_an_expired_contract(
             said.headline, said.explanation, said.operator_impact, said.next_step
@@ -1184,7 +1190,7 @@ async def test_a_close_still_being_retried_when_its_contract_expired_is_told_as_
     notice = notices["EXIT_NOT_FLAT"]
     assert notice.recovery_status is not None
     assert (notice.recovery_status.kind, notice.recovery_status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
-    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    await _no_order_can_be_sent_and_nothing_offered_says_otherwise(dry_run)
     await _expired_and_unsold(dry_run)
 
 
@@ -1219,7 +1225,7 @@ async def test_the_page_says_a_contract_expired_from_the_moment_it_did_without_w
         )
     status = notices["EXIT_NOT_FLAT"].recovery_status
     assert status is not None and (status.kind, status.reason_code) == ("on_hold", "OPTION_CONTRACT_EXPIRED")
-    await _nothing_can_be_done_and_nothing_offered_says_otherwise(dry_run)
+    await _no_order_can_be_sent_and_nothing_offered_says_otherwise(dry_run)
     assert _transitions(dry_run) == written, "reading the page wrote to the books"
 
 

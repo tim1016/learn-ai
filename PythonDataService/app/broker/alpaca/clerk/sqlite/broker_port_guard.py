@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from typing import Literal
 
+    from app.broker.alpaca.clerk.simulated_option_settlement import OwnersWord, SimulatedOptionSettlements
     from app.broker.alpaca.clerk.synthesized_orders import SynthesizedAnchor, SynthesizedOptionFill
     from app.options.quotes import HeldQuote
     from app.services.source_bar_ledger import RetainedSourceBar
@@ -316,6 +317,26 @@ class GuardedBrokerTradePort:
         if not callable(bind):
             return False
         return bool(bind(client_order_id, symbol=symbol, side=side, quotes=quotes, usable_generation=usable_generation))
+
+    def settle_expired_options(
+        self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None
+    ) -> SimulatedOptionSettlements | None:
+        """Have a simulation settle the contracts it holds past their last session (ADR 0076 decision 22).
+
+        None from a port that is no simulation: that account's broker ends
+        its positions and reports them through the read port. The step
+        writes the simulation's own order ledger, as a broker would act on
+        its own side, so it is refused under the intake fence like every
+        other call that acts there. ``at_the_owners_word`` is handed on as
+        it is: the owner's word to end a contract nothing will settle.
+        """
+        self._assert_unfenced("settle_expired_options")
+        settle = getattr(self._inner, "settle_expired_options", None)
+        if not callable(settle):
+            return None
+        if at_the_owners_word is None:
+            return settle(after_ms=after_ms)
+        return settle(after_ms=after_ms, at_the_owners_word=at_the_owners_word)
 
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id. Not fenced: a ledger read."""

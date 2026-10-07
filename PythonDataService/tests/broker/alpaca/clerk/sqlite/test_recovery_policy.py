@@ -89,6 +89,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
         "prepare_safe_flatten",
         "execute_safe_flatten",
         "discharge_attributed_residue",
+        "end_expired_option",
         "settle_unknown_exit_order",
         "stop_bot_decisions",
         "open_custody_timeline",
@@ -1623,3 +1624,58 @@ def test_the_settle_token_outlives_a_pass_and_not_a_send_made_again() -> None:
                 action_id="settle_unknown_exit_order",
                 concurrency_token=token,
             )
+
+
+# ── the owner's ending of an expired option contract (ADR 0076 decision 22) ──
+
+# One SPY call that expired on Friday 2023-11-03, held past that by a Dry Run's bot.
+_EXPIRED_CALL = "SPY231103C00430000"
+
+
+def _not_settled_hold(sid: str, *, contract: str = _EXPIRED_CALL) -> ProjectedUncertainty:
+    return ProjectedUncertainty(
+        uncertainty_id=f"option-events:{sid}:OPTION_EXPIRED_NOT_SETTLED",
+        scope="CUSTODY_SUBJECT",
+        severity="warning",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=sid,
+        reason_code="OPTION_EXPIRED_NOT_SETTLED",
+        headline="An expired contract was not settled",
+        explanation="The simulation kept no price of SPY from the contract's last session.",
+        operator_impact="New entries are paused for this bot.",
+        next_step="End the contract at your word.",
+        observed_at_ms=1_700_000_009_000,
+        evidence_age_ms=1_000,
+        evidence_refs=(f"contract:{contract}",),
+    )
+
+
+def _ending_offered_with(*holds: ProjectedUncertainty) -> RecoveryCapability:
+    context = _context(
+        account_id="sim:spy-bot",
+        positions=(
+            ProjectedPosition(
+                strategy_instance_id="spy-bot", symbol=_EXPIRED_CALL, attributed_qty=1.0,
+                updated_at_ms=1_700_000_008_000,
+            ),
+        ),
+        uncertainties=holds,
+    )
+    return next(action for action in build_recovery_catalog(context) if action.action_id == "end_expired_option")
+
+
+def test_an_ending_is_offered_on_this_bots_own_hold_that_names_the_contract_and_on_no_other_hold() -> None:
+    """The hold is the durable word that a whole look found no settlement of this bot's contract. Another
+    bot's hold says that of the other bot's position, and a hold naming another contract says it of that one."""
+    assert _ending_offered_with(_not_settled_hold("spy-bot")).available
+
+    for another in (
+        _not_settled_hold("another-bot"),
+        _not_settled_hold("spy-bot", contract="SPY231103P00430000"),
+    ):
+        ending = _ending_offered_with(another)
+
+        assert not ending.available and ending.needed
+        assert ending.unavailable_reason_code == "EXPIRED_OPTION_CONTRACT_MAY_STILL_BE_SETTLED"
