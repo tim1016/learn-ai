@@ -47,6 +47,7 @@ from app.broker.ibkr.bars import REALTIME_BAR_STALL_TIMEOUT_S
 from app.broker.ibkr.config import reset_settings_for_testing
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.services import bot_option_run, market_liveness
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
@@ -274,7 +275,8 @@ async def test_an_entry_that_fills_in_part_is_settled_as_entered_and_the_exit_se
     on_paper: Callable[..., PaperFloor],
 ) -> None:
     """Two contracts asked for. One fills, and the rest is cancelled at the deadline. The bot holds one, the
-    strategy is in, the held contract is asked for as a held quote line, and the exit sells one."""
+    strategy is in, the held contract is asked for as a held quote line, and the exit sells one. The run
+    reads what to ask for from the account's books, in one read."""
     paper = await on_paper(contracts=2).open()
     seen: dict[str, Any] = {}
 
@@ -678,12 +680,16 @@ async def test_a_dry_runs_entry_is_handed_the_bots_own_order_terms_too(
         pytest.param(session_close_ms_utc(FRIDAY), (), id="once its last session has closed"),
     ],
 )
-async def test_a_paper_run_asks_for_what_its_bot_holds_until_the_contracts_last_session_closes(
+async def test_a_paper_run_asks_for_a_held_contract_on_its_underlying_until_its_last_session_closes(
     paper: PaperFloor, asked_at: int, named: tuple[Any, ...]
 ) -> None:
-    """Nothing trades in a contract after its last session, so no quote line is spent on it."""
+    """The account's books name a SPY call and a QQQ call. The run of a bot on SPY asks for the SPY call as a
+    held line: the other is another underlying's. Nothing trades in a contract after its last session, so
+    no quote line is spent on it then."""
+    another_underlyings = OptionContract.of(root="QQQ", expiry_date=FRIDAY, right="call", strike=585).occ_symbol
     run = OptionRun(
-        paper.binding, paper.market(clock=lambda: asked_at), held_contracts=lambda: (CALL,), names_what_it_holds=True
+        paper.binding, paper.market(clock=lambda: asked_at), held_contracts=tuple,
+        contracts_to_watch=lambda: (CALL, another_underlyings),
     )
 
     async with run:

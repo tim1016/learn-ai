@@ -940,8 +940,8 @@ async def run_trade_bot(
     )
     # None for a bot that trades shares. An option bot's side of the run: what it asks to have quoted,
     # and what its decisions are handed to the Clerk with. No keeping of the Clerk's asks for what a
-    # real account's bot holds, so this run names it.
-    options = _option_run(binding, clerk, option_market, names_what_it_holds=True)
+    # real account holds, so this run names it.
+    options = _option_run(binding, clerk, option_market, names_what_is_held=True)
     if options is not None:
         # Whichever stream delivers the underlying's bars moves the watched window with each one.
         feed = options.tapping(feed)
@@ -1569,14 +1569,14 @@ def _option_run(
     clerk: ActiveAlpacaClerk,
     option_market: OptionMarket | None,
     *,
-    names_what_it_holds: bool = False,
+    names_what_is_held: bool = False,
 ) -> OptionRun | None:
     """This run's option side, or ``None`` for a bot that trades shares, which has none (ADR 0076).
 
     Loaded only for an option bot: it brings the resolver and the pricer
-    with it. ``names_what_it_holds`` is set on a real account, where the run
-    itself asks for the contracts its bot holds to be quoted; a Dry Run's
-    Clerk keeps those quotes itself.
+    with it. ``names_what_is_held`` is set on a real account, where the run
+    itself asks for the lines of the contracts the account's books say must
+    be quoted; a Dry Run's Clerk asks for those itself.
     """
     if not is_option_plan(binding.action_plan):
         return None
@@ -1587,7 +1587,7 @@ def _option_run(
         option_market or this_process_option_market(),
         # The contracts this bot holds are the Clerk's answer, read from its books at each EXIT.
         held_contracts=lambda: clerk.held_option_contracts(binding.strategy_instance_id),
-        names_what_it_holds=names_what_it_holds,
+        contracts_to_watch=clerk.option_contracts_to_watch if names_what_is_held else None,
     )
 
 
@@ -1655,7 +1655,7 @@ async def _settle_option_entry(
         return None
     entered = settled.settlement is EntrySettlement.ENTERED
     _settle_evaluation(evaluation, Settlement.COMMIT if entered else Settlement.DISCARD)
-    # What the bot holds may have changed: a part fill is held from now on.
+    # What is held may have changed: a part fill is held from now on.
     options.follow_what_is_held()
     logger.info(
         "An option bot's entry was settled on what it came to",

@@ -13,12 +13,13 @@ list, for the window its plan's rules can pick from, and moves that window
 with every closed bar of the underlying. The contract it comes to hold is not
 its to ask for in a Dry Run: that is the Clerk's own demand, read from its
 books (``held_option_quotes``), so the line outlives this run. That keeping
-follows a Dry Run's books only. On a real account the run names what the
-Clerk says its bot holds on its own request, beside the window, for as long
-as the run lasts (``names_what_it_holds``). A run is refused as it starts, by
-name, when its window can need more quote lines than the Clerk may open, or
-when the Clerk reads its market status from a shared source and so has no
-option quotes of its own.
+follows a Dry Run's books only. On a real account the run names, on its own
+request and beside the window, the contracts on its underlying that the
+account's books say must be quoted: one a bot holds, or one an order is
+working in (``contracts_to_watch``). That lasts as long as the run. A run is
+refused as it starts, by name, when its window can need more quote lines
+than the Clerk may open, or when the Clerk reads its market status from a
+shared source and so has no option quotes of its own.
 
 **An ENTER** is resolved here and judged by the Clerk. After the runner's
 own screens, in order:
@@ -310,7 +311,7 @@ class OptionRun:
         market: OptionMarket,
         *,
         held_contracts: Callable[[], tuple[str, ...]],
-        names_what_it_holds: bool = False,
+        contracts_to_watch: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         self._market = market
         self._plan: ActionPlan = binding.action_plan
@@ -320,9 +321,10 @@ class OptionRun:
         self._terms = option_order_terms(binding)
         # The Clerk's answer to which contracts this bot holds now, by OCC symbol.
         self._held_contracts = held_contracts
-        # Whether this run asks for what its bot holds as held lines. True on a real account, where
-        # no keeping of the Clerk's asks for them.
-        self._names_what_it_holds = names_what_it_holds
+        # The account's answer to which option contracts must be quoted, by OCC symbol: one a bot holds,
+        # or one an order is working in. Handed over on a real account, where no keeping of the Clerk's
+        # asks for their lines; None in a Dry Run, where the keeping does.
+        self._contracts_to_watch = contracts_to_watch
         # Where the watched window is centred: the close of the underlying's newest bar with a trade in it.
         self._money: Decimal | None = None
         self._picks_by_delta = any(
@@ -387,19 +389,24 @@ class OptionRun:
         )
 
     def _held_to_name(self) -> tuple[OptionContract, ...]:
-        """The contracts this run asks for as held lines: what the Clerk says its bot holds, where the run
-        is the one to ask. A contract past its last session is not asked for: nothing trades in it."""
-        if not self._names_what_it_holds:
+        """The contracts this run asks for as held lines, where the run is the one to ask: those on its
+        underlying that the account's books say must be quoted. One read of the books, whatever their
+        length. A contract past its last session is not asked for: nothing trades in it."""
+        if self._contracts_to_watch is None:
             return ()
         now = self._market.clock()
-        held = (OptionContract.from_occ_symbol(symbol) for symbol in self._held_contracts())
-        return tuple(contract for contract in held if not past_last_session(contract.expiry_date, now))
+        named = (OptionContract.from_occ_symbol(symbol) for symbol in self._contracts_to_watch())
+        return tuple(
+            contract
+            for contract in named
+            if contract.root == self._underlying and not past_last_session(contract.expiry_date, now)
+        )
 
     def follow_what_is_held(self) -> None:
-        """Ask again, with the window where it is: what the bot holds may have changed. The runner says so
-        as an entry settles. Each bar that moves the window asks again by itself, which is when a contract
-        the bot has sold since stops being asked for."""
-        if self._names_what_it_holds:
+        """Ask again, with the window where it is: what is held may have changed. The runner says so as an
+        entry settles. Each bar that moves the window asks again by itself, which is when a contract that
+        has been sold since stops being asked for."""
+        if self._contracts_to_watch is not None:
             self._watch(money=self._money)
 
     def tapping(self, feed: MarketDataFeed) -> MarketDataFeed:

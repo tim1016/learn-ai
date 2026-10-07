@@ -1162,6 +1162,16 @@ class SqliteAlpacaClerkFacade:
             how_simulated=self._trade.synthesized_option_fills(),
         )
 
+    def option_contracts_to_watch(self) -> tuple[str, ...]:
+        """The option contracts this account must have quoted, by OCC symbol (ADR 0076).
+
+        One a bot holds, or one an order is working in: the books' own
+        answer, in one read whatever their length. A Dry Run's keeping reads
+        the same answer from the books themselves; a real account's bot
+        asks here, for the lines its own run asks to have held.
+        """
+        return self._repo.option_contracts_to_watch()
+
     def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
         """The option contracts one bot holds now, by OCC symbol, its newest entry's first (ADR 0076).
 
