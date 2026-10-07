@@ -274,11 +274,12 @@ def test_an_iron_condors_line_turns_at_each_of_its_four_strikes() -> None:
 
 
 def test_a_line_never_starts_below_a_price_of_zero() -> None:
-    """A 2 put bought for $0.50 is even at 1.50. A dollar below that is under zero, and no stock trades there:
-    the line starts at zero, where the put is worth its whole strike."""
+    """A 2 put bought for $1.50 is even at 0.50. A dollar below that is under zero, and no stock trades there:
+    the line starts at zero, where the put is worth its whole strike and the entry is 50 cents a share ahead."""
     put = _of(_leg("bought", "long", "put", 2))
 
-    figures = at_expiry(put, _ONE, net_price=Decimal("0.50"))
+    figures = at_expiry(put, _ONE, net_price=Decimal("1.50"))
 
-    assert figures.sketch == _line(("0", 15_000), ("2", -5_000), ("3", -5_000))
+    assert figures.break_evens == (Fraction("0.5"),)
+    assert figures.sketch == _line(("0", 5_000), ("2", -15_000), ("3", -15_000))
 
