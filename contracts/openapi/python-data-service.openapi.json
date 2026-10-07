@@ -803,6 +803,16 @@
             },
             "title": "On Exit",
             "type": "array"
+          },
+          "structure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NamedStructure"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "ActionPlan",
@@ -33216,6 +33226,24 @@
         ],
         "title": "MonteCarloResult",
         "type": "object"
+      },
+      "NamedStructure": {
+        "enum": [
+          "long_call",
+          "long_put",
+          "bull_call_spread",
+          "bear_put_spread",
+          "bull_put_spread",
+          "bear_call_spread",
+          "long_straddle",
+          "long_strangle",
+          "iron_condor",
+          "iron_butterfly",
+          "call_butterfly",
+          "put_butterfly"
+        ],
+        "title": "NamedStructure",
+        "type": "string"
       },
       "NavigateAction": {
         "additionalProperties": false,

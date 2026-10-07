@@ -6576,6 +6576,7 @@ export interface components {
             on_enter?: (components["schemas"]["StockEntryLeg"] | components["schemas"]["OptionEntryLeg"])[];
             /** On Exit */
             on_exit?: components["schemas"]["CloseLegExit"][];
+            structure?: components["schemas"]["NamedStructure"] | null;
         };
         /**
          * ActivityPeriodRead
@@ -19433,6 +19434,11 @@ export interface components {
             /** Warnings */
             warnings?: string[];
         };
+        /**
+         * NamedStructure
+         * @enum {string}
+         */
+        NamedStructure: "long_call" | "long_put" | "bull_call_spread" | "bear_put_spread" | "bull_put_spread" | "bear_call_spread" | "long_straddle" | "long_strangle" | "iron_condor" | "iron_butterfly" | "call_butterfly" | "put_butterfly";
         /**
          * NavigateAction
          * @description Move: navigate to another operator page.

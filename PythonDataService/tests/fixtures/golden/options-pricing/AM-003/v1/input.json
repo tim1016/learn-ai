@@ -1,0 +1,1687 @@
+{
+  "quantlib_version": "1.42.1",
+  "engine": "BinomialLRVanillaEngine",
+  "min_time_value": 0.0001,
+  "cases": [
+    {
+      "case": "30d_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 16.114156417386482
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 4.859140854572778
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.2998942409450302
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 1.9032168619091676
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 1.5621204981655439
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.42921472541577116
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 4.568224990376667
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 84.1967,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 15.872500223130695
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 4.625800508703638
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 95.7908,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.3385416756329722
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 1.7561526748480576
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 1.6785254924921182
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.37937764021971093
+      }
+    },
+    {
+      "case": "30d_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 104.3942,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 4.70706446699515
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 40.532717436597075
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 13.378952251899502
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.9539363009483173
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 5.32042793382726
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 4.9748425199091795
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 1.2066317626730723
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 14.665708032219548
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.045_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.00013494149818982256
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 59.6877,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 40.36140730906737
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 13.169633187780153
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 87.8964,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.9943727103567783
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 5.182295605270339
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 5.104122700884833
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 1.158447945775967
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 113.7703,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 14.8527801631418
+      }
+    },
+    {
+      "case": "30d_vol0.45_rate0.01_m+4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 167.5387,
+        "years_to_expiry": 0.0821917808219178,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.00012246216786746154
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 8.052697871175608
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 2.2983777420619
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.15884289216159925
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.8721867578770659
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.7914092929609536
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.1890675143970432
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 2.223735826558138
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 92.0267,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 7.990960929294437
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 2.242858398870806
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.9442,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.16841105024332853
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.8382413582695117
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.8199749424426496
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.1779490577001014
+      }
+    },
+    {
+      "case": "7d_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.099,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 2.2610837011327227
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 22.130568362182053
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 6.6124381707771045
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.49042846739075696
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 2.528032701470243
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 2.446311250657777
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.5495093590161961
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 6.90717634464794
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 77.9367,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 22.078284091148348
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 6.559754462283048
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 93.9584,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.5002550769585301
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 2.4950961573290016
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 2.476712497289897
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.5385687194314825
+      }
+    },
+    {
+      "case": "7d_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 106.4301,
+        "years_to_expiry": 0.019178082191780823,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 6.951508033449034
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 3.103652014313284
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.8575539590955987
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.06331548338783598
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.31940630540812326
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.30771535508624387
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.0676583554497565
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.8460503504877223
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 96.9083,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 3.094360425130121
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.8495368547031237
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.2179,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.06473566738139172
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.3145904556536823
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.31196129671572775
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.06611174034740497
+      }
+    },
+    {
+      "case": "1d_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.7882,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.8519859251239414
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 9.00263523402682
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 2.53193715374763
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.19207672702460385
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.9457686334099213
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.933975145339195
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.20052741319128498
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 2.573459053254875
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 91.0086,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 8.993909326041292
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 2.5240773729786596
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.6721,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.19351681358332248
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.9410072874349525
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.9383647112160618
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.19899024123828374
+      }
+    },
+    {
+      "case": "1d_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 102.3834,
+        "years_to_expiry": 0.0027397260273972603,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 2.5799632057779243
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.9035196999838917
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.24612353321739314
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.01870506010808354
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.09093406368018637
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.08994953533395336
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.019069443468413754
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.24510898289832356
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.0975,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.9027278548632672
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.24545243018029508
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7736,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.018825899320604116
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.0905339999214817
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.09031352089356226
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.018942054505691096
+      }
+    },
+    {
+      "case": "2h_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2269,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.24564311208331024
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 2.6841045884770525
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.7349221286494916
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.056307586416750675
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.27177185783833746
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.27078154845496827
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.057000720791858216
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.7384095997055428
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 97.3169,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 2.6833269717928916
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.7342548687312301
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.3224,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.056429271729181316
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.2713731061025112
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.2711518239479859
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.05687356894071095
+      }
+    },
+    {
+      "case": "2h_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.6823,
+        "years_to_expiry": 0.00022831050228310502,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.7389699975992808
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.68,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.32012858182834397
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.08688166562884327
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.006654083588878186
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.03203250198720164
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.03190872443123104
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.006693758138249052
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.08678313449037083
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.08679768074340495
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.9199,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.006669311060828978
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.0319825411955189
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.031954881735568014
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.0066778946876600844
+      }
+    },
+    {
+      "case": "15min_vol0.15_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0802,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.08685261286286941
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-4_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.043,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.957128900610177
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.2602139898861985
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.019986550493267793
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.09596895196625929
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.09584464659563172
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "call",
+        "steps": 401,
+        "price": 0.020071269202539557
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.045_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.045,
+        "right": "put",
+        "steps": 401,
+        "price": 0.2606580468398831
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.2601301753135551
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m-1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 99.7599,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.020001842518253495
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.09591904387518435
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+0_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.0958913081496899
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_call_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "call",
+        "steps": 401,
+        "price": 0.02005540618504337
+      }
+    },
+    {
+      "case": "15min_vol0.45_rate0.01_m+1_put_401steps",
+      "input": {
+        "spot": 100.0,
+        "strike": 100.2407,
+        "years_to_expiry": 2.8538812785388127e-05,
+        "rate": 0.01,
+        "right": "put",
+        "steps": 401,
+        "price": 0.26072972757083945
+      }
+    }
+  ]
+}
