@@ -162,21 +162,14 @@ def _refusal(refused: EntryRefusal) -> NotAsBuilt:
 
 
 def _refusals_in_an_entrys_order(worked: EntryFigures) -> tuple[NotAsBuilt, ...]:
-    """The entry's refusals, with a day that has no fee rate pinned said where the money would have been."""
+    """The entry's refusals, with a day that has no fee rate pinned said where the money would have been asked:
+    after the shape and each leg's gap. With no provision the money is never worked out, so nothing follows it."""
     told = [_refusal(refused) for refused in worked.refusals]
     if worked.structure is not None and worked.fee_provision_cents is None:
-        unpinned = NotAsBuilt(
-            FEE_RATE_NOT_PINNED, (), "no fee rate is pinned for today, so what an entry sets aside is not known"
+        told.append(
+            NotAsBuilt(FEE_RATE_NOT_PINNED, (), "no fee rate is pinned for today, so what an entry sets aside is not known")
         )
-        # Asked after the shape and each leg's gap, where the money is.
-        after = sum(1 for refusal in told if refusal.reason not in _money_reasons())
-        told.insert(after, unpinned)
     return tuple(told)
-
-
-def _money_reasons() -> frozenset[str]:
-    """The refusals asked once the fee provision is known: the money's own, and the cost limit."""
-    return frozenset(str(reason) for reason in StructureMoneyRefusal if reason is not StructureMoneyRefusal.LEG_GAP_OVER_LIMIT)
 
 
 def structure_figures(
