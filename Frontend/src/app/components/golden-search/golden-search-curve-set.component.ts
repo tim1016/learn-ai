@@ -31,7 +31,7 @@ function setProgress(study: StudyDetail, curves: CurveSetKey): string {
  * The server names the set's lines and their roles; this panel reads the set
  * once per study (and again when its own step records more), draws it, and
  * says what the set could not show: points past its cap, completed runs
- * that kept no curve, and the server's own notes.
+ * that kept no curve, runs that failed, and the server's own notes.
  */
 @Component({
   selector: 'app-golden-search-curve-set',
@@ -46,8 +46,8 @@ function setProgress(study: StudyDetail, curves: CurveSetKey): string {
         </div>
       } @else if (spec(); as drawn) {
         <app-golden-search-chart [spec]="drawn" [height]="340" />
-      } @else if (set(); as read) {
-        <p class="muted">{{ read.not_recorded > 0 ? 'These runs have no curve recorded.' : empty() }}</p>
+      } @else if (set()) {
+        <p class="muted">{{ nothingDrawn() }}</p>
       } @else {
         <p class="muted" role="status">Loading the curves…</p>
       }
@@ -57,6 +57,7 @@ function setProgress(study: StudyDetail, curves: CurveSetKey): string {
           @for (note of read.notes; track note) { {{ note }} }
           @if (read.left_out > 0) { An even spread of the scored points is drawn; {{ read.left_out }} more are not. All runs lists every one. }
           @if (read.not_recorded > 0 && read.lines.length > 0) { {{ read.not_recorded }} completed runs of this set have no curve recorded. }
+          @if (read.failed > 0 && read.lines.length > 0) { Runs of this set that failed: {{ read.failed }}. }
         }
       </p>
     </app-golden-search-panel>
@@ -107,6 +108,14 @@ export class GoldenSearchCurveSetComponent {
     },
     { equal: sameChart },
   );
+
+  /** Why a read set draws nothing: its runs failed, kept no curve, or have not run yet. */
+  protected readonly nothingDrawn = computed(() => {
+    const read = this.set();
+    if (read === null || (read.failed === 0 && read.not_recorded === 0)) return this.empty();
+    if (read.not_recorded === 0) return 'These runs failed, so they have no curve.';
+    return read.failed === 0 ? 'These runs have no curve recorded.' : 'These runs have no curve: some failed, the rest kept none.';
+  });
 
   constructor() {
     reloadOnProgress(() => setProgress(this.study(), this.curves()), this.lines);

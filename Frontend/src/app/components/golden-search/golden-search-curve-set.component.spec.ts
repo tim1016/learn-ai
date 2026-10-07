@@ -61,11 +61,23 @@ describe('GoldenSearchCurveSetComponent', () => {
     // The current settings are dashed wherever they are drawn, also as the candidate the chart is about.
     ['incumbent', '#b2b5be', 'dashed'],
   ] as const)('draws the bold line in the colour of the candidate it is about (%s)', async (candidate, color, type) => {
-    const { charts } = await renderSet('candidate', async () => curveSet('candidate'), candidate);
+    const read = curveSet('candidate');
+    const lines = read.lines.map((line) => (line.role === 'candidate' ? { ...line, current_settings: candidate === 'incumbent' } : line));
+    const { charts } = await renderSet('candidate', async () => ({ ...read, lines }), candidate);
 
     await within(panel()).findByRole('img');
     const bold = equitySeries(charts.charts[0].options.at(-1)).get('run-candidate');
     expect([bold?.lineStyle.color, bold?.lineStyle.type, bold?.lineStyle.width]).toEqual([color, type, 2.5]);
+  });
+
+  it('a winner that is the current settings is bold in the fit’s colour and dashed', async () => {
+    const read = curveSet('search');
+    const kept = read.lines.filter((line) => line.role !== 'incumbent').map((line) => (line.role === 'winner' ? { ...line, label: 'Winner · current settings', current_settings: true } : line));
+    const { charts } = await renderSet('search', async () => ({ ...read, lines: kept }));
+
+    await within(panel()).findByRole('img');
+    const winner = equitySeries(charts.charts[0].options.at(-1)).get('run-winner');
+    expect([winner?.lineStyle.color, winner?.lineStyle.type, winner?.lineStyle.width]).toEqual(['#2962ff', 'dashed', 2.5]);
   });
 
   it('says what the set could not show: the server’s notes, the points past its cap, and completed runs with no curve', async () => {
@@ -76,6 +88,21 @@ describe('GoldenSearchCurveSetComponent', () => {
     expect(panel().textContent).toContain('The current settings were not run on this window, so they have no line here.');
     expect(panel().textContent).toContain('An even spread of the scored points is drawn; 40 more are not. All runs lists every one.');
     expect(panel().textContent).toContain('2 completed runs of this set have no curve recorded.');
+    expect(panel().textContent).not.toContain('that failed');
+  });
+
+  it('a set whose runs failed says they failed, not that nothing has run', async () => {
+    await renderSet('search', async () => curveSet('search', { lines: [], failed: 3 }));
+
+    expect(await screen.findByText('These runs failed, so they have no curve.')).not.toBeNull();
+    expect(screen.queryByText('No run is recorded for this chart yet.')).toBeNull();
+  });
+
+  it('counts the failed runs of a set that still draws the rest', async () => {
+    await renderSet('search', async () => curveSet('search', { failed: 2 }));
+
+    await within(panel()).findByRole('img');
+    expect(panel().textContent).toContain('Runs of this set that failed: 2.');
   });
 
   it('a set whose runs have no curve says so and draws nothing', async () => {

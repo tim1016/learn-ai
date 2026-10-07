@@ -18,8 +18,9 @@ const END_LABELS = 8;
 /**
  * One step's runs on the shared session chart (#2930), each drawn by the
  * role the server gave it: the set's winner or candidate bold in `accent`'s
- * colour, the current settings dashed, a cost stress and a neighbor in their
- * own colours, and a search's other points faint behind them all. A faint
+ * colour, a cost stress and a neighbor in their own colours, and a search's
+ * other points faint behind them all. The current settings are dashed
+ * whatever their role, also when they are the winner or the candidate. A faint
  * line is named by its settings, since the server calls every one of them
  * "Scored point". Every value is the server's.
  */
@@ -73,9 +74,7 @@ function styleOf(role: LineRole, accent: CandidateKey, theme: ChartTheme): RoleS
 function drawn(aligned: readonly AlignedLine[], accent: CandidateKey, labelled: boolean, theme: ChartTheme): SessionLine[] {
   return aligned.map(({ line, returns, falls }) => {
     const faint = line.role === 'other';
-    // The current settings are dashed wherever they are drawn, also when they are the candidate the chart is about.
-    const dashed = line.role === 'incumbent' || (line.role === 'candidate' && accent === 'incumbent');
-    return { key: line.curve.evaluation_key, name: line.label, returns, falls, ...styleOf(line.role, accent, theme), dashed, endLabel: labelled && !faint, filled: false, quiet: faint };
+    return { key: line.curve.evaluation_key, name: line.label, returns, falls, ...styleOf(line.role, accent, theme), dashed: line.current_settings, endLabel: labelled && !faint, filled: false, quiet: faint };
   });
 }
 
@@ -97,7 +96,7 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
       columns: ['Return', 'Fall from peak'],
       rows: shown.map((run) => ({
         label: nameOf(run.line),
-        swatch: { color: styleOf(run.line.role, accent, theme).color, dashed: run.line.role === 'incumbent' },
+        swatch: { color: styleOf(run.line.role, accent, theme).color, dashed: run.line.current_settings },
         values: [signedPercentOrNotRecorded(run.returns[index]), run.line.curve.drawdown === null ? NOT_RECORDED : signedPercentOrNotRecorded(run.falls[index])],
       })),
       notes,

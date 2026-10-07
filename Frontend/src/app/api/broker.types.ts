@@ -14038,6 +14038,11 @@ export interface components {
          * @description One run a step draws: its role says how, its label what to call it on that chart.
          */
         GoldenSearchCurveLine: {
+            /**
+             * Current Settings
+             * @description The run's settings are the current settings, whatever its role: a winner can be the incumbent.
+             */
+            current_settings: boolean;
             curve: components["schemas"]["GoldenSearchRunCurve"];
             /** Label */
             label: string;
@@ -14077,6 +14082,11 @@ export interface components {
         };
         /** GoldenSearchCurveSet */
         GoldenSearchCurveSet: {
+            /**
+             * Failed
+             * @description Runs of the set that failed, so they have no curve.
+             */
+            failed: number;
             /**
              * Left Out
              * @description Other scored points with a curve that this read did not return, past its cap; named lines are never left out.

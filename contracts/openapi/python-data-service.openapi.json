@@ -19759,6 +19759,11 @@
         "additionalProperties": false,
         "description": "One run a step draws: its role says how, its label what to call it on that chart.",
         "properties": {
+          "current_settings": {
+            "description": "The run's settings are the current settings, whatever its role: a winner can be the incumbent.",
+            "title": "Current Settings",
+            "type": "boolean"
+          },
           "curve": {
             "$ref": "#/components/schemas/GoldenSearchRunCurve"
           },
@@ -19787,6 +19792,7 @@
         "required": [
           "role",
           "label",
+          "current_settings",
           "params_sentence",
           "curve"
         ],
@@ -19829,6 +19835,11 @@
       "GoldenSearchCurveSet": {
         "additionalProperties": false,
         "properties": {
+          "failed": {
+            "description": "Runs of the set that failed, so they have no curve.",
+            "title": "Failed",
+            "type": "integer"
+          },
           "left_out": {
             "description": "Other scored points with a curve that this read did not return, past its cap; named lines are never left out.",
             "title": "Left Out",
@@ -19859,6 +19870,7 @@
           "lines",
           "left_out",
           "not_recorded",
+          "failed",
           "notes"
         ],
         "title": "GoldenSearchCurveSet",

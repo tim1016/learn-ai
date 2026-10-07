@@ -288,12 +288,13 @@ def test_a_fold_test_set_finds_each_run_by_what_it_is_even_when_another_step_sco
     ]
 
 
-def _evidence(key: str, point: dict[str, Any], *, below: str | None = None, above: str | None = None) -> dict[str, Any]:
-    """A stored candidate; ``below`` / ``above`` are its gap neighbors' audit statuses, none when it was not audited."""
-    audited = below is not None and above is not None
-    rows = [{"value": 0.0, "status": status, "metrics": None, "reason": None} for status in (below, "center", above)]
-    neighbors = [{"knob": "gap", "rows": rows, "one_sided": False}] if audited else []
-    return {"key": key, "point": point, "point_hash": point_hash(STRATEGY, point), "neighbors_audited": audited, "neighbors": neighbors}
+def _evidence(key: str, point: dict[str, Any], *, below: tuple[float, str] | None = None, above: tuple[float, str] | None = None) -> dict[str, Any]:
+    """A stored candidate; ``below`` / ``above`` are its gap neighbors as the audit recorded them (value, status), none when it was not audited."""
+    neighbors = []
+    if below is not None and above is not None:
+        rows = [{"value": value, "status": status, "metrics": None, "reason": None} for value, status in (below, (point["gap"], "center"), above)]
+        neighbors = [{"knob": "gap", "rows": rows, "one_sided": False}]
+    return {"key": key, "point": point, "point_hash": point_hash(STRATEGY, point), "neighbors_audited": bool(neighbors), "neighbors": neighbors}
 
 
 def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_wherever_they_were_scored() -> None:
@@ -309,7 +310,7 @@ def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_w
         _run("f-win", "exam", WINNER, detail=True, window_start_ms=300, window_end_ms=400),
         _run("x-inc", "evidence", INCUMBENT, scenario="slippage_1c"),
     ]
-    evidence = {"candidates": [_evidence("all_period", WINNER, below="tested", above="tested"), _evidence("incumbent", INCUMBENT)]}
+    evidence = {"candidates": [_evidence("all_period", WINNER, below=(0.25, "tested"), above=(0.35, "tested")), _evidence("incumbent", INCUMBENT)]}
 
     assert _drawn(records, "candidate", "all_period", evidence=evidence) == [
         ("s-win", "candidate", "All-period fit"),
@@ -322,8 +323,37 @@ def test_a_candidate_set_is_its_own_run_its_stresses_and_its_audited_neighbors_w
     assert incumbent == [("s-inc", "candidate", "Current settings"), ("x-inc", "stress", "Extra 1¢/share slippage")]
     assert _drawn(records, "candidate", "recent", evidence=evidence) == []
     # The audit ran out of budget before the neighbor below: the search's run of that point is not drawn as its audit.
-    partly = {"candidates": [_evidence("all_period", WINNER, below="untested", above="tested")]}
+    partly = {"candidates": [_evidence("all_period", WINNER, below=(0.25, "untested"), above=(0.35, "tested"))]}
     assert [key for key, role, _ in _drawn(records, "candidate", "all_period", evidence=partly) if role == "neighbor"] == ["n-above"]
+
+
+def test_a_neighbor_is_found_by_the_value_its_audit_recorded_not_by_the_knobs_step_today() -> None:
+    # The audit stepped the gap by 0.2 when it ran; the knob's neighbor step is another size now.
+    records = [
+        _run("d-win", "evidence", WINNER, detail=True),
+        _run("n-far", "evidence", {**INCUMBENT, "gap": 0.1}),
+        # One step below by today's declaration, scored by the search: never the audit's neighbor.
+        _run("s-near", "search", {**INCUMBENT, "gap": 0.3 - float(EMA.knob("gap").neighbor_step)}),
+    ]
+    evidence = {"candidates": [_evidence("all_period", WINNER, below=(0.1, "tested"), above=(0.5, "tested"))]}
+
+    neighbors = [(key, label) for key, role, label in _drawn(records, "candidate", "all_period", evidence=evidence) if role == "neighbor"]
+
+    assert neighbors == [("n-far", "Crossover gap one step below (0.1)")]
+
+
+def test_a_set_marks_the_current_settings_whatever_their_role_and_counts_its_failed_runs() -> None:
+    kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
+    returned = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
+    assert [(line.role, line.incumbent) for line in returned.lines] == [("winner", True), ("other", False)]
+    searched = _chosen([_run("s1", "search", INCUMBENT), _run("s3", "search", WINNER)], "search", search=SEARCHED)
+    assert [(line.role, line.incumbent) for line in searched.lines] == [("incumbent", True), ("winner", False)]
+    evidence = {"candidates": [_evidence("incumbent", INCUMBENT)]}
+    assert [line.incumbent for line in _chosen([_run("c1", "evidence", INCUMBENT, detail=True)], "candidate", "incumbent", evidence=evidence).lines] == [True]
+
+    # Every run of the set failed: nothing to draw, and the set says they failed rather than that nothing ran.
+    failed = _chosen([_run("s1", "search", INCUMBENT, status="failed", has_curve=False), _run("s3", "search", WINNER, status="failed", has_curve=False)], "search", search=SEARCHED)
+    assert (failed.lines, failed.failed, failed.not_recorded) == ((), 2, 0)
 
 
 def test_a_set_keeps_every_named_line_spreads_the_others_over_the_search_and_counts_only_completed_runs_without_a_curve() -> None:
