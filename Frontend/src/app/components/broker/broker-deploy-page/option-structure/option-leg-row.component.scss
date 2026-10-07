@@ -55,6 +55,26 @@ select[aria-invalid='true'] { box-shadow: 0 0 0 1px var(--bear); }
   }
 }
 
+// A fixed date sits on a line of its own under the leg's other boxes, wide
+// enough for its calendar to open in place under it.
+.leg-row__date {
+  grid-row: 2;
+  grid-column: 5 / -1;
+  justify-self: end;
+  width: min(100%, 21rem);
+
+  &::before {
+    content: attr(data-label);
+    @include field-label;
+  }
+}
+
+// Kept at the end of the leg's first line, whatever sits under it.
+.leg-row__end {
+  grid-row: 1;
+  grid-column: -2 / -1;
+}
+
 .leg-row__remove {
   display: grid;
   width: 2rem;
@@ -84,4 +104,13 @@ select[aria-invalid='true'] { box-shadow: 0 0 0 1px var(--bear); }
 
   .leg-row__number::before { content: 'Leg '; }
   .leg-row__rule { grid-column: 1 / -1; }
+
+  .leg-row__date {
+    grid-row: auto;
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    width: auto;
+  }
+
+  .leg-row__end { grid-row: auto; grid-column: auto; }
 }

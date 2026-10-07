@@ -147,6 +147,25 @@ describe('OptionStructureBuilderComponent', () => {
     }));
   });
 
+  it('offers no day before today in New York for a fixed expiry date', async () => {
+    // 23:30 on October 6 in New York, and already October 7 by the UTC clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 7, 3, 30));
+    await renderBuilder({ legs: [BULL_CALL_SPREAD_LEGS[0]] });
+    await userEvent.selectOptions(screen.getByLabelText('Leg 1 expiry'), 'Fixed date');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open the calendar' }));
+
+    const calendar = await screen.findByRole('group', { name: 'Calendar' });
+    // PrimeNG's months are zero-based.
+    const offered = (day: number): boolean => {
+      const cell = calendar.querySelector(`span[data-date="2026-9-${day}"]`);
+      if (cell === null) throw new Error(`October ${day} is not on the calendar.`);
+      return !cell.classList.contains('p-disabled');
+    };
+    expect([offered(5), offered(6), offered(7)]).toEqual([false, true, true]);
+  });
+
   it('calls an edited structure Custom, and by its name again once its legs match again', async () => {
     const { service } = await renderBuilder();
     expect(screen.getByRole('button', { name: 'Bull call spread', pressed: true })).toBeTruthy();

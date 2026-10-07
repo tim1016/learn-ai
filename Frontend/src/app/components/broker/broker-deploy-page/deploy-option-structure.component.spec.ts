@@ -190,6 +190,10 @@ describe('DeployOptionStructureComponent', () => {
     expect(within(start).getByRole('button', { name: 'Bull call spread', pressed: true })).toBeTruthy();
     expect(screen.getByLabelText<HTMLInputElement>('Leg 1 Delta target, delta').value).toBe('0.5');
     expect(start.closest('.p-drawer')).not.toBeNull();
+    // It holds the keyboard inside it, so it is a dialog over the page, named by its heading.
+    const dialog = screen.getByRole('dialog', { name: 'Structure builder' });
+    expect(dialog.contains(start)).toBe(true);
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
     const builder = start.closest<HTMLElement>('.builder');
     if (builder === null) throw new Error('The builder is not rendered.');
     await vi.waitFor(() => expect(document.activeElement).toBe(within(builder).getByRole('heading', { level: 3, name: 'Bull call spread' })));
@@ -225,6 +229,60 @@ describe('DeployOptionStructureComponent', () => {
     await vi.waitFor(() => expect(screen.queryByRole('navigation', { name: 'Start from' })).toBeNull());
     expect(settingsChange).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit structure' })));
+  });
+
+  it('closes only the calendar on Escape while a leg’s calendar is open, and the builder on the next', async () => {
+    const { settingsChange } = await renderOptions(SPREAD);
+    await openBuilder();
+    fireEvent.change(screen.getByLabelText('Leg 1 Delta target, delta'), { target: { value: '0.3' } });
+    await userEvent.selectOptions(screen.getByLabelText('Leg 1 expiry'), 'Fixed date');
+    const calendar = (): HTMLElement | null => screen.queryByRole('group', { name: 'Calendar' });
+    const escapeFrom = (element: Element): void => {
+      fireEvent.keyDown(element, { key: 'Escape', code: 'Escape', which: 27, keyCode: 27 });
+    };
+    const stillBuilding = async (): Promise<void> => {
+      await vi.waitFor(() => expect(calendar()).toBeNull());
+      const dialog = screen.getByRole('dialog', { name: 'Structure builder' });
+      expect(within(dialog).getByRole('navigation', { name: 'Start from' })).toBeTruthy();
+      // The page behind stays dimmed, and what was edited is still there.
+      expect(document.querySelector('.p-drawer-mask')).not.toBeNull();
+      expect(screen.getByLabelText<HTMLInputElement>('Leg 1 Delta target, delta').value).toBe('0.3');
+      expect(screen.getByLabelText<HTMLSelectElement>('Leg 1 expiry').selectedOptions[0]?.textContent?.trim()).toBe('Fixed date');
+    };
+    const open = screen.getByRole('button', { name: 'Open the calendar' });
+
+    // With the keyboard still on the button that opened it.
+    await userEvent.click(open);
+    expect(calendar()?.closest('.p-drawer')).not.toBeNull();
+    escapeFrom(open);
+    await stillBuilding();
+
+    // And from a day inside the calendar.
+    await userEvent.click(open);
+    const day = calendar()?.querySelector('span[data-date]');
+    if (!day) throw new Error('The calendar shows no day.');
+    escapeFrom(day);
+    await stillBuilding();
+
+    // No calendar is open now: Escape is the builder's, from the same field.
+    escapeFrom(screen.getByLabelText('Leg 1 expiry date'));
+    await vi.waitFor(() => expect(screen.queryByRole('navigation', { name: 'Start from' })).toBeNull());
+    expect(settingsChange).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit structure' })));
+  });
+
+  it('stays open, with its edits, when the dimmed page behind it is clicked', async () => {
+    await renderOptions(SPREAD);
+    await openBuilder();
+    fireEvent.change(screen.getByLabelText('Leg 1 Delta target, delta'), { target: { value: '0.3' } });
+    const dimmed = document.querySelector('.p-drawer-mask');
+    if (dimmed === null) throw new Error('The page behind the builder is not dimmed.');
+
+    await userEvent.click(dimmed);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.getByRole('navigation', { name: 'Start from' })).toBeTruthy();
+    expect(screen.getByLabelText<HTMLInputElement>('Leg 1 Delta target, delta').value).toBe('0.3');
   });
 
   it('has no accessibility violation, with the builder closed and with it open', async () => {

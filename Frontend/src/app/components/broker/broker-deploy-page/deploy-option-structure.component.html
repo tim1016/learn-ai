@@ -41,15 +41,19 @@
   }
 </div>
 
-<!-- Over the page, never in the column: opening it never makes What taller. -->
+<!--
+  Over the page, never in the column: opening it never makes What taller. It
+  holds unsaved edits, so a click on the dimmed page does not close it: Cancel,
+  the close button and Escape do.
+-->
 <p-drawer
   [visible]="building()" (visibleChange)="$event || closeBuilder()"
-  position="right" [modal]="true" [dismissible]="true" [showCloseIcon]="false"
+  position="right" [modal]="true" [dismissible]="false" [showCloseIcon]="false" [pt]="builderDialog"
   styleClass="option-builder-drawer" [style]="{ width: 'min(88rem, 100vw)' }"
 >
   <ng-template #header>
     <div class="option-structure__drawer-head">
-      <h2>Structure builder</h2>
+      <h2 [id]="builderTitleId">Structure builder</h2>
       <button type="button" aria-label="Close the structure builder" (click)="closeBuilder()">
         <i class="pi pi-times" aria-hidden="true"></i>
       </button>

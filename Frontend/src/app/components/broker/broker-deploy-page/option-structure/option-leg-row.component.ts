@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import { DateFieldComponent } from '../../../../shared/date-picker';
+import { etIsoDate } from '../../../../shared/date/et-midnight';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { onExpiryRule, onStrikeRule, type LegRow, type OptionRules } from './option-structure';
 
@@ -50,6 +51,12 @@ export class OptionLegRowComponent {
   readonly remove = output();
 
   protected readonly dateId = `option-leg-date-${nextDateId++}`;
+  /**
+   * Today in New York, where an expiry date lives: the first day the calendar
+   * offers. A date that has passed can still be typed, and the server says why
+   * it refuses one.
+   */
+  protected readonly today = etIsoDate(Date.now());
   protected readonly name = computed(() => `Leg ${this.number()}`);
   protected readonly strikeRule = computed(
     () => this.rules().strike_rules.find((rule) => rule.selector === this.row().strike.selector) ?? null,
@@ -109,6 +116,19 @@ export class OptionLegRowComponent {
 
   protected setDate(date: string): void {
     if (date !== this.row().expiry.date) this.rowChange.emit({ ...this.row(), expiry: { ...this.row().expiry, date } });
+  }
+
+  /**
+   * Escape with this leg's calendar open puts the calendar away and goes no
+   * further, so the builder around it stays open with its edits. With no
+   * calendar open the key is the builder's. The field's own button says
+   * whether its calendar is open.
+   */
+  protected keepEscape(event: Event, field: DateFieldComponent): void {
+    const within = event.currentTarget;
+    if (!(within instanceof HTMLElement) || within.querySelector('button[aria-expanded="true"]') === null) return;
+    event.stopPropagation();
+    field.closeCalendar();
   }
 
   private setStrike(change: Partial<LegRow['strike']>): void {

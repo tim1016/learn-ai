@@ -25,6 +25,8 @@ import {
 import { newPreviewKey, optionStructurePreview } from './option-structure/option-structure-preview';
 import { OptionVerdictComponent } from './option-structure/option-verdict.component';
 
+let nextDrawerId = 0;
+
 /**
  * Deploy's Options branch of "What it trades" (#2915): the underlying, the
  * chosen structure in a few lines with one Edit button, and what it would
@@ -63,6 +65,16 @@ export class DeployOptionStructureComponent {
   private readonly injector = inject(Injector);
   private readonly edit = viewChild<ElementRef<HTMLButtonElement>>('edit');
   private readonly builder = viewChild(OptionStructureBuilderComponent);
+
+  protected readonly builderTitleId = `option-builder-drawer-title-${nextDrawerId++}`;
+  /**
+   * What the drawer is to a screen reader: a dialog over the page, named by
+   * its heading. It holds the keyboard inside it, and the library's own role
+   * for a drawer (a complementary landmark, with no name) says neither.
+   */
+  protected readonly builderDialog = {
+    root: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': this.builderTitleId },
+  };
 
   /** This page's one name for its request for quotes, kept while Options stays chosen. */
   protected readonly previewKey = newPreviewKey();

@@ -68,10 +68,7 @@
     }
   </select>
   @if (expiryRule()?.value; as box) {
-    @if (box.unit === 'date') {
-      <label class="sr-only" [for]="dateId">{{ name() }} expiry date</label>
-      <app-date-field [inputId]="dateId" appearance="filled" [value]="row().expiry.date" (valueChange)="setDate($event)" />
-    } @else {
+    @if (box.unit !== 'date') {
       <span class="leg-row__unit">
         <input
           type="number" inputmode="numeric" min="1" step="1"
@@ -84,7 +81,17 @@
     }
   }
 </span>
-<span role="cell">
+@if (expiryRule()?.value?.unit === 'date') {
+  <!-- On a line of its own, where its calendar has room to open in place: the builder holds the keyboard inside it, and a calendar floating over the page would open outside. -->
+  <span role="cell" data-label="Expiry date" class="leg-row__date">
+    <label class="sr-only" [for]="dateId">{{ name() }} expiry date</label>
+    <app-date-field
+      #date [inputId]="dateId" appearance="filled" calendar="inline" [pickFrom]="today"
+      [value]="row().expiry.date" (valueChange)="setDate($event)" (keydown.escape)="keepEscape($event, date)"
+    />
+  </span>
+}
+<span role="cell" class="leg-row__end">
   <button type="button" class="leg-row__remove" [attr.aria-label]="'Remove leg ' + number()" (click)="remove.emit()">
     <i class="pi pi-times" aria-hidden="true"></i>
   </button>
