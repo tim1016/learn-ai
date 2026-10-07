@@ -239,6 +239,22 @@ def test_a_stock_that_goes_ex_inside_the_day_is_priced_a_day_later_at_its_price_
     assert abs(at_the_price_less_its_present_value.price - at_the_price_less_the_cash.price) > 1e-5
 
 
+def test_two_dividends_going_ex_at_one_instant_inside_the_day_count_as_one_of_their_sum() -> None:
+    """A regular $0.50 and a special $0.90 go ex together in twelve hours. Both come off the stock
+    price a day later: $1.40, not the larger of the two and not the first. The call then loses value
+    over the day. With only one of them taken off it would seem to gain."""
+    both = american_daily_decay(
+        **(_AT_THE_MONEY | {"right": "call", "dividends": (_ex_in(12 * _HOUR_MS, 0.5), _ex_in(12 * _HOUR_MS, 0.9))})
+    )
+    as_one = american_daily_decay(**(_AT_THE_MONEY | {"right": "call", "dividends": (_ex_in(12 * _HOUR_MS, 1.4),)}))
+
+    assert both is not None and as_one is not None
+    assert (both.cash_gone_ex, as_one.cash_gone_ex) == (1.4, 1.4)
+    assert both.price_now == pytest.approx(as_one.price_now, abs=_SAME_PRICE_ATOL, rel=0)
+    assert both.decay == pytest.approx(as_one.decay, abs=_SAME_PRICE_ATOL, rel=0)
+    assert both.decay < 0
+
+
 @pytest.mark.parametrize(
     "ex_after_ms",
     [
@@ -303,8 +319,10 @@ def test_an_ex_date_exactly_on_a_tree_step_moves_the_later_price_by_no_more_than
     100 of the tree's 401. Whether that step is before the ex-date is decided by the last bit of the
     two times. The decay takes a day off each time as a float and lands on one side; the same
     contract priced a day later from instants lands on the other. The two prices differ by the
-    tree's step error, the figure fixture AM-005 holds the default tree to, and no more."""
+    tree's step error and no more. The same contract going ex on step 5 moves by more as its
+    ex-date crosses the step, so the bound is held for that case too."""
     on_a_step = _AT_THE_MONEY | {"right": "call", "strike": 95.0, "volatility": 0.4}
+    a_day_later = on_a_step | {"years_to_expiry": years_from_ms(401 * _HOUR_MS)}
 
     worked = american_daily_decay(
         **(
@@ -315,13 +333,22 @@ def test_an_ex_date_exactly_on_a_tree_step_moves_the_later_price_by_no_more_than
             }
         )
     )
-    from_instants = american_value(
-        **(on_a_step | {"years_to_expiry": years_from_ms(401 * _HOUR_MS), "dividends": (_ex_in(100 * _HOUR_MS, 1.75),)})
+    from_instants = american_value(**(a_day_later | {"dividends": (_ex_in(100 * _HOUR_MS, 1.75),)}))
+    # The same contract going ex on step 5, a millisecond before the step and a millisecond after.
+    before_step_5, after_step_5 = (
+        american_value(**(a_day_later | {"dividends": (_ex_in(5 * _HOUR_MS + shift_ms, 1.75),)})) for shift_ms in (-1, 1)
     )
 
     assert worked is not None and from_instants is not None
-    # Measured 5.6e-3. Under 1e-9 the two fell on the same side and this case no longer shows the edge.
-    assert 1e-9 < abs(worked.price_a_day_later - from_instants.price) <= 1e-2
+    assert before_step_5 is not None and after_step_5 is not None
+    # Measured figures with headroom, not a bound on the tree: 5.6e-3 on step 100, and 1.11e-2 as
+    # the ex-date crosses step 5.
+    a_steps_error = 2e-2
+    # Each lower bound says its case still shows the edge. The first is expected to fail the day the
+    # pricer decides by rule which side of a step an ex-date is on, and the second the day a price
+    # no longer jumps as an ex-date crosses a step. This test then goes with the edge it pins.
+    assert 1e-9 < abs(worked.price_a_day_later - from_instants.price) <= a_steps_error
+    assert 1e-9 < abs(after_step_5.price - before_step_5.price) <= a_steps_error
 
 
 @pytest.mark.parametrize(
