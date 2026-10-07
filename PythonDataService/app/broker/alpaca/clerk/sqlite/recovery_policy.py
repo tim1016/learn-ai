@@ -67,6 +67,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     VoidAfter,
     reason_age_policy,
     reason_policy,
+    reasons_that_strand_a_residue,
     residue_discharge_role,
 )
 from app.options.contract import OptionContract
@@ -1276,7 +1277,7 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         next_step = expired_contract.next_step
     elif not episodes:
         reason_code = "NO_STRANDED_EXIT_EPISODE"
-        reason = "No open EXIT_NOT_FLAT or EXIT_STUCK episode names this bot's exposure."
+        reason = f"No open {reasons_that_strand_a_residue()} episode names this bot's exposure."
         next_step = "Flatten real exposure instead of discharging it."
     elif refusing:
         reason_code = "EXPOSURE_NOT_PROVEN"

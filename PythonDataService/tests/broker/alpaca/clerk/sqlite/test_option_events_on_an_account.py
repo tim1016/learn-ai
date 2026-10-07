@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import option_events, reads
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
@@ -22,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_external_order
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
 from app.broker.alpaca.clerk.sqlite.option_event_acknowledgement import OptionEventHoldNotAcknowledged
 from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
@@ -82,7 +84,10 @@ async def test_a_stock_only_accounts_poll_asks_alpaca_nothing_and_writes_nothing
     repo = await _a_stock_account_with_a_working_entry(tmp_path, transitions=0)
     try:
         written = repo.last_custody_sequence()
-        keeper = DeadlineKeeper(repo=repo, trade=_FakeTradePort(), read=_NeverAsked(), off_loop=run_inline)
+        keeper = DeadlineKeeper(
+            repo=repo, trade=_FakeTradePort(), read=_NeverAsked(), intake=ReentrantAsyncLock(),
+            pricing=UNPRICEABLE_RECOVERY, off_loop=run_inline,
+        )
 
         await keeper.tick()
         as_the_keeper = await keeper.option_events_read()
@@ -109,7 +114,10 @@ async def test_a_stock_only_accounts_books_are_never_read_for_option_events_howe
         repo = await _a_stock_account_with_a_working_entry(tmp_path / str(transitions), transitions=transitions)
         try:
             written = repo.last_custody_sequence()
-            keeper = DeadlineKeeper(repo=repo, trade=_FakeTradePort(), read=_NeverAsked(), off_loop=run_inline)
+            keeper = DeadlineKeeper(
+                repo=repo, trade=_FakeTradePort(), read=_NeverAsked(), intake=ReentrantAsyncLock(),
+                pricing=UNPRICEABLE_RECOVERY, off_loop=run_inline,
+            )
             with _StepsCounted(repo) as the_round:
                 await keeper.tick()
                 await keeper.option_events_read()
@@ -217,7 +225,7 @@ async def test_the_keepers_round_books_an_expiry_with_no_pass_and_starts_none(pa
     _on_saturday(paper)
     paper.account.settled.add(SYMBOL)
     paper.account.option_events.rows = [_expiry_row()]
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
+    keeper = paper.another_keeper(read=paper.account)
 
     await keeper.tick()
     read = await keeper.option_events_read()
@@ -235,7 +243,7 @@ async def test_the_other_bot_on_the_account_is_not_held_by_one_bots_option_hold(
     await _holding_one_call(paper, "a")
     _on_saturday(paper)
     paper.account.option_events.rows = [_expiry_row(qty="-0.5")]
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
+    keeper = paper.another_keeper(read=paper.account)
 
     await keeper.tick()
     await keeper.option_events_read()
@@ -787,7 +795,7 @@ async def test_a_poll_that_raises_is_tried_again_a_minute_later_and_not_on_the_k
     paper: PaperOptions, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     await _holding_one_call(paper)
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
+    keeper = paper.another_keeper(read=paper.account)
     real_booking = option_events.book_option_events
 
     def breaks(*_args: Any, **_kwargs: Any) -> Any:
@@ -828,7 +836,7 @@ async def test_a_slow_read_of_option_events_does_not_hold_the_keepers_round_or_t
         return await real_read(**asked_for)
 
     paper.account.option_events.read_option_event_activities = slow  # type: ignore[method-assign]
-    keeper = DeadlineKeeper(repo=paper.repo, trade=paper.venue, read=paper.account, off_loop=run_inline)
+    keeper = paper.another_keeper(read=paper.account)
     try:
         await asyncio.wait_for(keeper.tick(), timeout=5)
         await asyncio.sleep(0)

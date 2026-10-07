@@ -314,6 +314,11 @@ async def test_the_clerks_own_task_settles_an_expired_contract_with_no_pass_and_
     # the contract is settled, by a round and by no pass.
     assert dry_run.held() == {}
     assert _booked(dry_run)[0]["summary_code"] == "OPTION_EXPIRED"
+    # The same round had first recorded the scheduled close the contract's last session ended on
+    # (ADR 0076 decision 20). The next round finds nothing held and ends that notice.
+    assert _notice(dry_run, "SCHEDULED_CLOSE_MISSED") is not None
+    assert (await _keepers_round(dry_run)).read is False
+    assert _notice(dry_run, "SCHEDULED_CLOSE_MISSED") is None
     # Nothing is read again until the next read is due, and nothing more is written.
     written = dry_run.repo.last_custody_sequence()
     assert (await _keepers_round(dry_run)).read is False

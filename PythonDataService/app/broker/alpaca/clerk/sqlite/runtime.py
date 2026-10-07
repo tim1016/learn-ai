@@ -110,6 +110,7 @@ from app.broker.alpaca.clerk.sqlite.entry_outcome import (
     ENTRY_OUTCOME_LIMIT_PAST,
     ENTRY_OUTCOME_LIMIT_TOO_FAR,
     MAX_ENTRY_OUTCOME_WAIT_MS,
+    EntryOnTheBooks,
     EntryOutcomeWaitRefused,
     SettledEntry,
     entry_outcome,
@@ -164,6 +165,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, ManualTicketLeg
 from app.broker.alpaca.clerk.sqlite.models import (
+    CommandResource,
     ControlMetaSnapshot,
     ExecutionCoverageResolutionReceipt,
     ManualOrderTicketResource,
@@ -1052,6 +1054,16 @@ class SqliteAlpacaClerkFacade:
             raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
         return the_one_bought_option_leg(action_plan).instrument.underlying
 
+    def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
+        """Raise the typed refusal of an option plan this account does not take (ADR 0076).
+
+        What a runner asks before it opens a stream or asks for a quote
+        line: the rule a bot is registered under, so the two cannot differ.
+        A plan in shares, and an option plan this account takes, raise
+        nothing.
+        """
+        self._symbol_to_register(action_plan)
+
     def _option_plan_account_refusal(self) -> str | None:
         """Why this account takes no option plan, or ``None`` when it does: a Dry Run's and a Paper account do.
 
@@ -1161,6 +1173,43 @@ class SqliteAlpacaClerkFacade:
             strategy_instance_id=strategy_instance_id,
             durable_decision_id=_durable_decision_id(decision_id),
             how_simulated=self._trade.synthesized_option_fills(),
+        )
+
+    def option_contracts_to_watch(self) -> tuple[str, ...]:
+        """The option contracts a bot's run on this account must ask to have quoted, by OCC symbol (ADR 0076).
+
+        One a bot holds, or one an order is working in: the books' own
+        answer, in one read whatever their length. None on a Dry Run's
+        account. There the Clerk's own keeping asks for those lines, from
+        the same read of the books, whether a run is alive or not
+        (``held_option_quotes``), so a run that named them too would ask
+        twice. No keeping follows a real account's books, so its bot's run
+        asks here for the lines to have held.
+        """
+        if self.authority_kind == "synthetic":
+            return ()
+        return self._repo.option_contracts_to_watch()
+
+    def option_entry_of_decision(self, strategy_instance_id: str, decision_id: str) -> EntryOnTheBooks | None:
+        """Where the option entry one decision made stands on the books now, or ``None`` when it made none (ADR 0076).
+
+        Reads only: nothing is waited for and nothing is recorded. What a
+        runner asks of an ENTER whose receipt was a refusal. One the Clerk
+        refused before it took the entry made none. One it took and then
+        did not send made one: it stands never sent, and the code is the
+        one the books last recorded of its order, which says why.
+        """
+        command_id = f"cmd:{strategy_instance_id}:{_durable_decision_id(decision_id)}"
+        with self._repo.write_fence():
+            found = self._option_entry_of_command(command_id)
+            if found is None:
+                return None
+            _command, order = found
+            outcome = entry_outcome(self._repo, order.order_ref)
+            last = self._repo.last_order_transition(order_ref=order.order_ref)
+        assert last is not None, "an entry's order has its acceptance on record"
+        return EntryOnTheBooks(
+            standing=outcome.standing, order_ref=order.order_ref, last_recorded_code=last["summary_code"]
         )
 
     def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:
@@ -1472,6 +1521,22 @@ class SqliteAlpacaClerkFacade:
                 extra={"strategy_instance_id": key[0], "decision_id": key[1]},
                 exc_info=(type(error), error, error.__traceback__),
             )
+
+    async def begin_closing(self) -> None:
+        """Say that this Clerk is closing: from here on it takes no scheduled close (ADR 0076).
+
+        Said under the intake fence, the lock a scheduled close is accepted
+        under. So a close is either accepted before this, and is finished or
+        left for the next start as every unfinished EXIT is, or it is asked
+        after this and not taken. The keeper's task and the account's
+        reconciliation loop both go on while the Clerk closes, and each asks.
+        """
+        try:
+            async with self._intake:
+                self._repo.begin_closing()
+        except IntakeFencePoisonedError:
+            # A poisoned fence takes no run again, so nothing can be accepted under it: said without it.
+            self._repo.begin_closing()
 
     async def drain_effects(self) -> None:
         """Finish accepted broker custody before the repository is closed."""
@@ -2030,8 +2095,8 @@ class SqliteAlpacaClerkFacade:
         - the bot's run is no longer active: the answer is the books' as
           they stand, and nothing is recorded, so a later replay settles
           from the books as they then are;
-        - the Clerk's clock has reached ``until_ms``, the close of the
-          bot's next decision bar: still unproven, the strategy is in.
+        - the Clerk's clock has reached ``until_ms``, the end of the
+          caller's own wait: still unproven, the strategy is in.
 
         The settlement is recorded once, as ``ENTRY_SETTLED`` on the ENTER's
         own timeline, in the same locked read it was worked out in: what is
@@ -2048,8 +2113,8 @@ class SqliteAlpacaClerkFacade:
 
         Raises ``EntryOutcomeWaitRefused``, by name, for a limit the Clerk
         does not take, for an entry still unproven with no answer recorded.
-        One more than a week ahead of its clock: no decision bar closes
-        that far on. And one already past when the wait is asked for:
+        One more than a week ahead of its clock: no caller waits that
+        long. And one already past when the wait is asked for:
         "still unproven at the limit" is a judgment made by waiting to the
         limit, and is not handed out for a limit that was never waited for.
         The books are read first, so an entry already settled, or already
@@ -2083,14 +2148,10 @@ class SqliteAlpacaClerkFacade:
         be waited for (ADR 0076 decision 19).
         """
         with self._repo.write_fence():
-            command = self._repo.get_command(command_id)
-            order = (
-                None
-                if command is None or command.action != "ENTER" or command.effect_operation_id is None
-                else self._repo.order_for_effect_operation(command.effect_operation_id)
-            )
-            if command is None or order is None or option_entry_of_order(self._repo, order.order_ref) is None:
+            found = self._option_entry_of_command(command_id)
+            if found is None:
                 raise LookupError(f"no entry in an option contract is on the books for {command_id!r}")
+            command, order = found
             assert command.effect_operation_id is not None
             recorded = recorded_settlement(self._repo, order.order_ref)
             if recorded is not None:
@@ -2148,6 +2209,18 @@ class SqliteAlpacaClerkFacade:
                 },
             )
             return SettledEntry.of(facts, order_ref=order.order_ref, recorded=True)
+
+    def _option_entry_of_command(self, command_id: str) -> tuple[CommandResource, OrderResource] | None:
+        """The ENTER ``command_id`` and the order of the option entry it made, or ``None`` when it made none."""
+        command = self._repo.get_command(command_id)
+        order = (
+            None
+            if command is None or command.action != "ENTER" or command.effect_operation_id is None
+            else self._repo.order_for_effect_operation(command.effect_operation_id)
+        )
+        if command is None or order is None or option_entry_of_order(self._repo, order.order_ref) is None:
+            return None
+        return command, order
 
     async def _execute_effect_once(
         self,

@@ -145,6 +145,16 @@ class SettledEntry:
         )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EntryOnTheBooks:
+    """Where the option entry one decision made stands on the books now, for a caller that only asks."""
+
+    standing: EntryStanding
+    order_ref: str
+    # The code the books last recorded of the entry's order. For one that was never sent, why.
+    last_recorded_code: str | None
+
+
 def entry_outcome(repo: ClerkSqliteRepository, entry_order_ref: str) -> EntryOutcome:
     """What the option entry accepted as ``entry_order_ref`` has come to. Raises for any other order.
 
@@ -286,10 +296,11 @@ class EntryOutcomeWaitRefused(ValueError):
         self.explanation = explanation
 
 
-# The furthest limit a wait for an outcome is taken with: a week. A limit is the close of the bot's next
-# decision bar. For a daily bar that is three days on over a weekend and more over a holiday, and a bound
-# of exactly one day refused a daily bar's own limit when the Clerk's clock was a millisecond behind the
-# bar's close (ADR 0076 decision 19).
+# The furthest limit a wait for an outcome is taken with: a week. The bound was set for a limit at the
+# close of a bot's next decision bar. For a daily bar that is three days on over a weekend and more over a
+# holiday, and a bound of exactly one day refused a daily bar's own limit when the Clerk's clock was a
+# millisecond behind the bar's close. The bot runner's own limit is far inside it; the bound stays, for
+# any caller (ADR 0076 decision 19).
 MAX_ENTRY_OUTCOME_WAIT_MS = 7 * 24 * 60 * 60 * 1000
 ENTRY_OUTCOME_LIMIT_TOO_FAR = "ENTRY_OUTCOME_LIMIT_TOO_FAR"
 ENTRY_OUTCOME_LIMIT_PAST = "ENTRY_OUTCOME_LIMIT_PAST"
@@ -300,6 +311,7 @@ __all__ = [
     "ENTRY_OUTCOME_LIMIT_TOO_FAR",
     "MAX_ENTRY_OUTCOME_WAIT_MS",
     "PROVEN_STANDINGS",
+    "EntryOnTheBooks",
     "EntryOutcome",
     "EntryOutcomeWaitRefused",
     "EntrySettlement",

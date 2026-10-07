@@ -982,6 +982,16 @@ def test_residue_discharge_is_refused_outside_its_stranded_state(
     assert action.execution_ref is None
 
 
+def test_a_write_off_not_offered_for_want_of_a_notice_names_every_notice_that_would_allow_it() -> None:
+    from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
+
+    action = _discharge(_residue_context(uncertainties=()))
+
+    allowing = [code for code, policy in _REASON_POLICIES.items() if policy.residue_discharge == "strands"]
+    assert action.unavailable_reason_code == "NO_STRANDED_EXIT_EPISODE" and action.unavailable_reason is not None
+    assert len(allowing) == 3 and all(code in action.unavailable_reason for code in allowing)
+
+
 def test_residue_discharge_token_rejects_a_changed_residue() -> None:
     presented = _discharge(_residue_context())
     moved = _residue_context(

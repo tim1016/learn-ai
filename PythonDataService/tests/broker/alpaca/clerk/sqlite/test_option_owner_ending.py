@@ -138,7 +138,10 @@ async def _stopped_before_the_last_session_with_no_price_kept(account: _DryRun) 
     await _stopped_on_thursday_with_nothing_bid(account)
     _wait_until(account, MONDAY_NOON)
     await _passes(account, 2)
-    assert set(await _page_notices(account)) == {"EXIT_NOT_FLAT", "OPTION_EXPIRED_NOT_SETTLED"}
+    # The pass also records the scheduled close the contract's last session ended on (ADR 0076 decision 20).
+    assert set(await _page_notices(account)) == {
+        "EXIT_NOT_FLAT", "OPTION_EXPIRED_NOT_SETTLED", "SCHEDULED_CLOSE_MISSED"
+    }
 
 
 async def test_the_notice_of_a_contract_a_dry_run_cannot_settle_promises_no_price_and_says_what_the_owner_can_do(
@@ -200,7 +203,8 @@ async def test_a_running_dry_run_whose_feed_was_down_all_of_the_last_session_can
     await dry_run.enter(dry_run.evidence())
     _wait_until(dry_run, SATURDAY_NOON)
     await dry_run.clerk.reconcile_once()
-    assert set(await _page_notices(dry_run)) == {"OPTION_EXPIRED_NOT_SETTLED"}
+    # Its scheduled close was never taken either: that is the other notice (ADR 0076 decision 20).
+    assert set(await _page_notices(dry_run)) == {"OPTION_EXPIRED_NOT_SETTLED", "SCHEDULED_CLOSE_MISSED"}
     assert dry_run.repo.active_run(SID) is not None
 
     await _press(dry_run.clerk, SID)

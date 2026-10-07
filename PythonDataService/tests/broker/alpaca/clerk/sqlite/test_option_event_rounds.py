@@ -17,10 +17,12 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import exit_watchdog, option_events
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import BrokerSymbolView
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline, to_thread
 from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
 from app.broker.alpaca.clerk.sqlite.option_events import book_option_events, poll_option_events
@@ -188,7 +190,10 @@ async def test_the_keepers_stop_ends_the_read_it_started(tmp_path: Path) -> None
         return await real_read(**asked_for)
 
     account.option_events.read_option_event_activities = slow  # type: ignore[method-assign]
-    keeper = DeadlineKeeper(repo=repo, trade=_FakeTradePort(), read=account, off_loop=run_inline)
+    keeper = DeadlineKeeper(
+        repo=repo, trade=_FakeTradePort(), read=account, intake=ReentrantAsyncLock(), pricing=UNPRICEABLE_RECOVERY,
+        off_loop=run_inline,
+    )
     try:
         await keeper.tick()
         await asyncio.sleep(0)

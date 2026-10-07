@@ -33310,6 +33310,10 @@
             "title": "Description",
             "type": "string"
           },
+          "in_a_sentence": {
+            "title": "In A Sentence",
+            "type": "string"
+          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -33328,6 +33332,7 @@
         "required": [
           "structure",
           "label",
+          "in_a_sentence",
           "description",
           "legs"
         ],
@@ -34968,16 +34973,64 @@
         "title": "OptionOrderTermDefaults",
         "type": "object"
       },
+      "OptionOrderTermNotes": {
+        "additionalProperties": false,
+        "description": "What How says under the option order terms, for every option bot.",
+        "properties": {
+          "alpaca_sentence": {
+            "title": "Alpaca Sentence",
+            "type": "string"
+          },
+          "entries_sentence": {
+            "title": "Entries Sentence",
+            "type": "string"
+          },
+          "exits_sentence": {
+            "title": "Exits Sentence",
+            "type": "string"
+          },
+          "hours_sentence": {
+            "title": "Hours Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entries_sentence",
+          "exits_sentence",
+          "hours_sentence",
+          "alpaca_sentence"
+        ],
+        "title": "OptionOrderTermNotes",
+        "type": "object"
+      },
       "OptionPercentTerm": {
         "additionalProperties": false,
         "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/OptionValueBounds"
+          },
           "default": {
             "title": "Default",
+            "type": "string"
+          },
+          "help": {
+            "title": "Help",
             "type": "string"
           },
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "range_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Reason"
           },
           "unit_label": {
             "title": "Unit Label",
@@ -34987,7 +35040,10 @@
         "required": [
           "label",
           "unit_label",
-          "default"
+          "default",
+          "bounds",
+          "help",
+          "range_reason"
         ],
         "title": "OptionPercentTerm",
         "type": "object"
@@ -35055,6 +35111,17 @@
             ],
             "title": "Gain Sentence"
           },
+          "gain_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain Usd"
+          },
           "loss_cents": {
             "anyOf": [
               {
@@ -35084,6 +35151,24 @@
             ],
             "title": "Loss Sentence"
           },
+          "loss_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Usd"
+          },
+          "sketch": {
+            "items": {
+              "$ref": "#/components/schemas/OptionPreviewSketchPoint"
+            },
+            "title": "Sketch",
+            "type": "array"
+          },
           "warning_sentence": {
             "title": "Warning Sentence",
             "type": "string"
@@ -35101,9 +35186,122 @@
           "gain_sentence",
           "break_even_sentence",
           "assumptions_sentence",
-          "warning_sentence"
+          "warning_sentence",
+          "loss_usd",
+          "gain_usd",
+          "sketch"
         ],
         "title": "OptionPreviewAtExpiry",
+        "type": "object"
+      },
+      "OptionPreviewDecay": {
+        "additionalProperties": false,
+        "description": "What the next 24 hours take from the entry, by this system's own model, with the underlying's price,\neach leg's volatility and the rate held. An estimate. Three such days pass over a weekend.",
+        "properties": {
+          "assumptions_sentence": {
+            "title": "Assumptions Sentence",
+            "type": "string"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "loses",
+                  "gains",
+                  "neither"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "estimated": {
+            "title": "Estimated",
+            "type": "boolean"
+          },
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "near_ex_date_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Near Ex Date Sentence"
+          },
+          "per_24h_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per 24H Cents"
+          },
+          "per_24h_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per 24H Usd"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "warning_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning Sentence"
+          }
+        },
+        "required": [
+          "estimated",
+          "reason_code",
+          "leg_ids",
+          "per_24h_cents",
+          "per_24h_usd",
+          "direction",
+          "sentence",
+          "assumptions_sentence",
+          "warning_sentence",
+          "near_ex_date_sentence"
+        ],
+        "title": "OptionPreviewDecay",
         "type": "object"
       },
       "OptionPreviewDividend": {
@@ -35126,6 +35324,34 @@
           "cash_per_share"
         ],
         "title": "OptionPreviewDividend",
+        "type": "object"
+      },
+      "OptionPreviewEntryRefusal": {
+        "additionalProperties": false,
+        "description": "One reason an entry on these picks and quotes would be refused.",
+        "properties": {
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason_code",
+          "leg_ids",
+          "sentence"
+        ],
+        "title": "OptionPreviewEntryRefusal",
         "type": "object"
       },
       "OptionPreviewLean": {
@@ -35210,8 +35436,16 @@
             "title": "Delta Status",
             "type": "string"
           },
+          "delta_status_sentence": {
+            "title": "Delta Status Sentence",
+            "type": "string"
+          },
           "gap_percent_of_mid": {
             "title": "Gap Percent Of Mid",
+            "type": "string"
+          },
+          "gap_sentence": {
+            "title": "Gap Sentence",
             "type": "string"
           },
           "ibkr_delta": {
@@ -35240,6 +35474,21 @@
             "title": "Leg Id",
             "type": "string"
           },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "over_gap_limit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Over Gap Limit"
+          },
           "position": {
             "enum": [
               "long",
@@ -35258,17 +35507,51 @@
         },
         "required": [
           "leg_id",
+          "number",
           "position",
           "ratio",
           "contract",
           "quote",
           "gap_percent_of_mid",
+          "over_gap_limit",
+          "gap_sentence",
           "delta",
           "implied_volatility",
           "delta_status",
+          "delta_status_sentence",
           "ibkr_delta"
         ],
         "title": "OptionPreviewLeg",
+        "type": "object"
+      },
+      "OptionPreviewLegAsked": {
+        "additionalProperties": false,
+        "description": "One leg as it was asked for: its rules, in words.",
+        "properties": {
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "side_label": {
+            "title": "Side Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "number",
+          "side_label",
+          "sentence"
+        ],
+        "title": "OptionPreviewLegAsked",
         "type": "object"
       },
       "OptionPreviewMoney": {
@@ -35278,6 +35561,10 @@
           "broker_requirement_cents": {
             "title": "Broker Requirement Cents",
             "type": "integer"
+          },
+          "broker_requirement_usd": {
+            "title": "Broker Requirement Usd",
+            "type": "string"
           },
           "cost_limit_percent": {
             "title": "Cost Limit Percent",
@@ -35291,9 +35578,17 @@
             "title": "Entry Commitment Cents",
             "type": "integer"
           },
+          "entry_commitment_usd": {
+            "title": "Entry Commitment Usd",
+            "type": "string"
+          },
           "fee_estimate_cents": {
             "title": "Fee Estimate Cents",
             "type": "integer"
+          },
+          "fee_estimate_usd": {
+            "title": "Fee Estimate Usd",
+            "type": "string"
           },
           "fees_sentence": {
             "title": "Fees Sentence",
@@ -35315,6 +35610,10 @@
             "title": "Net Price",
             "type": "string"
           },
+          "net_price_usd": {
+            "title": "Net Price Usd",
+            "type": "string"
+          },
           "over_cost_limit": {
             "title": "Over Cost Limit",
             "type": "boolean"
@@ -35328,12 +35627,32 @@
             "title": "Premium Is",
             "type": "string"
           },
+          "premium_is_label": {
+            "title": "Premium Is Label",
+            "type": "string"
+          },
+          "premium_per_structure_usd": {
+            "title": "Premium Per Structure Usd",
+            "type": "string"
+          },
+          "premium_sentence": {
+            "title": "Premium Sentence",
+            "type": "string"
+          },
+          "premium_usd": {
+            "title": "Premium Usd",
+            "type": "string"
+          },
           "round_trip_cost_cents": {
             "title": "Round Trip Cost Cents",
             "type": "integer"
           },
           "round_trip_cost_percent": {
             "title": "Round Trip Cost Percent",
+            "type": "string"
+          },
+          "round_trip_cost_usd": {
+            "title": "Round Trip Cost Usd",
             "type": "string"
           },
           "structures": {
@@ -35356,9 +35675,58 @@
           "cost_limit_percent",
           "over_cost_limit",
           "cost_sentence",
-          "fees_sentence"
+          "fees_sentence",
+          "net_price_usd",
+          "premium_usd",
+          "premium_per_structure_usd",
+          "premium_is_label",
+          "premium_sentence",
+          "broker_requirement_usd",
+          "fee_estimate_usd",
+          "entry_commitment_usd",
+          "round_trip_cost_usd"
         ],
         "title": "OptionPreviewMoney",
+        "type": "object"
+      },
+      "OptionPreviewOrderTerms": {
+        "additionalProperties": false,
+        "description": "The order terms this preview was asked with, and what they come to.",
+        "properties": {
+          "cost_limit_percent": {
+            "title": "Cost Limit Percent",
+            "type": "string"
+          },
+          "entry_wait_seconds": {
+            "title": "Entry Wait Seconds",
+            "type": "integer"
+          },
+          "expiry_close_lead_minutes": {
+            "title": "Expiry Close Lead Minutes",
+            "type": "integer"
+          },
+          "expiry_close_sentence": {
+            "title": "Expiry Close Sentence",
+            "type": "string"
+          },
+          "gap_limit_percent": {
+            "title": "Gap Limit Percent",
+            "type": "string"
+          },
+          "orders_sentence": {
+            "title": "Orders Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gap_limit_percent",
+          "entry_wait_seconds",
+          "cost_limit_percent",
+          "expiry_close_lead_minutes",
+          "expiry_close_sentence",
+          "orders_sentence"
+        ],
+        "title": "OptionPreviewOrderTerms",
         "type": "object"
       },
       "OptionPreviewPricingInputs": {
@@ -35440,6 +35808,31 @@
           "ask_age_ms"
         ],
         "title": "OptionPreviewQuote",
+        "type": "object"
+      },
+      "OptionPreviewSketchPoint": {
+        "additionalProperties": false,
+        "description": "One point of the profit-and-loss line at expiry: the underlying's price, and what the entry comes to there.",
+        "properties": {
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "result_cents": {
+            "title": "Result Cents",
+            "type": "integer"
+          },
+          "result_usd": {
+            "title": "Result Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "price",
+          "result_cents",
+          "result_usd"
+        ],
+        "title": "OptionPreviewSketchPoint",
         "type": "object"
       },
       "OptionPreviewVerdict": {
@@ -35545,10 +35938,15 @@
             },
             "title": "Ranges",
             "type": "array"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
           }
         },
         "required": [
           "ranges",
+          "sentence",
           "lines_wanted",
           "lines_held",
           "lines_refused",
@@ -35588,6 +35986,10 @@
             ],
             "title": "Right",
             "type": "string"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
           }
         },
         "required": [
@@ -35595,7 +35997,8 @@
           "expiry_ms",
           "lowest_strike",
           "highest_strike",
-          "contracts"
+          "contracts",
+          "sentence"
         ],
         "title": "OptionPreviewWatchedRange",
         "type": "object"
@@ -35629,6 +36032,9 @@
         "additionalProperties": false,
         "description": "How far from its target a rule's pick may be: the builder's \"Within\".",
         "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/OptionValueBounds"
+          },
           "default": {
             "title": "Default",
             "type": "number"
@@ -35655,7 +36061,8 @@
           "field",
           "unit",
           "unit_label",
-          "default"
+          "default",
+          "bounds"
         ],
         "title": "OptionRuleTolerance",
         "type": "object"
@@ -35664,6 +36071,9 @@
         "additionalProperties": false,
         "description": "What the box beside a rule holds.",
         "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/OptionValueBounds"
+          },
           "field": {
             "title": "Field",
             "type": "string"
@@ -35688,7 +36098,8 @@
         "required": [
           "field",
           "unit",
-          "unit_label"
+          "unit_label",
+          "bounds"
         ],
         "title": "OptionRuleValue",
         "type": "object"
@@ -35753,6 +36164,10 @@
             "title": "Custom Description",
             "type": "string"
           },
+          "custom_in_a_sentence": {
+            "title": "Custom In A Sentence",
+            "type": "string"
+          },
           "custom_label": {
             "title": "Custom Label",
             "type": "string"
@@ -35771,9 +36186,15 @@
             "title": "Groups",
             "type": "array"
           },
+          "leg_quantity_bounds": {
+            "$ref": "#/components/schemas/OptionValueBounds"
+          },
           "max_legs": {
             "title": "Max Legs",
             "type": "integer"
+          },
+          "order_term_notes": {
+            "$ref": "#/components/schemas/OptionOrderTermNotes"
           },
           "order_terms": {
             "$ref": "#/components/schemas/OptionOrderTermDefaults"
@@ -35784,16 +36205,23 @@
             },
             "title": "Strike Rules",
             "type": "array"
+          },
+          "structures_bounds": {
+            "$ref": "#/components/schemas/OptionValueBounds"
           }
         },
         "required": [
           "groups",
           "custom_label",
+          "custom_in_a_sentence",
           "custom_description",
           "max_legs",
+          "leg_quantity_bounds",
+          "structures_bounds",
           "strike_rules",
           "expiry_rules",
-          "order_terms"
+          "order_terms",
+          "order_term_notes"
         ],
         "title": "OptionStructureCatalogue",
         "type": "object"
@@ -35804,6 +36232,8 @@
           "ask_again_in_ms": {
             "anyOf": [
               {
+                "maximum": 60000.0,
+                "minimum": 1000.0,
                 "type": "integer"
               },
               {
@@ -35836,6 +36266,34 @@
             "title": "Cost Limit Percent",
             "type": "string"
           },
+          "decay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewDecay"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry_refusals": {
+            "items": {
+              "$ref": "#/components/schemas/OptionPreviewEntryRefusal"
+            },
+            "title": "Entry Refusals",
+            "type": "array"
+          },
+          "entry_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Sentence"
+          },
           "fault": {
             "anyOf": [
               {
@@ -35858,7 +36316,32 @@
             ],
             "title": "Feed Generation"
           },
-          "gap_limit_percent": {
+          "figures_good_for_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figures Good For Ms"
+          },
+          "figures_good_until_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Figures Good Until Ms"
+          },
+          "figures_stale_sentence": {
             "anyOf": [
               {
                 "type": "string"
@@ -35867,7 +36350,11 @@
                 "type": "null"
               }
             ],
-            "title": "Gap Limit Percent"
+            "title": "Figures Stale Sentence"
+          },
+          "gap_limit_percent": {
+            "title": "Gap Limit Percent",
+            "type": "string"
           },
           "lean": {
             "anyOf": [
@@ -35904,6 +36391,13 @@
             "title": "Legs",
             "type": "array"
           },
+          "legs_asked": {
+            "items": {
+              "$ref": "#/components/schemas/OptionPreviewLegAsked"
+            },
+            "title": "Legs Asked",
+            "type": "array"
+          },
           "money": {
             "anyOf": [
               {
@@ -35936,6 +36430,16 @@
             ],
             "title": "Oldest Quote Age Ms"
           },
+          "order_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionPreviewOrderTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "preview_sentence": {
             "title": "Preview Sentence",
             "type": "string"
@@ -35956,6 +36460,17 @@
             "minimum": 0.0,
             "title": "Quotes Read Ms",
             "type": "integer"
+          },
+          "quotes_read_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quotes Read Sentence"
           },
           "reason_code": {
             "anyOf": [
@@ -35994,6 +36509,10 @@
                 "type": "null"
               }
             ]
+          },
+          "structure_in_a_sentence": {
+            "title": "Structure In A Sentence",
+            "type": "string"
           },
           "structure_label": {
             "title": "Structure Label",
@@ -36064,12 +36583,19 @@
           "underlying",
           "structure",
           "structure_label",
+          "structure_in_a_sentence",
           "structures",
           "gap_limit_percent",
           "cost_limit_percent",
+          "order_terms",
+          "legs_asked",
           "quotes_read_ms",
           "feed_generation",
           "oldest_quote_age_ms",
+          "quotes_read_sentence",
+          "figures_good_until_ms",
+          "figures_good_for_ms",
+          "figures_stale_sentence",
           "underlying_quote",
           "the_money",
           "the_money_sentence",
@@ -36079,6 +36605,9 @@
           "at_expiry",
           "lean",
           "lean_unknown_sentence",
+          "decay",
+          "entry_refusals",
+          "entry_sentence",
           "watched",
           "pricing_inputs",
           "preview_sentence"
@@ -36103,6 +36632,20 @@
             "default": "10",
             "title": "Cost Limit Percent"
           },
+          "entry_wait_seconds": {
+            "default": 20,
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Entry Wait Seconds",
+            "type": "integer"
+          },
+          "expiry_close_lead_minutes": {
+            "default": 45,
+            "maximum": 390.0,
+            "minimum": 0.0,
+            "title": "Expiry Close Lead Minutes",
+            "type": "integer"
+          },
           "gap_limit_percent": {
             "anyOf": [
               {
@@ -36112,11 +36655,9 @@
               },
               {
                 "type": "string"
-              },
-              {
-                "type": "null"
               }
             ],
+            "default": "8",
             "title": "Gap Limit Percent"
           },
           "legs": {
@@ -36224,16 +36765,125 @@
         "title": "OptionTemplatePosition",
         "type": "object"
       },
+      "OptionValueBounds": {
+        "additionalProperties": false,
+        "description": "What may be typed into a box: the range the server holds it to. A form can refuse a value outside it\nbefore asking. One that reaches the preview all the same is refused in words.\n\nA box uses one pair of ends, never both. A box that takes a number uses\n``min`` and ``max``, exact decimals, and its ``min_ms`` and ``max_ms``\nare null. A box that takes a date (a rule value whose ``unit`` is\n``date``) uses ``min_ms`` and ``max_ms``: the first and the last date\nit takes, each as that date's 16:00 New York anchor in ``int64 ms UTC``,\nto be shown in the date-only New York mode. Its ``min`` and ``max`` are\nnull, which there does not mean \"no bound\".",
+        "properties": {
+          "max": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "max_included": {
+            "title": "Max Included",
+            "type": "boolean"
+          },
+          "max_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Ms"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "min_included": {
+            "title": "Min Included",
+            "type": "boolean"
+          },
+          "min_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Ms"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "required": [
+          "min",
+          "min_included",
+          "max",
+          "max_included",
+          "min_ms",
+          "max_ms",
+          "step",
+          "sentence"
+        ],
+        "title": "OptionValueBounds",
+        "type": "object"
+      },
       "OptionWholeNumberTerm": {
         "additionalProperties": false,
         "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/OptionValueBounds"
+          },
           "default": {
             "title": "Default",
             "type": "integer"
           },
+          "help": {
+            "title": "Help",
+            "type": "string"
+          },
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "range_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Reason"
           },
           "unit_label": {
             "title": "Unit Label",
@@ -36243,7 +36893,10 @@
         "required": [
           "label",
           "unit_label",
-          "default"
+          "default",
+          "bounds",
+          "help",
+          "range_reason"
         ],
         "title": "OptionWholeNumberTerm",
         "type": "object"

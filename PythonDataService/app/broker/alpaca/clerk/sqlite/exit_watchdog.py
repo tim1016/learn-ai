@@ -71,6 +71,31 @@ cannot come. The first pass to hold it so also rewrites the bot's open EXIT
 notices to say that the contract expired: they were written while a retry or
 a flatten could still close it, and a stopped bot makes no later EXIT that
 would correct them.
+
+ADR 0076: a holding whose scheduled close the Clerk has taken -- its own
+close of an option position on its expiry day, or of a structure with a sold
+leg before a session's close -- is retried on that close's own rule for as
+long as the session it was due in is open. The episode is ready again 30
+seconds after it failed, not two minutes. It is not counted out after three
+tries and the bot is not given up: the session's end is the limit, and a
+close its session ended on is recorded as missed (``scheduled_close``). The
+rule is read from the books in the scan
+(``scheduled_close.close_being_retried``): is the contract still held, does
+it owe a close in the session open now, and was that close accepted? It is
+not read from the orders the open notice names, so another exit of the bot
+that fails after the close leaves the rule standing. It is read once more
+before a bot is given up: a pass that took the close after its scan does
+not give the bot up. Every check a re-drive passes still stands, and under
+the rule two more are asked in the run that accepts it. Has the Clerk
+begun to close? Then it sends no close again, and the next start does.
+And has the retry wait passed since the bot's newest exit? On a Dry Run
+the keeper retries a failed close too, and its try may have come since the
+scan. Each re-drive made under the rule records the same close on its own
+acceptance, and neither it nor the time it failed for is counted toward
+giving the bot up.
+So the next session starts from where the ordinary count stood before the
+close was taken. A count that was already full then gives the bot up at
+that session's open, with nothing sent.
 """
 
 from __future__ import annotations
@@ -117,6 +142,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
     OrderSubmitFailedFacts,
+    ScheduledCloseFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -130,6 +156,11 @@ from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadE
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.scheduled_close import (
+    SCHEDULED_CLOSE_RETRY_AFTER_MS,
+    close_being_retried,
+    inside_the_retry_wait,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
@@ -194,6 +225,9 @@ class EpisodeAttempt:
     # Its EXIT sells only inside the regular session
     # (``ExitAcceptedFacts.regular_session_only``, #2607).
     regular_session_only: bool = False
+    # The scheduled close its EXIT is, or was made under the rule of
+    # (``ExitAcceptedFacts.scheduled_close``, ADR 0076). Such a try is not counted toward giving up.
+    scheduled_close: ScheduledCloseFacts | None = None
 
 
 type OppositeSide = Literal["open", "ended"]
@@ -220,10 +254,27 @@ class _StaleExit:
     # Why nothing is sent while ``stopped``, by the open ``EXIT_STUCK``
     # episode's cause (#2854).
     stopped_because: str = RECOVERY_STOPPED_AFTER_FAILURES
+    # The scheduled close the Clerk took of this holding in the session open at the scan, read
+    # from the books (ADR 0076). While it is set the close's own retry rule holds: ready again
+    # sooner, never counted out, never given up, and each re-drive records this same close.
+    scheduled_close: ScheduledCloseFacts | None = None
+
+    @property
+    def failed_redrives(self) -> int:
+        """Every regular-session re-drive of the episode that was sent and failed, under whichever rule."""
+        return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
 
     @property
     def regular_failures(self) -> int:
-        return sum(a.redrive and a.submitted and a.failed and not a.extended_hours for a in self.attempts)
+        """The failed regular-session re-drives that count toward giving up.
+
+        A re-drive made under a scheduled close's own rule is not one of
+        them: that rule has the session's end for its limit (ADR 0076).
+        """
+        return sum(
+            a.redrive and a.submitted and a.failed and not a.extended_hours and a.scheduled_close is None
+            for a in self.attempts
+        )
 
     @property
     def regular_session_only(self) -> bool:
@@ -280,6 +331,7 @@ def episode_attempts(
             repo.has_order_transition(order_ref=order.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"),
             effect.state == "failed", created.extended_hours, bound, redrive,
             regular_session_only=accepted is not None and accepted.regular_session_only,
+            scheduled_close=None if accepted is None else accepted.the_scheduled_close,
         ))
     return redrives, tuple(attempts)
 
@@ -311,11 +363,21 @@ def _scan_stale_exits(repo: ClerkSqliteRepository) -> list[_StaleExit]:
         opposite = opposite_side_after_refusal(
             repo, facts.evidence_refs, symbol=cause.symbol, side=reducing_side(remaining),
         )
-        settled = episode["observed_at_ms"] + policy.after_ms
+        # A holding's scheduled close has a retry rule of its own while its session is open
+        # (ADR 0076). Asked of the books, and only for a position in an option contract.
+        scheduled = (
+            close_being_retried(repo, sid, cause.symbol, repo.clock())
+            if is_option_contract_symbol(cause.symbol.upper())
+            else None
+        )
+        settled = episode["observed_at_ms"] + (SCHEDULED_CLOSE_RETRY_AFTER_MS if scheduled is not None else policy.after_ms)
         send_now = opposite == "ended" or replacement_ready(repo, facts.evidence_refs)
         ready = repo.clock() if not stopped and send_now else settled
         because = RECOVERY_STOPPED_AFTER_FAILURES if stuck is None else recovery_stopped_because(stuck)
-        stale.append(_StaleExit(sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled, because))
+        stale.append(_StaleExit(
+            sid, episode, cause, remaining, redrives, token, attempts, ready, stopped, opposite, settled, because,
+            scheduled_close=scheduled,
+        ))
     return stale
 
 
@@ -386,7 +448,9 @@ def evaluate_recovery_wait(
                               next_redrive_at_ms(not_before_ms=stale.ready_at_ms, policy=policy))
     if verdict == "send":
         age_policy = reason_age_policy(EXIT_NOT_FLAT_REASON_CODE, RedriveThenEscalate)
-        if stale.regular_failures >= age_policy.max_count:
+        # A scheduled close is not counted out while its own session is open: that session's end is its limit.
+        counted_out = stale.regular_failures >= age_policy.max_count
+        if counted_out and stale.scheduled_close is None:
             return RecoveryResult("failure", "EXIT_REDRIVES_EXHAUSTED", "Automatic regular-session exit attempts were exhausted.")
     elif stale.opposite_side is None:
         bound = max((a.valid_until_ms for a in stale.attempts if a.submitted and a.extended_hours
@@ -455,6 +519,7 @@ async def _recover_stale_exit(
             symbol=cause.symbol, decision_id=f"{redrive_decision_prefix(stale.episode_token)}{stale.redrives + 1}",
             entry_order_ref=target.order_ref, confirmed_shape=shape,
             regular_session_only=stale.regular_session_only,
+            scheduled_close=stale.scheduled_close,
         )
         if accepted is None:
             return None
@@ -528,10 +593,15 @@ def commit_recovery_evaluations(
             repo, strategy_instance_id=stale.strategy_instance_id, uncertainty_id=stale.episode["uncertainty_id"],
             result=result, evaluated_at_ms=evaluation.evaluated_at_ms,
             pass_started_at_ms=pass_started_at_ms, interval_ms=interval_ms,
+            # Time a scheduled close fails for under its own rule is not time toward giving up (ADR 0076).
+            spends_failure_time=stale.scheduled_close is None,
         )
         if observation is not None:
             _say_if_the_contract_expired(repo, evaluation)
         if observation is None or result.outcome != "failure":
+            continue
+        if stale.scheduled_close is not None:
+            # The Clerk does not give up on a scheduled close while its own session is open (ADR 0076).
             continue
         exhausted = stale.regular_failures >= policy.max_count
         if not exhausted and observation.failure_elapsed_ms < policy.after_ms * (policy.max_count + 1):
@@ -577,6 +647,7 @@ def _accept_admissible_redrive(
     entry_order_ref: str,
     confirmed_shape: ConfirmedRecoveryShape | None,
     regular_session_only: bool = False,
+    scheduled_close: ScheduledCloseFacts | None = None,
 ) -> ExitSubmission | _RedriveRefused | None:
     """Accept the re-drive EXIT only when the broker and the REDUCE gate admit it.
 
@@ -612,6 +683,21 @@ def _accept_admissible_redrive(
                 f"{outside.sentence} The Clerk did not place it, and it is in a contract this bot holds. The bot's "
                 "own order waits until it is settled."
             ),
+        )
+    if scheduled_close is not None and repo.closing:
+        # A closing Clerk takes no scheduled close, and sends none again (ADR 0076). The next start does.
+        return _RedriveRefused(
+            action="exit_redrive_deferred_clerk_closing", reason_code="RECOVERY_CLERK_CLOSING",
+            message="The Clerk is shutting down. It sends this close again once it has started again.",
+            facts={}, outcome="hold",
+        )
+    if scheduled_close is not None and inside_the_retry_wait(repo, strategy_instance_id):
+        # Asked again here, as the keeper's own retry is: on a Dry Run the keeper sends a failed
+        # scheduled close again too, and its try may have been made since the scan (ADR 0076).
+        return _RedriveRefused(
+            action="exit_redrive_deferred_inside_the_retry_wait", reason_code="RECOVERY_RETRY_WAIT",
+            message="Another exit of this bot was tried a moment ago; the Clerk waits before it sends the close again.",
+            facts={}, outcome="hold",
         )
     if clerk_work_in_flight(repo, symbol):
         unconfirmed_of = bots_with_an_unconfirmed_closing_order(repo, symbol, other_than=strategy_instance_id)
@@ -679,6 +765,7 @@ def _accept_admissible_redrive(
         entry_order_ref=entry_order_ref,
         confirmed_shape=confirmed_shape,
         regular_session_only=regular_session_only,
+        scheduled_close=scheduled_close,
     )
 
 
@@ -791,7 +878,8 @@ def _escalate_to_exit_stuck(
     """
     sid = stale_exit.strategy_instance_id
     cause = stale_exit.cause
-    redrives = stale_exit.regular_failures
+    # What the owner is told is every re-drive that was sent, also those not counted toward giving up.
+    redrives = stale_exit.failed_redrives
     if deferred_since_ms is None:
         headline = "A stuck EXIT exhausted automatic re-drives"
         why = f"after {redrives} automatic EXIT re-drives."
@@ -810,6 +898,10 @@ def _escalate_to_exit_stuck(
         now. Escalating either from obsolete data would leave an
         already-flat strategy paused behind a false operator-visible
         error (#1993 review).
+
+        The same pass can also take the holding's scheduled close after
+        its scan. That close's own retry rule holds from then on, so this
+        pass does not give the bot up (ADR 0076).
         """
         episode_now = repo.active_uncertainty(
             scope="CUSTODY_SUBJECT",
@@ -822,6 +914,8 @@ def _escalate_to_exit_stuck(
             return None
         remaining_now = repo.position(sid, cause.symbol)
         if not position_quantity_is_nonzero(remaining_now):
+            return None
+        if stale_exit.closes_an_option and close_being_retried(repo, sid, cause.symbol, repo.clock()) is not None:
             return None
         return raise_uncertainty(
             repo,
