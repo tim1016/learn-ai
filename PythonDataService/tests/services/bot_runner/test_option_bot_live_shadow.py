@@ -613,3 +613,27 @@ async def test_the_clerk_says_how_the_shadow_priced_what_each_decision_filled(sh
     by_order = shadow.clerk.synthesized_option_fills()
     assert by_order[bought.order_ref].request.limit_price == Decimal("4.12")
     assert by_order[sold.order_ref].request.limit_price is None
+
+
+async def test_a_shadows_exit_is_sold_at_the_quote_its_own_decision_read_not_at_an_older_mark(
+    shadow: ShadowFloor,
+) -> None:
+    """The call ticks up in the moment before the EXIT is decided, after the keeping last stated its mark.
+    The runner hands the Clerk the quote its decision read, and the book sells at that quote's bid."""
+
+    async def the_call_ticks_as_the_bar_arrives(floor: ShadowFloor) -> None:
+        floor.markets[585] = ("4.40", "4.44")
+        await floor.bar_arrives(EXIT_MS + 300)
+
+    script = _round_trip()
+    script[4] = Step(script[4].bar, before=the_call_ticks_as_the_bar_arrives)  # type: ignore[arg-type]
+
+    await shadow.run(script)
+
+    marked = shadow.kept_quotes().stated_mark(CALL, at_or_before_ms=EXIT_MS + 299)
+    assert marked is not None and marked.quote.bid == Decimal("4.08"), "the mark stated before the tick"
+    (sold,) = [fill for fill in shadow.simulated_fills() if fill.request.side is OrderSide.SELL]
+    assert (sold.fill_model, sold.fill_price, sold.quote_age_ms) == (
+        SimulatedFillModel.NATURAL_PRICE, Decimal("4.40"), 0
+    )
+    assert shadow.holds() == {}
