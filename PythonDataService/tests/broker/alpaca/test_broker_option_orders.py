@@ -317,8 +317,11 @@ async def test_a_lookup_answer_refused_here_does_not_end_the_grace_of_an_unknown
     with pytest.raises(BrokerUnavailable):
         await broker.get_option_order_by_client_order_id(_REF)
 
-    # The window is the submit's own: the refused answer did not start it again.
+    # The 30 seconds count from the refused answer, the last time Alpaca answered under this client order id.
     now[0] += _SUBMIT_VISIBILITY_GRACE_S - 2
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+    now[0] += 2
     assert await broker.get_option_order_by_client_order_id(_REF) is None
 
 
@@ -461,6 +464,114 @@ async def test_an_accepted_order_whose_answer_cannot_be_read_still_names_the_ord
     assert on_submit.value.broker_order_id == _PARENT_ID
     assert on_lookup.value.broker_order_id == _PARENT_ID
     assert by_its_own_id.value.broker_order_id == _PARENT_ID
+
+
+@pytest.mark.parametrize("spelling", [_PARENT_ID, _PARENT_ID.upper()], ids=["as given", "upper case"])
+@responses.activate
+async def test_the_order_id_an_unreadable_answer_names_is_not_called_absent_a_moment_later(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch, spelling: str
+) -> None:
+    """The id is handed on so the order can be read or cancelled by it. Alpaca answered for that order a
+    moment ago, so its 404 to a read by the id is no more proof than its 404 to the lookup (#2913)."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, json=_answer("MultilegOptionsOrderResponse", filled_qty="some"))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as on_submit:
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+    assert on_submit.value.broker_order_id == _PARENT_ID
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(spelling)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S - 2
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(spelling)
+    now[0] += 2
+    assert await broker.get_option_order_by_broker_order_id(spelling) is None
+
+
+@responses.activate
+async def test_a_parent_shown_without_its_legs_is_not_called_absent_by_a_read_of_its_own_id(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No submit was made in this process. The lookup found the parent, so a 404 to its own id proves nothing."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.GET, _BY_CLIENT_ID, json=_answer("MultilegOptionsOrderResponse", legs=None))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as on_lookup:
+        await broker.get_option_order_by_client_order_id(_REF)
+    assert on_lookup.value.broker_order_id == _PARENT_ID
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+
+
+@responses.activate
+async def test_an_order_whose_own_id_read_could_not_be_read_is_not_called_absent_a_moment_later(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", json=_answer("MultilegOptionsOrderResponse", qty="x"))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable):
+        await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+
+
+@responses.activate
+async def test_an_order_read_whole_by_its_own_id_is_absent_when_alpaca_next_says_so(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once an answer has been taken as the order's, the grace an unreadable answer started is over."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, json=_answer("MultilegOptionsOrderResponse", filled_qty="some"))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", json=_answer("MultilegOptionsOrderResponse"))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable):
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+    now[0] += 1
+    read_whole = await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+
+    assert read_whole is not None and read_whole.order_id == _PARENT_ID
+    assert await broker.get_option_order_by_broker_order_id(_PARENT_ID) is None
+
+
+@responses.activate
+async def test_an_order_a_lookup_just_showed_is_not_called_absent_because_the_submits_grace_ran_out(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The grace counts from the last time Alpaca answered for the order, not only from the submit. Shown at
+    second 29 with an answer that cannot be read, and not found at second 31, the order is still unknown."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    unreadable = _answer("MultilegOptionsOrderResponse", filled_qty="some")
+    responses.add(responses.POST, _ORDERS, json=unreadable)
+    responses.add(responses.GET, _BY_CLIENT_ID, json=unreadable)
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable):
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S - 1
+    with pytest.raises(BrokerOrderAnswerUnreadable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    now[0] += 2
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S
+    assert await broker.get_option_order_by_client_order_id(_REF) is None
 
 
 @responses.activate

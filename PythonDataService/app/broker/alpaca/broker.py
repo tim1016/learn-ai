@@ -759,7 +759,8 @@ class AlpacaBroker:
 
         That unknown outcome gets the lookup's visibility grace too, started
         here: Alpaca's 200 ended the one the client keeps, and an order it
-        took a moment ago can still answer 404 to a lookup.
+        took a moment ago can still answer 404 to a lookup. The same holds
+        for a read by the broker order id an unreadable answer handed on.
 
         An order that cannot be written as one, or a client order id Alpaca
         could not keep as given, is ``BrokerRequestInvalid``: nothing was
@@ -769,10 +770,23 @@ class AlpacaBroker:
         payload = await self._client.submit_order(body)
         try:
             return _option_order_asked_about(payload, client_order_id=client_order_id)
-        except Exception:
-            # Alpaca took the order. Whatever stopped its answer being taken, a 404 in the next seconds is not "absent".
-            self._client.hold_submission_uncertain(client_order_id)
+        except Exception as not_taken:
+            self._answered_and_not_taken(not_taken, client_order_id=client_order_id)
             raise
+
+    def _answered_and_not_taken(self, not_taken: Exception, *, client_order_id: str | None = None) -> None:
+        """Alpaca answered for an order, and the answer was not taken as that order's.
+
+        Whatever stopped it, a 404 in the next seconds is not "absent": not
+        to the lookup by the client order id, and not to a read by the
+        broker order id an unreadable answer handed on. Each gets the
+        visibility grace, counted from this answer.
+        """
+        if client_order_id is not None:
+            self._client.hold_submission_uncertain(client_order_id)
+        handed_on = _order_uuid(not_taken.broker_order_id) if isinstance(not_taken, BrokerOrderAnswerUnreadable) else None
+        if handed_on is not None:
+            self._client.hold_submission_uncertain(str(handed_on))
 
     async def get_option_order_by_client_order_id(
         self, client_order_id: str
@@ -785,7 +799,7 @@ class AlpacaBroker:
         stays unknown. Unlike the stock read, a found order does not end
         that grace by being found. It ends once the answer has been read
         whole and is about the order asked for; an answer refused here
-        leaves it standing, so the 404 that follows is still not "absent".
+        starts it again, so the 404 that follows is still not "absent".
 
         Alpaca documents no way to ask this read for nested legs, so a
         multi-leg parent that comes back without them is read again by its
@@ -795,22 +809,35 @@ class AlpacaBroker:
         if payload is None:
             return None
         order_id = None
-        if adapter.alpaca_multi_leg_order_lacks_legs(payload):
-            # The second answer is held to both ids: the one first asked by, and the one it was read again by.
-            order_id, payload = await self._nested_order(payload, client_order_id=client_order_id)
-        accepted = _option_order_asked_about(payload, client_order_id=client_order_id, order_id=order_id)
+        try:
+            if adapter.alpaca_multi_leg_order_lacks_legs(payload):
+                # The second answer is held to both ids: the one first asked by, and the one it was read again by.
+                order_id, payload = await self._nested_order(payload, client_order_id=client_order_id)
+            accepted = _option_order_asked_about(payload, client_order_id=client_order_id, order_id=order_id)
+        except Exception as not_taken:
+            self._answered_and_not_taken(not_taken, client_order_id=client_order_id)
+            raise
         self._client.settle_submission(client_order_id)
         return accepted
 
     async def get_option_order_by_broker_order_id(self, order_id: str) -> BrokerOptionOrder | None:
         """Look an option order up by its broker-assigned id, legs nested under a multi-leg parent.
 
-        ``order_id`` is the parent's. ``None`` only on a definitive 404.
+        ``order_id`` is the parent's. ``None`` only on a definitive 404:
+        for the visibility grace after an answer about this order that could
+        not be read, which is where a caller gets the id from, a 404 stays
+        unknown. The grace ends once an answer is read whole here.
         """
         payload = await self._client.get_nested_order_by_broker_order_id(order_id)
         if payload is None:
             return None
-        return _option_order_asked_about(payload, order_id=order_id)
+        try:
+            accepted = _option_order_asked_about(payload, order_id=order_id)
+        except Exception as not_taken:
+            self._answered_and_not_taken(not_taken)
+            raise
+        self._client.settle_submission(str(UUID(order_id)))
+        return accepted
 
     async def _nested_order(self, parent: Mapping[str, Any], *, client_order_id: str) -> tuple[str, Any]:
         """Read a multi-leg parent again, by its own id, with its legs nested: that id, and the answer."""

@@ -229,23 +229,27 @@ class AlpacaTradingClient:
             self._uncertain_submissions.pop(client_order_id, None)
             return False
 
-    def hold_submission_uncertain(self, client_order_id: str) -> None:
-        """Start the visibility window for an order Alpaca accepted whose answer the caller would not take.
+    def hold_submission_uncertain(self, order_key: str) -> None:
+        """Start the visibility window for an order Alpaca answered for whose answer the caller would not take.
 
         :meth:`submit_order` closes the window on a 200. A caller that then
         refuses that answer, because it will not read or names another
         order, knows no more than after a timeout, and Alpaca's lookup index
         may still be catching up: for the same grace, a lookup's 404 stays
         "not visible yet" (#2913).
-        """
-        self._mark_submission_uncertain(client_order_id)
 
-    def settle_submission(self, client_order_id: str) -> None:
+        ``order_key`` is the client order id, for the lookup by it, or the
+        broker order id in its canonical spelling, for a read by that id.
+        """
+        self._mark_submission_uncertain(order_key)
+
+    def settle_submission(self, order_key: str) -> None:
         """Close the visibility window: the caller has taken an answer as this order's.
 
-        For a lookup made with ``found_settles_submission=False``.
+        For a lookup made with ``found_settles_submission=False``, and for a
+        read by a broker order id held with :meth:`hold_submission_uncertain`.
         """
-        self._clear_uncertain_submission(client_order_id)
+        self._clear_uncertain_submission(order_key)
 
     def _build_default_client(self) -> Any:
         # Injected settings are the whole binding; otherwise the one this
@@ -674,9 +678,15 @@ class AlpacaTradingClient:
         The UUID gate, the 404 that means absent and the error taxonomy are
         the same read's, so they are written once. Only ``nested`` adds the
         query parameter; without it the SDK is called as it always was.
+
+        A 404 is "absent" except inside a visibility window a caller holds
+        for this order id (:meth:`hold_submission_uncertain`, under the id's
+        canonical spelling): Alpaca answered for the order a moment ago, so
+        its not-found proves nothing yet (#2913). Nothing holds one for a
+        stock order.
         """
         try:
-            UUID(order_id)
+            held_under = str(UUID(order_id))
         except ValueError as exc:
             raise BrokerRequestInvalid(
                 f"{order_id!r} is not an Alpaca order id.",
@@ -691,6 +701,15 @@ class AlpacaTradingClient:
                 return client.get_order_by_id(order_id)
             except APIError as exc:
                 if status_of(exc) == 404:
+                    if self._submission_may_become_visible(held_under):
+                        raise BrokerUnavailable(
+                            "Alpaca answered for this order a moment ago and now reports no such order.",
+                            broker=self.broker_id,
+                            detail=(
+                                "Alpaca returned 404 inside the visibility window held for "
+                                "this order id; the outcome remains uncertain."
+                            ),
+                        ) from exc
                     return None
                 raise
 

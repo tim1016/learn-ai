@@ -200,7 +200,10 @@ class BrokerTradePort(Protocol):
     included, the lookup by client order id keeps the stock lookup's grace:
     "no such order" stays unknown until the vendor has had time to show the
     order. Only an answer taken as that order's ends the grace early; one
-    the lookup refuses does not.
+    the lookup refuses starts it again. A read by the broker order id that
+    an unreadable answer carried keeps the same grace, counted from that
+    answer. Outside a grace, ``None`` from either lookup is the vendor
+    saying no such order exists.
     """
 
     broker_id: str
