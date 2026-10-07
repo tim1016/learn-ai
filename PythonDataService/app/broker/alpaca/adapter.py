@@ -7,7 +7,9 @@ models. Every vendor→contract conversion happens here, exactly once:
 - RFC-3339 timestamp strings → ``int64`` ms UTC (the one
   conversion boundary on ingestion).
 - Decimal money/quantity strings → ``float`` (read-only display surface; the
-  verbatim decimals remain in the capture journal).
+  verbatim decimals remain in the capture journal). The option mappers are
+  the exception: an option price stays an exact ``Decimal`` and a quantity a
+  whole ``int``, because they are compared with money set aside in cents.
 
 This module holds the shared helpers; each read-path slice adds its per-model
 mapper (``from_alpaca_account``, ``from_alpaca_position``, …) built on them.
@@ -38,7 +40,22 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPortfolioHistory,
     BrokerPosition,
+    OrderSide,
 )
+from app.broker.contract.options import (
+    BrokerOptionAccountSnapshot,
+    BrokerOptionContract,
+    BrokerOptionDeliverable,
+    BrokerOptionOrder,
+    BrokerOptionOrderLeg,
+    MultiLegOptionOrderRequest,
+    OptionOrderRequest,
+    OptionPositionIntent,
+    SingleOptionOrderRequest,
+)
+from app.options.contract import OptionContract
+from app.options.exact import require_everyday
+from app.options.expiry import option_expiry_anchor_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -702,4 +719,394 @@ def from_alpaca_clock(
         next_open_ms=opt_rfc3339_to_ms(payload.get("next_open")),
         next_close_ms=next_close_ms,
         observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+# ── Options (ADR 0076) ──────────────────────────────────────────────────────
+#
+# Every field name and value below is Alpaca's own, from its Trading API
+# documents as read on 2026-10-06:
+#   orders      https://docs.alpaca.markets/reference/postorder
+#   multi-leg   https://docs.alpaca.markets/docs/options-level-3-trading
+#   options     https://docs.alpaca.markets/docs/options-trading
+#   contracts   https://docs.alpaca.markets/reference/get-option-contract-symbol_or_id
+#   account     https://docs.alpaca.markets/reference/getaccount-1
+
+_ALPACA_MULTI_LEG_ORDER_CLASS = "mleg"
+# The reference names a plain order's class ``simple`` and allows it blank.
+_ALPACA_SINGLE_ORDER_CLASSES = frozenset({"simple", ""})
+# An option order is good for the day (#2913); Alpaca also takes ``gtc``.
+_ALPACA_OPTION_TIME_IN_FORCE = "day"
+# The order reference's limit on ``client_order_id``: "<= 128 characters".
+_ALPACA_CLIENT_ORDER_ID_MAX_LENGTH = 128
+
+_ALPACA_POSITION_INTENT: dict[tuple[OrderSide, OptionPositionIntent], str] = {
+    (OrderSide.BUY, OptionPositionIntent.OPEN): "buy_to_open",
+    (OrderSide.BUY, OptionPositionIntent.CLOSE): "buy_to_close",
+    (OrderSide.SELL, OptionPositionIntent.OPEN): "sell_to_open",
+    (OrderSide.SELL, OptionPositionIntent.CLOSE): "sell_to_close",
+}
+_SIDE_AND_INTENT_OF_ALPACA: dict[str, tuple[OrderSide, OptionPositionIntent]] = {
+    word: pair for pair, word in _ALPACA_POSITION_INTENT.items()
+}
+
+
+def to_alpaca_option_order_request(order: OptionOrderRequest, *, client_order_id: str) -> dict[str, Any]:
+    """Build the Alpaca ``POST /v2/orders`` JSON body for one option order.
+
+    A single-leg order is a plain order on the contract's symbol with a
+    ``position_intent``. A multi-leg order has ``order_class`` ``mleg``, no
+    symbol or side of its own, the number of structures as ``qty``, and each
+    leg's symbol, ``ratio_qty``, side and ``position_intent`` under ``legs``.
+    Its ``limit_price`` keeps the order's sign: Alpaca reads a positive value
+    as a debit and a negative one as a credit.
+
+    ``time_in_force`` is always ``day`` and ``extended_hours`` is never
+    written: Alpaca wants it false or absent on an option order.
+
+    ``client_order_id`` must be the caller's own. Alpaca makes one up for an
+    order sent without, and no lookup of ours could then find that order.
+    One with a space before or after it, or longer than the 128 characters
+    Alpaca's reference allows, is refused too: whether Alpaca would trim it,
+    cut it or refuse it, the id it kept might not be the id asked for.
+
+    Anything refused here raises ``ValueError`` or ``TypeError`` before a
+    body exists; the broker port turns that into ``BrokerRequestInvalid``.
+    """
+    if not isinstance(client_order_id, str) or not client_order_id.strip():
+        raise ValueError("an option order is sent under the client order id its caller minted; none was given")
+    if client_order_id != client_order_id.strip():
+        raise ValueError(f"a client order id has no space before or after it; got {client_order_id!r}")
+    if len(client_order_id) > _ALPACA_CLIENT_ORDER_ID_MAX_LENGTH:
+        raise ValueError(
+            f"Alpaca takes a client order id of at most {_ALPACA_CLIENT_ORDER_ID_MAX_LENGTH} characters; "
+            f"this one has {len(client_order_id)}"
+        )
+    if isinstance(order, SingleOptionOrderRequest):
+        body: dict[str, Any] = {
+            "symbol": order.contract.occ_symbol,
+            "qty": str(order.quantity),
+            "side": str(order.side),
+            "position_intent": _ALPACA_POSITION_INTENT[order.side, order.intent],
+            "type": str(order.order_type),
+            "time_in_force": _ALPACA_OPTION_TIME_IN_FORCE,
+            "client_order_id": client_order_id,
+        }
+        if order.limit_price is not None:
+            body["limit_price"] = format(order.limit_price, "f")
+        return body
+    if not isinstance(order, MultiLegOptionOrderRequest):
+        # A stock leg has a quantity and an order type too; it must never be written out as an option order.
+        raise TypeError(f"an option order is a single or a multi-leg request, not {type(order).__name__}")
+    body = {
+        "order_class": _ALPACA_MULTI_LEG_ORDER_CLASS,
+        "qty": str(order.quantity),
+        "type": str(order.order_type),
+        "time_in_force": _ALPACA_OPTION_TIME_IN_FORCE,
+        "client_order_id": client_order_id,
+        "legs": [
+            {
+                "symbol": leg.contract.occ_symbol,
+                "ratio_qty": str(leg.ratio),
+                "side": str(leg.side),
+                "position_intent": _ALPACA_POSITION_INTENT[leg.side, leg.intent],
+            }
+            for leg in order.legs
+        ],
+    }
+    if order.net_limit_price is not None:
+        body["limit_price"] = format(order.net_limit_price, "f")
+    return body
+
+
+def _exact_decimal(value: Any, *, field: str) -> Decimal:
+    """Parse a required Alpaca decimal (string or number) with no digit lost."""
+    if isinstance(value, bool) or not isinstance(value, str | int | float | Decimal):
+        raise TypeError(f"Alpaca field {field!r} must be a number, got {value!r}")
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"Alpaca field {field!r} is not a number: {value!r}") from exc
+    return require_everyday(number, what=f"Alpaca field {field!r}")
+
+
+def _opt_exact_decimal(value: Any, *, field: str) -> Decimal | None:
+    """Parse an optional Alpaca decimal exactly; ``None``/empty → ``None``."""
+    if value is None or value == "":
+        return None
+    return _exact_decimal(value, field=field)
+
+
+def _whole_count(value: Any, *, field: str) -> int:
+    """Parse a required count of contracts or structures: a whole number, zero or more."""
+    number = _exact_decimal(value, field=field)
+    if number < 0 or number != number.to_integral_value():
+        raise ValueError(f"Alpaca field {field!r} must be a whole number, zero or more; got {value!r}")
+    return int(number)
+
+
+def _opt_whole_count(value: Any, *, field: str) -> int | None:
+    if value is None or value == "":
+        return None
+    return _whole_count(value, field=field)
+
+
+def _opt_text(value: Any, *, field: str) -> str | None:
+    """Read optional vendor text: ``None`` or blank is absent, and anything but text is refused."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"Alpaca field {field!r} must be a string or null, got {value!r}")
+    return value if value.strip() else None
+
+
+def _option_order_intent(value: Any, side: OrderSide, *, field: str) -> OptionPositionIntent | None:
+    """Read a ``position_intent``; one that names the other side contradicts the order and is refused."""
+    text = _opt_text(value, field=field)
+    if text is None:
+        return None
+    if text not in _SIDE_AND_INTENT_OF_ALPACA:
+        raise ValueError(f"Alpaca field {field!r} is not a position intent: {text!r}")
+    stated_side, intent = _SIDE_AND_INTENT_OF_ALPACA[text]
+    if stated_side is not side:
+        raise ValueError(f"Alpaca field {field!r} is {text!r} on an order whose side is {side.value!r}")
+    return intent
+
+
+def _option_order_id(value: Any, *, field: str) -> str:
+    """Read an option order's id, or a leg's, as Alpaca wrote it; one that is not a UUID is refused.
+
+    The order reference gives ``id`` the format ``uuid``, and the read and
+    the cancel by id take nothing else: an order under any other id could
+    be neither read nor cancelled. Any spelling of a UUID is one.
+    """
+    text = to_str(value, field=field)
+    try:
+        UUID(text)
+    except ValueError as exc:
+        raise ValueError(f"Alpaca field {field!r} is not an order id, which is a UUID: {text!r}") from exc
+    return text
+
+
+def _require_a_multi_leg_parent_states_nothing_of_its_own(payload: Mapping[str, Any]) -> None:
+    """Refuse a multi-leg parent that states a contract, a side or an intent: its legs carry all three.
+
+    Alpaca's published parent writes ``symbol`` and ``side`` as the empty
+    string and has no ``position_intent``. So null, left out and the empty
+    string are a parent stating none. Anything else is taken as stated,
+    a space and a value that is not text included, and contradicts the
+    order being a parent.
+    """
+    for field in ("symbol", "side", "position_intent"):
+        stated = payload.get(field)
+        if stated is not None and stated != "":
+            raise ValueError(f"Alpaca's multi-leg parent states a {field!r} of its own: {stated!r}")
+
+
+def _option_order_times(payload: Mapping[str, Any]) -> dict[str, int | None]:
+    return {
+        "submitted_at_ms": opt_rfc3339_to_ms(payload.get("submitted_at")),
+        "created_at_ms": opt_rfc3339_to_ms(payload.get("created_at")),
+        "updated_at_ms": opt_rfc3339_to_ms(payload.get("updated_at")),
+        "filled_at_ms": opt_rfc3339_to_ms(payload.get("filled_at")),
+        "canceled_at_ms": opt_rfc3339_to_ms(payload.get("canceled_at")),
+        "expired_at_ms": opt_rfc3339_to_ms(payload.get("expired_at")),
+    }
+
+
+def _from_alpaca_option_order_leg(payload: Any) -> BrokerOptionOrderLeg:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Alpaca order leg must be an object, got {type(payload).__name__}")
+    side = OrderSide(to_str(payload.get("side"), field="legs.side"))
+    return BrokerOptionOrderLeg(
+        order_id=_option_order_id(payload.get("id"), field="legs.id"),
+        client_order_id=_opt_text(payload.get("client_order_id"), field="legs.client_order_id"),
+        contract=OptionContract.from_occ_symbol(to_str(payload.get("symbol"), field="legs.symbol")),
+        side=side,
+        intent=_option_order_intent(payload.get("position_intent"), side, field="legs.position_intent"),
+        ratio=_opt_whole_count(payload.get("ratio_qty"), field="legs.ratio_qty"),
+        quantity=_opt_whole_count(payload.get("qty"), field="legs.qty"),
+        filled_quantity=_whole_count(payload.get("filled_qty"), field="legs.filled_qty"),
+        filled_avg_price=_opt_exact_decimal(payload.get("filled_avg_price"), field="legs.filled_avg_price"),
+        status=to_str(payload.get("status"), field="legs.status"),
+        **_option_order_times(payload),
+    )
+
+
+def alpaca_multi_leg_order_lacks_legs(payload: Any) -> bool:
+    """Whether an Alpaca answer is a multi-leg parent that came without its legs.
+
+    Alpaca nests the legs when an order is read "in a nested style", and
+    documents the parameter for that only on the read by broker order id.
+    """
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("order_class") == _ALPACA_MULTI_LEG_ORDER_CLASS
+        and not payload.get("legs")
+    )
+
+
+def from_alpaca_option_order(
+    payload: Any,
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerOptionOrder:
+    """Map one raw Alpaca option order, with any nested legs, to a ``BrokerOptionOrder``.
+
+    Read whole or not at all: a value that is missing where Alpaca's
+    reference requires it, or will not parse, raises ``TypeError`` or
+    ``ValueError``. ``from_alpaca_order`` reads a damaged row as far as it
+    can because one row must not refuse a whole list. This is the answer
+    about one order, and a quantity it could not read must not become zero
+    contracts filled.
+
+    A multi-leg parent has no symbol or side of its own and Alpaca writes
+    both blank; its legs carry them. A parent that states a symbol, a side
+    or a position intent contradicts itself and is refused. A leg's own
+    ``type`` is blank too and is not read. A symbol that is not an option
+    contract's is refused, so a stock order looked up by mistake is never
+    read as an option order.
+
+    The order's id, and each leg's, is a UUID, as the order reference
+    writes it. One that is not is refused here, where Alpaca's rule
+    belongs: the broker-neutral model holds an id to no spelling.
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Alpaca order payload must be an object, got {type(payload).__name__}")
+    order_class = payload.get("order_class")
+    if order_class == _ALPACA_MULTI_LEG_ORDER_CLASS:
+        raw_legs = payload.get("legs")
+        if not isinstance(raw_legs, list) or not raw_legs:
+            raise ValueError("Alpaca's multi-leg order came without its legs")
+        _require_a_multi_leg_parent_states_nothing_of_its_own(payload)
+        legs = tuple(_from_alpaca_option_order_leg(leg) for leg in raw_legs)
+        contract = side = intent = None
+    elif order_class is None or order_class in _ALPACA_SINGLE_ORDER_CLASSES:
+        if payload.get("legs"):
+            raise ValueError("Alpaca's single option order came with legs")
+        legs = ()
+        contract = OptionContract.from_occ_symbol(to_str(payload.get("symbol"), field="symbol"))
+        side = OrderSide(to_str(payload.get("side"), field="side"))
+        intent = _option_order_intent(payload.get("position_intent"), side, field="position_intent")
+    else:
+        raise ValueError(f"Alpaca order class {order_class!r} is not an option order's")
+    return BrokerOptionOrder(
+        broker=BROKER_ID,
+        order_id=_option_order_id(payload.get("id"), field="id"),
+        client_order_id=_opt_text(payload.get("client_order_id"), field="client_order_id"),
+        multi_leg=bool(legs),
+        contract=contract,
+        side=side,
+        intent=intent,
+        # ``order_type`` is the reference's deprecated name for ``type``.
+        order_type=to_str(payload.get("type") or payload.get("order_type"), field="type"),
+        time_in_force=to_str(payload.get("time_in_force"), field="time_in_force"),
+        quantity=_whole_count(payload.get("qty"), field="qty"),
+        filled_quantity=_whole_count(payload.get("filled_qty"), field="filled_qty"),
+        limit_price=_opt_exact_decimal(payload.get("limit_price"), field="limit_price"),
+        filled_avg_price=_opt_exact_decimal(payload.get("filled_avg_price"), field="filled_avg_price"),
+        status=to_str(payload.get("status"), field="status"),
+        **_option_order_times(payload),
+        legs=legs,
+        observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def _from_alpaca_option_deliverable(payload: Any) -> BrokerOptionDeliverable:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Alpaca option deliverable must be an object, got {type(payload).__name__}")
+    return BrokerOptionDeliverable(
+        kind=to_str(payload.get("type"), field="deliverables.type"),
+        symbol=to_str(payload.get("symbol"), field="deliverables.symbol"),
+        amount=_opt_exact_decimal(payload.get("amount"), field="deliverables.amount"),
+    )
+
+
+def from_alpaca_option_contract(
+    payload: Any,
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerOptionContract:
+    """Map a raw Alpaca option contract (``/v2/options/contracts/{symbol}``) to a ``BrokerOptionContract``.
+
+    The fields that decide whether a bot may trade the contract are required,
+    as the reference requires them: its status, ``tradable``, expiry date,
+    call or put, ``style``, strike, ``multiplier`` and ``size`` (the shares
+    it delivers). One that is missing raises, so a listing that cannot be
+    shown to be standard is never read as one. The expiry date becomes its
+    16:00 New York anchor here, once (ADR 0022 (i)).
+
+    ``root_symbol`` is in every example Alpaca publishes but not among the
+    fields its reference requires, so it may be absent. ``deliverables`` is
+    present only when the answer carries the list.
+    """
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Alpaca option contract payload must be an object, got {type(payload).__name__}")
+    right = to_str(payload.get("type"), field="type")
+    if right not in ("call", "put"):
+        raise ValueError(f"Alpaca field 'type' must be 'call' or 'put', got {right!r}")
+    raw_deliverables = payload.get("deliverables")
+    if raw_deliverables is not None and not isinstance(raw_deliverables, list):
+        raise TypeError(f"Alpaca field 'deliverables' must be a list or null, got {raw_deliverables!r}")
+    expiry_date = date.fromisoformat(to_str(payload.get("expiration_date"), field="expiration_date"))
+    return BrokerOptionContract(
+        broker=BROKER_ID,
+        contract_id=to_str(payload.get("id"), field="id"),
+        symbol=to_str(payload.get("symbol"), field="symbol"),
+        name=_opt_text(payload.get("name"), field="name"),
+        status=to_str(payload.get("status"), field="status"),
+        tradable=to_bool(payload.get("tradable"), field="tradable"),
+        expiry_ms=option_expiry_anchor_ms(expiry_date),
+        root_symbol=_opt_text(payload.get("root_symbol"), field="root_symbol"),
+        underlying_symbol=to_str(payload.get("underlying_symbol"), field="underlying_symbol"),
+        underlying_asset_id=_opt_text(payload.get("underlying_asset_id"), field="underlying_asset_id"),
+        right=right,
+        style=to_str(payload.get("style"), field="style"),
+        strike_price=_exact_decimal(payload.get("strike_price"), field="strike_price"),
+        multiplier=_exact_decimal(payload.get("multiplier"), field="multiplier"),
+        shares_per_contract=_exact_decimal(payload.get("size"), field="size"),
+        penny_program=opt_bool(payload.get("ppind"), field="ppind"),
+        deliverables=(
+            None
+            if raw_deliverables is None
+            else tuple(_from_alpaca_option_deliverable(item) for item in raw_deliverables)
+        ),
+        observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def _opt_option_level(value: Any, *, field: str) -> int | None:
+    """Read an option approval level: a whole number, or ``None`` when Alpaca gives none."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"Alpaca field {field!r} must be a whole number or null, got {value!r}")
+    return value
+
+
+def from_alpaca_option_account(
+    payload: Mapping[str, Any],
+    *,
+    account_mode: Literal["paper", "live"],
+    observed_at_ms: int | None = None,
+) -> BrokerOptionAccountSnapshot:
+    """Map the option fields of a raw Alpaca account payload to a ``BrokerOptionAccountSnapshot``.
+
+    Whose account it is, and the refusal of a number shaped for the other
+    mode, are ``from_alpaca_account``'s, read from the same payload. A field
+    Alpaca leaves out stays ``None``: its own example answer carries no
+    ``options_approved_level``. A level outside the 0 to 3 its reference
+    lists is refused, not passed on as a level above three.
+    """
+    account = from_alpaca_account(payload, account_mode=account_mode, observed_at_ms=observed_at_ms)
+    return BrokerOptionAccountSnapshot(
+        broker=account.broker,
+        account_id=account.account_id,
+        account_mode=account.account_mode,
+        options_buying_power=_opt_exact_decimal(payload.get("options_buying_power"), field="options_buying_power"),
+        options_approved_level=_opt_option_level(
+            payload.get("options_approved_level"), field="options_approved_level"
+        ),
+        options_trading_level=_opt_option_level(payload.get("options_trading_level"), field="options_trading_level"),
+        observed_at_ms=account.observed_at_ms,
     )
