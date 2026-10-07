@@ -45,7 +45,6 @@ from app.services.alpaca_fee_attribution import (
     attribute_session_fees,
     attribute_simulated_option_fees,
     collapse_activity_deliveries,
-    estimate_option_fees,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
@@ -54,17 +53,6 @@ if TYPE_CHECKING:
 
 FEE_EVIDENCE_KIND = "FEE_EVIDENCE_OBSERVED"
 FEE_EVIDENCE_MAX_AGE_MS = 90_000
-OPTION_DAY_FEE_NOT_ATTRIBUTED = (
-    "is account-unattributed: the account filled an option order that day, and which fills a fee row "
-    "of such a day is for is not known yet. Reconcile account fee evidence."
-)
-"""Why a fee row Alpaca posted for a day with an option fill is charged to no bot (ADR 0076).
-
-The words after the row's own id. Alpaca's fee activities for options have
-not been seen: a row of such a day may be for the option fills, for the
-day's stock fills, or for both rounded together, so the stock rule may not
-share it out. Like every account-unattributed charge it leaves the account's
-fees unresolved until the attribution is built."""
 
 
 class FeeEvidenceFacts(BaseModel):
@@ -559,18 +547,18 @@ def custody_fee_attribution(
     Coverage is still checked against all current execution evidence; selecting
     a historical population never grants permission to ignore missing facts.
 
-    A fill of an option contract is charged by the option fee model on every
-    account and is never handed to the stock rule (ADR 0076). On a simulated
-    account that charge settles with its day. On a real account it is an
-    estimate and stays one, and no fee row of a day with an option fill is
-    shared out among the bots: each is kept as an account-unattributed
-    charge, which leaves the fees unresolved (``OPTION_DAY_FEE_NOT_ATTRIBUTED``).
-    A day with no option fill is projected exactly as before.
+    A fill of an option contract is priced by the option fee model on every
+    account, never by the stock model (ADR 0076). On a simulated account that
+    charge settles with its day. On a real account it is an estimate until a
+    fee row of its day is seen; the day's rows are then shared among all of
+    the day's fills, stock and option alike, each weighted by its own model's
+    prediction. An option fill is never by itself a reason the fees read
+    unresolved. A day with no option fill is projected exactly as before.
 
     Formula: existing session fee model/apportionment over selected effective fills.
     Reference: ADR 0059 fee attribution amendment; PRD #2540; ADR 0076 for option fills.
     Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees,
-      and ``estimate_option_fees`` / ``attribute_simulated_option_fees`` for option fills.
+      and ``attribute_simulated_option_fees`` for a simulation's option fills.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py,
       tests/broker/alpaca/clerk/sqlite/test_option_custody.py and
       tests/broker/alpaca/clerk/sqlite/test_paper_option_fees.py.
@@ -643,6 +631,9 @@ def custody_fee_attribution(
                 population_complete = False
                 continue
             witnessed_external.add(row.native_order_id)
+            # No contract is on the books for an outside order, so its fill
+            # carries no multiplier and the stock fee model prices it, an
+            # option's too (ADR 0076, a known gap).
             external = FeeFill(
                 fill_id=row.activity_id,
                 subject_id=outside_order_subject_id(row.native_order_id),
@@ -708,18 +699,15 @@ def custody_fee_attribution(
             for row in by_date[day].values()
             if row.activity_type == "FEE"
         ]
-        # Option fills are charged by the option fee model on every account,
-        # and are never handed to the stock rule, which would charge a
-        # contract as one share. Fills in shares go through that one rule.
-        option_fills = [fill for fill in grouped[day] if fill.multiplier is not None]
-        # On a real account's day with an option fill no fee row is shared
-        # out by the stock rule: which fills a row is for is not known (ADR
-        # 0076). Each is kept as an account-level charge below.
-        withheld = fees if option_fills and not simulated else []
+        # A real account's day is one population: its fee rows are shared
+        # among all of its fills, each priced by its own fee model (ADR
+        # 0076). A simulation observes no fee row, and charges its option
+        # fills by the option model as a population of their own.
+        option_fills = [fill for fill in grouped[day] if fill.multiplier is not None] if simulated else []
         result = attribute_session_fees(
             trade_date=day,
-            fills=[fill for fill in grouped[day] if fill.multiplier is None],
-            charges=[] if withheld else fees,
+            fills=[fill for fill in grouped[day] if fill.multiplier is None] if simulated else grouped[day],
+            charges=fees,
             population_complete=population_complete and day not in conflicting,
             activities_complete=day not in unproven,
             simulated=simulated,
@@ -727,7 +715,7 @@ def custody_fee_attribution(
             settlement_at_ms=et_midnight_ms(day + timedelta(days=1)),
         )
         results = [result]
-        if option_fills and simulated:
+        if option_fills:
             results.append(attribute_simulated_option_fees(
                 trade_date=day,
                 fills=option_fills,
@@ -735,19 +723,6 @@ def custody_fee_attribution(
                 session_ended=day < et_date_at_ms(now_ms),
                 settlement_at_ms=et_midnight_ms(day + timedelta(days=1)),
             ))
-        elif option_fills:
-            # An estimate, on the day and after it: nothing Alpaca posts settles it yet.
-            results.append(estimate_option_fees(
-                trade_date=day,
-                fills=option_fills,
-                population_complete=population_complete and day not in conflicting,
-                settlement_at_ms=et_midnight_ms(day + timedelta(days=1)),
-            ))
-        for charge in withheld:
-            unresolved.append(f"Fee {charge.charge_id} {OPTION_DAY_FEE_NOT_ATTRIBUTED}")
-            if charge.amount is not None and charge.amount.is_finite():
-                unattributed += charge.amount
-                unattributed_charges.append(UnattributedCharge(charge.charge_id, charge.amount, charge.observed_at_ms))
         for result in results:
             shares.extend(result.shares)
             unresolved.extend(result.unresolved)
