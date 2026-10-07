@@ -179,6 +179,12 @@ async def test_under_a_missed_close_an_expired_contract_is_never_written_off_and
     with pytest.raises(RecoveryActionUnavailableError):
         await _press_the_write_off(paper)
     assert paper.held() == {SYMBOL: 1.0}
+    # No notice sends the owner to a write-off the page does not offer.
+    for reason_code in (MISSED, NOT_FLAT, NOT_SETTLED):
+        notice = _notice(paper, reason_code=reason_code)
+        assert notice is not None
+        said = f"{notice['explanation']} {notice['next_step']}".lower()
+        assert "can be written off" not in said and "write the position off" not in said, (reason_code, said)
 
     _until(paper, MONDAY_CLOSE)
     ended = await _press(paper.clerk, "a")

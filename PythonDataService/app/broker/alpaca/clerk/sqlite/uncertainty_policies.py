@@ -449,9 +449,11 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         # lane is not quiet under it. It cannot wedge a flat lane: the pass a
         # draining lane still runs ends it once the bot holds nothing.
         blocks_lane_quiet=True,
-        # An expired contract the broker has since taken off its books is a
-        # residue no order can close. The write-off's own proof still asks
-        # the broker, so a contract the broker holds is never written off.
+        # A contract that still trades and that the broker has since taken
+        # off its books is a residue the owner may write off. The
+        # write-off's own proof still asks the broker, so a contract the
+        # broker holds is never written off. An expired contract is never
+        # offered it, whatever notice stands (ADR 0076 decision 22).
         residue_discharge="strands",
     ),
 }

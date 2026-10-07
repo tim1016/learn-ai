@@ -816,9 +816,11 @@ def _missed_next_step(item: HeldContract, *, simulated: bool, now_ms: int) -> st
         )
         if simulated:
             return settled
+        # Never a write-off: an expired contract is not offered one, whatever notice stands (ADR 0076 decision 22).
         return (
-            f"{settled} Look at the account at Alpaca for an exercise, an assignment or a sale. Once Alpaca "
-            "no longer holds the contract, the position can be written off from the bot's page."
+            f"{settled} Look at the account at Alpaca for an exercise, an assignment or a sale. An expired "
+            "contract is not written off. If no record of its end comes, the notice that it is not settled "
+            "says what can be done."
         )
     if item.left_to_owner:
         return (
