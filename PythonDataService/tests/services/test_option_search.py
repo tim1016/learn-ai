@@ -657,17 +657,19 @@ async def test_a_worker_lost_to_a_preview_is_told_as_not_run_and_nothing_is_kept
 # ---- Nothing else searches in the Clerk's own process ------------------------------------------
 
 
-def test_only_the_search_worker_calls_the_resolver() -> None:
+def test_only_the_search_worker_calls_the_resolver_and_nothing_outside_the_options_package_prices() -> None:
     """A search run on the event loop, or in a thread of the Clerk's process, stops the loop for as long as it runs
-    (ADR 0076). Everything outside the resolver's own package reaches it through a lane."""
+    (ADR 0076 decision 18). Everything outside the resolver's own package reaches it through a lane, and the
+    pricer it searches with is called by nothing else."""
     app = Path(option_search.__file__).resolve().parents[1]
-    callers = []
+    held_to = {"resolve_contracts", "american_implied_volatility", "american_value"}
+    callers: dict[str, set[str]] = {}
     for module in sorted(app.rglob("*.py")):
         if module.parent == app / "options":
             continue
         tree = ast.parse(module.read_text(encoding="utf-8"))
         named = {getattr(node, "id", None) or getattr(node, "attr", None) for node in ast.walk(tree)}
-        if "resolve_contracts" in named:
-            callers.append(module.relative_to(app).as_posix())
+        if named & held_to:
+            callers[module.relative_to(app).as_posix()] = named & held_to
 
-    assert callers == ["services/option_search.py"]
+    assert callers == {"services/option_search.py": {"resolve_contracts"}}
