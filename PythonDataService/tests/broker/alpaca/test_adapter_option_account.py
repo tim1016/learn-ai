@@ -109,6 +109,26 @@ def test_an_option_field_that_is_not_what_alpaca_documents_is_refused(
         from_alpaca_option_account(captured, account_mode="paper", observed_at_ms=_OBSERVED)
 
 
+def test_a_trading_level_above_the_approved_level_is_refused(captured: dict[str, Any]) -> None:
+    """The account reference, on ``options_trading_level`` (read 2026-10-07): "This is the minimum between
+    account options_approved_level and account configurations max_options_trading_level." An answer with the
+    level in force above the level approved contradicts that, so neither of its levels is taken."""
+    captured.update(options_approved_level=1, options_trading_level=2)
+
+    with pytest.raises(ValueError):
+        from_alpaca_option_account(captured, account_mode="paper", observed_at_ms=_OBSERVED)
+
+
+def test_a_trading_level_is_held_to_the_approved_level_only_when_alpaca_states_both(captured: dict[str, Any]) -> None:
+    """Alpaca's own example answer states a trading level and no approved level; that one stays unknown."""
+    del captured["options_approved_level"]
+    captured["options_trading_level"] = 3
+
+    options = from_alpaca_option_account(captured, account_mode="paper", observed_at_ms=_OBSERVED)
+
+    assert (options.options_approved_level, options.options_trading_level) == (None, 3)
+
+
 def test_a_paper_account_under_live_mode_is_refused_for_its_option_fields_too(captured: dict[str, Any]) -> None:
     with pytest.raises(BrokerAccountModeDisagreement):
         from_alpaca_option_account(captured, account_mode="live", observed_at_ms=_OBSERVED)
@@ -152,6 +172,16 @@ async def test_a_live_accounts_option_fields_are_read_as_a_live_accounts(capture
 
 async def test_the_broker_names_unreadable_option_fields_as_unavailable_evidence(captured: dict[str, Any]) -> None:
     captured["options_trading_level"] = "three"
+
+    with pytest.raises(BrokerEvidenceUnavailable, match="account"):
+        await _broker(captured).get_option_account()
+
+
+async def test_the_broker_names_a_trading_level_above_the_approved_one_as_unavailable_evidence(
+    captured: dict[str, Any],
+) -> None:
+    """Refused as an answer that could not be read, never as an error no caller of the port is written to catch."""
+    captured.update(options_approved_level=2, options_trading_level=3)
 
     with pytest.raises(BrokerEvidenceUnavailable, match="account"):
         await _broker(captured).get_option_account()

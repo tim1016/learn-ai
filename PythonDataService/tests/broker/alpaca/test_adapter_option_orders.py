@@ -37,6 +37,8 @@ from tests.broker.alpaca.test_schema_drift import _known_names
 
 _REF = "learn-ai/spy-options/v1:enter-1"
 _OBSERVED = 1_700_000_000_000
+# The order id of Alpaca's documented single-leg answer.
+_SINGLE_ORDER_ID = "30a077fa-96f6-4f20-a052-4b921ee2f243"
 
 _BUY, _SELL = OrderSide.BUY, OrderSide.SELL
 _OPEN, _CLOSE = OptionPositionIntent.OPEN, OptionPositionIntent.CLOSE
@@ -606,12 +608,56 @@ def _single_with(**changes: Any) -> dict[str, Any]:
         pytest.param(_first_leg_with(symbol="AAPL241213C00260000"), id="two legs on one contract"),
         pytest.param(_single_with(qty="0"), id="a single order for no contracts"),
         pytest.param(_single_with(filled_qty="3"), id="a single order filled beyond its quantity"),
+        # Unfilled, so nothing but the quantity of zero itself can refuse it.
+        pytest.param(_multi_leg_with(qty="0", filled_qty="0"), id="a multi-leg parent for no structures"),
+        pytest.param(_first_leg_with(symbol="MSFT241213C00250000"), id="legs on two underlyings"),
+        # A parent that states what only its legs carry contradicts being a parent.
+        pytest.param(_multi_leg_with(symbol="AAPL241213C00250000"), id="a parent that names a contract of its own"),
+        pytest.param(_multi_leg_with(side="buy"), id="a parent that states a side of its own"),
+        pytest.param(_multi_leg_with(position_intent="buy_to_open"), id="a parent that states an intent of its own"),
+        pytest.param(_multi_leg_with(symbol=" "), id="a parent whose symbol is a space, which is not blank"),
+        pytest.param(_multi_leg_with(side=0), id="a parent whose side is a number"),
+        pytest.param(_multi_leg_with(position_intent=False), id="a parent whose intent is a boolean"),
+        # One contract's price is never below zero; only a parent's net price is signed.
+        pytest.param(_first_leg_with(filled_avg_price="-0.43"), id="a leg filled at a price below zero"),
+        pytest.param(_single_with(limit_price="-10"), id="a single order limited at a price below zero"),
+        pytest.param(_single_with(filled_avg_price="-1.28"), id="a single order filled at a price below zero"),
+        # The order reference gives ``id`` the format ``uuid``, on the order and on each leg.
+        pytest.param(_multi_leg_with(id="not-an-order-id"), id="a parent whose order id is not a UUID"),
+        pytest.param(_first_leg_with(id="leg-1"), id="a leg whose order id is not a UUID"),
+        pytest.param(_single_with(id="not-an-order-id"), id="a single order whose id is not a UUID"),
+        pytest.param(_single_with(id=f" {_SINGLE_ORDER_ID}"), id="an order id with a space before it"),
     ],
 )
 def test_an_answer_that_cannot_be_read_whole_is_refused_and_states_no_outcome(payload: Any) -> None:
     """A filled quantity that will not parse must not become zero contracts filled."""
     with pytest.raises((TypeError, ValueError)):
         from_alpaca_option_order(payload, observed_at_ms=_OBSERVED)
+
+
+def test_a_multi_leg_parent_is_read_with_its_own_symbol_side_and_intent_blank_null_or_left_out() -> None:
+    """Alpaca's published parent writes ``symbol`` and ``side`` as empty strings and has no ``position_intent``."""
+    published = _responses("MultilegOptionsOrderResponse")
+    assert (published["symbol"], published["side"]) == ("", "")
+    assert "position_intent" not in published
+
+    left_out = _responses("MultilegOptionsOrderResponse")
+    del left_out["symbol"], left_out["side"]
+    for payload in (
+        published,
+        left_out,
+        _multi_leg_with(symbol="", side="", position_intent=""),
+        _multi_leg_with(symbol=None, side=None, position_intent=None),
+    ):
+        order = from_alpaca_option_order(payload, observed_at_ms=_OBSERVED)
+        assert (order.multi_leg, order.contract, order.side, order.intent) == (True, None, None, None)
+
+
+def test_an_order_id_is_read_as_alpaca_wrote_it_whatever_spelling_of_a_uuid_it_is() -> None:
+    """The read and the cancel by id take every spelling of a UUID, so each one is an id an order can be reached by."""
+    shouted = _SINGLE_ORDER_ID.upper()
+
+    assert from_alpaca_option_order(_single_with(id=shouted), observed_at_ms=_OBSERVED).order_id == shouted
 
 
 def test_a_stock_order_is_never_read_as_an_option_order(load_alpaca_fixture: Any) -> None:

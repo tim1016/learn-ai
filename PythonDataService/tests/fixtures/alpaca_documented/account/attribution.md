@@ -26,6 +26,13 @@ A real capture already exists for these three fields:
   3. 0 is disabled, 1 covered calls and cash-secured puts, 2 bought calls and
   puts, 3 spreads and straddles. The trading level is the lower of the
   approved level and the most the account's configuration allows.
+- **The trading level is never above the approved level.** The reference's
+  words on `options_trading_level`, read again on 2026-10-07: "This is the
+  minimum between account options_approved_level and account configurations
+  max_options_trading_level." An answer that states both, with the trading
+  level the higher, contradicts that and is refused. The reference's own
+  `Account` schema example agrees with the rule: approved 2, trading 1. A
+  level the answer leaves out holds the other to nothing.
 
 ## What neither file shows
 

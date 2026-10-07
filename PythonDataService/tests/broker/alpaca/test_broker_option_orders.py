@@ -265,6 +265,9 @@ _REFUSED_ANSWERS = [
     pytest.param({"legs": None, "id": "not-an-order-id"}, id="no legs and no usable id"),
     pytest.param({"filled_qty": "some"}, id="a quantity that will not parse"),
     pytest.param({"client_order_id": "learn-ai/another-bot/v1:enter-9"}, id="another order"),
+    pytest.param({"qty": "0", "filled_qty": "0"}, id="a parent for no structures"),
+    pytest.param({"symbol": "AAPL241213C00250000"}, id="a parent that names a contract of its own"),
+    pytest.param({"id": "not-an-order-id"}, id="an order id that is not Alpaca's"),
 ]
 
 
@@ -526,6 +529,117 @@ async def test_an_order_whose_own_id_read_could_not_be_read_is_not_called_absent
     now[0] += 1
     with pytest.raises(BrokerUnavailable):
         await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+
+
+@pytest.mark.parametrize("spelling", [_OTHER_ID, _OTHER_ID.upper()], ids=["as given", "upper case"])
+@pytest.mark.parametrize(
+    "another_orders",
+    [
+        pytest.param({}, id="a whole answer about another order"),
+        pytest.param({"filled_qty": "some"}, id="an unreadable answer about another order"),
+    ],
+)
+@responses.activate
+async def test_a_read_by_order_id_answered_with_another_order_is_not_called_absent_a_moment_later(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch, spelling: str, another_orders: dict[str, Any]
+) -> None:
+    """Alpaca answered the read of this id, whatever it said. Its 404 to the same read a second later is no
+    more proof than after any other answer this port would not take (#2913)."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    answer = _answer("MultilegOptionsOrderResponse", **another_orders)
+    responses.add(responses.GET, f"{_ORDERS}/{_OTHER_ID}", json=answer)
+    responses.add(responses.GET, f"{_ORDERS}/{_OTHER_ID}", status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerEvidenceUnavailable) as not_taken:
+        await broker.get_option_order_by_broker_order_id(spelling)
+    # The answer names another order, and that order's id is still never handed on as this one's.
+    assert getattr(not_taken.value, "broker_order_id", None) is None
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(spelling)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S - 2
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(spelling)
+    now[0] += 2
+    assert await broker.get_option_order_by_broker_order_id(spelling) is None
+
+
+@responses.activate
+async def test_a_parent_whose_second_read_answered_with_another_order_is_not_called_absent_by_a_read_of_its_id(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lookup found the parent and read it again by its own id; Alpaca answered that read too, with
+    another order. A 404 to the parent's id a second later proves nothing either."""
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.GET, _BY_CLIENT_ID, json=_answer("MultilegOptionsOrderResponse", legs=None))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", json=_answer("MultilegOptionsOrderResponse", id=_OTHER_ID))
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerEvidenceUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S
+    assert await broker.get_option_order_by_broker_order_id(_PARENT_ID) is None
+
+
+def _answer_with_first_leg(**changes: Any) -> dict[str, Any]:
+    payload = _answer("MultilegOptionsOrderResponse")
+    payload["legs"][0].update(changes)
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("asked", "answer"),
+    [
+        pytest.param(
+            _PARENT_ID,
+            _answer("MultilegOptionsOrderResponse", qty="0", filled_qty="0"),
+            id="a multi-leg parent for no structures",
+        ),
+        pytest.param(_PARENT_ID, _answer_with_first_leg(symbol="MSFT241213C00250000"), id="legs on two underlyings"),
+        pytest.param(
+            _PARENT_ID,
+            _answer("MultilegOptionsOrderResponse", side="buy"),
+            id="a parent that states a side of its own",
+        ),
+        pytest.param(_PARENT_ID, _answer_with_first_leg(filled_avg_price="-0.43"), id="a leg filled below zero"),
+        pytest.param(
+            _OTHER_ID, _answer("OptionOrderResponse", limit_price="-10"), id="a single order limited below zero"
+        ),
+        pytest.param(_PARENT_ID, _answer_with_first_leg(id="leg-1"), id="a leg whose order id is not Alpaca's"),
+    ],
+)
+@responses.activate
+async def test_an_answer_that_contradicts_itself_is_an_unknown_outcome_that_still_names_its_order(
+    broker: AlpacaBroker, asked: str, answer: dict[str, Any]
+) -> None:
+    """Refused by what the answer says of itself. It crosses the port as an answer that could not be read,
+    with the order's id so it can be cancelled, never as the reader's own error."""
+    responses.add(responses.GET, f"{_ORDERS}/{asked}", json=answer)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as unknown:
+        await broker.get_option_order_by_broker_order_id(asked)
+
+    assert isinstance(unknown.value, BrokerUnavailable)
+    assert unknown.value.broker_order_id == asked
+
+
+@responses.activate
+async def test_an_accepted_order_whose_id_is_not_alpacas_is_unknown_and_hands_on_no_id(broker: AlpacaBroker) -> None:
+    """Nothing could be read or cancelled by such an id, so the answer is not taken as an order held under it."""
+    responses.add(responses.POST, _ORDERS, json=_answer("MultilegOptionsOrderResponse", id="not-an-order-id"))
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as unknown:
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+
+    assert isinstance(unknown.value, BrokerUnavailable)
+    assert unknown.value.broker_order_id is None
 
 
 @responses.activate
