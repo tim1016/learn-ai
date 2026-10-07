@@ -1,27 +1,40 @@
 """A Dry Run settles a contract its bot holds past expiry (#2913).
 
 The real SQLite Clerk of a ``sim:`` account, with its real simulated broker.
-The simulation settles its own position when the Clerk reads the account's
-option events, and the Clerk books what it reports exactly as it books a real
-broker's. The rule and the price are the simulation's: nothing here says
-what a real account would have done.
+No broker ends a Dry Run's positions, so its simulation does, by a rule of
+its own: the contract is sold, in cash, at its exercise value at the close
+of its last session, or expires at nothing. It is never exercised into
+shares. The Clerk books what the simulation hands back exactly as it books a
+real broker's events. Nothing here says what a real account would have got.
+
+The scene is the one of ``test_option_entry_and_exit``: a $1,000.00 budget,
+one SPY 585 call expiring Friday 2026-09-18, bought at noon on Tuesday
+2026-09-08 at $1.94 a share: $194.00, and six cents of fees.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+from app.broker.alpaca.clerk.simulated_option_settlement import SETTLEMENT_GRACE_MS
 from app.broker.alpaca.clerk.sqlite import option_events
+from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulationEvidenceUnavailable
 from app.marketdata.feed import MarketDataBar
+from app.options.contract import OptionContract
+from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import SourceBarLedger
+from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.test_option_close_fences import (
+    EXPIRY,
     EXPIRY_CLOSE,
+    EXPIRY_NOON,
     MONDAY_NOON,
     SATURDAY_NOON,
     THURSDAY_NOON,
@@ -32,12 +45,19 @@ from tests.broker.alpaca.clerk.sqlite.test_option_close_fences import (
     _wait_until,
 )
 from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import (  # noqa: F401
+    LEG,
     RUN,
     SID,
     SYMBOL,
     _DryRun,
+    _open,
+    _option_leg,
+    _plan,
     dry_run,
 )
+
+MINUTE = 60_000
+PUT = OptionContract.of(root="SPY", expiry_date=EXPIRY, right="put", strike=585)
 
 
 def _keeps_spy(account: _DryRun, close: str, *, end_ms: int = EXPIRY_CLOSE) -> None:
@@ -47,7 +67,7 @@ def _keeps_spy(account: _DryRun, close: str, *, end_ms: int = EXPIRY_CLOSE) -> N
     try:
         ledger.append(
             MarketDataBar(
-                feed_id="ibkr", symbol="SPY", start_ms=end_ms - 60_000, end_ms=end_ms, open=price, high=price,
+                feed_id="ibkr", symbol="SPY", start_ms=end_ms - MINUTE, end_ms=end_ms, open=price, high=price,
                 low=price, close=price, volume=100, fetched_at_ms=end_ms, session_phase="RTH",
             ),
             run_id=RUN,
@@ -74,8 +94,24 @@ def _booked(account: _DryRun) -> list[dict[str, Any]]:
     return [{"summary_code": row[0], **json.loads(row[1])} for row in rows]
 
 
+def _budget(account: _DryRun) -> Any:
+    """The bot's own budget as its statement reads it: what it made, its fees, what it holds and its balance."""
+    return account.repo.account_budget(cash=1000, seen_before_ms=account.clock() + 1).deployments[0]
+
+
+def _fees(account: _DryRun) -> Decimal:
+    return account.fees().predicted_total
+
+
+# ── what the bot's money says after each outcome, by hand ────────────────
+
+
 async def test_a_call_held_past_expiry_out_of_the_money_ends_at_nothing_and_the_bot_is_flat(dry_run: _DryRun) -> None:  # noqa: F811
-    """One call bought at $1.94; SPY last traded at 580.00 under the 585 strike: $194.00 lost, and nothing held."""
+    """SPY closed at 580.00 under the 585 strike: the call is worth nothing. $194.00 is lost.
+
+    An expiry is no trade, so it has no fee: the six cents are the entry's.
+    Balance: 1,000.00 - 194.00 - 0.06 = $805.94, with nothing in position.
+    """
     await dry_run.enter(dry_run.evidence())
     _keeps_spy(dry_run, "580.00")
     _wait_until(dry_run, SATURDAY_NOON)
@@ -86,13 +122,188 @@ async def test_a_call_held_past_expiry_out_of_the_money_ends_at_nothing_and_the_
     assert dry_run.realized_pnl() == Decimal("-194")
     [booked] = _booked(dry_run)
     assert booked["summary_code"] == "OPTION_EXPIRED" and booked["simulated"] is True
+    assert (booked["close_price"], booked["simulation"]["fee_cents"]) == ("0", None)
+    assert _fees(dry_run) == Decimal("0.06")
+    budget = _budget(dry_run)
+    assert (budget.realized_gross, budget.fees, budget.position_cost) == (Decimal("-194"), Decimal("0.06"), 0)
+    assert (budget.balance, budget.free) == (Decimal("805.94"), Decimal("805.94"))
     assert await _page_notices(dry_run) == {}
     # The account can be read again: it holds cash and nothing else.
-    assert dry_run.account_reading() is not None
+    reading = dry_run.account_reading()
+    assert (reading.cash_available_usd, reading.equity_usd, reading.position_count) == (
+        Decimal("805.94"), Decimal("805.94"), 0
+    )
+
+
+async def test_a_call_in_the_money_is_settled_in_cash_at_its_exercise_value_and_the_bot_holds_no_shares(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """SPY closed at 590.25, 5.25 over the 585 strike. The call is sold for 5.25 a share: 100 x 5.25 = $525.00.
+
+    Made: 525.00 - 194.00 = $331.00. Fees: the entry's six cents and the
+    sale's nine (SEC 525 x 0.0000206 = 0.010815, two cents; TAF 0.00329,
+    one; CAT 0.0003, one; ORF 0.015, two; OCC 0.025, three). Balance:
+    1,000.00 + 331.00 - 0.15 = $1,330.85, with nothing in position.
+
+    Exercised, it would have bought 100 shares for $58,500.00 on a $1,000.00
+    budget. No share is bought, and the bot is held for none.
+    """
+    await dry_run.enter(dry_run.evidence())
+    _keeps_spy(dry_run, "590.25")
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {}
+    assert dry_run.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100), (SYMBOL, "sell", 1.0, 5.25, 100)]
+    assert dry_run.realized_pnl() == Decimal("331")
+    [booked] = _booked(dry_run)
+    assert booked["summary_code"] == "OPTION_SETTLED_IN_CASH" and booked["ended_by"] == "settled_in_cash"
+    assert (booked["close_price"], booked.get("shares"), booked["simulated"]) == ("5.25", None, True)
+    assert _fees(dry_run) == Decimal("0.15")
+    budget = _budget(dry_run)
+    assert (budget.realized_gross, budget.fees, budget.position_cost) == (Decimal("331"), Decimal("0.15"), 0)
+    assert (budget.balance, budget.free) == (Decimal("1330.85"), Decimal("1330.85"))
+    reading = dry_run.account_reading()
+    assert (reading.cash_available_usd, reading.equity_usd, reading.position_count) == (
+        Decimal("1330.85"), Decimal("1330.85"), 0
+    )
+    # The simulation's broker holds what the books hold: nothing.
+    assert await dry_run.clerk._read.list_positions() == []
+    assert await _page_notices(dry_run) == {}
+
+
+async def test_a_put_in_the_money_is_settled_in_cash_and_leaves_no_short_and_a_budget_that_still_reads(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """One 585 put bought at $1.94; SPY closed at 580.00. Sold for 5.00 a share: $500.00, $306.00 made.
+
+    Fees: six cents and nine (SEC 500 x 0.0000206 = 0.0103, two cents; the
+    rest as for the call). Balance: 1,000.00 + 306.00 - 0.15 = $1,305.85.
+
+    Exercised, it would have left the bot short 100 shares, and the account's
+    budget unreadable for it.
+    """
+    await dry_run.enter(dry_run.evidence(picked={LEG: PUT}), plan=_plan(_option_leg(LEG, right="put")))
+    assert dry_run.held() == {PUT.occ_symbol: 1.0}
+    _keeps_spy(dry_run, "580.00")
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {}
+    assert dry_run.realized_pnl() == Decimal("306")
+    [booked] = _booked(dry_run)
+    assert (booked["summary_code"], booked["close_price"]) == ("OPTION_SETTLED_IN_CASH", "5")
+    assert _fees(dry_run) == Decimal("0.15")
+    budget = _budget(dry_run)
+    assert (budget.realized_gross, budget.fees, budget.position_cost, budget.balance) == (
+        Decimal("306"), Decimal("0.15"), 0, Decimal("1305.85")
+    )
+    # The account's money map reads too: nothing is short and nothing is unvalued.
+    assert dry_run.repo.account_money(cash=1000, seen_before_ms=dry_run.clock() + 1).unvalued == ()
+    assert await _page_notices(dry_run) == {}
+
+
+async def test_a_close_a_fraction_of_a_cent_in_the_money_rounds_down_to_an_expiry_with_no_fee(dry_run: _DryRun) -> None:  # noqa: F811
+    """SPY closed at 585.009: nine tenths of a cent over the strike. Rounded down to the cent that is nothing.
+
+    So it is an expiry, the same as at 585.00: $194.00 lost, no sale and no
+    fee beyond the entry's six cents. Balance: $805.94.
+    """
+    await dry_run.enter(dry_run.evidence())
+    _keeps_spy(dry_run, "585.009")
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    [booked] = _booked(dry_run)
+    assert (booked["summary_code"], booked["close_price"]) == ("OPTION_EXPIRED", "0")
+    # Both figures are on the record: what it was worth as worked out, and as booked.
+    assert (booked["simulation"]["exercise_value"], booked["simulation"]["booked_price"]) == ("0.009", "0")
+    assert dry_run.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100), (SYMBOL, "sell", 1.0, 0.0, 100)]
+    assert (dry_run.realized_pnl(), _fees(dry_run)) == (Decimal("-194"), Decimal("0.06"))
+    assert _budget(dry_run).balance == Decimal("805.94")
+
+
+async def test_a_contract_bought_on_its_expiry_day_is_settled_and_the_days_pnl_is_what_it_made(dry_run: _DryRun) -> None:  # noqa: F811
+    """Bought at noon on the expiry day itself at $1.94, closed 5.25 in the money. The read of that day's
+    settlements starts on that same date.
+
+    Both fills are of one day, and a day's fees are rounded up once for each
+    fee type over all its fills: SEC 0.010815, two cents; TAF 0.00329, one;
+    CAT 0.0003 + 0.0003, one; ORF 0.015 + 0.015, three; OCC 0.025 + 0.025,
+    five. Twelve cents, where the two fills on two days would be fifteen.
+
+    The day's P&L, read at the close: the account began the day with
+    $1,000.00 and ends it with 1,000.00 + 331.00 - 0.12 = $1,330.88. It made $330.88.
+    """
+    _wait_until(dry_run, EXPIRY_NOON)
+    publish_quotes(EXPIRY_NOON, SPY=585.0)
+    await dry_run.read_account()
+    await dry_run.enter(dry_run.evidence())
+    assert dry_run.held() == {SYMBOL: 1.0}
+    _keeps_spy(dry_run, "590.25")
+    _wait_until(dry_run, EXPIRY_CLOSE)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {}
+    assert [booked["summary_code"] for booked in _booked(dry_run)] == ["OPTION_SETTLED_IN_CASH"]
+    reading = dry_run.account_reading()
+    day = observed_day_pnl(observation=reading, now_ms=dry_run.clock())
+    assert _fees(dry_run) == Decimal("0.12")
+    assert (reading.last_equity_usd, reading.equity_usd) == (Decimal(1000), Decimal("1330.88"))
+    assert day.display_total_usd == Decimal("330.88")
+
+
+# ── the record, and what is settled as ───────────────────────────────────
+
+
+async def test_the_books_record_says_it_is_a_simulations_rule_with_the_price_it_used_and_where_it_came_from(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    await dry_run.enter(dry_run.evidence())
+    _keeps_spy(dry_run, "590.25", end_ms=EXPIRY_CLOSE - MINUTE)
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    [booked] = _booked(dry_run)
+    said = booked["simulation"]
+    assert "simulation" in said["rule"].lower() and "not a broker" in said["rule"].lower()
+    assert (said["underlying_price"], said["strike"], said["exercise_value"], said["booked_price"]) == (
+        "590.25", "585", "5.25", "5.25"
+    )
+    assert (said["contracts"], said["multiplier"], said["cash_cents"], said["fee_cents"]) == (1, 100, 52_500, 9)
+    assert said["bar_ref"] and said["bar_provider"] == "ibkr"
+    assert (said["bar_end_ms"], said["last_session_close_ms"], said["bar_before_close_ms"]) == (
+        EXPIRY_CLOSE - MINUTE, EXPIRY_CLOSE, MINUTE
+    )
+    assert said["settled_at_ms"] == SATURDAY_NOON
+    assert booked["broker"] == "synthetic" and booked["source_code"] == "SIMULATED_CASH_SETTLEMENT"
+
+
+async def test_what_a_simulation_settled_is_on_the_books_as_a_simulated_execution(dry_run: _DryRun) -> None:  # noqa: F811
+    """A Dry Run's fills are never recorded as a real account's evidence, and a settlement's are no exception."""
+    await dry_run.enter(dry_run.evidence())
+    _keeps_spy(dry_run, "590.25")
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    with dry_run.repo.write_fence() as conn:
+        sources = {
+            row[0] for row in conn.execute("SELECT evidence_source FROM fills WHERE fill_id LIKE 'option-event:%'")
+        }
+    assert sources == {"simulated_execution"}
+
+
+# ── when it is settled ───────────────────────────────────────────────────
 
 
 async def test_the_clerks_own_task_settles_an_expired_contract_with_no_pass_and_no_owner(dry_run: _DryRun) -> None:  # noqa: F811
-    """A Dry Run has no pass on a timer. Its keeper's round is what reads the events and books them."""
+    """A Dry Run has no pass on a timer. Its keeper's round is what asks the simulation and books its answer."""
     await dry_run.enter(dry_run.evidence())
     _keeps_spy(dry_run, "580.00")
     _wait_until(dry_run, SATURDAY_NOON)
@@ -109,74 +320,66 @@ async def test_the_clerks_own_task_settles_an_expired_contract_with_no_pass_and_
     assert dry_run.repo.last_custody_sequence() == written
 
 
-async def test_a_call_in_the_money_is_exercised_and_the_bot_holds_the_shares_at_the_strike(dry_run: _DryRun) -> None:  # noqa: F811
-    """SPY last traded at 590.25 over the 585 strike: 100 shares bought at $585.00, and the premium is the loss."""
+async def test_at_the_close_the_clerk_waits_for_the_closing_bar_and_books_from_it_and_not_from_the_bar_before(
+    dry_run: _DryRun,  # noqa: F811
+) -> None:
+    """The race at the close. The 15:59 bar closed at 584.50, out of the money. The Clerk reads half a
+    second after the close, before the 16:00 bar has landed. Nothing is booked and no notice is raised: the
+    simulation is waiting. The closing bar lands at 586.00, and the next read, within a minute, books the
+    sale at 1.00 a share: $100.00, not an expiry at nothing."""
+    await dry_run.enter(dry_run.evidence())
+    _wait_until(dry_run, EXPIRY_NOON)
+    _keeps_spy(dry_run, "584.50", end_ms=EXPIRY_CLOSE - MINUTE)
+    _wait_until(dry_run, EXPIRY_CLOSE + 500)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert _booked(dry_run) == [] and dry_run.held() == {SYMBOL: 1.0}
+    assert _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED") is None
+
+    _keeps_spy(dry_run, "586.00")
+    dry_run.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
+    await dry_run.clerk.reconcile_once()
+
+    [booked] = _booked(dry_run)
+    assert (booked["summary_code"], booked["close_price"]) == ("OPTION_SETTLED_IN_CASH", "1")
+    assert booked["simulation"]["bar_before_close_ms"] == 0
+    assert dry_run.realized_pnl() == Decimal("-94")
+
+
+async def test_once_the_wait_for_the_closing_bar_is_over_the_newest_bar_of_the_session_settles_it(dry_run: _DryRun) -> None:  # noqa: F811
+    """No bar ends at the close. Two minutes after it the 15:59 bar stands for the close, and the record says
+    it ended a minute before."""
+    await dry_run.enter(dry_run.evidence())
+    _wait_until(dry_run, EXPIRY_NOON)
+    _keeps_spy(dry_run, "590.25", end_ms=EXPIRY_CLOSE - MINUTE)
+    _wait_until(dry_run, EXPIRY_CLOSE + SETTLEMENT_GRACE_MS)
+
+    await dry_run.clerk.reconcile_once()
+
+    [booked] = _booked(dry_run)
+    assert (booked["summary_code"], booked["simulation"]["bar_before_close_ms"]) == ("OPTION_SETTLED_IN_CASH", MINUTE)
+
+
+async def test_a_restart_between_the_simulations_settlement_and_its_booking_books_it_once(dry_run: _DryRun) -> None:  # noqa: F811
+    """The simulation settles in its own ledger, and the process stops before the Clerk has booked anything.
+    The next Clerk is handed the same settlement and books it. Restarted twice more, it books nothing more."""
     await dry_run.enter(dry_run.evidence())
     _keeps_spy(dry_run, "590.25")
     _wait_until(dry_run, SATURDAY_NOON)
+    dry_run.clerk._trade.settle_expired_options(after_ms=0)
+    assert _booked(dry_run) == [] and dry_run.held() == {SYMBOL: 1.0}
 
-    await dry_run.clerk.reconcile_once()
+    for _restart in range(3):
+        await close_synthetic_clerk_runtimes()
+        reopened = await _open(dry_run.artifacts_root, dry_run.clock, dry_run.binding)
+        await reopened.clerk.reconcile_once()
+        reopened.wait(option_events.OPTION_EVENT_POLL_INTERVAL_MS)
+        await reopened.clerk.reconcile_once()
 
-    assert dry_run.held() == {"SPY": 100.0}
-    assert ("SPY", "buy", 100.0, 585.0, None) in dry_run.fills()
-    assert dry_run.realized_pnl() == Decimal("-194")
-    [booked] = _booked(dry_run)
-    assert booked["summary_code"] == "OPTION_EXERCISED"
-    assert booked["shares"]["cash_cents"] == -5_850_000
-    # The simulation's broker holds what the books hold.
-    assert {
-        position.symbol: position.quantity for position in await dry_run.clerk._read.list_positions()
-    } == {"SPY": 100.0}
-    assert set(await _page_notices(dry_run)) == {"OPTION_SHARES_HELD"}
-
-
-async def test_the_record_says_it_is_a_simulations_rule_with_the_price_it_used_and_where_it_came_from(
-    dry_run: _DryRun,  # noqa: F811
-) -> None:
-    await dry_run.enter(dry_run.evidence())
-    _keeps_spy(dry_run, "590.25", end_ms=EXPIRY_CLOSE - 60_000)
-    _wait_until(dry_run, SATURDAY_NOON)
-
-    await dry_run.clerk.reconcile_once()
-
-    [booked] = _booked(dry_run)
-    said = booked["simulation"]
-    assert said["underlying_price"] == "590.25"
-    assert said["bar_end_ms"] == EXPIRY_CLOSE - 60_000 and said["last_session_close_ms"] == EXPIRY_CLOSE
-    assert said["bar_ref"] and "simulation" in said["rule"].lower()
-    assert booked["broker"] == "synthetic" and booked["source_code"] == "SIMULATED_EXERCISE"
-
-
-async def test_with_no_price_of_the_underlying_from_the_last_session_the_contract_stays_held_and_the_hold_says_why(
-    dry_run: _DryRun,  # noqa: F811
-) -> None:
-    await dry_run.enter(dry_run.evidence())
-    _keeps_spy(dry_run, "590.25", end_ms=THURSDAY_NOON)
-    _wait_until(dry_run, SATURDAY_NOON)
-
-    await dry_run.clerk.reconcile_once()
-
-    assert dry_run.held() == {SYMBOL: 1.0} and _booked(dry_run) == []
-    held = _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED")
-    assert held is not None
-    said = json.loads(held["facts_json"])["explanation"]
-    assert SYMBOL in said and "SPY" in said and "last session" in said
-    with pytest.raises(SimulationEvidenceUnavailable):
-        dry_run.account_reading()
-
-
-async def test_a_price_kept_later_settles_what_was_held_for_want_of_one_and_ends_the_hold(dry_run: _DryRun) -> None:  # noqa: F811
-    await dry_run.enter(dry_run.evidence())
-    _wait_until(dry_run, SATURDAY_NOON)
-    await dry_run.clerk.reconcile_once()
-    assert _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED") is not None
-    _keeps_spy(dry_run, "580.00")
-    dry_run.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
-
-    await dry_run.clerk.reconcile_once()
-
-    assert dry_run.held() == {}
-    assert _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED") is None
+        assert reopened.held() == {}
+        assert [booked["summary_code"] for booked in _booked(reopened)] == ["OPTION_SETTLED_IN_CASH"]
+        assert reopened.realized_pnl() == Decimal("331")
 
 
 async def test_a_stopped_bot_whose_close_failed_before_expiry_is_flat_once_its_contract_is_settled(
@@ -201,36 +404,48 @@ async def test_a_stopped_bot_whose_close_failed_before_expiry_is_flat_once_its_c
     assert dry_run.realized_pnl() == Decimal("-194")
 
 
-async def test_the_shares_an_exercise_left_are_sold_when_the_run_ends_as_a_dry_run_sells_whatever_a_run_left(
-    dry_run: _DryRun,  # noqa: F811
+# ── when it cannot be settled ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("kept_at", "says"),
+    [
+        pytest.param(THURSDAY_NOON, "no price of SPY", id="only a price from the day before"),
+        pytest.param(
+            et_minute_of_day_ms(date(2026, 9, 18), 9 * 60 + 35), "385 minutes before the close",
+            id="only the 09:35 bar of a bot whose feed then went down",
+        ),
+    ],
+)
+async def test_with_no_price_at_the_close_of_the_last_session_the_contract_stays_held_and_the_hold_says_why(
+    dry_run: _DryRun, kept_at: int, says: str  # noqa: F811
 ) -> None:
-    """A Dry Run never ends holding. The shares bought at 585.00 are sold at the last price it kept, 590.25:
-    100 x 5.25 = $525.00 on the shares, less the $194.00 premium."""
+    """A price from another day, or from six hours before the close, is not what the contract was worth at
+    the close. Nothing is settled from it."""
     await dry_run.enter(dry_run.evidence())
-    _keeps_spy(dry_run, "590.25")
+    _keeps_spy(dry_run, "590.25", end_ms=kept_at)
+    _wait_until(dry_run, SATURDAY_NOON)
+
+    await dry_run.clerk.reconcile_once()
+
+    assert dry_run.held() == {SYMBOL: 1.0} and _booked(dry_run) == []
+    held = _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED")
+    assert held is not None
+    said = json.loads(held["facts_json"])["explanation"]
+    assert SYMBOL in said and says in said and "last session" in said
+    with pytest.raises(SimulationEvidenceUnavailable):
+        dry_run.account_reading()
+
+
+async def test_a_price_kept_later_settles_what_was_held_for_want_of_one_and_ends_the_hold(dry_run: _DryRun) -> None:  # noqa: F811
+    await dry_run.enter(dry_run.evidence())
     _wait_until(dry_run, SATURDAY_NOON)
     await dry_run.clerk.reconcile_once()
-    assert dry_run.held() == {"SPY": 100.0}
+    assert _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED") is not None
+    _keeps_spy(dry_run, "580.00")
+    dry_run.wait(option_events.OPTION_EVENT_POLL_RETRY_MS)
 
-    await _stop(dry_run)
-    await dry_run.clerk.reconcile_once()
     await dry_run.clerk.reconcile_once()
 
     assert dry_run.held() == {}
-    assert dry_run.realized_pnl() == Decimal("331")
-    assert await _page_notices(dry_run) == {}
-
-
-async def test_what_a_simulation_settled_is_on_the_books_as_a_simulated_execution(dry_run: _DryRun) -> None:  # noqa: F811
-    """A Dry Run's fills are never recorded as a real account's evidence, and a settlement's are no exception."""
-    await dry_run.enter(dry_run.evidence())
-    _keeps_spy(dry_run, "590.25")
-    _wait_until(dry_run, SATURDAY_NOON)
-
-    await dry_run.clerk.reconcile_once()
-
-    with dry_run.repo.write_fence() as conn:
-        sources = {
-            row[0] for row in conn.execute("SELECT evidence_source FROM fills WHERE fill_id LIKE 'option-event:%'")
-        }
-    assert sources == {"simulated_execution"}
+    assert _notice(dry_run, "OPTION_EXPIRED_NOT_SETTLED") is None

@@ -20,10 +20,11 @@ with (ADR 0076). It is left out of a record that has none, so a ledger with
 no option order still reads on a build from before the field existed.
 
 A contract a simulation still holds after its last session is settled by the
-simulation itself (ADR 0076 decision 22). Each record of that settlement
-carries a ``SynthesizedOptionSettlement``: the rule, the underlying's price it
-read and the bar that price is the close of. It too is left out of a record
-that has none.
+simulation itself (ADR 0076 decision 22). The one record of that settlement
+carries a ``SynthesizedOptionSettlement`` (``simulated_option_settlement``):
+the rule, the underlying's price it read, the bar that price is the close of
+and every figure worked out from it. It too is left out of a record that has
+none.
 
 Math Provenance Contract
 ------------------------
@@ -46,17 +47,16 @@ from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal, NamedTuple, TypeGuard
+from typing import Literal, NamedTuple, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.clerk.simulated_option_settlement import SynthesizedOptionSettlement
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker.contract.options import SingleOptionOrderRequest
-from app.options.contract import OptionContract
-from app.options.event_allocation import OptionEventKind
 from app.options.simulated_fill import SimulatedFillModel
 from app.services.jsonl_wal import JsonlWal
 from app.services.session_authority import order_session_state_at_ms
@@ -169,51 +169,6 @@ class SynthesizedOptionFill(BaseModel):
     fill_price: Decimal | None
     quote_age_ms: int | None
     filled_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-
-
-class SynthesizedOptionSettlement(BaseModel):
-    """How a simulation settled a contract it held past the contract's last session (ADR 0076 decision 22).
-
-    A real broker exercises an option that is in the money at expiry and
-    lets the rest expire. A simulation has no broker to do it, so it applies
-    the same rule to its own position, from the last price of the underlying
-    it kept from the contract's last session. This is the record of that
-    rule and that price. It is a simulation's settlement, never a broker's.
-
-    One settlement writes one record that removes the option position, at a
-    price of zero. An exercise writes a second, for the shares at the
-    strike; both carry the same settlement.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    contract: OptionContract
-    kind: OptionEventKind
-    # Contracts settled: one or more. A simulation holds only what it bought.
-    contracts: int = Field(ge=1, strict=True)
-    multiplier: int = Field(ge=1, strict=True)
-    # The underlying's price the rule read, dollars a share, exact.
-    underlying_price: Decimal
-    # The retained bar that price is the close of, and when that bar ended.
-    bar_ref: str
-    bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    # When the contract stopped trading, and when the simulation settled it.
-    last_session_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    settled_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    # The rule applied, in plain words.
-    rule: str
-
-    def note(self) -> dict[str, Any]:
-        """The settlement as plain values, for the books' own record of the event."""
-        return {
-            "rule": self.rule,
-            "underlying_price": str(self.underlying_price),
-            "price_from": "the close of the last bar the simulation kept for the underlying in the contract's last session",
-            "bar_ref": self.bar_ref,
-            "bar_end_ms": self.bar_end_ms,
-            "last_session_close_ms": self.last_session_close_ms,
-            "settled_at_ms": self.settled_at_ms,
-        }
 
 
 class SynthesizedOrderRecord(BaseModel):

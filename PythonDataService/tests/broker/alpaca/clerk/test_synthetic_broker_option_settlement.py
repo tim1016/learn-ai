@@ -1,12 +1,16 @@
 """The simulation settles a contract it holds past the contract's last session (#2913).
 
-No broker exists to exercise or expire a simulated position, so the
-simulation applies Alpaca's stated rule to its own book, from the last price
-of the underlying it kept from the contract's last session. This is a
-simulation's rule: nothing here says what a real account would do.
+No broker exists to end a simulated position, so the simulation does it, by
+a rule of its own: it books the sale Alpaca says it makes of an expiring
+position, in cash, at the contract's exercise value at the close of its last
+session. It never exercises into shares. Nothing here says what a real
+account would have got.
 
 Settling is one explicit step of the simulation's trade port. Its read of
 option events settles nothing and reports none.
+
+The scene: one SPY call, or put, struck at 585 and expiring Friday
+2026-09-18, bought at noon on Tuesday 2026-09-08.
 """
 
 from __future__ import annotations
@@ -18,17 +22,22 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.simulated_option_settlement import SimulatedOptionSettlements
+from app.broker.alpaca.clerk.simulated_option_settlement import (
+    SETTLEMENT_BAR_MAX_AGE_MS,
+    SETTLEMENT_GRACE_MS,
+    SimulatedOptionSettlements,
+    SimulatedOutcome,
+)
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.models import OrderSide, OrderType
-from app.broker.contract.option_events import BrokerOptionEventActivity, BrokerOptionShareTradeActivity
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.marketdata.feed import MarketDataBar
 from app.options.contract import OptionContract
+from app.options.deadlines import last_session_close_ms
 from app.options.event_allocation import OptionEventKind
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.services.session_authority import et_minute_of_day_ms
-from app.services.source_bar_ledger import SourceBarLedger
+from app.services.source_bar_ledger import RECOVERY_QUOTE_PROVIDER, RUN_END_CLOSE_PROVIDER, SourceBarLedger
 from app.utils.session_anchors import et_midnight_ms
 
 ACCOUNT = "sim:settles-a-call"
@@ -40,6 +49,7 @@ SATURDAY = et_minute_of_day_ms(date(2026, 9, 19), 12 * 60)
 CALL = OptionContract.from_occ_symbol("SPY260918C00585000")
 PUT = OptionContract.from_occ_symbol("SPY260918P00585000")
 WINDOW = et_midnight_ms(date(2026, 9, 8))
+MINUTE = 60_000
 
 
 @pytest.fixture
@@ -78,29 +88,22 @@ async def _buys(simulation: SyntheticBroker, contract: OptionContract, clock: li
     )
 
 
-def _spy_bar(bars: SourceBarLedger, *, close: str, end_ms: int) -> None:
-    """The simulation keeps one minute of SPY that ended at ``end_ms``."""
+def _spy_bar(bars: SourceBarLedger, *, close: str, end_ms: int, **prices: str) -> None:
+    """The simulation keeps one minute of SPY that ended at ``end_ms``, as the market delivered it."""
     price = Decimal(close)
+    said = {"open": price, "high": price, "low": price, **{name: Decimal(value) for name, value in prices.items()}}
     bars.append(
         MarketDataBar(
-            feed_id="ibkr", symbol="SPY", start_ms=end_ms - 60_000, end_ms=end_ms, open=price, high=price, low=price,
-            close=price, volume=100, fetched_at_ms=end_ms, session_phase="RTH",
+            feed_id="ibkr", symbol="SPY", start_ms=end_ms - MINUTE, end_ms=end_ms, close=price, volume=100,
+            fetched_at_ms=end_ms, session_phase="RTH", **said,
         ),
         run_id="run-1",
     )
 
 
-def _settle(simulation: SyntheticBroker) -> SimulatedOptionSettlements:
+def _settle(simulation: SyntheticBroker, *, window: int = WINDOW) -> SimulatedOptionSettlements:
     """The step the Clerk's poll calls: settle what is held past expiry, and hand back what was settled."""
-    return simulation.settle_expired_options(after_ms=WINDOW)
-
-
-def _events(settled: SimulatedOptionSettlements) -> list[BrokerOptionEventActivity]:
-    return [settlement.event for settlement in settled.settled]
-
-
-def _share_trades(settled: SimulatedOptionSettlements) -> list[BrokerOptionShareTradeActivity]:
-    return [settlement.share_trade for settlement in settled.settled if settlement.share_trade is not None]
+    return simulation.settle_expired_options(after_ms=window)
 
 
 async def _held(simulation: SyntheticBroker) -> dict[str, float]:
@@ -110,106 +113,233 @@ async def _held(simulation: SyntheticBroker) -> dict[str, float]:
     }
 
 
+# ── what it settles to ───────────────────────────────────────────────────
+
+
 async def test_nothing_is_settled_while_the_contract_still_trades(
     simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
 ) -> None:
     await _buys(simulation, CALL, clock)
-    _spy_bar(bars, close="590", end_ms=LAST_SESSION_CLOSE - 60_000)
+    _spy_bar(bars, close="590", end_ms=LAST_SESSION_CLOSE - MINUTE)
     clock[0] = LAST_SESSION_CLOSE - 1
 
     settled = _settle(simulation)
 
-    assert settled.settled == () and settled.not_settled == {}
+    assert (settled.settled, settled.not_settled, settled.waiting) == ((), {}, {})
     assert await _held(simulation) == {CALL.occ_symbol: 1.0}
 
 
-async def test_a_call_out_of_the_money_at_the_last_price_expires_and_the_simulation_holds_nothing(
+async def test_a_call_in_the_money_is_sold_at_its_exercise_value_and_no_shares_appear(
     simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
 ) -> None:
-    await _buys(simulation, CALL, clock)
-    _spy_bar(bars, close="584.99", end_ms=LAST_SESSION_CLOSE)
-    clock[0] = SATURDAY
+    """Two calls struck at 585 with SPY closing at 590.25: 5.25 a share, 2 x 100 x 5.25 = $1,050.00 in cash.
 
-    settled = _settle(simulation)
-
-    [event] = _events(settled)
-    assert (event.kind, event.contract, event.position_change) == (OptionEventKind.EXPIRED, CALL, -1)
-    assert event.activity_date_ms == et_midnight_ms(EXPIRY)
-    assert _share_trades(settled) == [] and settled.not_settled == {}
-    assert await _held(simulation) == {}
-
-
-@pytest.mark.parametrize(
-    ("contract", "last_price", "exercised"),
-    [
-        pytest.param(CALL, "585.01", True, id="a call a cent in the money"),
-        pytest.param(CALL, "585.00", False, id="a call at the money"),
-        pytest.param(CALL, "585.009", False, id="a call less than a cent in the money"),
-        pytest.param(PUT, "584.99", True, id="a put a cent in the money"),
-        pytest.param(PUT, "585.00", False, id="a put at the money"),
-    ],
-)
-async def test_a_contract_is_exercised_when_it_is_in_the_money_by_a_cent_or_more_and_expires_otherwise(
-    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int], contract: OptionContract, last_price: str,
-    exercised: bool,
-) -> None:
-    await _buys(simulation, contract, clock)
-    _spy_bar(bars, close=last_price, end_ms=LAST_SESSION_CLOSE)
-    clock[0] = SATURDAY
-
-    settled = _settle(simulation)
-
-    [event] = _events(settled)
-    assert event.kind is (OptionEventKind.EXERCISED if exercised else OptionEventKind.EXPIRED)
-    assert len(_share_trades(settled)) == (1 if exercised else 0)
-
-
-async def test_an_exercised_call_leaves_the_simulation_holding_the_shares_at_the_strike(
-    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
-) -> None:
-    """Two calls struck at 585 with SPY last at 590.25: 200 shares bought at $585.00, for $117,000.00."""
+    Exercised, they would have bought 200 shares for $117,000.00. A Dry
+    Run's budget could not pay for them, so nothing is exercised.
+    """
     await _buys(simulation, CALL, clock, contracts=2)
     _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    [trade] = _share_trades(_settle(simulation))
-    assert (trade.underlying_symbol, trade.shares, trade.price, trade.net_amount) == (
-        "SPY", 200, Decimal(585), Decimal(-117000)
-    )
-    [shares] = await simulation.list_positions()
-    assert (shares.symbol, shares.quantity, shares.side, shares.average_entry_price) == ("SPY", 200.0, "long", 585.0)
+    [settlement] = _settle(simulation).settled
+
+    record = settlement.record
+    assert (record.outcome, record.contracts, record.multiplier) == (SimulatedOutcome.SETTLED_IN_CASH, 2, 100)
+    assert (record.exercise_value, record.booked_price, record.cash_cents) == (Decimal("5.25"), Decimal("5.25"), 105_000)
+    # Nothing is held: not the contract, and no share of SPY, bought or sold.
+    assert await _held(simulation) == {}
 
 
-async def test_an_exercised_put_leaves_the_simulation_short_the_shares_at_the_strike(
+async def test_a_put_in_the_money_is_sold_at_its_exercise_value_and_leaves_no_short(
     simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
 ) -> None:
+    """One put struck at 585 with SPY closing at 580.00: 5.00 a share, $500.00. Exercised, it would have sold 100 shares short."""
     await _buys(simulation, PUT, clock)
     _spy_bar(bars, close="580", end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
-    _settle(simulation)
+    [settlement] = _settle(simulation).settled
 
-    assert await _held(simulation) == {"SPY": -100.0}
+    assert (settlement.record.outcome, settlement.record.booked_price, settlement.record.cash_cents) == (
+        SimulatedOutcome.SETTLED_IN_CASH, Decimal(5), 50_000
+    )
+    assert await _held(simulation) == {}
 
 
-async def test_the_price_read_is_the_last_one_kept_from_the_last_session_and_the_record_says_which(
-    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+@pytest.mark.parametrize(
+    ("contract", "close", "outcome", "booked", "cash_cents"),
+    [
+        pytest.param(CALL, "585.01", SimulatedOutcome.SETTLED_IN_CASH, "0.01", 100, id="a call a cent in the money"),
+        pytest.param(PUT, "584.99", SimulatedOutcome.SETTLED_IN_CASH, "0.01", 100, id="a put a cent in the money"),
+        pytest.param(CALL, "585.12345", SimulatedOutcome.SETTLED_IN_CASH, "0.12", 1_200, id="rounded down to the cent"),
+        pytest.param(CALL, "585.009", SimulatedOutcome.EXPIRED, "0", 0, id="a call a fraction of a cent in the money"),
+        pytest.param(CALL, "585.00", SimulatedOutcome.EXPIRED, "0", 0, id="a call at the money"),
+        pytest.param(CALL, "584.99", SimulatedOutcome.EXPIRED, "0", 0, id="a call out of the money"),
+        pytest.param(PUT, "585.00", SimulatedOutcome.EXPIRED, "0", 0, id="a put at the money"),
+    ],
+)
+async def test_a_value_that_rounds_down_to_nothing_is_an_expiry_and_a_cent_or_more_is_a_sale(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int], contract: OptionContract, close: str,
+    outcome: SimulatedOutcome, booked: str, cash_cents: int,
 ) -> None:
-    """A later bar, from after the close, is not the contract's last price. The record names the bar used."""
-    await _buys(simulation, CALL, clock)
-    _spy_bar(bars, close="590", end_ms=LAST_SESSION_CLOSE - 120_000)
-    _spy_bar(bars, close="584", end_ms=LAST_SESSION_CLOSE - 60_000)
-    _spy_bar(bars, close="599", end_ms=LAST_SESSION_CLOSE + 60_000)
+    await _buys(simulation, contract, clock)
+    _spy_bar(bars, close=close, end_ms=LAST_SESSION_CLOSE)
     clock[0] = SATURDAY
 
     [settlement] = _settle(simulation).settled
 
-    assert settlement.event.kind is OptionEventKind.EXPIRED
-    note = settlement.note
-    assert note["underlying_price"] == "584"
-    assert note["bar_end_ms"] == LAST_SESSION_CLOSE - 60_000
-    assert note["last_session_close_ms"] == LAST_SESSION_CLOSE
-    assert "simulation" in note["rule"].lower()
+    record = settlement.record
+    assert (record.outcome, record.booked_price, record.cash_cents) == (outcome, Decimal(booked), cash_cents)
+    # An expiry is no sale and has no fee. A sale's fee is the option fee model's.
+    assert (record.fee_cents is None) is (outcome is SimulatedOutcome.EXPIRED)
+    assert await _held(simulation) == {}
+
+
+async def test_a_settlement_travels_as_an_expiry_dated_the_expiry_date_and_states_no_cash_of_its_own(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    """The rule that chooses lots knows three kinds of event. A settlement ends a bought position and moves no
+    shares, so it travels as the one that does that. Its price is in the simulation's record, not on the row."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
+    clock[0] = SATURDAY
+
+    [settlement] = _settle(simulation).settled
+
+    event = settlement.event
+    assert (event.kind, event.contract, event.position_change) == (OptionEventKind.EXPIRED, CALL, -1)
+    assert event.activity_date_ms == et_midnight_ms(EXPIRY)
+    assert (event.activity_type, event.net_amount) == ("SIMULATED_CASH_SETTLEMENT", None)
+
+
+async def test_the_record_says_the_rule_the_price_every_figure_and_the_fee(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    """One call sold at 5.25 a share on 2026-09-18, $525.00. Its fee, as a day of its own, each type rounded up
+    to the cent: SEC 525 x 0.0000206 = 0.010815, two cents; TAF 0.00329, one; CAT 100 x 0.000003 = 0.0003,
+    one; ORF 0.015, two; OCC 0.025, three. Nine cents."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE - MINUTE)
+    clock[0] = SATURDAY
+
+    [settlement] = _settle(simulation).settled
+
+    said = settlement.record.note()
+    assert "simulation" in said["rule"].lower() and "not a broker" in said["rule"].lower()
+    assert (said["underlying"], said["underlying_price"], said["strike"], said["right"]) == ("SPY", "590.25", "585", "call")
+    assert (said["exercise_value"], said["booked_price"]) == ("5.25", "5.25")
+    assert (said["contracts"], said["multiplier"], said["cash_cents"]) == (1, 100, 52_500)
+    assert said["bar_ref"] and said["bar_provider"] == "ibkr"
+    assert (said["bar_end_ms"], said["last_session_close_ms"], said["bar_before_close_ms"]) == (
+        LAST_SESSION_CLOSE - MINUTE, LAST_SESSION_CLOSE, MINUTE
+    )
+    assert said["settled_at_ms"] == SATURDAY
+    assert said["fee_cents"] == 9 and "option fee model" in said["fees"]
+
+
+# ── where the price comes from ───────────────────────────────────────────
+
+
+async def test_the_price_is_the_close_of_the_bar_and_none_of_its_other_prices(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    """A bar that opened at 580, reached 599, fell to 570 and closed at 590.25. Only the close settles."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE, open="580", high="599", low="570")
+    clock[0] = SATURDAY
+
+    [settlement] = _settle(simulation).settled
+
+    assert settlement.record.price.underlying_price == Decimal("590.25")
+    assert settlement.record.booked_price == Decimal("5.25")
+
+
+async def test_the_bar_that_ends_at_the_close_settles_at_once(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="586", end_ms=LAST_SESSION_CLOSE)
+    clock[0] = LAST_SESSION_CLOSE
+
+    settled = _settle(simulation)
+
+    [settlement] = settled.settled
+    assert settlement.record.price.bar_before_close_ms == 0 and settled.waiting == {}
+
+
+async def test_without_the_closing_bar_the_simulation_waits_and_settles_from_it_when_it_lands(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    """The race at the close. The 15:59 bar closed at 584.50, out of the money. Half a second after the close
+    the 16:00 bar has not landed. Settled then, the contract would expire for good. The closing bar lands a
+    second later at 586.00, a dollar in the money, and that is what it settles at."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="584.50", end_ms=LAST_SESSION_CLOSE - MINUTE)
+    clock[0] = LAST_SESSION_CLOSE + 500
+
+    early = _settle(simulation)
+
+    assert (early.settled, early.not_settled) == ((), {})
+    assert early.waiting == {CALL.occ_symbol: LAST_SESSION_CLOSE + SETTLEMENT_GRACE_MS}
+    assert await _held(simulation) == {CALL.occ_symbol: 1.0}
+
+    _spy_bar(bars, close="586.00", end_ms=LAST_SESSION_CLOSE)
+    clock[0] = LAST_SESSION_CLOSE + 1_500
+    [settlement] = _settle(simulation).settled
+
+    assert (settlement.record.outcome, settlement.record.booked_price) == (SimulatedOutcome.SETTLED_IN_CASH, Decimal(1))
+    assert settlement.record.price.bar_before_close_ms == 0
+
+
+@pytest.mark.parametrize(
+    ("after_the_close_ms", "settles"),
+    [
+        pytest.param(SETTLEMENT_GRACE_MS - 1, False, id="a millisecond before the wait is over"),
+        pytest.param(SETTLEMENT_GRACE_MS, True, id="when the wait is over"),
+    ],
+)
+async def test_once_the_wait_is_over_the_newest_bar_of_the_session_settles_and_says_how_old_it_is(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int], after_the_close_ms: int, settles: bool
+) -> None:
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590", end_ms=LAST_SESSION_CLOSE - 2 * MINUTE)
+    _spy_bar(bars, close="586", end_ms=LAST_SESSION_CLOSE - MINUTE)
+    clock[0] = LAST_SESSION_CLOSE + after_the_close_ms
+
+    settled = _settle(simulation)
+
+    assert len(settled.settled) == (1 if settles else 0)
+    assert (CALL.occ_symbol in settled.waiting) is not settles
+    if settles:
+        price = settled.settled[0].record.price
+        assert (price.underlying_price, price.bar_before_close_ms) == (Decimal(586), MINUTE)
+
+
+@pytest.mark.parametrize(
+    ("before_the_close_ms", "settles"),
+    [
+        pytest.param(SETTLEMENT_BAR_MAX_AGE_MS, True, id="a bar as old as the rule allows"),
+        pytest.param(SETTLEMENT_BAR_MAX_AGE_MS + MINUTE, False, id="a bar a minute older than that"),
+        pytest.param(6 * 60 * MINUTE + 25 * MINUTE, False, id="the 09:35 bar of a bot stopped that morning"),
+    ],
+)
+async def test_a_bar_too_long_before_the_close_is_no_price_and_the_simulation_says_how_old_it_is(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int], before_the_close_ms: int, settles: bool
+) -> None:
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE - before_the_close_ms)
+    clock[0] = SATURDAY
+
+    settled = _settle(simulation)
+
+    assert len(settled.settled) == (1 if settles else 0)
+    if settles:
+        assert settled.settled[0].record.price.bar_before_close_ms == before_the_close_ms
+        return
+    assert await _held(simulation) == {CALL.occ_symbol: 1.0} and settled.waiting == {}
+    [why] = settled.not_settled.values()
+    assert "SPY" in why and f"{before_the_close_ms // MINUTE} minutes before the close" in why
+    assert "15 minutes" in why
 
 
 @pytest.mark.parametrize(
@@ -217,6 +347,7 @@ async def test_the_price_read_is_the_last_one_kept_from_the_last_session_and_the
     [
         pytest.param(None, id="no price of the underlying at all"),
         pytest.param(LAST_SESSION_OPEN, id="only a price from before the last session opened"),
+        pytest.param(LAST_SESSION_CLOSE + MINUTE, id="only a price from after the close"),
     ],
 )
 async def test_with_no_price_from_the_last_session_nothing_is_settled_and_the_simulation_says_why(
@@ -229,13 +360,77 @@ async def test_with_no_price_from_the_last_session_nothing_is_settled_and_the_si
 
     settled = _settle(simulation)
 
-    assert settled.settled == ()
+    assert settled.settled == () and settled.waiting == {}
     assert await _held(simulation) == {CALL.occ_symbol: 1.0}
     [why] = settled.not_settled.values()
     assert "SPY" in why and "last session" in why
+    # No promise that one will be kept: none will be, by itself.
+    assert "until" not in why
 
 
-async def test_a_contract_is_settled_once_however_often_the_events_are_read(
+async def test_a_bar_from_after_the_close_is_never_the_price(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
+) -> None:
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="584", end_ms=LAST_SESSION_CLOSE - MINUTE)
+    _spy_bar(bars, close="599", end_ms=LAST_SESSION_CLOSE + MINUTE)
+    clock[0] = SATURDAY
+
+    [settlement] = _settle(simulation).settled
+
+    assert settlement.record.outcome is SimulatedOutcome.EXPIRED
+    assert (settlement.record.price.underlying_price, settlement.record.price.bar_end_ms) == (
+        Decimal(584), LAST_SESSION_CLOSE - MINUTE
+    )
+
+
+@pytest.mark.parametrize("provider", [RUN_END_CLOSE_PROVIDER, RECOVERY_QUOTE_PROVIDER])
+async def test_a_bar_the_simulation_made_as_the_evidence_of_a_fill_is_never_the_price(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int], provider: str
+) -> None:
+    """The market's last bar closed at 584.00. A fill of SPY shares a second before the close left its own
+    evidence bar at 599.00, ending at the close. That is a price the simulation wrote, not one the market
+    delivered: the contract expires, on the market's bar."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="584", end_ms=LAST_SESSION_CLOSE - MINUTE)
+    price = Decimal(599)
+    evidence = MarketDataBar(
+        symbol="SPY", start_ms=LAST_SESSION_CLOSE - 1, end_ms=LAST_SESSION_CLOSE, open=price, high=price,
+        low=price, close=price, volume=0, fetched_at_ms=LAST_SESSION_CLOSE, feed_id=provider, session_phase="RTH",
+    )
+    (bars.retain_run_end_close if provider == RUN_END_CLOSE_PROVIDER else bars.retain_recovery_quote)(evidence)
+    clock[0] = SATURDAY
+
+    [settlement] = _settle(simulation).settled
+
+    assert settlement.record.outcome is SimulatedOutcome.EXPIRED
+    assert (settlement.record.price.underlying_price, settlement.record.price.bar_provider) == (Decimal(584), "ibkr")
+
+
+async def test_on_a_half_day_the_close_is_the_early_one(
+    bars: SourceBarLedger, clock: list[int], simulation: SyntheticBroker
+) -> None:
+    """Friday 2026-11-27 closes at 13:00. Nothing is settled a millisecond before; the 13:00 bar settles at 13:00."""
+    half_day = date(2026, 11, 27)
+    contract = OptionContract.of(root="SPY", expiry_date=half_day, right="call", strike=585)
+    close_ms = last_session_close_ms(half_day)
+    assert close_ms == et_minute_of_day_ms(half_day, 13 * 60)
+    await _buys(simulation, contract, clock)
+    _spy_bar(bars, close="590.25", end_ms=close_ms)
+    _spy_bar(bars, close="600", end_ms=close_ms + 30 * MINUTE)
+
+    clock[0] = close_ms - 1
+    assert _settle(simulation).settled == ()
+    clock[0] = close_ms
+    [settlement] = _settle(simulation).settled
+
+    assert (settlement.record.booked_price, settlement.record.last_session_close_ms) == (Decimal("5.25"), close_ms)
+
+
+# ── once, and only what it holds ─────────────────────────────────────────
+
+
+async def test_a_contract_is_settled_once_however_often_the_step_runs_and_is_handed_over_each_time(
     simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
 ) -> None:
     await _buys(simulation, CALL, clock)
@@ -243,12 +438,14 @@ async def test_a_contract_is_settled_once_however_often_the_events_are_read(
     clock[0] = SATURDAY
 
     first = _settle(simulation)
-    clock[0] = SATURDAY + 60_000
+    # A price that turns up later changes nothing: the contract is no longer held.
+    _spy_bar(bars, close="700", end_ms=LAST_SESSION_CLOSE + MINUTE)
+    clock[0] = SATURDAY + MINUTE
     second = _settle(simulation)
 
-    assert [event.activity_id for event in _events(second)] == [event.activity_id for event in _events(first)]
-    assert len(_events(first)) == 1
-    assert await _held(simulation) == {"SPY": 100.0}
+    assert [item.event.activity_id for item in second.settled] == [item.event.activity_id for item in first.settled]
+    assert [item.record for item in second.settled] == [item.record for item in first.settled]
+    assert len(first.settled) == 1 and await _held(simulation) == {}
 
 
 async def test_shares_are_never_settled_and_a_settlement_is_no_open_order(
@@ -262,8 +459,31 @@ async def test_shares_are_never_settled_and_a_settlement_is_no_open_order(
 
     again = _settle(simulation)
 
-    assert len(again.settled) == 1 and await _held(simulation) == {"SPY": 100.0}
+    assert len(again.settled) == 1 and await _held(simulation) == {}
     assert await simulation.list_orders(status="open") == []
+
+
+@pytest.mark.parametrize(
+    ("window", "handed_over"),
+    [
+        pytest.param(et_midnight_ms(EXPIRY), True, id="a window that starts on the expiry date"),
+        pytest.param(et_minute_of_day_ms(EXPIRY, 15 * 60), True, id="any instant of the expiry date"),
+        pytest.param(et_midnight_ms(date(2026, 9, 19)), False, id="a window that starts the day after"),
+    ],
+)
+async def test_a_settlement_is_handed_over_while_the_window_reaches_its_expiry_date(
+    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int], window: int, handed_over: bool
+) -> None:
+    """A contract bought on its own expiry day is read for from that day on. Its settlement is dated that day."""
+    await _buys(simulation, CALL, clock)
+    _spy_bar(bars, close="590.25", end_ms=LAST_SESSION_CLOSE)
+    clock[0] = SATURDAY
+
+    settled = _settle(simulation, window=window)
+
+    assert len(settled.settled) == (1 if handed_over else 0)
+    # Settled in the ledger either way: the window only says what is handed over.
+    assert await _held(simulation) == {}
 
 
 async def test_reading_the_accounts_option_events_settles_nothing_and_reports_none(

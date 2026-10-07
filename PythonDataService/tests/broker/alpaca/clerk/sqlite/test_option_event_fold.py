@@ -8,18 +8,34 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.simulated_option_settlement import (
+    SIMULATED_SETTLEMENT_RULE,
+    SettlementPrice,
+    SimulatedOutcome,
+    SynthesizedOptionSettlement,
+)
 from app.broker.alpaca.clerk.sqlite import fee_evidence, option_events
 from app.broker.alpaca.clerk.sqlite.fee_evidence import custody_fee_attribution
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.option_event_folds import OPTION_POSITION_ENDED
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, complete_fee_evidence, documented_option_activity
-from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import bookings, books_at, held, holds_option, later, poll
+from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import (
+    bookings,
+    books_at,
+    contract,
+    fifo,
+    held,
+    holds_option,
+    later,
+    poll,
+)
 
 CALL = "AAPL230721C00150000"
 
@@ -46,7 +62,11 @@ def _as_for_bot_b(facts: dict[str, Any], **changes: Any) -> TransitionInput:
     altered = {
         **facts, "idempotency_key": key, "option_order_ref": "learn-ai/bot-b/v1:oc-again",
         "close_execution_id": "option-event:close:again:bot-b",
-        "shares": {**facts["shares"], "order_ref": "learn-ai/bot-b/v1:os-again", "execution_id": "option-event:shares:again:bot-b"},
+        **(
+            {"shares": {**facts["shares"], "order_ref": "learn-ai/bot-b/v1:os-again",
+                        "execution_id": "option-event:shares:again:bot-b"}}
+            if "shares" in facts else {}
+        ),
         **changes,
     }
     return TransitionInput(
@@ -54,7 +74,7 @@ def _as_for_bot_b(facts: dict[str, Any], **changes: Any) -> TransitionInput:
         order_ref=altered["option_order_ref"], transition_kind=OPTION_POSITION_ENDED, custody_owner="ACCOUNT_CLERK",
         execution_authority="ACCOUNT_CLERK", operation_state="succeeded",
         source_event_at_ms=altered["booked_as_of_ms"], clerk_observed_at_ms=0, summary_code="OPTION_EXERCISED",
-        facts_json=json.dumps(altered, sort_keys=True),
+        facts_json=json.dumps({name: value for name, value in altered.items() if value is not None}, sort_keys=True),
     )
 
 
@@ -194,3 +214,136 @@ def test_every_hold_of_the_family_has_words_of_its_own() -> None:
 
     assert set(option_events._HOLD_COPY) == set(OPTION_EVENT_HOLD_REASON_CODES)
     assert len(set(OPTION_EVENT_HOLD_REASON_CODES)) == len(OPTION_EVENT_HOLD_REASON_CODES)
+
+
+# ── a simulation's booking: its own record, or nothing ───────────────────
+
+
+async def _booked_expiry(tmp_path: Path) -> tuple[ClerkSqliteRepository, dict[str, Any]]:
+    """Books on which a real expiry of bot-a's two calls was booked, and its facts. Bot-b still holds two."""
+    repo = books_at(tmp_path, date(2023, 7, 20), {"bot-a": "AAPL", "bot-b": "AAPL"})
+    holds_option(repo, "bot-b", CALL, contracts=2)
+    holds_option(repo, "bot-a", CALL, contracts=2)
+    account = _FakeReadPort()
+    account.option_events.rows = [documented_option_activity("trading_api", "otm_option_expiry")]
+    later(repo, 2 * 86_400_000)
+    await poll(repo, account)
+    [booked] = bookings(repo)
+    assert (booked["strategy_instance_id"], booked["summary_code"]) == ("bot-a", "OPTION_EXPIRED")
+    return repo, json.loads(booked["facts_json"])
+
+
+def _a_simulations_record(close: str, **changes: Any) -> dict[str, Any]:
+    """A simulation's record of two AAPL 150 calls settled from ``close``: at 155.25, 5.25 a share and $1,050.00."""
+    price = Decimal(close)
+    value = max(price - 150, Decimal(0))
+    booked = Decimal(int(value * 100)).scaleb(-2)
+    record = SynthesizedOptionSettlement(
+        contract=contract(CALL), contracts=2, multiplier=100, last_session_close_ms=1_689_969_600_000,
+        settled_at_ms=1_690_000_000_000, rule=SIMULATED_SETTLEMENT_RULE,
+        outcome=SimulatedOutcome.SETTLED_IN_CASH if booked else SimulatedOutcome.EXPIRED,
+        price=SettlementPrice(
+            underlying_price=price, bar_ref="bar-1", bar_provider="ibkr", bar_end_ms=1_689_969_600_000,
+            bar_before_close_ms=0,
+        ),
+        exercise_value=value, booked_price=booked, cash_cents=int(booked * 100) * 2 * 100,
+        fee_cents=13 if booked else None,
+    )
+    return {**record.note(), **changes}
+
+
+_SETTLED_IN_CASH = {
+    "ended_by": "settled_in_cash", "close_price": "5.25", "simulated": True,
+    "close_execution_id": "option-event:cash:again:bot-b",
+}
+
+
+async def test_a_simulations_cash_settlement_is_booked_as_a_sale_at_the_price_its_own_record_gives(
+    tmp_path: Path,
+) -> None:
+    """Two calls bought at 1.94 and settled at 5.25 a share: 2 x 100 x (5.25 - 1.94) = $662.00 made. No shares."""
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        repo.append_transition(_as_for_bot_b(facts, **_SETTLED_IN_CASH, simulation=_a_simulations_record("155.25")))
+
+        assert held(repo, "bot-b") == {}
+        assert fifo(repo, "bot-b").exact_realized_pnl == Decimal("662")
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("changes", "refused_for"),
+    [
+        pytest.param({"simulated": True}, "carries the simulation's own record", id="a simulated expiry with no record"),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulation": None}, "carries the simulation's own record",
+            id="a simulated cash settlement with no record",
+        ),
+        pytest.param(
+            {"simulation": _a_simulations_record("149")}, "carries no simulation's record",
+            id="a real account's expiry that carries a simulation's record",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulated": False}, "only a simulation settles",
+            id="a cash settlement no simulation made",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "close_price": "5.26", "simulation": _a_simulations_record("155.25")}, "is worth",
+            id="a cash settlement a cent above what its record gives",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("149")}, "is worth",
+            id="a cash settlement whose record says the contract was worth nothing",
+        ),
+        pytest.param(
+            {"simulated": True, "simulation": _a_simulations_record("155.25")}, "is worth",
+            id="an expiry at nothing whose record says the contract was worth 5.25",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "close_price": "0.40", "simulation": _a_simulations_record("155.25")}, "is worth",
+            id="a cash settlement at a price no record gives",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("155.25"),
+             "close_execution_id": "option-event:close:again:bot-b"},
+            "is named", id="a sale filed as a close at nothing, which is charged no fee",
+        ),
+        pytest.param(
+            {"ended_by": "expired", "close_execution_id": "option-event:cash:again:bot-b"}, "is named",
+            id="a close at nothing filed as a sale",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("155.25"), "held": "sold"},
+            "only contracts it bought", id="a cash settlement of a sold lot",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("155.25", contracts=1, cash_cents=52_500)},
+            "from a settlement of 1", id="more contracts than the simulation settled",
+        ),
+        pytest.param(
+            {"ended_by": "exercised", "simulated": True, "simulation": _a_simulations_record("155.25"),
+             "shares": {"symbol": "AAPL", "quantity": 200, "price": "150", "cash_cents": -3_000_000,
+                        "order_ref": "learn-ai/bot-b/v1:os-again", "execution_id": "option-event:shares:again:bot-b"}},
+            "never as exercised", id="a simulation that exercises into shares",
+        ),
+        pytest.param(
+            {**_SETTLED_IN_CASH, "simulation": _a_simulations_record("155.25"),
+             "shares": {"symbol": "AAPL", "quantity": 200, "price": "150", "cash_cents": -3_000_000,
+                        "order_ref": "learn-ai/bot-b/v1:os-again", "execution_id": "option-event:shares:again:bot-b"}},
+            "moves no shares", id="a cash settlement that moves shares",
+        ),
+    ],
+)
+async def test_the_fold_refuses_a_simulated_booking_its_own_record_does_not_bear_out_and_writes_nothing(
+    tmp_path: Path, changes: dict[str, Any], refused_for: str
+) -> None:
+    """A price above zero reaches the books only with the record that says where it came from."""
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        with pytest.raises(ValueError, match=refused_for):
+            repo.append_transition(_as_for_bot_b(facts, **changes))
+
+        assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()

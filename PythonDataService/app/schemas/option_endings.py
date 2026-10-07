@@ -14,7 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 #: The closed set. ``sold_outside`` is an order the Clerk did not place: the broker's own sale, or the owner's by hand.
-OptionEndingKind = Literal["expired", "exercised", "assigned", "sold_outside"]
+#: ``settled_in_cash`` is a simulation's own rule and never a broker's: a Dry Run sold the contract at its
+#: exercise value at the close of its last session.
+OptionEndingKind = Literal["expired", "exercised", "assigned", "sold_outside", "settled_in_cash"]
 
 
 class OptionEndingView(BaseModel):

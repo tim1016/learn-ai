@@ -1,14 +1,16 @@
 """How the books record an option position that ended with no order of the bot's (ADR 0076 decision 22).
 
 An option expires, is exercised or is assigned, or the broker sells it
-itself. None of these is an order the Clerk placed. Each is booked for the
+itself. On a Dry Run, which has no broker, the simulation settles it in
+cash. None of these is an order the Clerk placed. Each is booked for the
 bot that held the contract as one transition, ``OPTION_POSITION_ENDED``,
 whose fold writes everything that changed in one SQLite transaction:
 
 - the lot closes: an order bound to the contract, with one fill. An expiry,
   an exercise and an assignment close it at a price of zero, so the premium
   paid or received stays in the lot's cost and is realised there. A sale by
-  the broker closes it at the broker's price;
+  the broker closes it at the broker's price, and a simulation's cash
+  settlement at the exercise value the simulation's own record gives;
 - an exercise or an assignment also moves shares: a second order, in the
   underlying's shares, with one fill at the strike. A bot assigned a call it
   holds no shares against is short the stock, and its books say so.
@@ -16,16 +18,26 @@ whose fold writes everything that changed in one SQLite transaction:
 One transition, never two, so the option never leaves the books without the
 shares and cash it became.
 
+**A simulation's booking carries the simulation's record, or it is refused.**
+That record names the price the simulation read and where it came from. The
+fold works the exercise value out again from it and refuses a booking whose
+close price is anything else. A price above zero is allowed only for a sale
+by the broker and for a simulation's cash settlement, so nothing else can
+put cash on the books that no record explains.
+
 Formula: for ``t`` contracts of a contract with multiplier ``m`` and strike ``K``:
   option position change = -t for a bought lot, +t for a sold one
   shares = +t·m (a call exercised, a put assigned), -t·m (a put exercised, a call assigned)
   cash   = -shares · K, in whole cents
+  a simulation's cash settlement moves no shares: cash = +t·m·b, with ``b`` its booked price a share
 Reference: ADR 0076 decision 14; Alpaca, "Non-Trade Activities for Option Events".
+  The cash settlement is a simulation's own rule (ADR 0076 decision 22).
 Canonical implementation: ``app/options/event_allocation.py``. This fold
   works the shares and the cash out again by that file's ``expected_share_trade``
-  and refuses a fact that states anything else.
+  and refuses a fact that states anything else. A cash settlement's price is
+  ``simulated_option_settlement.exercise_value``'s, worked out again here.
 Validated against: tests/broker/alpaca/clerk/sqlite/test_option_event_booking.py,
-  on golden fixture OEV-001.
+  on golden fixture OEV-001; tests/broker/alpaca/clerk/sqlite/test_option_event_fold.py.
 
 The rows written are the ones every reader of money already reads: a command,
 an effect, orders and fills. So FIFO, the budget, cash and the day's P&L
@@ -52,6 +64,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
 
+from app.broker.alpaca.clerk.simulated_option_settlement import check_settlement_note
 from app.broker.alpaca.clerk.sqlite.contract_terms import bind_order_contract, contract_terms
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -68,10 +81,18 @@ OPTION_EVENT_ORDER_ROLE = "OTHER"
 # every reduction of a bot's symbol is keyed on an entry order in it. So the owner's Flatten,
 # an ended run's close and the Clerk's retry can sell them as they sell any shares.
 OPTION_EVENT_SHARE_ORDER_ROLE = "ENTRY"
-# The execution id of the fill that closes a lot for an event. An event is no
-# trade, so the fee model is never asked to price such a fill.
+# The execution id of the fill that closes a lot at nothing. That is no trade,
+# so the fee model is never asked to price such a fill: it refuses a price of zero.
 OPTION_EVENT_CLOSE_EXECUTION_PREFIX = "option-event:close:"
+# The execution id of the fill a simulation's cash settlement closes a lot with. It is a
+# sale at a price above zero, and it is charged fees as every simulated option sale is.
+OPTION_EVENT_CASH_EXECUTION_PREFIX = "option-event:cash:"
 OPTION_EVENT_SHARES_EXECUTION_PREFIX = "option-event:shares:"
+
+
+def closed_by_an_option_event(execution_id: str) -> bool:
+    """Whether a fill closed a lot for an option event, and not for an order anyone sent."""
+    return execution_id.startswith((OPTION_EVENT_CLOSE_EXECUTION_PREFIX, OPTION_EVENT_CASH_EXECUTION_PREFIX))
 
 
 class OptionEnding(StrEnum):
@@ -82,6 +103,9 @@ class OptionEnding(StrEnum):
     ASSIGNED = "assigned"
     # An order the Clerk did not place sold or bought back the contract.
     SOLD_OUTSIDE = "sold_outside"
+    # A simulation sold it, in cash, at its exercise value at the close of its last session.
+    # Only a simulation's rule ends a position this way; no broker's activity does.
+    SETTLED_IN_CASH = "settled_in_cash"
 
 
 OPTION_ENDING_SUMMARY_CODES: dict[OptionEnding, str] = {
@@ -89,12 +113,27 @@ OPTION_ENDING_SUMMARY_CODES: dict[OptionEnding, str] = {
     OptionEnding.EXERCISED: "OPTION_EXERCISED",
     OptionEnding.ASSIGNED: "OPTION_ASSIGNED",
     OptionEnding.SOLD_OUTSIDE: "OPTION_SOLD_OUTSIDE",
+    OptionEnding.SETTLED_IN_CASH: "OPTION_SETTLED_IN_CASH",
 }
+# The endings an account activity of the broker's own kinds gives, each with the kind it is booked by.
 _EVENT_KINDS: dict[OptionEnding, OptionEventKind] = {
     OptionEnding.EXPIRED: OptionEventKind.EXPIRED,
     OptionEnding.EXERCISED: OptionEventKind.EXERCISED,
     OptionEnding.ASSIGNED: OptionEventKind.ASSIGNED,
 }
+# What the fill that closes a lot is called, by how the position ended. A sale by an order the
+# Clerk did not place is named for that order, under ``option_event_books.SALE_KEY_PREFIX``.
+_CLOSE_EXECUTION_PREFIXES: dict[OptionEnding, str] = {
+    OptionEnding.EXPIRED: OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
+    OptionEnding.EXERCISED: OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
+    OptionEnding.ASSIGNED: OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
+    OptionEnding.SETTLED_IN_CASH: OPTION_EVENT_CASH_EXECUTION_PREFIX,
+}
+
+
+def close_execution_prefix(ending: OptionEnding) -> str | None:
+    """What the id of the fill that closes a lot starts with, for an ending. None for a sale outside."""
+    return _CLOSE_EXECUTION_PREFIXES.get(ending)
 _BOUGHT, _SOLD = "bought", "sold"
 
 
@@ -126,6 +165,7 @@ class OptionPositionEndedFacts:
     # The side of the lots that closed: "bought" or "sold".
     held: str
     # Dollars a share the lots closed at, exact: "0" for an expiry, an exercise or an assignment.
+    # Above zero for a sale outside and for a simulation's cash settlement.
     close_price: str
     # When the books count it as having happened, ``int64`` ms UTC.
     booked_as_of_ms: int
@@ -139,7 +179,9 @@ class OptionPositionEndedFacts:
     shares: dict[str, Any] | None = None
     # The broker's own share-trade row and whether it agreed. Left out when none was paired.
     share_trade: dict[str, Any] | None = None
-    # A simulation's rule and the price it settled at. Left out on a real account.
+    # A simulation's own record of its settlement: the rule, the price it read, the bar that price
+    # is the close of and every figure worked out from it. Every simulated booking carries one,
+    # and a real account's never does.
     simulation: dict[str, Any] | None = None
     # What the books noted while booking, each a reason code and its words: an
     # expiry signed for the other side, a lot closed before the row was read.
@@ -185,6 +227,36 @@ def _exact(value: object, *, what: str) -> Decimal:
     return amount
 
 
+def _require_a_simulations_record(
+    facts: OptionPositionEndedFacts, contract: OptionContract, *, ended_by: OptionEnding, close_price: Decimal
+) -> None:
+    """Refuse a simulated booking with no record of its own, and a real one that carries a simulation's.
+
+    A simulation's record is what says where the price of its settlement
+    came from. Its figures are worked out again here, from the price it
+    names and the contract's own strike.
+    """
+    if not facts.simulated:
+        if facts.simulation is not None:
+            raise ValueError("a booking that no simulation made carries no simulation's record")
+        if ended_by is OptionEnding.SETTLED_IN_CASH:
+            raise ValueError("only a simulation settles an option in cash at its exercise value")
+        return
+    if facts.simulation is None:
+        raise ValueError("a simulation's booking carries the simulation's own record of what it settled, and this has none")
+    if ended_by not in (OptionEnding.EXPIRED, OptionEnding.SETTLED_IN_CASH):
+        raise ValueError(f"a simulation ends a contract by expiry or in cash, never as {ended_by.value}")
+    if facts.held != _BOUGHT:
+        raise ValueError("a simulation settles only contracts it bought")
+    check_settlement_note(
+        facts.simulation, contract, multiplier=facts.multiplier, outcome=ended_by.value, close_price=close_price
+    )
+    if facts.contracts > facts.simulation["contracts"]:
+        raise ValueError(
+            f"{facts.contracts} contracts are booked from a settlement of {facts.simulation['contracts']}"
+        )
+
+
 def _require_the_figures_the_contract_gives(facts: OptionPositionEndedFacts, contract: OptionContract) -> None:
     """Refuse facts whose side, price, shares or cash are not what the contract's terms give."""
     ended_by = OptionEnding(facts.ended_by)
@@ -192,11 +264,23 @@ def _require_the_figures_the_contract_gives(facts: OptionPositionEndedFacts, con
     if facts.held not in (_BOUGHT, _SOLD):
         raise ValueError(f"a lot is bought or sold; got {facts.held!r}")
     close_price = _exact(facts.close_price, what="the price a lot closed at")
+    # The fill's id says whether the fee model prices it. A sale filed under the name of a
+    # close at nothing would be charged no fee, without a word.
+    prefix = close_execution_prefix(ended_by)
+    if prefix is not None and not facts.close_execution_id.startswith(prefix):
+        raise ValueError(f"the fill that closes a lot that was {ended_by.value} is named {prefix}...")
+    _require_a_simulations_record(facts, contract, ended_by=ended_by, close_price=close_price)
     if ended_by is OptionEnding.SOLD_OUTSIDE:
         if close_price <= 0:
             raise ValueError("a sale by the broker closes a lot at the broker's price, above zero")
         if facts.shares is not None:
             raise ValueError("a sale of an option moves no shares")
+        return
+    if ended_by is OptionEnding.SETTLED_IN_CASH:
+        if close_price <= 0:
+            raise ValueError("a cash settlement closes a lot at its exercise value, above zero")
+        if facts.shares is not None:
+            raise ValueError("a cash settlement moves no shares")
         return
     if close_price != 0:
         raise ValueError(f"an option that {ended_by.value} closes its lot at a price of zero; got {close_price}")
@@ -404,6 +488,7 @@ def fold_option_position_ended(
 
 __all__ = [
     "OPTION_ENDING_SUMMARY_CODES",
+    "OPTION_EVENT_CASH_EXECUTION_PREFIX",
     "OPTION_EVENT_CLOSE_EXECUTION_PREFIX",
     "OPTION_EVENT_COMMAND_ACTION",
     "OPTION_EVENT_EFFECT_KIND",
@@ -414,5 +499,7 @@ __all__ = [
     "OptionEnding",
     "OptionEventBookWrites",
     "OptionPositionEndedFacts",
+    "close_execution_prefix",
+    "closed_by_an_option_event",
     "fold_option_position_ended",
 ]

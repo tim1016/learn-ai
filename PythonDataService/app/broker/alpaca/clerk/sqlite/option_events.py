@@ -91,6 +91,7 @@ from app.broker.alpaca.clerk.simulated_option_settlement import (
     OptionSettlementSimulation,
     SimulatedOptionSettlements,
     SimulatedSettlement,
+    plain,
 )
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_open_work import broker_quantity_by_symbol
@@ -126,11 +127,12 @@ from app.broker.alpaca.clerk.sqlite.option_event_books import (
 )
 from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OPTION_ENDING_SUMMARY_CODES,
-    OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
     OPTION_EVENT_SHARES_EXECUTION_PREFIX,
     OPTION_POSITION_ENDED,
     OptionEnding,
     OptionPositionEndedFacts,
+    close_execution_prefix,
+    closed_by_an_option_event,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
@@ -201,6 +203,11 @@ _ENDINGS: dict[OptionEventKind, OptionEnding] = {
     OptionEventKind.EXPIRED: OptionEnding.EXPIRED,
     OptionEventKind.EXERCISED: OptionEnding.EXERCISED,
     OptionEventKind.ASSIGNED: OptionEnding.ASSIGNED,
+}
+# The endings that move shares at the strike, each with the kind the canonical rule works them out by.
+_MOVES_SHARES: dict[OptionEnding, OptionEventKind] = {
+    OptionEnding.EXERCISED: OptionEventKind.EXERCISED,
+    OptionEnding.ASSIGNED: OptionEventKind.ASSIGNED,
 }
 # The holds a whole read's findings raise and its silence ends.
 _READ_HOLDS = tuple(
@@ -472,7 +479,7 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
     # event and the reading of its row.
     sides_at: dict[int, set[OrderSide]] = {}
     for record in records:
-        if not record.event_key.startswith(OPTION_EVENT_CLOSE_EXECUTION_PREFIX):
+        if not closed_by_an_option_event(record.event_key):
             sides_at.setdefault(record.filled_at_ms, set()).add(record.side)
     closed = tuple(
         (lot.opened_at_ms, lot.closed_at_ms, _SOLD if OrderSide.BUY in sides_at[lot.closed_at_ms] else _BOUGHT)
@@ -717,33 +724,38 @@ def _append_booking(
     idempotency_key = f"{key}{sid}"
     command_id = f"cmd:{idempotency_key}"
     symbol = contract.occ_symbol
+    # One spelling of a price, whatever arithmetic gave it: "0", "5.25", never "0.00" or "5E+2".
+    closed_at = plain(close_price)
     payload_hash = hashlib.sha256(
         canonicalize(
             {
                 "ended_by": ended_by.value, "broker": broker, "source_id": source_id, "source_code": source_code,
                 "event_date_ms": event_date_ms, "position_change": position_change, "contract": symbol,
-                "bot": sid, "contracts": contracts, "held": held, "close_price": str(close_price),
+                "bot": sid, "contracts": contracts, "held": held, "close_price": closed_at,
             }
         ).encode("utf-8")
     ).hexdigest()
     shares: dict[str, Any] | None = None
-    if ended_by is not OptionEnding.SOLD_OUTSIDE:
-        moved = expected_share_trade(OptionEventKind(ended_by.value), contract, contracts=contracts, multiplier=multiplier)
+    if ended_by in _MOVES_SHARES:
+        moved = expected_share_trade(_MOVES_SHARES[ended_by], contract, contracts=contracts, multiplier=multiplier)
         if moved is not None:
             shares = {
                 "symbol": moved.root, "quantity": moved.shares, "price": str(moved.price),
                 "cash_cents": moved.cash_cents, "order_ref": _order_ref(sid, idempotency_key, "shares"),
                 "execution_id": f"{OPTION_EVENT_SHARES_EXECUTION_PREFIX}{key.removeprefix(EVENT_KEY_PREFIX)}{sid}",
             }
+    # The fill's name says whether the fee model prices it: a close at nothing is no trade, a
+    # sale is one, a simulation's cash settlement among them.
+    close_prefix = close_execution_prefix(ended_by)
     close_execution_id = (
         f"{SALE_KEY_PREFIX}fill:{key.removeprefix(SALE_KEY_PREFIX)}{sid}"
-        if ended_by is OptionEnding.SOLD_OUTSIDE
-        else f"{OPTION_EVENT_CLOSE_EXECUTION_PREFIX}{key.removeprefix(EVENT_KEY_PREFIX)}{sid}"
+        if close_prefix is None
+        else f"{close_prefix}{key.removeprefix(EVENT_KEY_PREFIX)}{sid}"
     )
     facts = OptionPositionEndedFacts(
         idempotency_key=idempotency_key, payload_hash=payload_hash, ended_by=ended_by.value, broker=broker,
         source_id=source_id, source_code=source_code, event_date_ms=event_date_ms, position_change=position_change,
-        contract_symbol=symbol, multiplier=multiplier, contracts=contracts, held=held, close_price=str(close_price),
+        contract_symbol=symbol, multiplier=multiplier, contracts=contracts, held=held, close_price=closed_at,
         booked_as_of_ms=booked_as_of_ms, option_order_ref=_order_ref(sid, idempotency_key, "close"),
         close_execution_id=close_execution_id, simulated=simulated, allocation=allocation, shares=shares,
         share_trade=share_trade, simulation=simulation, notes=notes or None,
@@ -792,6 +804,17 @@ class _RowChanged(Exception):
 
 def _signed_side(position_change: int) -> str:
     return _BOUGHT if position_change < 0 else _SOLD
+
+
+def _ending_of(event: BrokerOptionEventActivity, settlement: SimulatedSettlement | None) -> OptionEnding:
+    """How the position an event ends is recorded as having ended.
+
+    A broker's activity is recorded as what it is. A simulation's
+    settlement travels as an expiry, so that the one rule that chooses lots
+    chooses these too, and is recorded as what the simulation's own record
+    says it was: an expiry at nothing, or a settlement in cash.
+    """
+    return _ENDINGS[event.kind] if settlement is None else OptionEnding(settlement.record.outcome.value)
 
 
 def _holders(conn: sqlite3.Connection, symbol: str) -> list[str]:
@@ -906,16 +929,12 @@ def _book_events(
         *(event for event in read.events if event.status is OptionActivityStatus.EXECUTED),
         *(settlement.event for settlement in simulated.values()),
     ]
-    share_trades = [
-        *read.share_trades,
-        *(settlement.share_trade for settlement in simulated.values() if settlement.share_trade is not None),
-    ]
     multiplier_of = {}
     for event in executed:
         terms = contract_terms(conn, event.contract.occ_symbol)
         if terms is not None:
             multiplier_of[event.contract.occ_symbol] = terms.multiplier
-    paired, unpaired = _pair_share_trades(in_allocation_order(executed), share_trades, multiplier_of)
+    paired, unpaired = _pair_share_trades(in_allocation_order(executed), read.share_trades, multiplier_of)
     booked: list[tuple[str, OptionPositionEndedFacts]] = []
     # What outside orders hold of each contract, less what this run's events have taken of it.
     outside_left: dict[str, int] = {}
@@ -927,17 +946,19 @@ def _book_events(
         def hold(reason_code: str, bots: Sequence[str], detail: str, *, _ref: str = ref, _event: BrokerOptionEventActivity = event) -> None:
             holds.add(reason_code, bots, ref=_ref, symbol=_event.contract.occ_symbol, date_ms=_event.activity_date_ms, detail=detail)
 
+        settlement = simulated.get(event.activity_id)
+        ending = _ending_of(event, settlement)
         recorded = bookings(conn, key)
         if recorded:
             first = next(iter(recorded.values()))
             owners = sorted({row["owner"] for row in first.allocation if row["owner"] != OUTSIDE_THE_BOOKS})
             if (first.ended_by, first.contract_symbol, first.position_change, first.event_date_ms) != (
-                event.kind.value, symbol, event.position_change, event.activity_date_ms
+                ending.value, symbol, event.position_change, event.activity_date_ms
             ):
                 hold(
                     OPTION_EVENT_ROW_CHANGED_REASON_CODE, owners,
                     f"Activity {event.activity_id} was booked as {first.position_change:+d} of {first.contract_symbol} "
-                    f"{first.ended_by}; it now reads {event.position_change:+d} of {symbol} {event.kind.value}.",
+                    f"{first.ended_by}; it now reads {event.position_change:+d} of {symbol} {ending.value}.",
                 )
                 continue
             allocation_rows = first.allocation
@@ -1077,13 +1098,16 @@ def _book_events(
             try:
                 record = _append_booking(
                     repo, sid=sid, run_id=_run_of(conn, rows[0].get("opened_by")), key=key,
-                    ended_by=_ENDINGS[event.kind], broker=event.broker, source_id=event.activity_id,
+                    ended_by=ending, broker=event.broker, source_id=event.activity_id,
                     source_code=event.activity_type, event_date_ms=event.activity_date_ms,
                     position_change=event.position_change, contract=contract, multiplier=multiplier,
-                    contracts=contracts, held=held, close_price=Decimal(0), booked_as_of_ms=booked_as_of_ms,
-                    simulated=event.activity_id in simulated, allocation=allocation_rows,
-                    share_trade=share_trade_note,
-                    simulation=dict(simulated[event.activity_id].note) if event.activity_id in simulated else None,
+                    contracts=contracts, held=held,
+                    # An event closes a lot at nothing. A simulation's cash settlement closes it at
+                    # the exercise value the simulation's own record gives, and nothing else does.
+                    close_price=Decimal(0) if settlement is None else settlement.record.booked_price,
+                    booked_as_of_ms=booked_as_of_ms, simulated=settlement is not None,
+                    allocation=allocation_rows, share_trade=share_trade_note,
+                    simulation=None if settlement is None else settlement.record.note(),
                     notes=notes,
                 )
             except _RowChanged:
@@ -1517,8 +1541,10 @@ async def poll_option_events(
             events = replace(events, broker_positions=broker_quantity_by_symbol(list(positions)))
         done = await off_loop(lambda: book_option_events(repo, events, settled=settled))
         state.read_at_ms = repo.clock()
-        # While a hold stands something is still to come: a row, a share trade, a price. Look again sooner.
-        state.nothing_pending = done.read_whole and not done.held
+        # While a hold stands something is still to come: a row, a share trade, a price. So it is
+        # while a simulation waits for a contract's closing bar. Look again sooner.
+        awaited = settled is not None and bool(settled.waiting)
+        state.nothing_pending = done.read_whole and not done.held and not awaited
         return OptionEventPoll(read=True, round=done)
 
 

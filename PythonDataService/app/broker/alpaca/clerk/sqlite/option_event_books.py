@@ -314,6 +314,8 @@ def describe_option_ending(facts: OptionPositionEndedFacts) -> str:
     elif ended_by is OptionEnding.SOLD_OUTSIDE:
         done = "sold" if facts.held == "bought" else "bought back"
         said = f"{what} {was} {done} at {facts.close_price} by an order the Clerk did not place."
+    elif ended_by is OptionEnding.SETTLED_IN_CASH:
+        said = f"{what} {was} settled in cash at {facts.close_price} a share."
     else:
         shares = facts.shares or {}
         quantity = shares.get("quantity", 0)
