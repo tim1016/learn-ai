@@ -1,7 +1,7 @@
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { NOT_RECORDED, signedPercentOrNotRecorded, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import { percentText, signedPercentText } from './golden-search-display';
-import { alignToSessions, lastValue, sessionAxis, sessionCurvesOption, type SessionLine } from './golden-search-session-curves';
+import { lastValue, onOneAxis, recordedSpan, sessionCurvesOption, type SessionLine } from './golden-search-session-curves';
 import type { RunCurve } from './golden-search.types';
 
 /** One run to draw: what asked for it, its settings in words, and its curve as the server sent it. */
@@ -10,6 +10,8 @@ export interface RunLine {
   readonly label: string;
   /** The run's settings sentence: with the label it tells any two runs apart. */
   readonly settings: string;
+  /** The session closes of the read that returned the curve. */
+  readonly sessions: readonly number[];
   readonly curve: RunCurve;
 }
 
@@ -30,15 +32,12 @@ const END_LABELS = 8;
  * own sessions. Every value is the server's, the deepest fall included.
  */
 export function runCurvesSpec(lines: readonly RunLine[], ceiling: number): ChartSpec {
-  const { sessions, dates } = sessionAxis(lines.map((line) => line.curve.close_ms));
-  const aligned: AlignedRun[] = lines.map((line) => ({
-    line,
-    returns: alignToSessions(sessions, line.curve.close_ms, line.curve.cumulative_return),
-    falls: line.curve.drawdown === null ? sessions.map(() => null) : alignToSessions(sessions, line.curve.close_ms, line.curve.drawdown),
-  }));
-  const sessionDate = (line: RunLine, at: 0 | -1): string => {
-    const ms = line.curve.close_ms.at(at);
-    return ms === undefined ? '—' : dates[sessions.indexOf(ms)];
+  const axis = onOneAxis(lines);
+  const dates = axis.dates;
+  const aligned: AlignedRun[] = lines.map((line, i) => ({ line, ...axis.lines[i] }));
+  const sessionDate = (returns: readonly (number | null)[], edge: 0 | 1): string => {
+    const span = recordedSpan(returns);
+    return span === null ? '—' : dates[span[edge]];
   };
   return {
     label: 'Run cumulative return and fall from peak',
@@ -50,7 +49,7 @@ export function runCurvesSpec(lines: readonly RunLine[], ceiling: number): Chart
       columns: ['Run', 'Settings', 'First session', 'Last session', 'Ended at', 'Deepest fall'],
       rows: aligned.map(({ line, returns }) => ({
         key: line.key,
-        cells: [line.label, line.settings, sessionDate(line, 0), sessionDate(line, -1), signedPercentText(lastValue(returns)), signedPercentText(line.curve.deepest_drawdown)],
+        cells: [line.label, line.settings, sessionDate(returns, 0), sessionDate(returns, 1), signedPercentText(lastValue(returns)), signedPercentText(line.curve.deepest_drawdown)],
       })),
     },
   };

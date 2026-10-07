@@ -331,7 +331,7 @@ export interface RunsQuery {
   page: number;
   page_size: number;
 }
-/** One run's daily curve as parallel lists over its session closes; `drawdown` and `deepest_drawdown` are null when its peak never rose above 0. */
+/** One run's daily curve: its values from `first_session` on along its read's `sessions_ms`, null at a session it did not score; `drawdown` and `deepest_drawdown` are null when its peak never rose above 0. */
 export type RunCurve = Schemas['GoldenSearchRunCurve'];
 /** The runs one step draws together: a search's scored points, the folds' tests, or one candidate with its stresses and neighbors. */
 export type CurveSetKey = 'search' | 'recent' | 'fold_tests' | 'candidate';
