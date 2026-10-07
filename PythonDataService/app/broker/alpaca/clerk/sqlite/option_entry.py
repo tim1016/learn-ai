@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.contract.models import OrderType
 from app.broker.contract.options import SingleOptionOrderRequest, closing_order
 from app.options.contract import OptionContract
+from app.options.deadlines import CloseTerms
 from app.options.entry import PreparedEntry
 from app.options.quotes import HeldQuote
 from app.options.structure import LegPosition, ResolvedLeg, ResolvedStructure
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 _Cents = Annotated[int, Field(strict=True)]
+_Milliseconds = Annotated[int, Field(strict=True, ge=0)]
 
 
 class OptionEntryLegFacts(BaseModel):
@@ -73,8 +75,43 @@ class OptionEntryMoneyFacts(BaseModel):
     round_trip_cost_cents: _Cents = Field(ge=0)
 
 
+class OptionOrderTermsFacts(BaseModel):
+    """The owner's order terms as an entry keeps them: whole milliseconds (``app.options.deadlines.CloseTerms``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # How long the entry waits for its fill before what is left of it is cancelled.
+    entry_wait_ms: _Milliseconds
+    # For a cancel to be proven ended by a lookup of the order.
+    cancel_allowance_ms: _Milliseconds
+    entry_margin_ms: _Milliseconds
+    # Before the session close on a held contract's expiry date.
+    expiry_close_lead_ms: _Milliseconds
+    # Before the close of every session a sold leg is held in.
+    sold_leg_close_lead_ms: _Milliseconds
+
+    @classmethod
+    def of(cls, terms: CloseTerms) -> OptionOrderTermsFacts:
+        return cls(
+            entry_wait_ms=terms.entry_wait_ms,
+            cancel_allowance_ms=terms.cancel_allowance_ms,
+            entry_margin_ms=terms.entry_margin_ms,
+            expiry_close_lead_ms=terms.expiry_close_lead_ms,
+            sold_leg_close_lead_ms=terms.sold_leg_close_lead_ms,
+        )
+
+    @property
+    def close_terms(self) -> CloseTerms:
+        return CloseTerms(**self.model_dump())
+
+
 class OptionEntryFacts(BaseModel):
-    """Everything kept with an accepted option entry. Never edited."""
+    """Everything kept with an accepted option entry. Never edited.
+
+    ``cancel_at_ms`` and ``terms`` are kept with every entry accepted since
+    an entry could rest at the broker. An entry accepted before that has
+    neither, and is written back without them, so it hashes as it did.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -94,6 +131,10 @@ class OptionEntryFacts(BaseModel):
     rechecked_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # The Clerk's own clock when it tested the quotes and worked out the money.
     admitted_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # When the Clerk asks the broker to cancel what has not filled: the admission
+    # time plus the owner's entry wait. The deadline is the entry's, never a leg's.
+    cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    terms: OptionOrderTermsFacts | None = None
 
     @model_validator(mode="after")
     def _the_order_is_for_the_one_leg(self) -> OptionEntryFacts:
@@ -102,6 +143,14 @@ class OptionEntryFacts(BaseModel):
             raise ValueError(f"an option entry of one order holds one leg; this one has {len(self.legs)}")
         if self.order.contract != self.legs[0].contract:
             raise ValueError("the order and the leg it opens name different contracts")
+        return self
+
+    @model_validator(mode="after")
+    def _the_deadline_is_the_admission_plus_the_owners_wait(self) -> OptionEntryFacts:
+        if (self.cancel_at_ms is None) != (self.terms is None):
+            raise ValueError("an entry keeps its cancel time and the terms it came from together, or neither")
+        if self.terms is not None and self.cancel_at_ms != self.admitted_at_ms + self.terms.entry_wait_ms:
+            raise ValueError("an entry's cancel time is its admission time plus the owner's entry wait")
         return self
 
     @classmethod
@@ -116,8 +165,14 @@ class OptionEntryFacts(BaseModel):
         quote_generation: int,
         rechecked_at_ms: int,
         admitted_at_ms: int,
+        terms: CloseTerms,
     ) -> OptionEntryFacts:
-        """The facts of one prepared entry and the order made of it."""
+        """The facts of one prepared entry and the order made of it.
+
+        The entry's wait is counted from ``admitted_at_ms``, the Clerk's own
+        clock: it is on the books before the order is sent, and the broker's
+        acceptance time is not known then.
+        """
         return cls(
             order=order,
             legs=tuple(
@@ -146,11 +201,20 @@ class OptionEntryFacts(BaseModel):
             quote_generation=quote_generation,
             rechecked_at_ms=rechecked_at_ms,
             admitted_at_ms=admitted_at_ms,
+            cancel_at_ms=admitted_at_ms + terms.entry_wait_ms,
+            terms=OptionOrderTermsFacts.of(terms),
         )
 
     def to_facts(self) -> dict[str, Any]:
-        """As the ``option`` key of the entry's facts: JSON's own values, every decimal a string."""
-        return self.model_dump(mode="json")
+        """As the ``option`` key of the entry's facts: JSON's own values, every decimal a string.
+
+        The cancel time and the terms are left out when the entry has none,
+        so an entry accepted before it could rest is written as it was.
+        """
+        facts = self.model_dump(mode="json")
+        if self.terms is None:
+            del facts["cancel_at_ms"], facts["terms"]
+        return facts
 
     @classmethod
     def from_facts(cls, option: Mapping[str, Any]) -> OptionEntryFacts:
@@ -291,6 +355,7 @@ __all__ = [
     "OptionEntryLegFacts",
     "OptionEntryMoneyFacts",
     "OptionExitFacts",
+    "OptionOrderTermsFacts",
     "option_entry_contracts",
     "option_entry_facts",
     "option_entry_of_order",

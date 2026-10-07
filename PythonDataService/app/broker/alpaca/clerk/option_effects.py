@@ -5,8 +5,8 @@ contract was picked by the resolver from quotes. So the caller hands over the
 facts the pick stands on, and the Clerk works out the money from them itself:
 
 - with an ENTER, ``OptionEntryEvidence``: the contract picked for each leg,
-  its listed multiplier, the quote read just before the hand-over, and the
-  bot's two limits;
+  its listed multiplier, the quote read just before the hand-over, the
+  bot's two limits, and the owner's order terms;
 - with an EXIT, ``OptionExitEvidence``: the quotes read at the exit decision
   for what the bot holds, each named by its contract. An EXIT may come
   without it.
@@ -22,13 +22,14 @@ here, before anything is written.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.options.contract import OptionContract
+from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -140,6 +141,9 @@ class OptionEntryEvidence:
     leg_gap_limit_percent: Decimal
     # The most opening and closing at once may cost, as a percent of the entry commitment.
     cost_limit_percent: Decimal
+    # The owner's order terms: how long the entry waits for its fill before the Clerk
+    # cancels what is left, and how long before a close its position is closed.
+    terms: CloseTerms = field(default_factory=CloseTerms)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
