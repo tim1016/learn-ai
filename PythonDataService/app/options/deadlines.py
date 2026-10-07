@@ -8,6 +8,11 @@ Formula: with ``S(D)`` the session close on the New York date ``D``:
     entry cutoff on D for a structure = the close it would owe on D - entry wait - cancel allowance - margin
     last session close(E) = S(E), or S of the session before E when E has none
     past its last session at t  <=>  t >= last session close(E)
+    the close owed at t = the close owed on the New York date of t, while t < S(that date)
+    the close missed at t, for a structure still held = the earlier of
+        last session close(E) - expiry close lead      for a leg past its last session at t
+        S(L) - sold-leg close lead                     with a sold leg, L the last session ended by t,
+                                                       when the structure was held before that instant
 Reference: ADR 0076 (#2913: the deadlines an option position is held to). Every
   session close is ``app/lean_sidecar/trading_calendar.py``'s, so a half day's
   deadlines are a half day's and a holiday has none.
@@ -34,9 +39,15 @@ from dataclasses import dataclass, fields
 from datetime import date
 from enum import StrEnum
 
-from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms, session_close_ms_utc
+from app.lean_sidecar.trading_calendar import (
+    SessionWindow,
+    current_trading_session_window,
+    previous_completed_session_close_ms,
+    session_close_ms_utc,
+    session_window_for_date,
+)
 from app.options.structure import ResolvedStructure
-from app.utils.session_anchors import et_midnight_ms
+from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
 _MINUTE_MS = 60_000
 
@@ -148,3 +159,78 @@ def entry_cutoff_on(structure: ResolvedStructure, session: date, terms: CloseTer
     if due is None:
         return None
     return due.due_ms - terms.entry_wait_ms - terms.cancel_allowance_ms - terms.entry_margin_ms
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledClose:
+    """A close a held structure owes in one session, with that session's own open and close.
+
+    The session is named by its open, which is how a trading date is kept
+    as one instant. The close is no longer owed in that session once
+    ``session_close_ms`` has come: from then on it was missed.
+    """
+
+    kind: CloseKind
+    due_ms: int
+    session_open_ms: int
+    session_close_ms: int
+
+    def due(self, at_ms: int) -> bool:
+        """Whether the close is to be made by ``at_ms``: its time has come and its session has not ended."""
+        return self.due_ms <= at_ms < self.session_close_ms
+
+
+def _in_session(close: DueClose, session: SessionWindow) -> ScheduledClose:
+    return ScheduledClose(close.kind, close.due_ms, session.open_ms_utc, session.close_ms_utc)
+
+
+def close_owed_at(structure: ResolvedStructure, terms: CloseTerms, *, at_ms: int) -> ScheduledClose | None:
+    """The close a held structure owes in the session of the New York date of ``at_ms``, or None.
+
+    None when that date has no session, when its session has ended, and when
+    the structure owes no close that day. Before the session opens it is the
+    close of the session to come. Whether its time has come is
+    ``ScheduledClose.due``.
+    """
+    session = current_trading_session_window(at_ms)
+    if session is None or at_ms >= session.close_ms_utc:
+        return None
+    owed = close_due_on(structure, session.session_date, terms)
+    return None if owed is None else _in_session(owed, session)
+
+
+def _last_session_ended_by(at_ms: int) -> SessionWindow:
+    """The latest session whose close is at or before ``at_ms``."""
+    today = current_trading_session_window(at_ms)
+    if today is not None and at_ms >= today.close_ms_utc:
+        return today
+    return session_window_for_date(et_date_at_ms(previous_completed_session_close_ms(at_ms)))
+
+
+def close_missed_at(
+    structure: ResolvedStructure, terms: CloseTerms, *, held_since_ms: int, at_ms: int
+) -> ScheduledClose | None:
+    """The close a structure still held at ``at_ms`` owed in a session that has ended, or None when it missed none.
+
+    A contract still held after its last session missed its expiry-day
+    close, however long ago that session was. A structure with a sold leg
+    still held after a session's close missed that session's close, when it
+    was already held before that close was due: an entry taken the next
+    morning missed nothing. When both were missed the earlier is told.
+
+    It says only that the close was owed and the structure is still held.
+    Whether an order can still close it is ``past_last_session``'s to say.
+    """
+    missed: list[ScheduledClose] = []
+    for expiry in sorted({leg.contract.expiry_date for leg in structure.legs}):
+        if past_last_session(expiry, at_ms):
+            last = session_window_for_date(et_date_at_ms(last_session_close_ms(expiry)))
+            missed.append(
+                _in_session(DueClose(CloseKind.EXPIRY_DAY, last.close_ms_utc - terms.expiry_close_lead_ms), last)
+            )
+    if structure.has_sold_leg:
+        ended = _last_session_ended_by(at_ms)
+        due = DueClose(CloseKind.SOLD_LEG, ended.close_ms_utc - terms.sold_leg_close_lead_ms)
+        if held_since_ms < due.due_ms:
+            missed.append(_in_session(due, ended))
+    return min(missed, key=lambda close: close.due_ms, default=None)
