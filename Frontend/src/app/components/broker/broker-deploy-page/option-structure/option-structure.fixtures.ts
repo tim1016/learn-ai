@@ -165,6 +165,22 @@ export function previewWithoutFigures(
   };
 }
 
+/**
+ * A resolved answer for a structure that pays at entry: the server signs the
+ * net price and the premium as negative, and says "received".
+ */
+export function previewThatPays(structures = 1): OptionStructurePreview {
+  const answer = resolvedPreview();
+  return {
+    ...answer,
+    structures,
+    money: answer.money && {
+      ...answer.money, structures, net_price: '-1.20', premium_is: 'received',
+      net_entry_premium_cents: -12_000 * structures, net_entry_premium_per_structure_cents: -12_000,
+    },
+  };
+}
+
 /** A resolved answer: a bull call spread on SPY, picked and priced. */
 export function resolvedPreview(over: Partial<OptionStructurePreview> = {}): OptionStructurePreview {
   return {

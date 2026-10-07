@@ -18,6 +18,7 @@ import {
   BULL_CALL_SPREAD_LEGS,
   OPTION_CATALOGUE,
   RED_VERDICT,
+  previewThatPays,
   previewWithoutFigures,
   resolvedPreview,
 } from './option-structure.fixtures';
@@ -350,6 +351,18 @@ describe('OptionStructureBuilderComponent', () => {
       'Set aside, with fees': '$194.37',
       'Open and close at once': '$11.00 · 5.66%',
     });
+  });
+
+  it.each([
+    [1, '$120.00 received'],
+    [2, '$240.00 received · $120.00 a structure'],
+  ])('shows the premium of a structure that pays as received, never as a minus (%i)', async (structures, premium) => {
+    await renderBuilder({ service: previewService(previewThatPays(structures)) });
+
+    const picks = screen.getByRole('region', { name: 'What this picks right now' });
+    await within(picks).findByText('Premium');
+    const money = picks.querySelector<HTMLElement>('dl.figures__money');
+    expect(money && termsIn(money)['Premium']).toBe(premium);
   });
 
   it('flags a round trip over the owner’s limit with a mark beside the server’s sentence', async () => {

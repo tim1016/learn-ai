@@ -18,6 +18,7 @@ import {
   BULL_CALL_SPREAD_LEGS,
   LONG_CALL_LEGS,
   OPTION_CATALOGUE,
+  previewThatPays,
   previewWithoutFigures,
   resolvedPreview,
 } from './option-structure/option-structure.fixtures';
@@ -122,6 +123,14 @@ describe('DeployOptionStructureComponent', () => {
     expect(service.previewOptionStructure.mock.calls[0][1]).toMatchObject({
       underlying: 'SPY', listens_to: 'SPY', structure: 'bull_call_spread', legs: BULL_CALL_SPREAD_LEGS, structures: 1,
     });
+  });
+
+  it('shows the premium of a structure that pays as received, a share and a structure, never as a minus', async () => {
+    await renderOptions(SPREAD, { service: previewService(previewThatPays()) });
+
+    const picks = screen.getByRole('region', { name: 'Right now this picks' });
+    await within(picks).findByText('Premium');
+    expect(picks.querySelector('dl.figures__money')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Premium $1.20 received · $120.00 a structure');
   });
 
   it('says a state with nothing to show in the server’s sentence, with no figures', async () => {
