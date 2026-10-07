@@ -111,11 +111,16 @@ export class GridSearchResultComponent {
 
   /** The cells the owner ticked, in the order ticked; null until the owner ticks or clears, while the leader is drawn. */
   private readonly chosen = signal<readonly TickedCell[] | null>(null);
-  /** The leader as the search record names it; the same leader across polls is the same value, so nothing redraws. */
+  /**
+   * The leader as this search's record names it; the same leader across polls is the same value, so nothing
+   * redraws. While another search is being opened the record on hand is still the last one's, and its leader is
+   * not this search's: asking this search for that cell's curve would be answered "none kept".
+   */
   private readonly leader = computed<TickedCell | null>(
     () => {
       const detail = this.detail();
-      return detail?.leader_params_hash && detail.leader_params ? { params_hash: detail.leader_params_hash, params: detail.leader_params } : null;
+      if (detail === null || detail.id !== this.searchId()) return null;
+      return detail.leader_params_hash && detail.leader_params ? { params_hash: detail.leader_params_hash, params: detail.leader_params } : null;
     },
     { equal: (a, b) => a?.params_hash === b?.params_hash },
   );

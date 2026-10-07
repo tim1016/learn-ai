@@ -105,7 +105,7 @@ export interface GridSearchCell {
   error: string | null;
   exploratory: boolean;
   completed_at_ms: number;
-  /** The cell kept its daily equity; false for a failed cell and for one recorded before cells kept it. */
+  /** The cell kept its daily equity; a failed cell never does. */
   has_curve: boolean;
   is_leader: boolean;
   eligible: boolean;

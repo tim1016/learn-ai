@@ -47,7 +47,7 @@ const CELLS = { one: 'cell', many: 'cells' } as const;
       } @else if (curves.reads.isLoading()) {
         <p class="muted" role="status">Loading the curves…</p>
       } @else if (cells().length > 0) {
-        <p class="muted">No curve was recorded for {{ cells().length === 1 ? 'this cell' : 'these cells' }}.</p>
+        <p class="muted">No curve was recorded for {{ unrecorded() }}.</p>
       } @else {
         <p class="muted">Tick cells in the table below to draw them here.</p>
       }
@@ -96,6 +96,12 @@ export class GridSearchCurvesComponent {
       return held === undefined || held === null ? [] : [{ key: cell.params_hash, label: cell.label, settings: cell.settings, ...held }];
     }),
   );
+  /** What to call the ticked cells when none of them kept a curve: the leader by its name, since the owner did not tick it. */
+  protected readonly unrecorded = computed(() => {
+    const cells = this.cells();
+    if (cells.length !== 1) return 'these cells';
+    return cells[0].label === null ? 'this cell' : `the ${cells[0].label.toLowerCase()}`;
+  });
   protected readonly chart = computed(
     () => {
       const lines = this.lines();
