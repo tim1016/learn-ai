@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission, stop_command_resource
 from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource, RunResource
+from app.broker.alpaca.clerk.sqlite.option_events import OwnerEndingReceipt, OwnerEndingRefused
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedUnknownExitOrder,
     RecoveryCapability,
@@ -110,6 +111,15 @@ class ActiveSqliteRecoveryFacade(Protocol):
         symbol: str,
         reason: str | None,
     ) -> ResidueDischargeReceipt: ...
+
+    async def end_expired_option(
+        self,
+        *,
+        strategy_instance_id: str,
+        symbol: str,
+        operator: str,
+        reason: str | None,
+    ) -> OwnerEndingReceipt: ...
 
     async def settle_unknown_exit_order(
         self,
@@ -321,6 +331,38 @@ async def execute_recovery_action(
             applied=True,
             receipt_id=f"transition:{receipt.sequence}",
             recorded_at_ms=receipt.recorded_at_ms,
+        )
+    if request.action_id == "end_expired_option":
+        strategy_instance_id = _require_strategy_instance(context)
+        if capability.execution_ref is None or request.execution_ref != capability.execution_ref:
+            raise RecoveryExecutionError(
+                "The contract does not match the one authorized by the presented action."
+            )
+        if request.operator is None:
+            raise RecoveryExecutionError(
+                "An ended contract records who ended it, and this request names no operator. "
+                "Nothing was changed."
+            )
+        try:
+            ended = await facade.end_expired_option(
+                strategy_instance_id=strategy_instance_id,
+                symbol=capability.execution_ref,
+                operator=request.operator,
+                reason=request.reason,
+            )
+        except OwnerEndingRefused as exc:
+            # A settlement that had come after all is told here too: it was
+            # booked in the ending's place, and the message says how.
+            raise RecoveryExecutionError(str(exc)) from exc
+        except BrokerError as exc:
+            raise RecoveryExecutionError(
+                f"The broker could not be read, so nothing was ended: {exc}"
+            ) from exc
+        return RecoveryExecutionResult(
+            action_id=request.action_id,
+            applied=True,
+            receipt_id=f"transition:{ended.sequence}",
+            recorded_at_ms=ended.recorded_at_ms,
         )
     if request.action_id == "settle_unknown_exit_order":
         strategy_instance_id = _require_strategy_instance(context)

@@ -34,7 +34,15 @@ then takes the newest bar of that session, provided it ended no more than
 ``SETTLEMENT_BAR_MAX_AGE_MS`` before the close. An older bar is no price,
 and neither is a bar of another session, a bar the simulation made itself as
 the evidence of a fill, or an option quote. With no price nothing is
-settled: the owner can end the contract at their word.
+settled.
+
+**The owner's ending.** A contract with no price at the close would be held
+for ever: no price comes by itself. So the owner can end it at their word.
+The step is handed that word, asks for the price once more, and only when
+there is still none lets go of the contract, at nothing, under the same
+ledger record a settlement would have used. A price that turns up later
+then settles nothing a second time. Nobody knows whether such a contract
+ended in the money, so it is its own outcome and never "expired".
 """
 
 from __future__ import annotations
@@ -75,6 +83,12 @@ SIMULATED_SETTLEMENT_RULE = (
     "cent is an expiry at nothing. A real account would have got the market's bid."
 )
 SIMULATED_FEES_RULE = "Charged by the option fee model, as for every simulated option sale."
+SIMULATED_OWNER_ENDING_ACTIVITY = "SIMULATED_ENDED_AT_OWNERS_WORD"
+SIMULATED_OWNER_ENDING_RULE = (
+    "A simulation's rule, not a broker's. This simulation kept no price to settle the contract from at the close "
+    "of its last session, and none comes by itself. The owner ended it at their word, and it was counted as "
+    "worth nothing. Whether it ended in the money is not known."
+)
 
 
 class SimulatedOutcome(StrEnum):
@@ -84,6 +98,21 @@ class SimulatedOutcome(StrEnum):
     EXPIRED = "expired"
     # Sold, in cash, at its exercise value.
     SETTLED_IN_CASH = "settled_in_cash"
+    # No price at the close: let go at nothing, at the owner's word.
+    ENDED_BY_OWNER = "ended_by_owner"
+
+
+class OwnersWord(BaseModel):
+    """The owner's word that an expired contract nothing will settle is to be ended, counted as worth nothing."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # Who said it: the installation's operator, never a request's own field.
+    operator: str = Field(min_length=1)
+    # The owner's own reason, when one was given.
+    reason: str | None = None
+    # When it was said, on the Clerk's clock.
+    said_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 def settlement_activity_id(symbol: str) -> str:
@@ -183,18 +212,35 @@ class SynthesizedOptionSettlement(BaseModel):
     settled_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # The rule applied, in plain words.
     rule: str = Field(min_length=1)
-    price: SettlementPrice
+    # The price the rule read. None only for a contract ended at the owner's word, which had none.
+    price: SettlementPrice | None = None
     # Dollars a share, exact: the exercise value as worked out, and as booked (rounded down to the cent).
-    exercise_value: Decimal
+    # No value was worked out for a contract ended at the owner's word. It is booked at nothing.
+    exercise_value: Decimal | None = None
     booked_price: Decimal
     # What the settlement paid the account, in whole cents: the booked price for every contract settled.
     cash_cents: int = Field(ge=0, strict=True)
     # What the option fee model charges this sale taken as a day of its own, in whole cents. None when
     # nothing was sold, or when a fee rate is not pinned for the day.
     fee_cents: int | None = Field(default=None, ge=0, strict=True)
+    # For a contract ended at the owner's word: whose word, and why the simulation's own rule could not settle it.
+    owner: OwnersWord | None = None
+    why_no_settlement: str | None = None
 
     @model_validator(mode="after")
     def _figures_that_are_one_settlement(self) -> Self:
+        if self.outcome is SimulatedOutcome.ENDED_BY_OWNER:
+            if self.owner is None or not (self.why_no_settlement or "").strip():
+                raise ValueError("a contract ended at the owner's word names who said so and why nothing settled it")
+            if self.price is not None or self.exercise_value is not None:
+                raise ValueError("a contract ended at the owner's word had no price to settle from")
+            if self.booked_price != 0 or self.cash_cents != 0 or self.fee_cents is not None:
+                raise ValueError("a contract ended at the owner's word is counted as worth nothing: no cash, no fee")
+            return self
+        if self.owner is not None or self.why_no_settlement is not None:
+            raise ValueError(f"a contract that was {self.outcome.value} was settled by the rule, at nobody's word")
+        if self.price is None or self.exercise_value is None:
+            raise ValueError(f"a contract that was {self.outcome.value} states the price it was settled from")
         worked_out = exercise_value(
             self.contract, underlying_price=self.price.underlying_price, contracts=self.contracts,
             multiplier=self.multiplier,
@@ -213,8 +259,34 @@ class SynthesizedOptionSettlement(BaseModel):
             raise ValueError("an expiry at nothing is no sale and has no fee")
         return self
 
+    def owner_word(self) -> dict[str, Any] | None:
+        """Whose word ended the contract and why nothing settled it, as plain values. None when the rule settled it."""
+        if self.owner is None:
+            return None
+        return {
+            "operator": self.owner.operator, "reason": self.owner.reason, "said_at_ms": self.owner.said_at_ms,
+            "why_no_settlement": self.why_no_settlement,
+        }
+
     def note(self) -> dict[str, Any]:
         """The settlement as plain values, for the books' own record of the event."""
+        if self.price is None or self.exercise_value is None:
+            return {
+                "rule": self.rule,
+                "outcome": self.outcome.value,
+                "underlying": self.contract.root,
+                "strike": plain(self.contract.strike),
+                "right": self.contract.right,
+                "booked_price": plain(self.booked_price),
+                "contracts": self.contracts,
+                "multiplier": self.multiplier,
+                "cash_cents": self.cash_cents,
+                "last_session_close_ms": self.last_session_close_ms,
+                "settled_at_ms": self.settled_at_ms,
+                "why_no_settlement": self.why_no_settlement,
+                "fees": "None: nothing was sold.",
+                "fee_cents": None,
+            }
         return {
             "rule": self.rule,
             "outcome": self.outcome.value,
@@ -249,6 +321,16 @@ def check_settlement_note(
     the booking's close price to that.
     """
     stated = {key: note.get(key) for key in ("outcome", "underlying_price", "booked_price", "cash_cents", "contracts")}
+    if outcome == SimulatedOutcome.ENDED_BY_OWNER.value:
+        # No price was read, so there is no value to work out again: only that nothing was paid.
+        if (stated["outcome"], stated["booked_price"], stated["cash_cents"]) != (outcome, "0", 0) or close_price != 0:
+            raise ValueError(
+                f"{contract.occ_symbol} ended at the owner's word is counted as worth nothing; the record states "
+                f"{stated!r} and the booking {plain(close_price)}"
+            )
+        if stated["underlying_price"] is not None:
+            raise ValueError("a contract ended at the owner's word had no price to settle from, and this record names one")
+        return
     try:
         underlying_price, booked_price = (
             normalize_money(stated[key]) if isinstance(stated[key], str) else None
@@ -293,7 +375,7 @@ class SimulatedOptionSettlements:
     # Every settlement in the window asked for, the ones made by earlier runs of the step among them.
     settled: tuple[SimulatedSettlement, ...] = ()
     # Each contract still held past its last session that the step cannot settle, with why. No price
-    # will come for one of these by itself.
+    # will come for one of these by itself: the owner can end it at their word.
     not_settled: Mapping[str, str] = field(default_factory=dict)
     # Each contract still held whose closing bar the step is waiting for, with the instant the wait ends.
     waiting: Mapping[str, int] = field(default_factory=dict)
@@ -309,11 +391,17 @@ class OptionSettlementSimulation(Protocol):
     through the read port.
     """
 
-    def settle_expired_options(self, *, after_ms: int) -> SimulatedOptionSettlements | None:
+    def settle_expired_options(
+        self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None
+    ) -> SimulatedOptionSettlements | None:
         """Settle every contract held past its last session, and hand back the settlements dated in the window.
 
         ``after_ms`` is any instant on the window's first New York date, as
         for ``BrokerReadPort.read_option_event_activities``.
+        ``at_the_owners_word`` names, by contract symbol, each contract the
+        owner has said to end: one of those that still has no price at the
+        close is let go of, at nothing. One that has a price is settled by
+        the rule, as every other is.
         """
         ...
 
@@ -328,9 +416,12 @@ __all__ = [
     "SETTLEMENT_GRACE_MS",
     "SIMULATED_CASH_SETTLEMENT_ACTIVITY",
     "SIMULATED_EXPIRY_ACTIVITY",
+    "SIMULATED_OWNER_ENDING_ACTIVITY",
+    "SIMULATED_OWNER_ENDING_RULE",
     "SIMULATED_SETTLEMENT_RULE",
     "ExerciseValue",
     "OptionSettlementSimulation",
+    "OwnersWord",
     "SettlementPrice",
     "SimulatedOptionSettlements",
     "SimulatedOutcome",

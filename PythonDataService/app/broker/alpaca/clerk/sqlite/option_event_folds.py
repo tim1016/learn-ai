@@ -18,6 +18,15 @@ whose fold writes everything that changed in one SQLite transaction:
 One transition, never two, so the option never leaves the books without the
 shares and cash it became.
 
+**The owner's ending.** A contract past its last session that nothing will
+ever settle is ended at the owner's word: the lot closes at a price of zero,
+so what it cost is the realised loss, and no shares and no cash move. It is
+the same transition and the same fold, with its own ending and a record of
+who said so, when, and why no settlement could be made. It is not the
+residue write-off, which leaves the lot open and realises nothing. Only a
+bought contract past its last session is ended this way: a sold one that
+was assigned moved shares, and nobody's word undoes that.
+
 **A simulation's booking carries the simulation's record, or it is refused.**
 That record names the price the simulation read and where it came from. The
 fold works the exercise value out again from it and refuses a booking whose
@@ -69,6 +78,7 @@ from app.broker.alpaca.clerk.sqlite.contract_terms import bind_order_contract, c
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.options.contract import OptionContract
+from app.options.deadlines import past_last_session
 from app.options.event_allocation import OptionEventKind, expected_share_trade
 
 OPTION_POSITION_ENDED = "OPTION_POSITION_ENDED"
@@ -106,6 +116,9 @@ class OptionEnding(StrEnum):
     # A simulation sold it, in cash, at its exercise value at the close of its last session.
     # Only a simulation's rule ends a position this way; no broker's activity does.
     SETTLED_IN_CASH = "settled_in_cash"
+    # Nothing will ever settle it, and the owner said to count it as worth nothing. Not "expired":
+    # nobody knows whether it ended in the money.
+    ENDED_BY_OWNER = "ended_by_owner"
 
 
 OPTION_ENDING_SUMMARY_CODES: dict[OptionEnding, str] = {
@@ -114,6 +127,7 @@ OPTION_ENDING_SUMMARY_CODES: dict[OptionEnding, str] = {
     OptionEnding.ASSIGNED: "OPTION_ASSIGNED",
     OptionEnding.SOLD_OUTSIDE: "OPTION_SOLD_OUTSIDE",
     OptionEnding.SETTLED_IN_CASH: "OPTION_SETTLED_IN_CASH",
+    OptionEnding.ENDED_BY_OWNER: "OPTION_ENDED_BY_OWNER",
 }
 # The endings an account activity of the broker's own kinds gives, each with the kind it is booked by.
 _EVENT_KINDS: dict[OptionEnding, OptionEventKind] = {
@@ -128,6 +142,7 @@ _CLOSE_EXECUTION_PREFIXES: dict[OptionEnding, str] = {
     OptionEnding.EXERCISED: OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
     OptionEnding.ASSIGNED: OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
     OptionEnding.SETTLED_IN_CASH: OPTION_EVENT_CASH_EXECUTION_PREFIX,
+    OptionEnding.ENDED_BY_OWNER: OPTION_EVENT_CLOSE_EXECUTION_PREFIX,
 }
 
 
@@ -186,10 +201,13 @@ class OptionPositionEndedFacts:
     # What the books noted while booking, each a reason code and its words: an
     # expiry signed for the other side, a lot closed before the row was read.
     notes: list[dict[str, str]] | None = None
+    # For a contract ended at the owner's word: operator, reason, said_at_ms and
+    # why_no_settlement. Left out of every other ending.
+    owner_word: dict[str, Any] | None = None
 
     def to_facts_json(self) -> str:
         payload = asdict(self)
-        for key in ("shares", "share_trade", "simulation", "notes"):
+        for key in ("shares", "share_trade", "simulation", "notes", "owner_word"):
             if payload[key] is None:
                 payload.pop(key)
         return canonicalize(payload)
@@ -244,8 +262,10 @@ def _require_a_simulations_record(
         return
     if facts.simulation is None:
         raise ValueError("a simulation's booking carries the simulation's own record of what it settled, and this has none")
-    if ended_by not in (OptionEnding.EXPIRED, OptionEnding.SETTLED_IN_CASH):
-        raise ValueError(f"a simulation ends a contract by expiry or in cash, never as {ended_by.value}")
+    if ended_by not in (OptionEnding.EXPIRED, OptionEnding.SETTLED_IN_CASH, OptionEnding.ENDED_BY_OWNER):
+        raise ValueError(
+            f"a simulation ends a contract by expiry, in cash or at the owner's word, never as {ended_by.value}"
+        )
     if facts.held != _BOUGHT:
         raise ValueError("a simulation settles only contracts it bought")
     check_settlement_note(
@@ -257,7 +277,40 @@ def _require_a_simulations_record(
         )
 
 
-def _require_the_figures_the_contract_gives(facts: OptionPositionEndedFacts, contract: OptionContract) -> None:
+def _require_the_owners_word(
+    facts: OptionPositionEndedFacts, contract: OptionContract, *, ended_by: OptionEnding, now_ms: int
+) -> None:
+    """Refuse an owner's ending that does not say who, when and why, and any other ending that claims a word.
+
+    Only a bought contract past its last session is ended at the owner's
+    word. Before then it still trades and an order can close it. A sold one
+    that was assigned moved shares, which no word undoes.
+    """
+    word = facts.owner_word
+    if ended_by is not OptionEnding.ENDED_BY_OWNER:
+        if word is not None:
+            raise ValueError(f"an option that was {ended_by.value} was ended at nobody's word")
+        return
+    if word is None:
+        raise ValueError("a contract ended at the owner's word records who said so, when, and why nothing settled it")
+    operator, said_at_ms, why = word.get("operator"), word.get("said_at_ms"), word.get("why_no_settlement")
+    if not isinstance(operator, str) or not operator.strip():
+        raise ValueError("a contract ended at the owner's word records who said so")
+    if isinstance(said_at_ms, bool) or not isinstance(said_at_ms, int) or said_at_ms < 0:
+        raise ValueError("a contract ended at the owner's word records when it was said")
+    if not isinstance(why, str) or not why.strip():
+        raise ValueError("a contract ended at the owner's word records why no settlement could be made")
+    if facts.held != _BOUGHT:
+        raise ValueError("only a bought contract is ended at the owner's word")
+    if not past_last_session(contract.expiry_date, now_ms):
+        raise ValueError(
+            f"{contract.occ_symbol} still trades: only a contract past its last session is ended at the owner's word"
+        )
+
+
+def _require_the_figures_the_contract_gives(
+    facts: OptionPositionEndedFacts, contract: OptionContract, *, now_ms: int
+) -> None:
     """Refuse facts whose side, price, shares or cash are not what the contract's terms give."""
     ended_by = OptionEnding(facts.ended_by)
     _whole(facts.contracts, at_least=1, what="the contracts an event took")
@@ -270,6 +323,7 @@ def _require_the_figures_the_contract_gives(facts: OptionPositionEndedFacts, con
     if prefix is not None and not facts.close_execution_id.startswith(prefix):
         raise ValueError(f"the fill that closes a lot that was {ended_by.value} is named {prefix}...")
     _require_a_simulations_record(facts, contract, ended_by=ended_by, close_price=close_price)
+    _require_the_owners_word(facts, contract, ended_by=ended_by, now_ms=now_ms)
     if ended_by is OptionEnding.SOLD_OUTSIDE:
         if close_price <= 0:
             raise ValueError("a sale by the broker closes a lot at the broker's price, above zero")
@@ -284,6 +338,10 @@ def _require_the_figures_the_contract_gives(facts: OptionPositionEndedFacts, con
         return
     if close_price != 0:
         raise ValueError(f"an option that {ended_by.value} closes its lot at a price of zero; got {close_price}")
+    if ended_by is OptionEnding.ENDED_BY_OWNER:
+        if facts.shares is not None:
+            raise ValueError("a contract ended at the owner's word moves no shares")
+        return
     if ended_by is OptionEnding.EXERCISED and facts.held != _BOUGHT:
         raise ValueError("only a bought option is exercised")
     if ended_by is OptionEnding.ASSIGNED and facts.held != _SOLD:
@@ -380,7 +438,7 @@ def fold_option_position_ended(
             f"{facts.contract_symbol} is not on the books with a multiplier of {facts.multiplier}: "
             f"the books hold {recorded!r}"
         )
-    _require_the_figures_the_contract_gives(facts, contract)
+    _require_the_figures_the_contract_gives(facts, contract, now_ms=payload["clerk_observed_at_ms"])
     subject_id = bot_subject_id(sid)
     held = conn.execute(
         "SELECT attributed_qty FROM positions WHERE subject_id = ? AND symbol = ?", (subject_id, facts.contract_symbol)

@@ -83,7 +83,10 @@ from app.broker.alpaca.clerk.simulated_option_settlement import (
     SETTLEMENT_GRACE_MS,
     SIMULATED_CASH_SETTLEMENT_ACTIVITY,
     SIMULATED_EXPIRY_ACTIVITY,
+    SIMULATED_OWNER_ENDING_ACTIVITY,
+    SIMULATED_OWNER_ENDING_RULE,
     SIMULATED_SETTLEMENT_RULE,
+    OwnersWord,
     SettlementPrice,
     SimulatedOptionSettlements,
     SimulatedOutcome,
@@ -351,7 +354,9 @@ class SyntheticBroker(OptionOrdersNotTaken):
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
 
-    def settle_expired_options(self, *, after_ms: int) -> SimulatedOptionSettlements:
+    def settle_expired_options(
+        self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None
+    ) -> SimulatedOptionSettlements:
         """Settle every contract this simulation holds past its last session, and say what it settled and what it could not.
 
         The one step that settles. It writes each settlement to this
@@ -365,6 +370,12 @@ class SyntheticBroker(OptionOrdersNotTaken):
         nothing (``simulated_option_settlement``). It is never exercised
         into shares. A contract whose closing price is still awaited, or
         that has none, stays held and is named in the answer.
+
+        ``at_the_owners_word`` is the owner's word to end a contract that
+        nothing will settle, by contract symbol. The price is asked for
+        once more first. Only a contract that still has none is let go of,
+        at nothing. One that has a price by now is settled by the rule, and
+        the owner's word for it is not used.
         """
         if self._ledger is None:
             return SimulatedOptionSettlements()
@@ -386,10 +397,16 @@ class SyntheticBroker(OptionOrdersNotTaken):
                 unsettled = self._settle_one(
                     records, contract, held=quantity, multiplier=multipliers[symbol], at_ms=at_ms
                 )
-                if isinstance(unsettled, _AwaitingTheClosingBar):
+                word = (at_the_owners_word or {}).get(symbol)
+                if isinstance(unsettled, _NoPriceAtTheClose) and word is not None:
+                    self._let_go_at_the_owners_word(
+                        records, contract, contracts=int(quantity), multiplier=multipliers[symbol], at_ms=at_ms,
+                        word=word, why=unsettled.why,
+                    )
+                elif isinstance(unsettled, _AwaitingTheClosingBar):
                     waiting[symbol] = unsettled.until_ms
                 elif unsettled is not None:
-                    not_settled[symbol] = unsettled
+                    not_settled[symbol] = unsettled.why if isinstance(unsettled, _NoPriceAtTheClose) else unsettled
             settled = tuple(
                 SimulatedSettlement(
                     event=self._settlement_as_an_event(record.settlement, observed_at_ms=at_ms),
@@ -418,7 +435,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
         return BrokerOptionEventActivity(
             broker=self.broker_id,
             activity_id=activity_id,
-            activity_type=SIMULATED_CASH_SETTLEMENT_ACTIVITY if sold else SIMULATED_EXPIRY_ACTIVITY,
+            activity_type=_ACTIVITY_CODES[settlement.outcome],
             kind=OptionEventKind.EXPIRED,
             status=OptionActivityStatus.EXECUTED,
             activity_date_ms=et_midnight_ms(contract.expiry_date),
@@ -432,7 +449,7 @@ class SyntheticBroker(OptionOrdersNotTaken):
 
     def _price_at_the_close(
         self, contract: OptionContract, *, close_ms: int, at_ms: int
-    ) -> SettlementPrice | _AwaitingTheClosingBar | str:
+    ) -> SettlementPrice | _AwaitingTheClosingBar | _NoPriceAtTheClose:
         """The price a contract is settled from, the wait for it, or why there is none.
 
         Only a bar the market delivered for the underlying counts, and only
@@ -452,12 +469,12 @@ class SyntheticBroker(OptionOrdersNotTaken):
         if at_ms < close_ms + SETTLEMENT_GRACE_MS:
             return _AwaitingTheClosingBar(until_ms=close_ms + SETTLEMENT_GRACE_MS)
         if bar is None or not in_the_session:
-            return (
+            return _NoPriceAtTheClose(
                 f"This simulation kept no price of {root} from the contract's last session, so it cannot say "
                 "what the contract was worth at the close."
             )
         if close_ms - bar.end_ms > SETTLEMENT_BAR_MAX_AGE_MS:
-            return (
+            return _NoPriceAtTheClose(
                 f"The newest price of {root} this simulation kept from the contract's last session is from "
                 f"{_minutes(close_ms - bar.end_ms)} before the close. Its rule takes none older than "
                 f"{_minutes(SETTLEMENT_BAR_MAX_AGE_MS)}, so it cannot say what the contract was worth at the close."
@@ -472,8 +489,12 @@ class SyntheticBroker(OptionOrdersNotTaken):
         held: float,
         multiplier: int,
         at_ms: int,
-    ) -> _AwaitingTheClosingBar | str | None:
+    ) -> _AwaitingTheClosingBar | _NoPriceAtTheClose | str | None:
         """Settle one expired contract in the ledger. None when it was settled; else the wait, or why it cannot be.
+
+        A contract with no price at the close is the one kind the owner can
+        end at their word. Any other reason is in plain words: a holding
+        this simulation settles in no way.
 
         The figures are ``simulated_option_settlement.exercise_value``'s. One
         record takes the option position out of the ledger at the booked
@@ -523,6 +544,47 @@ class SyntheticBroker(OptionOrdersNotTaken):
             },
         )
         return None
+
+    def _let_go_at_the_owners_word(
+        self,
+        records: list[SynthesizedOrderRecord],
+        contract: OptionContract,
+        *,
+        contracts: int,
+        multiplier: int,
+        at_ms: int,
+        word: OwnersWord,
+        why: str,
+    ) -> None:
+        """Take a contract with no price at the close out of the ledger, at nothing, at the owner's word.
+
+        One record, under the id a settlement of the contract would have
+        used. So the position is gone for good, and a price that turns up
+        later finds nothing to settle.
+        """
+        assert self._ledger is not None
+        symbol = contract.occ_symbol
+        close_ms = last_session_close_ms(contract.expiry_date)
+        self._ledger.append_locked(
+            records,
+            order=_settlement_order(
+                self.broker_id, settlement_client_order_id(symbol), symbol=symbol, quantity=float(contracts),
+                price=0.0, happened_at_ms=close_ms, observed_at_ms=at_ms,
+            ),
+            settlement=SynthesizedOptionSettlement(
+                contract=contract, outcome=SimulatedOutcome.ENDED_BY_OWNER, contracts=contracts,
+                multiplier=multiplier, last_session_close_ms=close_ms, settled_at_ms=at_ms,
+                rule=SIMULATED_OWNER_ENDING_RULE, booked_price=Decimal(0), cash_cents=0, owner=word,
+                why_no_settlement=why,
+            ),
+        )
+        logger.warning(
+            "the simulation let go of an expired contract it had no price for, at the owner's word",
+            extra={
+                "action": "simulated_option_ended_by_owner", "account_id": self._account_id, "symbol": symbol,
+                "contracts": contracts, "operator": word.operator,
+            },
+        )
 
     async def list_assets(
         self,
@@ -1160,6 +1222,20 @@ class _AwaitingTheClosingBar(NamedTuple):
     """A contract's last session is over and its closing bar may still arrive: the simulation waits."""
 
     until_ms: int
+
+
+class _NoPriceAtTheClose(NamedTuple):
+    """Nothing kept says what the underlying closed at. No price comes by itself: only the owner's word ends it."""
+
+    why: str
+
+
+# What each outcome is handed over as, where a broker's activity carries the broker's own code.
+_ACTIVITY_CODES: Mapping[SimulatedOutcome, str] = {
+    SimulatedOutcome.EXPIRED: SIMULATED_EXPIRY_ACTIVITY,
+    SimulatedOutcome.SETTLED_IN_CASH: SIMULATED_CASH_SETTLEMENT_ACTIVITY,
+    SimulatedOutcome.ENDED_BY_OWNER: SIMULATED_OWNER_ENDING_ACTIVITY,
+}
 
 
 def settlement_client_order_id(symbol: str) -> str:

@@ -131,6 +131,7 @@ ActionId = Literal[
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "end_expired_option",
     "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
@@ -144,6 +145,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "prepare_safe_flatten",
     "execute_safe_flatten",
     "discharge_attributed_residue",
+    "end_expired_option",
     "settle_unknown_exit_order",
     "stop_bot_decisions",
     "open_custody_timeline",
@@ -370,6 +372,11 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Discharge stranded residue",
         "Write off an attributed position the broker does not hold. The Clerk re-reads "
         "the broker first and sends no order.",
+    ),
+    "end_expired_option": OperatorCopy(
+        "End the expired contract",
+        "Count an expired option contract that nothing will settle as worth nothing, at your word. The Clerk "
+        "looks once more for a settlement first and sends no order.",
     ),
     "settle_unknown_exit_order": OperatorCopy(
         "Settle the uncertain order",

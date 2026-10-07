@@ -89,6 +89,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
         "prepare_safe_flatten",
         "execute_safe_flatten",
         "discharge_attributed_residue",
+        "end_expired_option",
         "settle_unknown_exit_order",
         "stop_bot_decisions",
         "open_custody_timeline",

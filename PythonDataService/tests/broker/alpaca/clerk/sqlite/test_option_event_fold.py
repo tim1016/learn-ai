@@ -56,7 +56,7 @@ async def _booked_exercise(tmp_path: Path) -> tuple[ClerkSqliteRepository, dict[
     return repo, json.loads(booked["facts_json"])
 
 
-def _as_for_bot_b(facts: dict[str, Any], **changes: Any) -> TransitionInput:
+def _as_for_bot_b(facts: dict[str, Any], *, observed_at_ms: int = 0, **changes: Any) -> TransitionInput:
     """The same booking handed to the fold again for the other bot, with ``changes`` laid over its facts."""
     key = facts["idempotency_key"].removesuffix("bot-a") + "bot-b"
     altered = {
@@ -73,7 +73,8 @@ def _as_for_bot_b(facts: dict[str, Any], **changes: Any) -> TransitionInput:
         strategy_instance_id="bot-b", command_id=f"cmd:{key}", effect_operation_id=f"effect:{key}",
         order_ref=altered["option_order_ref"], transition_kind=OPTION_POSITION_ENDED, custody_owner="ACCOUNT_CLERK",
         execution_authority="ACCOUNT_CLERK", operation_state="succeeded",
-        source_event_at_ms=altered["booked_as_of_ms"], clerk_observed_at_ms=0, summary_code="OPTION_EXERCISED",
+        source_event_at_ms=altered["booked_as_of_ms"], clerk_observed_at_ms=observed_at_ms,
+        summary_code="OPTION_EXERCISED",
         facts_json=json.dumps({name: value for name, value in altered.items() if value is not None}, sort_keys=True),
     )
 
@@ -345,5 +346,123 @@ async def test_the_fold_refuses_a_simulated_booking_its_own_record_does_not_bear
             repo.append_transition(_as_for_bot_b(facts, **changes))
 
         assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()
+
+
+# ── the owner's ending: who, when and why, or nothing ────────────────────
+
+# AAPL230721C00150000 stops trading at 16:00 New York time on Friday 2023-07-21.
+_LAST_SESSION_CLOSE = 1_689_969_600_000
+_THE_OWNERS_WORD = {
+    "operator": "the-owner", "reason": "nothing will settle it", "said_at_ms": _LAST_SESSION_CLOSE + 86_400_000,
+    "why_no_settlement": "The broker reported no activity for the contract and holds none of it.",
+}
+_ENDED_BY_OWNER = {"ended_by": "ended_by_owner", "owner_word": _THE_OWNERS_WORD}
+
+
+def _an_owner_endings_record(**changes: Any) -> dict[str, Any]:
+    """A simulation's record of two AAPL 150 calls it had no price for and let go of at the owner's word."""
+    from app.broker.alpaca.clerk.simulated_option_settlement import SIMULATED_OWNER_ENDING_RULE, OwnersWord
+
+    record = SynthesizedOptionSettlement(
+        contract=contract(CALL), outcome=SimulatedOutcome.ENDED_BY_OWNER, contracts=2, multiplier=100,
+        last_session_close_ms=_LAST_SESSION_CLOSE, settled_at_ms=_LAST_SESSION_CLOSE + 86_400_000,
+        rule=SIMULATED_OWNER_ENDING_RULE, booked_price=Decimal(0), cash_cents=0,
+        owner=OwnersWord(operator="the-owner", reason=None, said_at_ms=_LAST_SESSION_CLOSE + 86_400_000),
+        why_no_settlement="This simulation kept no price of AAPL from the contract's last session.",
+    )
+    return {**record.note(), **changes}
+
+
+async def test_an_owners_ending_closes_the_lot_at_nothing_so_what_it_cost_is_the_loss(tmp_path: Path) -> None:
+    """Two calls bought at 1.94, ended at the owner's word: 2 x 100 x 1.94 = $388.00 lost. No shares, no cash."""
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        repo.append_transition(_as_for_bot_b(facts, observed_at_ms=_LAST_SESSION_CLOSE, **_ENDED_BY_OWNER))
+
+        assert held(repo, "bot-b") == {}
+        assert fifo(repo, "bot-b").exact_realized_pnl == Decimal("-388")
+        assert fifo(repo, "bot-b").open_lots == []
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("changes", "observed_at_ms", "refused_for"),
+    [
+        pytest.param({"ended_by": "ended_by_owner"}, _LAST_SESSION_CLOSE, "records who said so, when", id="no word at all"),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, "operator": " "}}, _LAST_SESSION_CLOSE,
+            "records who said so", id="a word that names nobody",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, "said_at_ms": None}}, _LAST_SESSION_CLOSE,
+            "records when it was said", id="a word with no time",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "owner_word": {**_THE_OWNERS_WORD, "why_no_settlement": ""}}, _LAST_SESSION_CLOSE,
+            "records why no settlement", id="a word that does not say why nothing settled it",
+        ),
+        pytest.param(_ENDED_BY_OWNER, _LAST_SESSION_CLOSE - 1, "still trades", id="a contract that still trades"),
+        pytest.param({**_ENDED_BY_OWNER, "held": "sold"}, _LAST_SESSION_CLOSE, "only a bought contract", id="a sold contract"),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "close_price": "0.40"}, _LAST_SESSION_CLOSE, "price of zero",
+            id="an ending at a price, which no word can name",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER,
+             "shares": {"symbol": "AAPL", "quantity": 200, "price": "150", "cash_cents": -3_000_000,
+                        "order_ref": "learn-ai/bot-b/v1:os-again", "execution_id": "option-event:shares:again:bot-b"}},
+            _LAST_SESSION_CLOSE, "moves no shares", id="an ending that moves shares",
+        ),
+        pytest.param(
+            {"owner_word": _THE_OWNERS_WORD}, _LAST_SESSION_CLOSE, "at nobody's word",
+            id="an expiry that claims the owner's word",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "simulated": True}, _LAST_SESSION_CLOSE, "carries the simulation's own record",
+            id="a simulation's ending with no record of the simulation",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "simulated": True,
+             "simulation": _an_owner_endings_record(underlying_price="155.25")},
+            _LAST_SESSION_CLOSE, "had no price", id="a simulation's ending whose record names a price after all",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "simulated": True, "simulation": _an_owner_endings_record(cash_cents=52_500)},
+            _LAST_SESSION_CLOSE, "counted as worth nothing", id="a simulation's ending whose record paid cash",
+        ),
+        pytest.param(
+            {**_ENDED_BY_OWNER, "simulated": True, "simulation": _a_simulations_record("155.25")},
+            _LAST_SESSION_CLOSE, "counted as worth nothing",
+            id="a simulation's ending whose record is of a settlement in cash",
+        ),
+    ],
+)
+async def test_the_fold_refuses_an_owners_ending_that_is_not_whole_and_writes_nothing(
+    tmp_path: Path, changes: dict[str, Any], observed_at_ms: int, refused_for: str
+) -> None:
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        with pytest.raises(ValueError, match=refused_for):
+            repo.append_transition(_as_for_bot_b(facts, observed_at_ms=observed_at_ms, **changes))
+
+        assert held(repo, "bot-b") == {CALL: 2.0} and len(bookings(repo)) == 1
+    finally:
+        repo.close()
+
+
+async def test_a_simulations_ending_at_the_owners_word_is_booked_with_the_simulations_own_record(
+    tmp_path: Path,
+) -> None:
+    repo, facts = await _booked_expiry(tmp_path)
+    try:
+        repo.append_transition(_as_for_bot_b(
+            facts, observed_at_ms=_LAST_SESSION_CLOSE, **_ENDED_BY_OWNER, simulated=True,
+            simulation=_an_owner_endings_record(),
+        ))
+
+        assert held(repo, "bot-b") == {} and fifo(repo, "bot-b").exact_realized_pnl == Decimal("-388")
     finally:
         repo.close()

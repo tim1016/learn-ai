@@ -717,3 +717,59 @@ async def test_a_hold_that_still_stands_is_written_once_however_often_the_same_r
         assert len(account.option_events.reads) == 4
     finally:
         repo.close()
+
+
+async def test_a_bot_that_wrote_a_position_off_and_holds_the_contract_again_is_held_by_name_when_its_row_is_read(
+    tmp_path: Path,
+) -> None:
+    """A phantom lot was written off in the contract's life. The same bot then bought the contract again.
+
+    The write-off closed no lot, so the bot's lots no longer add up to what
+    it holds and none can be offered to the row. The row is not taken as
+    "it only confirms the write-off": the bot holds a contract the row may
+    be about. So it is held by name, in words that are true of it.
+    """
+    repo = _one_bot(tmp_path)
+    _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
+    holds_option(repo, "bot-a", CALL, contracts=1)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry())
+
+        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}
+        assert set(option_holds(repo)) == {("bot-a", "OPTION_EVENT_CONTRACT_NOT_HELD")}
+        said = option_holds(repo)[("bot-a", "OPTION_EVENT_CONTRACT_NOT_HELD")]["facts_json"]
+        assert "wrote off +1" in said and "holds +1" in said and "cannot be matched" in said
+    finally:
+        repo.close()
+
+
+async def test_the_real_write_off_of_a_position_an_event_already_closed_is_refused_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """A booked expiry left the position at zero. The owner's write-off, through its own executor, finds
+    nothing to write off: the loss stays the $194.00 the expiry booked, and the same row read once more
+    books nothing more."""
+    from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
+    from app.broker.alpaca.clerk.sqlite.residue_discharge import ResidueDischargeRefused, discharge_attributed_residue
+    from tests.broker.alpaca.clerk.sqlite.option_event_fixtures import fifo
+
+    repo = _one_bot(tmp_path)
+    account = _FakeReadPort()
+    try:
+        await _read(repo, account, _expiry())
+        assert [row["summary_code"] for row in bookings(repo)] == ["OPTION_EXPIRED"]
+        written = repo.last_custody_sequence()
+
+        with pytest.raises(ResidueDischargeRefused) as refused:
+            await discharge_attributed_residue(
+                repo, read=account, intake=ReentrantAsyncLock(), strategy_instance_id="bot-a", symbol=CALL,
+                operator_reason="expired",
+            )
+        await _read(repo, account, _expiry())
+
+        assert refused.value.reason_code == "NO_ATTRIBUTED_RESIDUE"
+        assert repo.last_custody_sequence() == written
+        assert fifo(repo, "bot-a").exact_realized_pnl == -194
+    finally:
+        repo.close()

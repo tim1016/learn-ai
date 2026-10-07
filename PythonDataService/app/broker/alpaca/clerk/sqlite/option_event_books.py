@@ -316,6 +316,8 @@ def describe_option_ending(facts: OptionPositionEndedFacts) -> str:
         said = f"{what} {was} {done} at {facts.close_price} by an order the Clerk did not place."
     elif ended_by is OptionEnding.SETTLED_IN_CASH:
         said = f"{what} {was} settled in cash at {facts.close_price} a share."
+    elif ended_by is OptionEnding.ENDED_BY_OWNER:
+        return f"{what} {was} ended at the owner's word and counted as worth nothing. No settlement could be made."
     else:
         shares = facts.shares or {}
         quantity = shares.get("quantity", 0)

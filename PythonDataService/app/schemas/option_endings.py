@@ -15,8 +15,9 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 #: The closed set. ``sold_outside`` is an order the Clerk did not place: the broker's own sale, or the owner's by hand.
 #: ``settled_in_cash`` is a simulation's own rule and never a broker's: a Dry Run sold the contract at its
-#: exercise value at the close of its last session.
-OptionEndingKind = Literal["expired", "exercised", "assigned", "sold_outside", "settled_in_cash"]
+#: exercise value at the close of its last session. ``ended_by_owner`` is a contract past its last session
+#: that nothing would ever settle, counted as worth nothing at the owner's word.
+OptionEndingKind = Literal["expired", "exercised", "assigned", "sold_outside", "settled_in_cash", "ended_by_owner"]
 
 
 class OptionEndingView(BaseModel):

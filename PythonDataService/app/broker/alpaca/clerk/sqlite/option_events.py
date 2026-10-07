@@ -68,7 +68,18 @@ the order releases it.
 **A row read after the owner wrote its position off** closes nothing: the
 write-off closed no lot and the bot is offered none. An expiry's row then
 confirms the write-off and holds nobody. An exercise's or an assignment's
-row holds that bot by name for the shares on no bot's books.
+row holds that bot by name for the shares on no bot's books. That holds
+only while the bot holds none of the contract now. One that bought it again
+is held by name: its lots no longer add up to what it holds.
+
+**The owner's ending.** A contract past its last session that nothing will
+ever settle is ended at the owner's word (``option_owner_ending``):
+:func:`end_option_at_the_owners_word` makes one poll, now, and hands the
+batch function the request with the read. What the read and the simulation
+brought is booked first, so a settlement that has come takes the ending's
+place. A real account's events are then still read for some days, back to
+that contract's expiry date, and a late row for it is treated as a row read
+after a write-off is.
 """
 
 from __future__ import annotations
@@ -85,14 +96,17 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
+from app.broker.alpaca.clerk.account_authority import is_synthetic_account_id
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.simulated_option_settlement import (
     OptionSettlementSimulation,
+    OwnersWord,
     SimulatedOptionSettlements,
     SimulatedSettlement,
     plain,
 )
+from app.broker.alpaca.clerk.sqlite import option_owner_ending as owner_ending_rule
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.account_open_work import broker_quantity_by_symbol
 from app.broker.alpaca.clerk.sqlite.contract_terms import contract_terms
@@ -116,6 +130,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_books import (
     booking_key,
     bookings,
     books_record_no_contract,
+    describe_option_ending,
     held_option_positions,
     hold_item_ack_ref,
     outside_fill,
@@ -133,6 +148,17 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     OptionPositionEndedFacts,
     close_execution_prefix,
     closed_by_an_option_event,
+)
+from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
+    OWNER_ENDING_SOURCE,
+    OwnerEndingOutcome,
+    OwnerEndingRequest,
+    expired_contract_hold_ref,
+    late_row_read_since_ms,
+    owner_ended,
+    owner_ending_key,
+    owner_ending_offered_from_ms,
+    recent_owner_endings,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
@@ -311,8 +337,16 @@ _NEXT_STEPS: dict[str, str] = {
     ),
     OPTION_EVENTS_NOT_READ_REASON_CODE: "Nothing to do: the Clerk reads them once more within a minute.",
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
-        "Nothing to send. It is settled when the broker's activity for it is read, or, in a simulation, when a "
-        "price of the underlying from the contract's last session is kept."
+        "Nothing to send. The Clerk books the contract's end when the broker's record of it is read. If none has "
+        "come by the close of the next session, you can end the contract at your word from this bot's page: it "
+        "is then counted as worth nothing, and what it cost is booked as a loss."
+    ),
+}
+# The same hold on a simulated account, which has no broker to send a record.
+_SIMULATED_NEXT_STEPS: dict[str, str] = {
+    OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
+        "Nothing to send, and no price will come by itself. You can end the contract at your word from this "
+        "bot's page: it is then counted as worth nothing, and what it cost is booked as a loss."
     ),
 }
 # What a hold means for the bot, where the family's own sentence would not be true.
@@ -364,6 +398,8 @@ class OptionEventRound:
     # Each hold standing when it ended, as (bot or None, reason code).
     held: tuple[tuple[str | None, str], ...] = ()
     read_whole: bool = False
+    # What came of the owner's ending this run was handed. None when it was handed none.
+    owner_ending: OwnerEndingOutcome | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,11 +424,20 @@ def _active_holds(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def option_work_on_the_books(repo: ClerkSqliteRepository) -> bool:
-    """Whether the books hold anything an option event could change, or a hold a read could end."""
+    """Whether the books hold anything an option event could change, or a hold a read could end.
+
+    Or a contract the owner ended at their word a few days ago, on a real
+    account: the broker's row for it may still come, and an exercise's or an
+    assignment's must not go unread.
+    """
     with repo.write_fence() as conn:
         if books_record_no_contract(conn):
             return False
-        return bool(held_option_positions(conn)) or bool(_active_holds(conn))
+        return (
+            bool(held_option_positions(conn))
+            or bool(_active_holds(conn))
+            or bool(recent_owner_endings(conn, since_ms=late_row_read_since_ms(repo.clock())))
+        )
 
 
 def option_position_differs(repo: ClerkSqliteRepository, broker_positions: Sequence[BrokerPosition]) -> bool:
@@ -410,9 +455,10 @@ def option_position_differs(repo: ClerkSqliteRepository, broker_positions: Seque
 def option_event_window_start_ms(repo: ClerkSqliteRepository) -> int:
     """Where a read of option events starts: 00:00 New York time on the first date that can still matter.
 
-    The date of the first fill in any contract a bot still holds, or the
-    date of the oldest row an open hold names, whichever is earlier. With
-    neither, today. Earlier than needed is safe: a row already booked is
+    The date of the first fill in any contract a bot still holds, the date
+    of the oldest row an open hold names, or the expiry date of a contract
+    the owner ended at their word a few days ago, whichever is earliest.
+    With none, today. Earlier than needed is safe: a row already booked is
     skipped by its id.
     """
     with repo.write_fence() as conn:
@@ -426,6 +472,7 @@ def option_event_window_start_ms(repo: ClerkSqliteRepository) -> int:
         for hold in _active_holds(conn):
             cause = json.loads(hold["facts_json"]).get("cause_facts") or {}
             instants += [item["date_ms"] for item in cause.get("items", []) if item.get("date_ms") is not None]
+        instants += recent_owner_endings(conn, since_ms=late_row_read_since_ms(repo.clock()))
     return et_midnight_ms(et_date_at_ms(min([*instants, repo.clock()])))
 
 
@@ -568,6 +615,13 @@ class _Holds:
         return self._found
 
 
+def _next_step(reason_code: str, *, simulated: bool) -> str:
+    """What the owner does about a hold. A simulated account has no broker, so some of it reads otherwise."""
+    if simulated and reason_code in _SIMULATED_NEXT_STEPS:
+        return _SIMULATED_NEXT_STEPS[reason_code]
+    return _NEXT_STEPS.get(reason_code, _DEFAULT_NEXT_STEP)
+
+
 def _raise_hold(repo: ClerkSqliteRepository, sid: str | None, reason_code: str, items: Sequence[OptionEventHoldItem]) -> None:
     headline, what = _HOLD_COPY[reason_code]
     raise_uncertainty(
@@ -582,7 +636,7 @@ def _raise_hold(repo: ClerkSqliteRepository, sid: str | None, reason_code: str, 
             if sid is not None
             else "No bot of this account takes a new entry. Reductions and the Flatten stay available.",
         ),
-        next_step=_NEXT_STEPS.get(reason_code, _DEFAULT_NEXT_STEP),
+        next_step=_next_step(reason_code, simulated=is_synthetic_account_id(repo.account_id)),
         evidence_refs=tuple(item.ref for item in items),
         cause_facts=OptionEventHoldCause(items=tuple(items)).to_mapping(),
     )
@@ -719,6 +773,7 @@ def _append_booking(
     share_trade: dict[str, Any] | None,
     simulation: dict[str, Any] | None,
     notes: list[dict[str, str]] | None,
+    owner_word: dict[str, Any] | None = None,
 ) -> OptionPositionEndedFacts | None:
     """Book one bot's part of one event, once. The record when this call booked it; None when it was booked before."""
     idempotency_key = f"{key}{sid}"
@@ -758,7 +813,7 @@ def _append_booking(
         contract_symbol=symbol, multiplier=multiplier, contracts=contracts, held=held, close_price=closed_at,
         booked_as_of_ms=booked_as_of_ms, option_order_ref=_order_ref(sid, idempotency_key, "close"),
         close_execution_id=close_execution_id, simulated=simulated, allocation=allocation, shares=shares,
-        share_trade=share_trade, simulation=simulation, notes=notes or None,
+        share_trade=share_trade, simulation=simulation, notes=notes or None, owner_word=owner_word,
     )
 
     def build_transition() -> TransitionInput:
@@ -842,21 +897,50 @@ def _bots_a_row_names(conn: sqlite3.Connection, symbol: str | None) -> list[str]
 def _bots_that_wrote_it_off(
     conn: sqlite3.Connection, books: Mapping[str, _BotBook], event: BrokerOptionEventActivity
 ) -> tuple[str, ...]:
-    """The bots whose written-off position in the event's contract accounts for the whole event, or none.
+    """The bots whose position in the event's contract left the books at the owner's word and accounts for the whole event, or none.
 
     An exercise ends a bought position and an assignment a sold one. An
     expiry ends either. A write-off took the position off the books and
-    closed no lot, so the event has no lot to take: booking it would count
-    the same contracts a second time.
+    closed no lot, and an owner's ending closed the lot at nothing. Either
+    way the event has no lot to take: booking it would count the same
+    contracts a second time.
+
+    Such a bot explains a row only while it holds none of the contract now.
+    One that wrote a position off and then bought the contract again holds
+    lots the row may be about, and explains nothing.
     """
+    symbol = event.contract.occ_symbol
     sides = {OptionEventKind.EXERCISED: (_BOUGHT,), OptionEventKind.ASSIGNED: (_SOLD,)}.get(event.kind, (_BOUGHT, _SOLD))
-    wrote_off = {
-        sid: abs(contracts)
-        for sid in books
-        if (contracts := written_off_contracts(conn, sid, event.contract.occ_symbol))
-        and (_BOUGHT if contracts > 0 else _SOLD) in sides
+    gone: dict[str, int] = {}
+    for sid in books:
+        if reads.position(conn, sid, symbol):
+            continue
+        contracts = written_off_contracts(conn, sid, symbol)
+        if contracts and (_BOUGHT if contracts > 0 else _SOLD) in sides:
+            gone[sid] = abs(contracts)
+    if _BOUGHT in sides:
+        # Only a bought contract is ended at the owner's word.
+        for sid, ended in owner_ended(conn, symbol).items():
+            if not reads.position(conn, sid, symbol):
+                gone[sid] = gone.get(sid, 0) + ended.contracts
+    return tuple(sorted(gone)) if sum(gone.values()) >= abs(event.position_change) else ()
+
+
+def _bots_whose_lots_cannot_be_offered(
+    conn: sqlite3.Connection, books: Mapping[str, _BotBook], symbol: str
+) -> dict[str, tuple[int, int]]:
+    """Each bot that holds the contract now and is offered no lot, with what it holds and what it wrote off.
+
+    A bot's lots are offered only while they add up to its position. After
+    a write-off they do not: the write-off closed no lot. So a bot that
+    wrote a position off and holds the contract again is offered none, and
+    a row for it cannot be matched to its lots.
+    """
+    return {
+        sid: (int(held_now), written_off_contracts(conn, sid, symbol))
+        for sid, book in books.items()
+        if (held_now := reads.position(conn, sid, symbol)) and not book.lots
     }
-    return tuple(sorted(wrote_off)) if sum(wrote_off.values()) >= abs(event.position_change) else ()
 
 
 def _pair_share_trades(
@@ -1003,10 +1087,11 @@ def _book_events(
                     else ()
                 )
                 if wrote_off and event.kind is OptionEventKind.EXPIRED:
-                    # The owner took the position off the books before the row came. The row moves
-                    # nothing more, so nothing is booked and nobody is held.
+                    # The owner took the position off the books before the row came, by a write-off
+                    # or by ending it at their word. The row moves nothing more, so nothing is
+                    # booked and nobody is held.
                     logger.info(
-                        "an option expiry was read for a position already written off; nothing is booked",
+                        "an option expiry was read for a position that left the books at the owner's word; nothing is booked",
                         extra={
                             "action": "option_event_already_written_off", "account_id": account_id,
                             "symbol": symbol, "activity_id": event.activity_id, "bots": list(wrote_off),
@@ -1015,9 +1100,23 @@ def _book_events(
                 elif wrote_off:
                     hold(
                         OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, wrote_off,
-                        f"The position in {symbol} was written off before this row was read. The row says it was "
-                        f"{event.kind.value}: the shares and the cash that moved are on no bot's books.",
+                        f"The position in {symbol} left the books at the owner's word before this row was read. "
+                        f"The row says it was {event.kind.value}: the shares and the cash that moved are on no "
+                        "bot's books.",
                     )
+                elif (
+                    refused.reason is OptionEventRefusal.CONTRACT_NOT_HELD
+                    and (unmatched := _bots_whose_lots_cannot_be_offered(conn, books, symbol))
+                ):
+                    # The rule was offered no lot, and a bot holds the contract: its lots and its
+                    # position disagree. Each such bot is held by name, with what is true of it.
+                    for sid, (held_now, written_off) in unmatched.items():
+                        hold(
+                            OPTION_EVENT_CONTRACT_NOT_HELD_REASON_CODE, [sid],
+                            f"{sid} holds {held_now:+d} of {symbol} and wrote off {written_off:+d} of it earlier, so "
+                            f"its lots do not add up to what it holds and this row, {event.kind.value} "
+                            f"{event.position_change:+d}, cannot be matched to them. Nothing was booked.",
+                        )
                 else:
                     hold(refused.reason.value, _holders(conn, symbol), str(refused))
                 continue
@@ -1108,7 +1207,7 @@ def _book_events(
                     booked_as_of_ms=booked_as_of_ms, simulated=settlement is not None,
                     allocation=allocation_rows, share_trade=share_trade_note,
                     simulation=None if settlement is None else settlement.record.note(),
-                    notes=notes,
+                    notes=notes, owner_word=None if settlement is None else settlement.record.owner_word(),
                 )
             except _RowChanged:
                 hold(
@@ -1188,7 +1287,7 @@ def _hold_what_expired_and_is_still_held(
         contract = OptionContract.from_occ_symbol(symbol)
         if not past_last_session(contract.expiry_date, now_ms):
             continue
-        ref = f"contract:{symbol}"
+        ref = expired_contract_hold_ref(symbol)
         expired_on = contract.expiry_date.isoformat()
         if symbol in not_settled:
             holds.add(
@@ -1339,11 +1438,224 @@ def _book_outside_orders(
     return booked
 
 
+# ── The owner's ending of a contract nothing will settle ─────────────────────
+
+
+def _owner_ending_refused(reason_code: str, message: str) -> OwnerEndingOutcome:
+    return OwnerEndingOutcome(result="refused", reason_code=reason_code, message=f"{message} Nothing was ended.")
+
+
+def _nothing_held(request: OwnerEndingRequest) -> OwnerEndingOutcome:
+    return _owner_ending_refused(
+        owner_ending_rule.NOTHING_HELD,
+        f"{request.strategy_instance_id} holds no {request.symbol.upper()} on these books.",
+    )
+
+
+def _booked_ending(facts: OptionPositionEndedFacts) -> OwnerEndingOutcome:
+    """What the owner is told of a contract whose end is on the books: ended at their word, or settled after all."""
+    command_id = f"cmd:{facts.idempotency_key}"
+    if facts.ended_by == OptionEnding.ENDED_BY_OWNER.value:
+        return OwnerEndingOutcome(
+            result="ended", ended_by=facts.ended_by, command_id=command_id,
+            message=f"{facts.contract_symbol} was ended at your word and counted as worth nothing.",
+        )
+    return OwnerEndingOutcome(
+        result="settled", ended_by=facts.ended_by, command_id=command_id,
+        message=(
+            f"{facts.contract_symbol} was not ended at your word: a settlement had come after all, and it was "
+            f"booked in its place. {describe_option_ending(facts)}"
+        ),
+    )
+
+
+def _last_ending(conn: sqlite3.Connection, sid: str, symbol: str) -> OptionPositionEndedFacts | None:
+    """The newest record of one bot's position in one contract having ended, or None. One bot's own records."""
+    row = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE strategy_instance_id = ? AND transition_kind = ? "
+        "AND json_extract(facts_json, '$.contract_symbol') = ? ORDER BY sequence DESC LIMIT 1",
+        (sid, OPTION_POSITION_ENDED, symbol),
+    ).fetchone()
+    return None if row is None else OptionPositionEndedFacts.from_facts_json(row["facts_json"])
+
+
+def _why_a_simulation_did_not_let_go(settled: SimulatedOptionSettlements | None, symbol: str) -> OwnerEndingOutcome:
+    """Why a simulated account still holds a contract after its simulation was handed the owner's word."""
+    if settled is not None and symbol in settled.waiting:
+        return _owner_ending_refused(
+            owner_ending_rule.WAITING_FOR_THE_CLOSING_PRICE,
+            f"The simulation is still waiting for the closing price of {symbol}'s last session.",
+        )
+    if settled is not None and symbol in settled.not_settled:
+        return _owner_ending_refused(owner_ending_rule.NOT_SETTLED_BY_THE_SIMULATION, settled.not_settled[symbol])
+    return _owner_ending_refused(
+        owner_ending_rule.NOT_SETTLED_BY_THE_SIMULATION,
+        f"The simulation's end of {symbol} could not be booked. This bot's notices say why.",
+    )
+
+
+def _why_a_real_account_cannot_end(
+    conn: sqlite3.Connection, read: OptionEventRead, request: OwnerEndingRequest, contract: OptionContract,
+    *, held_now: float, now_ms: int,
+) -> OwnerEndingOutcome | None:
+    """Why this read does not prove a real account's contract has no settlement, or None when it does.
+
+    Proof is all of: the contract is past its last session and the wait for
+    the broker's record is over; the read is whole; it has no row that
+    could be this contract's; the broker's position was read and holds
+    none of it; and this bot is the one the books hold it for, bought.
+    """
+    sid, symbol, root = request.strategy_instance_id, contract.occ_symbol, contract.root
+    if not past_last_session(contract.expiry_date, now_ms):
+        return _owner_ending_refused(
+            owner_ending_rule.CONTRACT_STILL_TRADES, f"{symbol} has not reached the end of its last session."
+        )
+    if held_now < 0:
+        return _owner_ending_refused(
+            owner_ending_rule.SOLD_CONTRACT,
+            f"{sid} holds {symbol} sold. A sold contract that was assigned moved shares, so it is not ended at a word.",
+        )
+    if now_ms < owner_ending_offered_from_ms(contract.expiry_date):
+        return _owner_ending_refused(
+            owner_ending_rule.RECORD_MAY_STILL_COME,
+            f"The broker's record of how {symbol} ended may still come: it is waited for until the close of the "
+            "session after the contract's last.",
+        )
+    if not read.whole:
+        return _owner_ending_refused(
+            owner_ending_rule.READ_NOT_WHOLE,
+            f"The account's option events could not be read whole, so nothing proves {symbol} has no record. "
+            f"{read.failure or ''}".strip(),
+        )
+    named = [event.activity_id for event in read.events if event.contract.occ_symbol == symbol]
+    named += [row.activity_id for row in read.unreadable if (row.symbol or "").upper() in (symbol, root)]
+    expired_on_ms = et_midnight_ms(contract.expiry_date)
+    named += [
+        trade.activity_id for trade in read.share_trades
+        if trade.underlying_symbol == root and trade.activity_date_ms >= expired_on_ms
+    ]
+    if named:
+        return _owner_ending_refused(
+            owner_ending_rule.ROW_NOT_BOOKED,
+            f"The broker reports activity that may be {symbol}'s end ({', '.join(sorted(named))}), and it could not "
+            "be booked. This bot's notices say why.",
+        )
+    if read.broker_positions is None:
+        return _owner_ending_refused(
+            owner_ending_rule.BROKER_POSITION_UNREAD,
+            f"The broker's positions could not be read, so nothing proves it holds no {symbol}.",
+        )
+    at_broker = read.broker_positions.get(symbol, 0.0)
+    if at_broker:
+        return _owner_ending_refused(
+            owner_ending_rule.BROKER_STILL_HOLDS,
+            f"The broker still shows {at_broker:g} of {symbol}. A position the broker holds is not ended at a word.",
+        )
+    return None
+
+
+def _end_at_the_owners_word(
+    repo: ClerkSqliteRepository,
+    conn: sqlite3.Connection,
+    read: OptionEventRead,
+    settled: SimulatedOptionSettlements | None,
+    request: OwnerEndingRequest,
+    *,
+    booked: Sequence[tuple[str, OptionPositionEndedFacts]],
+) -> tuple[OwnerEndingOutcome, tuple[str, OptionPositionEndedFacts] | None]:
+    """End one bot's expired contract at the owner's word, if this read left it on the books with nothing to book it from.
+
+    Called after the read's rows and the simulation's settlements are
+    booked. A contract one of those took off the books is not ended at a
+    word: the owner is told how it ended. On a simulated account the
+    simulation itself lets go first, in its own ledger, and its record is
+    what was booked. On a real account the booking is made here, once the
+    read proves there is nothing else to book.
+
+    The outcome, and the new record when this call booked one.
+    """
+    sid, symbol = request.strategy_instance_id, request.symbol.upper()
+    this_round = next((facts for bot, facts in booked if bot == sid and facts.contract_symbol == symbol), None)
+    if this_round is not None:
+        return _booked_ending(this_round), None
+    held_now = reads.position(conn, sid, symbol)
+    if not held_now:
+        earlier = _last_ending(conn, sid, symbol)
+        return (_nothing_held(request) if earlier is None else _booked_ending(earlier)), None
+    if is_synthetic_account_id(repo.account_id):
+        return _why_a_simulation_did_not_let_go(settled, symbol), None
+    contract = OptionContract.from_occ_symbol(symbol)
+    now_ms = repo.clock()
+    refused = _why_a_real_account_cannot_end(conn, read, request, contract, held_now=held_now, now_ms=now_ms)
+    if refused is not None:
+        return refused, None
+    terms = contract_terms(conn, symbol)
+    book = _bot_books(conn, repo.account_id, contract).get(sid)
+    contracts = int(held_now)
+    if terms is None or book is None or sum(lot.quantity for lot in book.lots) != contracts:
+        return _owner_ending_refused(
+            owner_ending_rule.LOTS_DISAGREE,
+            f"{sid}'s lots of {symbol} do not add up to the {held_now:g} it holds, so they cannot be closed.",
+        ), None
+    allocation = [
+        {
+            "owner": sid, "sequence": lot.sequence, "opened_at_ms": lot.opened_at_ms, "contracts": lot.quantity,
+            "option_quantity_change": -lot.quantity, "share_quantity_change": 0, "cash_change_cents": 0,
+            "opened_by": book.opened_by.get(lot.sequence),
+        }
+        for lot in book.lots
+    ]
+    try:
+        record = _append_booking(
+            repo, sid=sid, run_id=_run_of(conn, allocation[0]["opened_by"]), key=owner_ending_key(symbol),
+            ended_by=OptionEnding.ENDED_BY_OWNER, broker=OWNER_ENDING_SOURCE, source_id=f"owner-ending:{symbol}",
+            source_code="OWNER_ENDING", event_date_ms=et_midnight_ms(contract.expiry_date),
+            position_change=-contracts, contract=contract, multiplier=terms.multiplier, contracts=contracts,
+            held=_BOUGHT, close_price=Decimal(0),
+            # Counted as having happened when the contract stopped trading, as an expiry is.
+            booked_as_of_ms=max([last_session_close_ms(contract.expiry_date) - 1, *(lot.opened_at_ms for lot in book.lots)]),
+            simulated=False, allocation=allocation, share_trade=None, simulation=None, notes=None,
+            owner_word={
+                "operator": request.operator.strip(), "reason": (request.reason or "").strip() or None,
+                "said_at_ms": now_ms,
+                "why_no_settlement": (
+                    "A whole read of the account's option events, made after the close of the session that "
+                    "follows the contract's last, has no record of how the contract ended, and the broker holds "
+                    "none of it."
+                ),
+            },
+        )
+    except _RowChanged:
+        return _owner_ending_refused(
+            owner_ending_rule.LOTS_DISAGREE,
+            f"An ending of {symbol} at the owner's word is on the books for {sid} with other figures.",
+        ), None
+    if record is None:
+        # Booked before under the same key and the same figures, and the position is still held:
+        # the books do not say what this call would.
+        return _owner_ending_refused(
+            owner_ending_rule.LOTS_DISAGREE,
+            f"An ending of {symbol} at the owner's word is on the books for {sid}, and it still holds the contract.",
+        ), None
+    logger.warning(
+        "ended an expired option contract at the owner's word",
+        extra={
+            "action": "option_ended_at_the_owners_word", "account_id": repo.account_id, "strategy_instance_id": sid,
+            "symbol": symbol, "contracts": contracts, "operator": request.operator,
+        },
+    )
+    return _booked_ending(record), (sid, record)
+
+
 # ── The batch function ───────────────────────────────────────────────────────
 
 
 def book_option_events(
-    repo: ClerkSqliteRepository, read: OptionEventRead | None, *, settled: SimulatedOptionSettlements | None = None
+    repo: ClerkSqliteRepository,
+    read: OptionEventRead | None,
+    *,
+    settled: SimulatedOptionSettlements | None = None,
+    owner_ending: OwnerEndingRequest | None = None,
 ) -> OptionEventRound:
     """Book what one read of the account's option events found, and hold by name for what could not be booked.
 
@@ -1355,16 +1667,28 @@ def book_option_events(
     simulated account. Its settlements are booked with the read's rows, and
     what it could not settle is held for by name. None on a real account.
 
+    ``owner_ending`` is the owner's word to end one bot's expired contract
+    that nothing will settle (``option_owner_ending``). What the read and
+    the simulation brought is booked first. The contract is ended at the
+    owner's word only when that left it on the books, and this same read
+    proves there is still nothing to book it from. The round says which.
+
     Everything from the first read of the books to the last append happens
     inside the repository's write fence. On books that never recorded an
     option contract one small table is read and nothing is written.
     """
     with repo.write_fence() as conn:
         if books_record_no_contract(conn):
-            return OptionEventRound()
+            return OptionEventRound(owner_ending=None if owner_ending is None else _nothing_held(owner_ending))
         holds = _Holds()
         booked = _book_outside_orders(repo, conn, holds)
         whole = read is not None and read.whole
+        owner_outcome: OwnerEndingOutcome | None = None
+        if read is None and owner_ending is not None:
+            owner_outcome = _owner_ending_refused(
+                owner_ending_rule.READ_NOT_WHOLE,
+                "The account's option events were not read, so nothing proves the contract has no settlement.",
+            )
         if read is not None:
             if not whole:
                 holders = sorted({sid for sid, _symbol, _quantity in held_option_positions(conn)})
@@ -1376,6 +1700,12 @@ def book_option_events(
             _hold_what_could_not_be_read(conn, read, holds)
             simulated = {} if settled is None else {item.event.activity_id: item for item in settled.settled}
             booked += _book_events(repo, conn, read, holds, simulated=simulated)
+            if owner_ending is not None:
+                owner_outcome, ended = _end_at_the_owners_word(
+                    repo, conn, read, settled, owner_ending, booked=booked
+                )
+                if ended is not None:
+                    booked.append(ended)
             if whole:
                 _hold_what_expired_and_is_still_held(
                     conn, read, holds, now_ms=repo.clock(), not_settled={} if settled is None else settled.not_settled
@@ -1387,7 +1717,8 @@ def book_option_events(
             held += _sync_holds(repo, conn, holds, codes=(OPTION_EVENTS_NOT_READ_REASON_CODE, *_READ_HOLDS), may_end=whole)
         _sync_shares_held(repo, conn, booked)
         return OptionEventRound(
-            booked=tuple(f"cmd:{facts.idempotency_key}" for _sid, facts in booked), held=tuple(held), read_whole=whole
+            booked=tuple(f"cmd:{facts.idempotency_key}" for _sid, facts in booked), held=tuple(held), read_whole=whole,
+            owner_ending=owner_outcome,
         )
 
 
@@ -1472,6 +1803,7 @@ async def poll_option_events(
     asked_for: bool = False,
     broker_positions: Sequence[BrokerPosition] | None = None,
     act_on_the_books_between_reads: bool = False,
+    owner_ending: OwnerEndingRequest | None = None,
 ) -> OptionEventPoll:
     """Read the account's option events when a read is due, and book what was read.
 
@@ -1479,6 +1811,12 @@ async def poll_option_events(
     port. A simulation has no broker to end its positions, so before the
     read it is asked to settle what it holds past expiry, and what it hands
     back is booked with the read. A real account names none.
+
+    ``owner_ending`` is the owner's word to end one expired contract that
+    nothing will settle. The read is then made now, whatever the cadence,
+    and after any read already under way: this is the one look more that
+    the ending rests on. The simulation is handed the word with its step,
+    and the batch function is handed the request with the read.
 
     ``broker_positions`` is a pass's own reading of the account. When it
     shows a recorded contract's position differing from the books, the
@@ -1498,11 +1836,13 @@ async def poll_option_events(
     """
     state = _poll_state(repo)
     now_ms = repo.clock()
-    may_read = not state.lock.locked()
-    due = may_read and _due(state, now_ms, asked_for=asked_for)
+    forced = owner_ending is not None
+    # A read the owner's ending rests on waits its turn behind one under way. No other read does.
+    may_read = forced or not state.lock.locked()
+    due = may_read and (forced or _due(state, now_ms, asked_for=asked_for))
     if not due and broker_positions is None and not act_on_the_books_between_reads:
         return OptionEventPoll(read=False)
-    if not await off_loop(lambda: option_work_on_the_books(repo)):
+    if not forced and not await off_loop(lambda: option_work_on_the_books(repo)):
         if due:
             # Nothing an event could change: look again when the next read would be due.
             state.read_at_ms, state.nothing_pending = now_ms, True
@@ -1521,7 +1861,20 @@ async def poll_option_events(
         state.read_at_ms, state.nothing_pending = now_ms, False
         after_ms = await off_loop(lambda: option_event_window_start_ms(repo))
         # A write to the simulation's own ledger, made with no lock of the Clerk's held, as the read is.
-        settled = None if simulation is None else simulation.settle_expired_options(after_ms=after_ms)
+        settled = None
+        if simulation is not None and owner_ending is None:
+            settled = simulation.settle_expired_options(after_ms=after_ms)
+        elif simulation is not None and owner_ending is not None:
+            settled = simulation.settle_expired_options(
+                after_ms=after_ms,
+                at_the_owners_word={
+                    owner_ending.symbol.upper(): OwnersWord(
+                        operator=owner_ending.operator.strip(),
+                        reason=(owner_ending.reason or "").strip() or None,
+                        said_at_ms=now_ms,
+                    )
+                },
+            )
         events = await _read_events(repo, read, after_ms=after_ms)
         positions = broker_positions
         expired_held = (
@@ -1539,7 +1892,11 @@ async def poll_option_events(
                 )
         if positions is not None:
             events = replace(events, broker_positions=broker_quantity_by_symbol(list(positions)))
-        done = await off_loop(lambda: book_option_events(repo, events, settled=settled))
+        done = await off_loop(
+            lambda: book_option_events(repo, events, settled=settled)
+            if owner_ending is None
+            else book_option_events(repo, events, settled=settled, owner_ending=owner_ending)
+        )
         state.read_at_ms = repo.clock()
         # While a hold stands something is still to come: a row, a share trade, a price. So it is
         # while a simulation waits for a contract's closing bar. Look again sooner.
@@ -1578,6 +1935,77 @@ async def poll_option_events_in_a_pass(
         )
 
 
+class OwnerEndingRefused(Exception):
+    """An expired contract was not ended at the owner's word. Nothing was booked at that word."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+# The contract's settlement had come after all and was booked in place of the owner's ending.
+OWNER_ENDING_SETTLED_INSTEAD = "OPTION_OWNER_ENDING_SETTLED_INSTEAD"
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerEndingReceipt:
+    """The books' record of one contract ended at the owner's word."""
+
+    sequence: int
+    recorded_at_ms: int
+    symbol: str
+    command_id: str
+
+
+async def end_option_at_the_owners_word(
+    repo: ClerkSqliteRepository,
+    *,
+    read: BrokerReadPort,
+    simulation: OptionSettlementSimulation | None,
+    off_loop: OffLoop,
+    request: OwnerEndingRequest,
+) -> OwnerEndingReceipt:
+    """End one bot's expired contract at the owner's word, after one look more (``option_owner_ending``).
+
+    The look is the poll itself, made now: the same read, the same
+    simulation step and the same batch function as every other end of an
+    option position. A settlement that has come is booked in the ending's
+    place, and the owner is told that it was: ``OwnerEndingRefused`` under
+    ``OWNER_ENDING_SETTLED_INSTEAD``, with how the contract ended. Any other
+    refusal names what does not prove the contract has no settlement.
+    """
+    if not request.operator.strip():
+        raise OwnerEndingRefused(
+            owner_ending_rule.NOTHING_HELD, "An ended contract records who ended it, and this request names nobody."
+        )
+    polled = await poll_option_events(repo, read=read, simulation=simulation, off_loop=off_loop, owner_ending=request)
+    outcome = None if polled.round is None else polled.round.owner_ending
+    if outcome is None:
+        raise OwnerEndingRefused(
+            owner_ending_rule.READ_NOT_WHOLE, "The account's option events were not read. Nothing was ended."
+        )
+    if outcome.result == "refused":
+        raise OwnerEndingRefused(outcome.reason_code or owner_ending_rule.NOTHING_HELD, outcome.message)
+    if outcome.result == "settled":
+        raise OwnerEndingRefused(OWNER_ENDING_SETTLED_INSTEAD, outcome.message)
+    assert outcome.command_id is not None
+    command_id = outcome.command_id
+
+    def _recorded() -> tuple[int, int]:
+        with repo.write_fence() as conn:
+            row = conn.execute(
+                "SELECT sequence, recorded_at_ms FROM custody_transitions WHERE effect_operation_id = ? "
+                "AND transition_kind = ? ORDER BY sequence LIMIT 1",
+                (f"effect:{command_id.removeprefix('cmd:')}", OPTION_POSITION_ENDED),
+            ).fetchone()
+        return int(row["sequence"]), int(row["recorded_at_ms"])
+
+    sequence, recorded_at_ms = await off_loop(_recorded)
+    return OwnerEndingReceipt(
+        sequence=sequence, recorded_at_ms=recorded_at_ms, symbol=request.symbol.upper(), command_id=command_id
+    )
+
+
 def book_outside_option_orders_in_a_pass(repo: ClerkSqliteRepository) -> None:
     """Act on the books' record of outside orders inside a pass's verdict, and never fail the verdict doing it."""
     try:
@@ -1606,13 +2034,17 @@ __all__ = [
     "OPTION_EVENT_POLL_INTERVAL_MS",
     "OPTION_EVENT_POLL_RETRY_MS",
     "OUTSIDE_THE_BOOKS",
+    "OWNER_ENDING_SETTLED_INSTEAD",
     "OptionEventPoll",
     "OptionEventRead",
     "OptionEventRound",
+    "OwnerEndingReceipt",
+    "OwnerEndingRefused",
     "acknowledge_option_event_hold",
     "book_option_events",
     "book_outside_option_orders_in_a_pass",
     "books_record_no_contract",
+    "end_option_at_the_owners_word",
     "held_option_positions",
     "option_event_window_start_ms",
     "option_position_differs",
