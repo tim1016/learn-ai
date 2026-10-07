@@ -27,9 +27,9 @@ from app.broker.ibkr.market_subscription import (
     MarketSubscription,
     install_market_data_callbacks,
 )
-from app.broker.ibkr.option_quotes import OptionQuoteLines
+from app.broker.ibkr.option_quotes import LineUse, OptionQuoteLines
 from app.options.quotes import HeldQuote, quote_fault
-from app.options.resolver import FeedState
+from app.options.resolver import Chain, FeedState
 from app.schemas.market_liveness import MarketStatusSnapshot, SymbolTradingStatusEvidence
 from app.utils.atomic_file import atomic_write_bytes
 from app.utils.timestamps import Clock, now_ms_utc
@@ -258,6 +258,15 @@ class IbkrMarketStatusSource:
             generation=self._options.generation,
             unhealthy=None if self._connected() else "the IBKR market-data connection is not up",
         )
+
+    def option_chain(self, underlying: str) -> Chain | None:
+        """The underlying's chain as it is known now, with the quote held for each watched contract. None
+        while this Clerk watches no option contract, or the chain's expiries are not known yet."""
+        return None if self._options is None else self._options.chain(underlying)
+
+    def option_line_use(self) -> LineUse | None:
+        """How this Clerk's option quote lines stand. None while it watches no option contract."""
+        return None if self._options is None else self._options.line_use()
 
     def _underlying_mid(self, symbol: str) -> Decimal | None:
         """Where a window is centred when no bar close is given: the mid of a quote a decision could use."""
