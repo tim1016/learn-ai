@@ -17,16 +17,23 @@ import asyncio
 import json
 from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
+
+import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
+from app.broker.alpaca.clerk.sqlite import scheduled_close as scheduled_close_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.facts import ExitAcceptedFacts, ScheduledCloseFacts
+from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
+from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
 from app.broker.alpaca.clerk.sqlite.residue_discharge import discharge_attributed_residue
 from app.broker.alpaca.clerk.sqlite.scheduled_close import (
     CloseStanding,
     ScheduledCloseRound,
+    held_contracts,
     scheduled_close_state,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -47,8 +54,10 @@ from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
 from app.options.contract import OptionContract
-from app.options.deadlines import CloseKind
+from app.options.deadlines import CloseKind, CloseTerms, ScheduledClose
+from app.options.structure import ResolvedLeg, ResolvedStructure
 from app.schemas.market_liveness import MarketLivenessFact, SymbolTradingStatusEvidence
+from app.services.broker_v2_panel import lane_summary
 from app.services.market_liveness import unknown_market_liveness
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.market_quotes import publish_quotes
@@ -355,6 +364,23 @@ async def test_a_missed_close_names_the_contract_and_how_many_and_holds_that_bot
         paper.repo, capability=Capability.REDUCE, strategy_instance_id="a",
         reduction_intent=ReductionIntent(symbol=SYMBOL, side="SELL", quantity=2),
     ).allowed
+
+
+async def test_a_missed_close_is_a_line_on_the_lanes_bell_that_opens_its_bot(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _the_clerk_was_down_through_the_close(paper)
+    monkeypatch.setattr(lane_summary, "get_active_clerk_runtime", lambda: SimpleNamespace(
+        sqlite_repository=paper.repo, clerk=None, startup_failure=None, selected_account_authority_kind="real_paper",
+    ))
+
+    [line] = [
+        item for item in (await lane_summary.lane_attention_read()).items
+        if item.reason_code == SCHEDULED_CLOSE_MISSED_REASON_CODE
+    ]
+
+    # Listed with the exits that have not flattened, and it opens the bot that holds the contract.
+    assert (line.kind, line.strategy_instance_id, line.action.destination) == ("exit", "a", "bot")
 
 
 async def test_nothing_is_ever_sent_for_a_contract_after_its_last_session(paper: PaperOptions) -> None:  # noqa: F811
@@ -704,3 +730,66 @@ async def test_two_bots_each_holding_the_contract_are_each_closed_by_an_order_of
 
     assert len(done.closes.taken) == 2 and _closes_sent(paper) == [SELLS_ONE_TO_CLOSE, SELLS_ONE_TO_CLOSE]
     assert len(_closing_refs(paper, "a")) == 1 and len(_closing_refs(paper, "b")) == 1
+
+
+# ── a structure with a sold leg: shown at this level only, until the Clerk takes one ──
+
+
+def _with_its_leg_sold(entry: OptionEntryFacts) -> OptionEntryFacts:
+    """The same entry with its one leg sold, not bought. No such entry can be made through the Clerk yet."""
+    return entry.model_copy(update={"legs": (entry.the_leg.model_copy(update={"position": "short"}),)})
+
+
+async def test_a_holding_whose_entry_has_a_sold_leg_owes_a_close_ten_minutes_before_every_sessions_close(
+    paper: PaperOptions, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    await _holds_one_call(paper)
+    as_entered = scheduled_close_module.option_entry_of_order
+    monkeypatch.setattr(
+        scheduled_close_module, "option_entry_of_order", lambda repo, ref: _with_its_leg_sold(as_entered(repo, ref))
+    )
+
+    def owes_on(day: date, *, closes_at: int) -> ScheduledClose:
+        return ScheduledClose(
+            CloseKind.SOLD_LEG, et_minute_of_day_ms(day, (closes_at - 1) * 60 + 50),
+            et_minute_of_day_ms(day, 9 * 60 + 30), et_minute_of_day_ms(day, closes_at * 60),
+        )
+
+    # The day after the entry, the day after that, and a half day two months on: one close each session.
+    for day, closes_at in ((date(2026, 9, 9), 16), (date(2026, 9, 10), 16), (HALF_DAY, 13)):
+        [held] = held_contracts(paper.repo, et_minute_of_day_ms(day, 10 * 60)).held
+        assert held.owed == owes_on(day, closes_at=closes_at)
+    # On the contract's own expiry day the earlier close binds: 15:15, not 15:50.
+    [on_expiry] = held_contracts(paper.repo, et_minute_of_day_ms(EXPIRY, 10 * 60)).held
+    assert on_expiry.owed is not None and (on_expiry.owed.kind, on_expiry.owed.due_ms) == (CloseKind.EXPIRY_DAY, DUE)
+    # Still held on a Saturday: nothing is owed that day, and Friday's close was missed.
+    [weekend] = held_contracts(paper.repo, et_minute_of_day_ms(date(2026, 9, 12), 12 * 60)).held
+    assert weekend.owed is None and weekend.missed == owes_on(date(2026, 9, 11), closes_at=16)
+    assert not weekend.expired
+
+
+@pytest.mark.parametrize(
+    ("day", "closes_at"),
+    [pytest.param(date(2026, 9, 9), 16, id="a full day"), pytest.param(HALF_DAY, 13, id="a half day")],
+)
+def test_an_entry_on_a_structure_with_a_sold_leg_is_too_late_from_eighty_seconds_before_that_sessions_close_of_it(
+    day: date, closes_at: int
+) -> None:
+    """The Clerk's own cutoff is counted from the close the position would owe that day, whichever close it is."""
+    far = date(2026, 12, 18)
+    structure = ResolvedStructure(legs=(
+        ResolvedLeg(
+            leg_id="bought", contract=OptionContract.of(root="SPY", expiry_date=far, right="call", strike=585),
+            position="long", ratio=1,
+        ),
+        ResolvedLeg(
+            leg_id="sold", contract=OptionContract.of(root="SPY", expiry_date=far, right="call", strike=590),
+            position="short", ratio=1,
+        ),
+    ))
+    # Ten minutes before the close, less a 20 second wait, 30 to prove a cancel and 30 of margin.
+    cutoff = et_minute_of_day_ms(day, (closes_at - 1) * 60 + 48) + 40_000
+
+    assert entry_past_cutoff(structure, now_ms=cutoff - 1, terms=CloseTerms()) is None
+    refused = entry_past_cutoff(structure, now_ms=cutoff, terms=CloseTerms())
+    assert refused is not None and refused.reason_code == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
