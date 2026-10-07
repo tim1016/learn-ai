@@ -91,7 +91,7 @@ def ask_the_coordinator(
         )
     except ValidationError as not_asked:
         raise CoordinatorDidNotAnswer(
-            WhyNotKnown.LOOKUP_FAILED,
+            WhyNotKnown.COORDINATOR_NOT_ASKED,
             f"this is not a question the coordinator answers ({not_asked.errors()[0]['msg']})",
         ) from not_asked
 

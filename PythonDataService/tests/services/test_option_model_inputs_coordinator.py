@@ -296,15 +296,26 @@ def _another_question(_request: httpx.Request) -> httpx.Response:
     )
 
 
-def _in_the_answer(**changed: object) -> Callable[[httpx.Request], httpx.Response]:
-    """The answer to this very ask, with its ``dividends`` changed."""
+def _in_the_answer(*, rate: dict | None = None, **dividends: object) -> Callable[[httpx.Request], httpx.Response]:
+    """The answer to this very ask, with its ``rate`` or its ``dividends`` changed."""
 
     def answer(request: httpx.Request) -> httpx.Response:
         body = json.loads(_another_question(request).content) | {"underlying": "SPY"}
-        body["dividends"] = body["dividends"] | changed
+        body["rate"] = body["rate"] | (rate or {})
+        body["dividends"] = body["dividends"] | dividends
         return httpx.Response(200, json=body)
 
     return answer
+
+
+def test_an_answer_to_this_very_ask_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the cases below each change one thing in."""
+    coordinator = Coordinator(monkeypatch)
+    coordinator.answer = _in_the_answer()
+
+    read = _read()
+
+    assert (read.rate, read.rate_is_default, read.dividends) == (0.05, False, ())
 
 
 @pytest.mark.parametrize(
@@ -346,6 +357,36 @@ def _in_the_answer(**changed: object) -> Callable[[httpx.Request], httpx.Respons
             _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_TUESDAY), "cash": "1.8", "currency": "USD"}]),
             WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
             id="a dividend that went ex before the moment asked",
+        ),
+        pytest.param(
+            _in_the_answer(declared=[{"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "0", "currency": "USD"}]),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="a dividend of nothing",
+        ),
+        pytest.param(
+            _in_the_answer(
+                declared=[
+                    {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.25", "currency": "USD"},
+                    {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8", "currency": "USD"},
+                ]
+            ),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="dividends out of the order they go ex",
+        ),
+        pytest.param(
+            _in_the_answer(rate={"published_by_ms": et_midnight_ms(_WEDNESDAY)}),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="a rate published by another date than the one asked",
+        ),
+        pytest.param(
+            _in_the_answer(rate={"value": 0.05}),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="a rate written as a number, not as text",
+        ),
+        pytest.param(
+            _in_the_answer(rate={"source": "default"}),
+            WhyNotKnown.COORDINATOR_ANSWER_UNREADABLE,
+            id="a default rate that does not say why",
         ),
         pytest.param(
             _in_the_answer(status="unknown"),
@@ -422,6 +463,24 @@ def test_a_coordinator_address_outside_the_private_network_is_sent_nothing(monke
     read = _read()
 
     assert _nothing_known(read) == (WhyNotKnown.COORDINATOR_NOT_CONFIGURED, WhyNotKnown.COORDINATOR_NOT_CONFIGURED)
+    assert coordinator.sent == []
+
+
+@pytest.mark.parametrize(
+    ("underlying", "at_ms"),
+    [
+        pytest.param("not a symbol!", NOW, id="an underlying that is no symbol"),
+        pytest.param("SPY", 1, id="a moment no calendar holds"),
+    ],
+)
+def test_a_question_the_coordinator_does_not_answer_is_not_sent_and_nothing_is_known(
+    monkeypatch: pytest.MonkeyPatch, underlying: str, at_ms: int
+) -> None:
+    coordinator = Coordinator(monkeypatch)
+
+    read = read_option_model_inputs(underlying, at_ms=at_ms, latest_expiry=_NEXT_FRIDAY)
+
+    assert _nothing_known(read) == (WhyNotKnown.COORDINATOR_NOT_ASKED, WhyNotKnown.COORDINATOR_NOT_ASKED)
     assert coordinator.sent == []
 
 

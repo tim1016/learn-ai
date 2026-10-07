@@ -225,9 +225,8 @@ async def test_every_read_slot_held_a_command_is_admitted_without_the_queue_dead
         assert _status(status) == 200
 
 
-@pytest.mark.parametrize("path", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs"])
 async def test_internal_history_batch_read_draws_read_not_command_capacity(
-    tmp_path: Path, path: str
+    tmp_path: Path,
 ) -> None:
     """The coordinator's history-batch POST is a read for capacity purposes.
 
@@ -235,13 +234,9 @@ async def test_internal_history_batch_read_draws_read_not_command_capacity(
     mounts both the coordinator's internal surface and the clerk lane
     runtime (issue #2204). It must not compete with real commands for the
     (typically much smaller) command pool merely because it is spelled POST.
-    The read of the rate and the dividends an option is priced with (#2913)
-    is the same kind of POST.
     """
     from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
-    from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
 
-    assert path in (INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH)
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -256,14 +251,55 @@ async def test_internal_history_batch_read_draws_read_not_command_capacity(
         config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
         evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
     )
-    held = asyncio.create_task(_invoke(runtime, method="POST", path=path))
+    held = asyncio.create_task(
+        _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
+    )
     await entered.wait()
 
     # The one read slot is held by the internal history-batch call above, so
     # a second one of the same shape must be refused -- proving it drew from
     # the read pool, not the untouched command pool.
-    refused = await _invoke(runtime, method="POST", path=path)
+    refused = await _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
     assert _status(refused) == 503
+
+    release.set()
+    assert _status(await held) == 200
+
+
+@pytest.mark.parametrize("internal_read", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs"])
+async def test_a_held_internal_read_takes_the_read_slot_and_leaves_the_command_slot_free(
+    tmp_path: Path, internal_read: str
+) -> None:
+    """The fleet's internal reads are spelled POST and change nothing (#2204, #2913).
+
+    While one is held, an ordinary read finds the one read slot taken, and a
+    command such as Stop is still admitted: the read did not take its slot.
+    """
+    from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
+    from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
+
+    assert internal_read in (INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
+        if scope["path"] == internal_read:
+            entered.set()
+            await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    runtime = FleetLaneRuntimeMiddleware(
+        app,
+        config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
+        evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
+    )
+    held = asyncio.create_task(_invoke(runtime, method="POST", path=internal_read))
+    await entered.wait()
+
+    another_read = await asyncio.wait_for(_invoke(runtime, method="GET"), timeout=2.0)
+    a_command = await asyncio.wait_for(_invoke(runtime, method="POST"), timeout=2.0)
+    assert (_status(another_read), _status(a_command)) == (503, 200)
 
     release.set()
     assert _status(await held) == 200

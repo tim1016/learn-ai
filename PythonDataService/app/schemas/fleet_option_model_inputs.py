@@ -54,6 +54,7 @@ class WhyNotKnown(StrEnum):
     POLYGON_ANSWER_UNREADABLE = "polygon_answer_unreadable"
     # What a Clerk says of its own ask. The coordinator never answers with these.
     COORDINATOR_NOT_CONFIGURED = "coordinator_not_configured"
+    COORDINATOR_NOT_ASKED = "coordinator_not_asked"
     COORDINATOR_UNREACHABLE = "coordinator_unreachable"
     COORDINATOR_TIMED_OUT = "coordinator_timed_out"
     COORDINATOR_REFUSED = "coordinator_refused"

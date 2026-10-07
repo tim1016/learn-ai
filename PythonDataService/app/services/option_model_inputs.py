@@ -193,7 +193,7 @@ def declared_dividends_from_polygon(
 
 def _nowhere_to_look(underlying: str, _first: date, _last: date) -> Sequence[DeclaredDividend]:
     raise DividendsUnknown(
-        f"This process holds no Polygon key to look up {underlying}'s declared dividends with.",
+        f"No Polygon key is set to look up {underlying}'s declared dividends with.",
         WhyNotKnown.NO_POLYGON_KEY,
     )
 
@@ -379,7 +379,9 @@ def read_option_model_inputs(
     One lookup runs at a time. A caller that finds one running waits for it,
     or with ``wait`` false raises ``ModelInputsBeingRead`` at once: a page
     that asks every second must not stack a waiting thread on each ask.
-    What is already kept is answered without waiting either way.
+    What is already kept is answered without waiting either way. On a Clerk
+    the lookup is one ask of the coordinator, which is told whether this
+    caller waits and holds to it the same way.
     """
     symbol = underlying.upper()
     today = et_date_at_ms(at_ms)
