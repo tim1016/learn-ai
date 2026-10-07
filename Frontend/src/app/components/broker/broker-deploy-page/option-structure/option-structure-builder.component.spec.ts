@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { provideFakeDateWorld } from '../../../../shared/date-picker/testing/fake-trading-calendar';
@@ -13,6 +13,7 @@ import {
 import { DEPLOY_TYPING_SETTLE_MS } from '../deploy-money-step.component';
 import { startingOrderTerms, type OptionLegRules } from './option-structure';
 import { OptionStructureBuilderComponent, type OptionStructureChoice } from './option-structure-builder.component';
+import { PREVIEW_ASK_AGAIN_LIMIT } from './option-structure-preview';
 import {
   BULL_CALL_SPREAD_LEGS,
   OPTION_CATALOGUE,
@@ -64,6 +65,16 @@ function termsIn(element: HTMLElement): Record<string, string> {
     row.querySelector('dt')?.textContent?.trim() ?? '', row.querySelector('dd')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
   ]));
 }
+
+/** A state that passes by itself: the server says to ask about it again after `wait` ms, every time it is asked. */
+function waitingService(wait = 1_000) {
+  return previewService(previewWithoutFigures('quotes_arriving', 'Stand-in: quotes are arriving.', { ask_again_in_ms: wait }));
+}
+
+/** The panel's own note that the page no longer asks by itself. */
+const STOPPED_ASKING = 'Stopped asking. Refresh asks again.';
+/** Longer than a whole run of asks takes at the one second the server names. */
+const PAST_A_WHOLE_RUN_MS = 5 * 60_000;
 
 function chosenIn(name: string): string {
   const select = screen.getByLabelText<HTMLSelectElement>(name);
@@ -303,7 +314,67 @@ describe('OptionStructureBuilderComponent', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('The preview could not be read.');
     expect(screen.getByRole('status').textContent).toContain('Not known yet.');
-    expect(screen.getByRole('button', { name: 'Use this structure' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('will not use a structure whose ask failed, until a Refresh brings the server’s verdict', async () => {
+    const service = previewService();
+    service.previewOptionStructure.mockRejectedValueOnce(new Error('offline'));
+    const { use } = await renderBuilder({ service });
+    await screen.findByRole('alert');
+
+    const useIt = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this structure' });
+    expect(useIt.disabled).toBe(true);
+    await userEvent.click(useIt);
+    expect(use).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('Stand-in: it can be deployed.');
+    await vi.waitFor(() => expect(useIt.disabled).toBe(false));
+    await userEvent.click(useIt);
+    expect(use).toHaveBeenCalledWith({ structure: 'bull_call_spread', legs: BULL_CALL_SPREAD_LEGS });
+  });
+
+  it('will not use legs the server has not judged yet: a red verdict on the legs as they were does not let an edit through', async () => {
+    const service = previewService(resolvedPreview({ verdict: RED_VERDICT }));
+    const { use } = await renderBuilder({ service });
+    await screen.findByText('Stand-in: leg 2 lands on the strike of leg 1.');
+    const useIt = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this structure' });
+    // The ask for the edited legs is on its way and has not answered.
+    let answerNow: (answer: OptionStructurePreview) => void = () => undefined;
+    service.previewOptionStructure.mockReturnValue(new Promise((resolve) => { answerNow = resolve; }));
+
+    fireEvent.change(box('Leg 1 quantity'), { target: { value: '2' } });
+    fireEvent.click(useIt);
+    await vi.waitFor(() => expect(service.previewOptionStructure).toHaveBeenCalledTimes(2));
+
+    expect(useIt.disabled).toBe(true);
+    fireEvent.click(useIt);
+    expect(use).not.toHaveBeenCalled();
+
+    answerNow(resolvedPreview());
+    await vi.waitFor(() => expect(useIt.disabled).toBe(false));
+  });
+
+  it('holds “Use this structure” while the owner’s Refresh is on its way, and not while the page asks again by itself', async () => {
+    vi.useFakeTimers();
+    const service = waitingService();
+    await renderBuilder({ service });
+    await vi.advanceTimersByTimeAsync(50);
+    const useIt = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this structure' });
+    const refresh = screen.getByRole<HTMLButtonElement>('button', { name: 'Refresh' });
+    expect(useIt.disabled).toBe(false);
+
+    // The page's own ask, a second later, never answers: the verdict on screen is still the server's on these legs.
+    service.previewOptionStructure.mockReturnValue(new Promise(() => undefined));
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(2);
+    expect(useIt.disabled).toBe(false);
+    expect(refresh.disabled).toBe(false);
+
+    // The owner asked for a new verdict: nothing is taken until it comes.
+    fireEvent.click(refresh);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(useIt.disabled).toBe(true);
   });
 
   it('asks again when the legs change and when the owner refreshes, under the one key', async () => {
@@ -341,6 +412,90 @@ describe('OptionStructureBuilderComponent', () => {
     expect(service.previewOptionStructure).toHaveBeenCalledTimes(2);
   });
 
+  it('stops asking by itself after a bounded run for a state that never passes, and says so beside Refresh', async () => {
+    vi.useFakeTimers();
+    const service = waitingService();
+    await renderBuilder({ service });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(STOPPED_ASKING)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(PAST_A_WHOLE_RUN_MS);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1 + PREVIEW_ASK_AGAIN_LIMIT);
+
+    // An hour on, the page has asked nothing more: its hold on quote lines is left to lapse.
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1 + PREVIEW_ASK_AGAIN_LIMIT);
+    // The server's sentence stands. The page's own note sits beside its own control and describes it.
+    const picks = screen.getByRole('region', { name: 'What this picks right now' });
+    expect(within(picks).getByText('Stand-in: quotes are arriving.')).toBeTruthy();
+    const note = within(picks).getByText(STOPPED_ASKING);
+    const refresh = within(picks).getByRole('button', { name: 'Refresh' });
+    expect(refresh.getAttribute('aria-describedby')).toBe(note.id);
+    expect(refresh.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('asks nothing while the page is hidden, and once when it is shown again', async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    onTestFinished(() => visibility.mockRestore());
+    const service = waitingService();
+    await renderBuilder({ service });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1);
+
+    visibility.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1);
+
+    visibility.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(2);
+
+    // Shown, it goes on as before: again after the wait, and no sooner.
+    await vi.advanceTimersByTimeAsync(800);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([0, -1_000])('waits a second before asking again when the server names a wait of %i ms', async (wait) => {
+    vi.useFakeTimers();
+    const service = waitingService(wait);
+    await renderBuilder({ service });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts a new run of asks when the owner refreshes, and when the legs change', async () => {
+    vi.useFakeTimers();
+    const service = waitingService();
+    await renderBuilder({ service });
+    const wholeRun = 1 + PREVIEW_ASK_AGAIN_LIMIT;
+    await vi.advanceTimersByTimeAsync(PAST_A_WHOLE_RUN_MS);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(wholeRun);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(wholeRun + 1);
+    expect(screen.queryByText(STOPPED_ASKING)).toBeNull();
+    await vi.advanceTimersByTimeAsync(PAST_A_WHOLE_RUN_MS);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(2 * wholeRun);
+    expect(screen.getByText(STOPPED_ASKING)).toBeTruthy();
+
+    fireEvent.change(box('Leg 1 Delta target, delta'), { target: { value: '0.45' } });
+    await vi.advanceTimersByTimeAsync(PAST_A_WHOLE_RUN_MS);
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(3 * wholeRun);
+    expect(lastAsk(service).legs[0].strike).toMatchObject({ target: 0.45 });
+  });
+
   it.each([
     ['a resolved answer', resolvedPreview()],
     ['a red verdict', resolvedPreview({ verdict: RED_VERDICT })],
@@ -361,7 +516,11 @@ describe('OptionStructureBuilderComponent', () => {
     await vi.advanceTimersByTimeAsync(50);
 
     await vi.advanceTimersByTimeAsync(60_000);
+    // Coming back to the page asks nothing either: no ask fell due while it was away.
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(service.previewOptionStructure).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(STOPPED_ASKING)).toBeNull();
   });
 });

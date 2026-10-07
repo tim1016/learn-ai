@@ -29,7 +29,7 @@
       <app-option-preview-panel
         heading="Right now this picks" [compact]="true"
         [preview]="preview.answer()" [asking]="preview.asking()" [failure]="preview.failure()"
-        (refresh)="preview.refresh()"
+        [stopped]="preview.stopped()" (refresh)="preview.refresh()"
       />
       @if (leanWarning(); as warning) {
         <div class="option-structure__warning" role="note">

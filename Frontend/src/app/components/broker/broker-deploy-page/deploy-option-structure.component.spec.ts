@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { resourceTarget } from '../../../fleet/resource-target';
 import { fakePickerWorld, pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
@@ -21,6 +21,7 @@ import {
   previewWithoutFigures,
   resolvedPreview,
 } from './option-structure/option-structure.fixtures';
+import { PREVIEW_ASK_AGAIN_LIMIT } from './option-structure/option-structure-preview';
 
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
 const TERMS = startingOrderTerms(OPTION_CATALOGUE.order_terms);
@@ -132,6 +133,23 @@ describe('DeployOptionStructureComponent', () => {
     expect(picks.querySelector('dl')).toBeNull();
   });
 
+  it('stops asking by itself about a state that never passes, and says so beside Refresh', async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    const service = previewService(previewWithoutFigures('underlying_quote_unusable', 'Stand-in: no fresh quote.', { ask_again_in_ms: 1_000 }));
+    await renderOptions(SPREAD, { service });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const asked = service.previewOptionStructure.mock.calls.length;
+    expect(asked).toBe(1 + PREVIEW_ASK_AGAIN_LIMIT);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(service.previewOptionStructure).toHaveBeenCalledTimes(asked);
+    const picks = screen.getByRole('region', { name: 'Right now this picks' });
+    expect(within(picks).getByText('Stand-in: no fresh quote.')).toBeTruthy();
+    expect(within(picks).getByText('Stopped asking. Refresh asks again.')).toBeTruthy();
+  });
+
   it('warns in the server’s sentence when the structure leans against the signal', async () => {
     const answer = resolvedPreview();
     const leans = answer.lean && { ...answer.lean, gains_when_underlying_falls: true, warning_sentence: 'Stand-in: this gains when SPY falls.' };
@@ -181,9 +199,12 @@ describe('DeployOptionStructureComponent', () => {
     const { settingsChange } = await renderOptions(SPREAD);
     await openBuilder();
     await userEvent.click(screen.getByRole('button', { name: 'Long call' }));
-    await screen.findByText('Stand-in: it can be deployed.');
+    // Its leg is on screen, and then the server's verdict on it: only a judged structure is taken.
+    await screen.findByRole('heading', { level: 3, name: 'Long call' });
+    const useIt = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this structure' });
+    await vi.waitFor(() => expect(useIt.disabled).toBe(false));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Use this structure' }));
+    await userEvent.click(useIt);
 
     expect(settingsChange).toHaveBeenCalledWith({ ...SPREAD, structure: 'long_call', legs: LONG_CALL_LEGS });
     await vi.waitFor(() => expect(screen.queryByRole('navigation', { name: 'Start from' })).toBeNull());

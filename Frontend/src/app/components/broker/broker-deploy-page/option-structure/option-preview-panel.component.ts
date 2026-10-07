@@ -19,7 +19,9 @@ let nextTitleId = 0;
  * this component has never heard of still reads correctly. A resolved answer
  * shows each picked contract through the shared contract renderer, with the
  * time its quotes were read. An answer is as old as that time says: it is
- * asked again when the legs change or the owner refreshes.
+ * asked again when the legs change or the owner refreshes. A state that
+ * passes by itself is asked again for a while without the owner; once that
+ * stops, the panel says so beside Refresh, in its own words.
  *
  * `compact` is Deploy's short view of the same answer.
  */
@@ -37,11 +39,15 @@ export class OptionPreviewPanelComponent {
   readonly asking = input(false);
   /** Why the ask got no answer at all, when it did not. */
   readonly failure = input<string | null>(null);
+  /** The answer says to ask again and the page no longer does so by itself: only Refresh asks. */
+  readonly stopped = input(false);
   readonly compact = input(false);
 
   readonly refresh = output();
 
-  protected readonly titleId = `option-preview-title-${nextTitleId++}`;
+  private readonly id = nextTitleId++;
+  protected readonly titleId = `option-preview-title-${this.id}`;
+  protected readonly stoppedId = `option-preview-stopped-${this.id}`;
 
   /** The answer, when it is one that carries figures. */
   protected readonly resolved = computed(() => {

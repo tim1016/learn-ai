@@ -1,7 +1,14 @@
 <section class="picks" [attr.aria-labelledby]="titleId">
   <header class="picks__head">
     <h3 [id]="titleId">{{ heading() }}</h3>
-    <button type="button" class="picks__refresh" [disabled]="asking()" (click)="refresh.emit()">Refresh</button>
+    <span class="picks__again">
+      <!-- The page's own words, beside its own control: never one of the server's states. -->
+      @if (stopped()) { <span class="picks__stopped" role="status" [id]="stoppedId">Stopped asking. Refresh asks again.</span> }
+      <button
+        type="button" class="picks__refresh" [disabled]="asking()"
+        [attr.aria-describedby]="stopped() ? stoppedId : null" (click)="refresh.emit()"
+      >Refresh</button>
+    </span>
   </header>
 
   @if (failure(); as why) {

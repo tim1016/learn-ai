@@ -38,8 +38,8 @@ let nextBuilderId = 0;
  * legs for it. A structure keeps that name only while its legs are still
  * those; once one is edited it is Custom, and it is named again when they
  * match again. The verdict line is always there, in the server's words, and
- * "Use this structure" stays off while the server marks it red or a row is
- * unfinished.
+ * "Use this structure" stays off while the server marks it red, a row is
+ * unfinished, or the server has not yet judged the legs on screen.
  *
  * The preview is asked for the legs on screen while the builder is open, and
  * no longer once it is closed.
@@ -109,7 +109,16 @@ export class OptionStructureBuilderComponent {
   });
 
   protected readonly canAdd = computed(() => this.rows().length < this.catalogue().max_legs);
-  protected readonly canUse = computed(() => this.whole() !== null && this.verdict()?.red !== true);
+  /**
+   * Only a structure the server has judged is taken: its verdict on exactly
+   * these legs is on screen and is not red, and no ask the owner is waiting
+   * on is on its way. So not while a row is unfinished, not straight after an
+   * edit, and not after an ask that failed.
+   */
+  protected readonly canUse = computed(() => {
+    const verdict = this.verdict();
+    return this.whole() !== null && verdict !== null && !verdict.red && !this.preview.asking();
+  });
 
   /** Moves the keyboard into the builder, to its heading. */
   focus(): void {

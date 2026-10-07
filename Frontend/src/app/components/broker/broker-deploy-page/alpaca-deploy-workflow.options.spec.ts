@@ -114,8 +114,11 @@ async function tradeOptions(): Promise<void> {
 async function useBullCallSpread(): Promise<void> {
   fireEvent.click(within(step('What')).getByRole('button', { name: 'Edit structure' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Bull call spread' }));
-  await screen.findByText('Stand-in: it can be deployed.');
-  fireEvent.click(screen.getByRole('button', { name: 'Use this structure' }));
+  // Its legs are on screen, and then the server's verdict on them: only a judged structure is taken.
+  await screen.findByRole('heading', { level: 3, name: 'Bull call spread' });
+  const useIt = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this structure' });
+  await vi.waitFor(() => expect(useIt.disabled).toBe(false));
+  fireEvent.click(useIt);
   await within(step('What')).findByRole('region', { name: 'Bull call spread' });
 }
 
