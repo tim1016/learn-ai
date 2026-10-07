@@ -587,6 +587,118 @@
       "price_a_day_later": 13.655546241254747,
       "decay": -0.03476756381965451,
       "cash_gone_ex": 0.9
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k85_call",
+      "price_now": 15.020956323482782,
+      "price_a_day_later": 15.010478807651582,
+      "decay": -0.010477515831199824,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k85_put",
+      "price_now": 0.08722680729622281,
+      "price_a_day_later": 0.08335293330963109,
+      "decay": -0.003873873986591725,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k90_call",
+      "price_now": 10.022428841170129,
+      "price_a_day_later": 10.011096975549746,
+      "decay": -0.011331865620382686,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k90_put",
+      "price_now": 0.4559090322322005,
+      "price_a_day_later": 0.44443898541327415,
+      "decay": -0.011470046818926327,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k95_call",
+      "price_now": 5.49974051891452,
+      "price_a_day_later": 5.4537832831941,
+      "decay": -0.04595723572042054,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k95_put",
+      "price_now": 1.5542117992438251,
+      "price_a_day_later": 1.5344522017789022,
+      "decay": -0.01975959746492295,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k100_call",
+      "price_now": 2.7130692340169404,
+      "price_a_day_later": 2.6811702494800684,
+      "decay": -0.03189898453687201,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.2_k100_put",
+      "price_now": 3.809651775242434,
+      "price_a_day_later": 3.7888500691725535,
+      "decay": -0.02080170606988041,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k85_call",
+      "price_now": 15.329600746689039,
+      "price_a_day_later": 15.256893193583254,
+      "decay": -0.07270755310578458,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k85_put",
+      "price_now": 1.385479386923986,
+      "price_a_day_later": 1.3557311401397831,
+      "decay": -0.02974824678420296,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k90_call",
+      "price_now": 11.529424959361275,
+      "price_a_day_later": 11.478598658280779,
+      "decay": -0.05082630108049635,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k90_put",
+      "price_now": 2.633020274396983,
+      "price_a_day_later": 2.5934176812766876,
+      "decay": -0.03960259312029546,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k95_call",
+      "price_now": 8.395111230050913,
+      "price_a_day_later": 8.338061902994973,
+      "decay": -0.05704932705594068,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k95_put",
+      "price_now": 4.479704534074668,
+      "price_a_day_later": 4.433706497258569,
+      "decay": -0.0459980368160986,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k100_call",
+      "price_now": 5.8889352565265645,
+      "price_a_day_later": 5.830222532588321,
+      "decay": -0.05871272393824345,
+      "cash_gone_ex": 0.0
+    },
+    {
+      "case": "60d_ex_on_day_2_vol0.4_k100_put",
+      "price_now": 6.964735455780046,
+      "price_a_day_later": 6.917338456271539,
+      "decay": -0.047396999508507065,
+      "cash_gone_ex": 0.0
     }
   ]
 }
