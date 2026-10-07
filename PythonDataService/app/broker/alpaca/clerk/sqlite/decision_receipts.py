@@ -16,8 +16,10 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, entry_settlement
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order
 from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -752,7 +754,8 @@ class SqliteDecisionReceipts:
         An ENTER receipt alone does not say a position was opened: the Clerk
         writes it when it accepts the ENTER and never amends it. So the
         ENTER's effect is read with it (:meth:`_entered`), and an ENTER whose
-        effect ended failed is not returned.
+        effect ended failed is not returned. An entry in an option contract
+        is asked for its settlement instead (:meth:`option_entry_settlement`).
 
         An EXIT's effect is not read: every EXIT is taken as a close. An EXIT
         refused as it is sent ends failed, the runner is answered as for a
@@ -810,7 +813,15 @@ class SqliteDecisionReceipts:
         The read is one effect row by its id. A receipt that names no
         effect on record does not show a position either: that is logged,
         and the ENTER is not returned.
+
+        An entry in an option contract rests at the broker, and the strategy
+        was settled on what it came to, not on its acceptance (ADR 0076). So
+        it is entered when that settlement says so, whatever its effect's
+        state is now.
         """
+        settled = self.option_entry_settlement(entry)
+        if settled is not None:
+            return settled is EntrySettlement.ENTERED
         effect_operation_id = json.loads(entry.facts_json).get("effect_operation_id")
         effect = (
             self._repository.effect_operation(effect_operation_id)
@@ -829,6 +840,28 @@ class SqliteDecisionReceipts:
             )
             return False
         return effect.state not in FAILED_EFFECT_STATES
+
+
+    def option_entry_settlement(self, entry: DecisionReceiptResource) -> EntrySettlement | None:
+        """How the strategy is settled on the option entry ``entry`` receipts, asked after the fact (ADR 0076).
+
+        ``None`` when the receipt's ENTER is not an entry in an option
+        contract: a receipt that names no effect, an effect that made no
+        entry order, and an entry in shares. Each keeps the rule it had.
+
+        The answer is the Clerk's own (``entry_outcome.entry_settlement``):
+        the settlement it recorded when it answered the runner, else its rule
+        on the books as they stand. A replay and the live runner are settled
+        by that one rule.
+        """
+        effect_operation_id = json.loads(entry.facts_json).get("effect_operation_id")
+        if not isinstance(effect_operation_id, str):
+            return None
+        with self._repository.write_fence():
+            order = self._repository.order_for_effect_operation(effect_operation_id)
+            if order is None or option_entry_of_order(self._repository, order.order_ref) is None:
+                return None
+            return entry_settlement(self._repository, order.order_ref)
 
 
 def _read_limit(requested: int) -> int:

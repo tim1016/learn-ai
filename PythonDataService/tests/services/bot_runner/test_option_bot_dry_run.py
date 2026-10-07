@@ -739,21 +739,25 @@ async def test_on_its_expiry_day_an_entry_after_the_cutoff_is_refused_by_the_run
     _nothing_was_sent(floor, ran)
 
 
-async def test_the_clerk_refuses_an_entry_past_the_cutoff_whatever_the_runner_let_through(
+async def test_the_clerk_refuses_an_entry_past_the_cutoff_at_its_own_clock_though_the_runners_recheck_passed(
     on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A bot whose own terms would let it enter up to the close. Its runner's recheck passes at 15:14. The
-    Clerk asks the cutoff itself, at its own clock and under its own terms, and refuses: one refused
-    decision, written once, and nothing sent."""
-    monkeypatch.setattr(
-        bot_option_run, "option_order_terms",
-        lambda _binding: OptionOrderTerms(
-            close=CloseTerms(expiry_close_lead_ms=0, entry_wait_ms=0, cancel_allowance_ms=0, entry_margin_ms=0)
-        ),
-    )
+    """A bot whose own terms put the cutoff at 15:13:01, a second after its decision bar closes. Its runner's
+    recheck passes, three tenths of a second after that close. The entry reaches the Clerk a second later.
+    The Clerk asks the cutoff itself, at its own clock and under the terms the runner handed it, and
+    refuses: one refused decision, written once, and nothing sent."""
+    terms = CloseTerms(entry_margin_ms=69_000)
+    monkeypatch.setattr(bot_option_run, "option_order_terms", lambda _binding: OptionOrderTerms(close=terms))
     floor = await _on_friday_afternoon(on_the_floor)
+    ask = floor.clerk.execute_for_instance
 
-    ran = await floor.run([*_entered_on_the_bar_closing_at(AT_1513 + MINUTE), Step(red(AT_1513 + 2 * MINUTE))])
+    async def a_second_later(**effect: Any) -> Any:
+        floor.clock.value += 1_000
+        return await ask(**effect)
+
+    monkeypatch.setattr(floor.clerk, "execute_for_instance", a_second_later)
+
+    ran = await floor.run([*_entered_on_the_bar_closing_at(AT_1513), Step(red(AT_1513 + MINUTE))])
 
     assert [code for code, _ in ran.blocked()] == [OptionEffectRefusal.PAST_ENTRY_CUTOFF.value]
     assert [outcome for outcome, _ in ran.outcomes()] == ["no_action", "blocked", "no_action"]
