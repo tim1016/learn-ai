@@ -62,3 +62,13 @@ def test_curves_come_back_in_the_order_asked_and_a_run_that_kept_none_is_named_n
     assert read["not_recorded"] == ["old"]
     # The sessions are those of the runs asked for, not of every run that kept a curve.
     assert read["sessions_ms"] == [1]
+
+
+def test_a_read_names_its_curves_under_any_key_and_keeps_the_sessions_the_caller_names() -> None:
+    # Walk-forward folds, by index: fold 0 drawn, fold 1 completed with no curve kept, and a session (3) no fold scored.
+    read = curves_read([0, 1], {0: [(1, 110.0), (2, 121.0)]}, 100.0, key="fold_index", also=[1, 2, 3])
+
+    assert read["sessions_ms"] == [1, 2, 3] and read["not_recorded"] == [1]
+    (curve,) = read["curves"]
+    assert (curve["fold_index"], curve["first_session"]) == (0, 0)
+    assert curve["cumulative_return"] == pytest.approx([0.1, 0.21], abs=1e-12, rel=0)

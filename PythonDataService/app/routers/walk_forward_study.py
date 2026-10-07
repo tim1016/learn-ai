@@ -15,19 +15,18 @@ from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
-import asyncpg
 from anyio import to_thread
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
-from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search.engine_adapter import default_execute_cell
 from app.research.grid_search.service import MAX_TOTAL_BACKTESTS, GridSearchRefusal, window_dates
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection
-from app.research.session_curves import session_curves
+from app.research.session_curves import curves_read
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study import service
 from app.research.walk_forward_study.models import FoldRecord, StudyRow, StudySpec
@@ -160,21 +159,13 @@ async def get_walk_forward_study(study_id: str) -> WalkForwardStudyDetailRespons
     )
 
 
-async def _winner_test_curves(conn: asyncpg.Connection, folds: Sequence[FoldRecord]) -> dict[int, list[tuple[int, float]]]:
-    """The stored daily equity of each completed fold's winner on its test window, by fold index, for those that kept one."""
-    curves: dict[int, list[tuple[int, float]]] = {}
-    for fold in folds:
-        if fold.status != "completed" or fold.test_search_id is None or fold.winner_params_hash is None:
-            continue
-        stored = await sweep_repo.cell_curves(conn, fold.test_search_id, [fold.winner_params_hash])
-        if fold.winner_params_hash in stored:
-            curves[fold.fold_index] = stored[fold.winner_params_hash]
-    return curves
-
-
-def _test_window_closes(fold: FoldRecord) -> list[int]:
-    """Every scheduled session close of the fold's test window, from the canonical calendar."""
-    return [session_close_ms_utc(day) for day in expected_sessions(*window_dates(fold.test_start_ms, fold.test_end_ms))]
+def _test_window_closes(folds: Sequence[FoldRecord]) -> list[int]:
+    """Every scheduled session close inside a fold's test window, from the canonical calendar."""
+    if not folds:
+        return []
+    first, last = window_dates(min(fold.test_start_ms for fold in folds), max(fold.test_end_ms for fold in folds))
+    closes = (window.close_ms_utc for window in session_windows_ms_utc(first, last))
+    return [close for close in closes if any(fold.test_start_ms <= close < fold.test_end_ms for fold in folds)]
 
 
 @router.get("/{study_id}/fold-curves", response_model=WalkForwardFoldCurvesResponse)
@@ -187,16 +178,21 @@ async def get_walk_forward_fold_curves(study_id: str) -> WalkForwardFoldCurvesRe
     stands on the axis as a gap and nothing is drawn across it.
     """
     row = await _load(study_id)
-    stored = await with_connection(_winner_test_curves, row.folds)
-    sessions, curves = session_curves(
-        stored,
-        StudySpec.from_request_dict(row.request).grid.initial_cash,
-        also=[close for fold in row.folds for close in _test_window_closes(fold)],
-    )
-    return WalkForwardFoldCurvesResponse(
-        sessions_ms=sessions,
-        curves=[{"fold_index": index, **curve} for index, curve in sorted(curves.items())],
-        not_recorded=[fold.fold_index for fold in row.folds if fold.status == "completed" and fold.fold_index not in stored],
+    # A completed fold's evidence is its winner's cell in the fold's test sweep.
+    tested = {
+        fold.fold_index: (fold.test_search_id, fold.winner_params_hash)
+        for fold in row.folds
+        if fold.status == "completed" and fold.test_search_id is not None and fold.winner_params_hash is not None
+    }
+    kept = await with_connection(sweep_repo.curves_of, list(tested.values()))
+    return WalkForwardFoldCurvesResponse.model_validate(
+        curves_read(
+            list(tested),
+            {index: kept[cell] for index, cell in tested.items() if cell in kept},
+            StudySpec.from_request_dict(row.request).grid.initial_cash,
+            key="fold_index",
+            also=_test_window_closes(row.folds),
+        )
     )
 
 

@@ -336,17 +336,25 @@ async def existing_params_hashes(conn: asyncpg.Connection, search_id: str) -> se
     return {row["params_hash"] for row in rows}
 
 
-async def cell_curves(conn: asyncpg.Connection, search_id: str, params_hashes: Sequence[str]) -> dict[str, list[tuple[int, float]]]:
-    """The stored daily equity ``(session close ms, equity)`` of each named cell that kept one."""
+async def curves_of(conn: asyncpg.Connection, cells: Sequence[tuple[str, str]]) -> dict[tuple[str, str], list[tuple[int, float]]]:
+    """The stored daily equity ``(session close ms, equity)`` of each named ``(search id, params hash)`` cell that kept one."""
     rows = await conn.fetch(
         """
-        SELECT params_hash, equity_close_ms, equity_values FROM research_grid_search_cells
-         WHERE search_id = $1 AND params_hash = ANY($2::text[]) AND equity_close_ms IS NOT NULL
+        SELECT cell.search_id, cell.params_hash, cell.equity_close_ms, cell.equity_values
+          FROM research_grid_search_cells cell
+          JOIN unnest($1::text[], $2::text[]) AS asked (search_id, params_hash) USING (search_id, params_hash)
+         WHERE cell.equity_close_ms IS NOT NULL
         """,
-        search_id,
-        list(params_hashes),
+        [search_id for search_id, _ in cells],
+        [params_hash for _, params_hash in cells],
     )
-    return {row["params_hash"]: list(zip(row["equity_close_ms"], row["equity_values"], strict=True)) for row in rows}
+    return {(row["search_id"], row["params_hash"]): list(zip(row["equity_close_ms"], row["equity_values"], strict=True)) for row in rows}
+
+
+async def cell_curves(conn: asyncpg.Connection, search_id: str, params_hashes: Sequence[str]) -> dict[str, list[tuple[int, float]]]:
+    """The stored daily equity of each named cell of one search that kept one."""
+    stored = await curves_of(conn, [(search_id, params_hash) for params_hash in params_hashes])
+    return {params_hash: curve for (_, params_hash), curve in stored.items()}
 
 
 async def list_all_cells(conn: asyncpg.Connection, search_id: str) -> list[CellRow]:

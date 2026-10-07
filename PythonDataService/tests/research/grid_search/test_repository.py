@@ -179,6 +179,21 @@ async def test_a_cell_keeps_its_daily_equity_and_a_rewrite_replaces_it(conn: asy
     assert await repo.cell_curves(conn, sid, ["a"]) == {"a": curve[:1]}
 
 
+async def test_curves_are_read_for_cells_of_several_searches_at_once_and_never_crossed(conn: asyncpg.Connection, unique: str) -> None:
+    # A walk-forward fold's training and test sweeps hold the same cells under the same hashes.
+    train, test = f"train-{unique}", f"test-{unique}"
+    curves = {train: [(1_736_197_200_000, 100_500.0)], test: [(1_738_875_600_000, 99_000.0)]}
+    for sid, curve in curves.items():
+        await repo.create_search(conn, _new_search(sid, symbol=unique))
+        attempt = await repo.claim_attempt(conn, sid, job_id=None)
+        await repo.write_cells(conn, sid, attempt, [replace(_cell("winner"), daily_equity=curve), _cell("kept-none")])
+
+    stored = await repo.curves_of(conn, [(test, "winner"), (train, "winner"), (test, "kept-none"), (test, "no-such-cell")])
+
+    assert stored == {(train, "winner"): curves[train], (test, "winner"): curves[test]}
+    assert await repo.curves_of(conn, []) == {}
+
+
 async def test_a_completed_search_is_immutable_to_claims_and_writes(conn: asyncpg.Connection, unique: str) -> None:
     sid = f"s-{unique}"
     await repo.create_search(conn, _new_search(sid, symbol=unique))

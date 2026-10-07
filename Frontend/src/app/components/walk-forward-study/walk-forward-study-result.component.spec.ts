@@ -143,7 +143,8 @@ describe('WalkForwardStudyResultComponent', () => {
   it('leaves the sessions of a fold that did not complete empty on the date axis, between the folds that did', async () => {
     // Folds 1 and 3 ran; fold 2 (the May sessions) failed. The read's sessions cover all three test windows.
     const read = foldCurves({ sessions_ms: SESSIONS_MS, curves: [foldCurve(0, 0, 0.02), foldCurve(2, 4, 0.03)] });
-    const { charts } = await renderResult(detail(), { foldCurves: vi.fn(async () => read) });
+    const third = fold({ fold_index: 2, train_search_id: 'train-2', test_search_id: 'test-2' });
+    const { charts } = await renderResult(detail({ fold_count: 3, completed_folds: 2, folds: [...detail().folds, third] }), { foldCurves: vi.fn(async () => read) });
 
     const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
     await waitFor(() => expect(within(panel).getByRole('img').getAttribute('aria-label')).toContain('2 folds drawn'));
@@ -155,14 +156,29 @@ describe('WalkForwardStudyResultComponent', () => {
       [0.01, 0.02, '-', '-', '-', '-'],
       ['-', '-', '-', '-', 0.015, 0.03],
     ]);
+    // A hover names the one fold that scored the session, and says so on a session none did.
+    const tooltip = option?.tooltip;
+    const formatter = !Array.isArray(tooltip) && typeof tooltip?.formatter === 'function' ? tooltip.formatter : null;
+    const hoverAt = (dataIndex: number): unknown => (formatter === null ? null : Reflect.apply(formatter, undefined, [[{ dataIndex }]]));
+    expect(hoverAt(0)).toContain('Fold 1 · short_window=5, long_window=30');
+    expect(hoverAt(0)).not.toContain('did not score');
+    expect(hoverAt(2)).toContain('No fold has a curve at this session.');
   });
 
-  it('says the curve was not recorded for a study that ran before folds kept theirs, and draws nothing', async () => {
+  it('says no curve was recorded when the completed folds kept none, and draws nothing', async () => {
     await renderResult(detail(), { foldCurves: vi.fn(async () => foldCurves({ curves: [], not_recorded: [0] })) });
 
     const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
-    expect(await within(panel).findByText('Curve not recorded: this study ran before folds kept their daily equity.')).not.toBeNull();
+    expect(await within(panel).findByText('No curve was recorded for this study’s folds.')).not.toBeNull();
     expect(within(panel).queryByRole('img')).toBeNull();
+  });
+
+  it('does not promise a curve to a finished study in which no fold completed', async () => {
+    const failed = detail().folds.map((item) => ({ ...item, status: 'failed' as const }));
+    await renderResult(detail({ completed_folds: 0, failed_folds: 2, folds: failed }), { foldCurves: vi.fn(async () => foldCurves({ curves: [] })) });
+
+    const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
+    expect(await within(panel).findByText('No fold completed, so there is no curve to draw.')).not.toBeNull();
   });
 
   it('names a completed fold that has no curve beside the folds that are drawn', async () => {
@@ -177,7 +193,7 @@ describe('WalkForwardStudyResultComponent', () => {
     const read = vi.fn(async (): Promise<WalkForwardFoldCurves> => {
       throw new Error('offline');
     });
-    await renderResult(detail(), { foldCurves: read });
+    await renderResult(detail({ status: 'running', verdict: null }), { foldCurves: read });
     const panel = await screen.findByRole('region', { name: 'Test-window equity, fold by fold' });
     expect((await within(panel).findByRole('alert')).textContent).toContain('The folds’ curves could not be loaded.');
 

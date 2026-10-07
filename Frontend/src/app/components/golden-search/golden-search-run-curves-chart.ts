@@ -39,10 +39,9 @@ const END_LABELS = 8;
  * chart. Runs over different windows share the axis and each spans only its
  * own sessions. Every value is the server's, the deepest fall included.
  * `ceiling` is the page's worst-fall limit, null for a page with none.
- * `also` names sessions the axis holds though no run scored them.
  */
-export function runCurvesSpec(lines: readonly RunLine[], ceiling: number | null, noun: RunNoun = RUNS, also: readonly number[] = []): ChartSpec {
-  const axis = onOneAxis(lines, also);
+export function runCurvesSpec(lines: readonly RunLine[], ceiling: number | null, noun: RunNoun = RUNS): ChartSpec {
+  const axis = onOneAxis(lines);
   const dates = axis.dates;
   const aligned: AlignedRun[] = lines.map((line, i) => ({ line, ...axis.lines[i] }));
   const sessionDate = (returns: readonly (number | null)[], edge: 0 | 1): string => {

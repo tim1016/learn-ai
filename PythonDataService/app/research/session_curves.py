@@ -66,9 +66,12 @@ def session_curves[K](stored: Mapping[K, Sequence[tuple[int, float]]], capital: 
     return sessions, curves
 
 
-def curves_read(asked: Sequence[str], stored: Mapping[str, Sequence[tuple[int, float]]], capital: float, *, key: str) -> dict[str, Any]:
-    """The curves of the runs asked for, in the order asked and each named under ``key``, and the runs among them that kept none."""
-    sessions, curves = session_curves({name: stored[name] for name in asked if name in stored}, capital)
+def curves_read[K](asked: Sequence[K], stored: Mapping[K, Sequence[tuple[int, float]]], capital: float, *, key: str, also: Iterable[int] = ()) -> dict[str, Any]:
+    """The curves of the runs asked for, in the order asked and each named under ``key``, and the runs among them that kept none.
+
+    ``also`` names session closes the read's list holds whether or not a run scored them.
+    """
+    sessions, curves = session_curves({name: stored[name] for name in asked if name in stored}, capital, also=also)
     return {
         "sessions_ms": sessions,
         "curves": [{key: name, **curves[name]} for name in asked if name in curves],
