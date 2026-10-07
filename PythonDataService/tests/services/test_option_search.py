@@ -926,19 +926,57 @@ async def test_a_worker_lost_to_a_preview_is_told_as_not_run_and_the_next_ask_se
 # ---- Nothing else searches in the Clerk's own process ------------------------------------------
 
 
+_HELD_TO_THE_WORKER = frozenset({"resolve_contracts", "american_implied_volatility", "american_value"})
+
+
+def _reached_in(source: str) -> set[str]:
+    """Which of the resolver and the pricer's functions a module's source reaches: by a name it uses, by a name
+    it reads off a module, or by importing one, under its own name or another."""
+    tree = ast.parse(source)
+    used = {getattr(node, "id", None) or getattr(node, "attr", None) for node in ast.walk(tree)}
+    imported = {
+        alias.name for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom) for alias in node.names
+    }
+    return (used | imported) & _HELD_TO_THE_WORKER
+
+
+@pytest.mark.parametrize(
+    ("source", "reached"),
+    [
+        ("from app.options.resolver import resolve_contracts\nresolve_contracts(plan)", {"resolve_contracts"}),
+        ("from app.options.resolver import resolve_contracts as pick\npick(plan)", {"resolve_contracts"}),
+        (
+            "from app.options.american import american_value as price, american_implied_volatility as solve",
+            {"american_value", "american_implied_volatility"},
+        ),
+        ("from app.options import resolver as picks\npicks.resolve_contracts(plan)", {"resolve_contracts"}),
+        ("import app.options.american as pricer\npricer.american_value(1.0)", {"american_value"}),
+        ("from app.options.resolver import Chain, Resolution", set()),
+    ],
+    ids=["by its own name", "under another name", "the pricer under other names", "off its module", "off the pricer's module", "the resolver's types"],
+)
+def test_a_module_that_reaches_the_resolver_or_the_pricer_is_seen_whatever_name_it_imports_them_under(
+    source: str, reached: set[str]
+) -> None:
+    assert _reached_in(source) == reached
+
+
 def test_only_the_search_worker_calls_the_resolver_and_nothing_outside_the_options_package_prices() -> None:
     """A search run on the event loop, or in a thread of the Clerk's process, stops the loop for as long as it runs
     (ADR 0076 decision 18). Everything outside the resolver's own package reaches it through a lane, and the
-    pricer it searches with is called by nothing else."""
+    pricer it searches with is called by nothing else.
+
+    This reads the source, so it sees a name that is written: used, read off a module, or imported under any
+    name. A name built at run time and looked up with ``getattr`` is out of its reach, as is a new function
+    inside the options package that calls the resolver for its caller.
+    """
     app = Path(option_search.__file__).resolve().parents[1]
-    held_to = {"resolve_contracts", "american_implied_volatility", "american_value"}
     callers: dict[str, set[str]] = {}
     for module in sorted(app.rglob("*.py")):
         if module.parent == app / "options":
             continue
-        tree = ast.parse(module.read_text(encoding="utf-8"))
-        named = {getattr(node, "id", None) or getattr(node, "attr", None) for node in ast.walk(tree)}
-        if named & held_to:
-            callers[module.relative_to(app).as_posix()] = named & held_to
+        reached = _reached_in(module.read_text(encoding="utf-8"))
+        if reached:
+            callers[module.relative_to(app).as_posix()] = reached
 
     assert callers == {"services/option_search.py": {"resolve_contracts"}}
