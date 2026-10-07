@@ -180,10 +180,10 @@ def entry_figures(
     """The figures of the entry ``plan`` would make of the picked contracts, and every reason it would be refused.
 
     The questions are an entry's, in an entry's order, and a refusal is
-    returned, never raised. With ``first_refusal_only`` nothing is asked
-    after the first refusal: that is an entry. Without it every question
-    that can still be asked is, and every leg over the gap limit is named:
-    that is a preview. Picks that are not the plan's legs at all end both,
+    returned, never raised. With ``first_refusal_only`` no question is asked
+    after the first one that refuses: that is an entry. Without it every
+    question that can still be asked is, and every leg over the gap limit is
+    named: that is a preview. Picks that are not the plan's legs at all end both,
     since nothing can be priced from them.
 
     A mistake of the caller's is still raised as one: legs listed with more
