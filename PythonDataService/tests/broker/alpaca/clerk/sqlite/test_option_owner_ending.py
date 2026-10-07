@@ -1409,6 +1409,83 @@ async def test_a_record_that_comes_at_the_press_for_a_part_of_the_position_is_bo
         repo.close()
 
 
+async def test_a_record_that_took_only_what_an_outside_order_holds_is_booked_for_no_bot_and_still_stands_in_the_way(
+    tmp_path: Path,
+) -> None:
+    """The bot holds one call. An order the Clerk did not place then bought one more of that contract.
+
+    The broker's expiry of one takes the newest lot, the outside one, and
+    nothing is booked for any bot. Such a row is not booked whole: no bot's
+    record bears it out, and whose contract it ended is not settled by it.
+    Nothing is ended at the owner's word beside it.
+    """
+    repo = _books(tmp_path, bot_a=1)
+    observe_external_order(
+        repo, order=_outside("by-hand-buy", status="filled", side="buy", filled=1, price=1.5, symbol=CALL)
+    )
+    account = _FakeReadPort()
+    account.option_events.rows = [_expiry_of(1)]
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+
+        outcome = await _asked_to_end(repo, account)
+
+        assert (outcome.result, outcome.reason_code) == ("refused", "OPTION_OWNER_ENDING_ROW_NOT_BOOKED")
+        assert "exp-1" in outcome.message
+        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}
+    finally:
+        repo.close()
+
+
+async def test_a_record_that_one_of_the_bots_it_names_could_not_be_booked_for_still_stands_in_the_way(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three bots hold one call each, and the broker reports an expiry of two.
+
+    It takes the two newest lots, bot-c's and bot-b's. Bot-b's part is
+    booked and the process dies. Before the next read bot-c sells its call
+    itself, so the record's part for it can no longer be booked. The row is
+    then not booked whole: the contract it counted for bot-c may have been
+    bot-a's. So it stands in the way of bot-a's ending, and nothing is
+    ended.
+    """
+    repo = books_at(tmp_path, THE_DAY_BEFORE, {"bot-a": "AAPL", "bot-b": "AAPL", "bot-c": "AAPL"})
+    for bot in ("bot-a", "bot-b", "bot-c"):
+        holds_option(repo, bot, CALL, contracts=1)
+    account = _FakeReadPort()
+    account.option_events.rows = [_expiry_of(2)]
+    real_append = option_events._append_booking
+    appended: list[str] = []
+
+    def dies_after_the_first(repository: ClerkSqliteRepository, **booking: Any) -> Any:
+        if appended:
+            raise RuntimeError("the process died here")
+        appended.append(booking["sid"])
+        return real_append(repository, **booking)
+
+    monkeypatch.setattr(option_events, "_append_booking", dies_after_the_first)
+    try:
+        later(repo, AFTER_THE_WAIT - repo.clock())
+        with pytest.raises(RuntimeError, match="died"):
+            await poll(repo, account)
+        monkeypatch.setattr(option_events, "_append_booking", real_append)
+        assert _summaries(repo) == [("bot-b", "OPTION_EXPIRED")]
+        holds_option(repo, "bot-c", CALL, contracts=-1, price=0.05)
+        assert held(repo, "bot-c") == {}
+        later(repo, option_events.OPTION_EVENT_POLL_RETRY_MS)
+        await poll(repo, account, asked_for=True)
+        assert ("bot-c", "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD") in option_holds(repo)
+
+        shown = _offered_on_the_books(repo)
+        outcome = await _asked_to_end(repo, account)
+
+        assert not shown.available
+        assert (outcome.result, outcome.reason_code) == ("refused", "OPTION_OWNER_ENDING_ROW_NOT_BOOKED")
+        assert _summaries(repo) == [("bot-b", "OPTION_EXPIRED")] and held(repo, "bot-a") == {CALL: 1.0}
+    finally:
+        repo.close()
+
+
 # ── a record in the way: the page offers no ending that could only be refused ──
 
 

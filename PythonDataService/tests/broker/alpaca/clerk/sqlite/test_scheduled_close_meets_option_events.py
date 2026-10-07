@@ -193,9 +193,10 @@ async def test_under_a_missed_close_an_expired_contract_is_never_written_off_and
     assert ended.applied and paper.held() == {}
     assert [booked["summary_code"] for booked in bookings(paper.repo)] == ["OPTION_ENDED_BY_OWNER"]
     assert fifo(paper.repo, "a").exact_realized_pnl == Decimal("-194") and fifo(paper.repo, "a").open_lots == []
-    # The missed close ends on the next round, which finds nothing held, and a pass ends the rest.
+    # The missed close ends on the next round, which finds nothing held, and a pass ends the rest. On a real
+    # account the failed close's own notice is ended by the pass's clean look at the broker, not by the booking.
     await paper.round()
-    assert _notice(paper) is None
+    assert _notice(paper) is None and NOT_FLAT in _open_notices(paper)
     assert (await paper.pass_()).verdict == "clean" and _open_notices(paper) == set()
 
 
