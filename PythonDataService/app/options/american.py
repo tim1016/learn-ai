@@ -41,9 +41,14 @@ What it does not do. It has no continuous dividend yield: a bot's dividends
 are cash amounts on dates, given explicitly, and there is no default of
 none. It does not price index options or anything not American. Time is a
 fraction of a 365-day year, to the millisecond, so a contract expiring today
-has the hours it really has. Under a few minutes to expiry the tree's
-probabilities keep about six digits, as the reference's do: both take
-``1 - exp(-x)`` of a very small ``x``.
+has the hours it really has.
+
+Where it is coarse. An up probability within about 1e-8 of one half rounds
+to one half, as the reference's does: both take ``1 - exp(-x)`` of a very
+small ``x``. That is a strike placed where d2, or d2 + σ·√T, is all but
+zero, at any time to expiry. The price there moves in steps of up to about
+1e-5 as the volatility changes, and a volatility solved from it is good to
+about 2e-7/√T: 1e-6 at thirty days, 1e-4 at one minute.
 """
 
 from __future__ import annotations
@@ -76,7 +81,10 @@ _BRACKET_GROWTH = 1.25
 _UNRESOLVED_PROBABILITY = 1e-6
 # A price this close to a bound is at it: far under any quote's increment, far over the tree's rounding.
 # Without it a quote at exactly what exercising pays would be told apart from one a rounding error over.
+# The tree's rounding is about 1e-13 of the price, so the allowance holds for an option worth thousands a share.
 _PRICE_NOISE = 1e-9
+# A dollar compounded at the rate to expiry is ``e^(rate·years)``; past this the number cannot be held.
+_MAX_RATE_TIMES_YEARS = 700.0
 
 
 def years_from_ms(duration_ms: int) -> float:
@@ -187,7 +195,8 @@ def _tree(
     That happens when the strike lies so many standard deviations away that a
     branch probability is all but zero or one. The option then has no time
     value the tree can see, and the branch sizes would be rounding error. A
-    volatility too small to have a square has no tree either.
+    volatility too small to have a square has no tree either, nor has a price
+    and strike whose ratio is not a number above zero.
     """
     escrowed_spot = _escrowed_spot(spot, dividends, rate=rate, years_to_expiry=years_to_expiry)
     step_years = years_to_expiry / steps
@@ -195,9 +204,12 @@ def _tree(
     deviation = math.sqrt(variance)
     if not (math.isfinite(deviation) and deviation > 0):
         return None
+    moneyness = escrowed_spot / strike
+    if not (math.isfinite(moneyness) and moneyness > 0):
+        return None
     drift_per_step = (rate - 0.5 * volatility * volatility) * step_years
     growth = math.exp(drift_per_step + 0.5 * variance / steps)
-    d2 = (math.log(escrowed_spot / strike) + drift_per_step * steps) / deviation
+    d2 = (math.log(moneyness) + drift_per_step * steps) / deviation
     probability_up = _peizer_pratt(d2, steps)
     probability_up_tilted = _peizer_pratt(d2 + deviation, steps)
     resolved = min(probability_up, probability_up_tilted) >= _UNRESOLVED_PROBABILITY and max(
@@ -226,8 +238,10 @@ def _require_inputs(
     for name, value in (("spot", spot), ("strike", strike), ("years to expiry", years_to_expiry)):
         if not (math.isfinite(value) and value > 0):
             raise ValueError(f"{name} must be a finite number above zero; got {value}")
-    if not math.isfinite(rate):
-        raise ValueError(f"the rate must be finite; got {rate}")
+    if not (math.isfinite(rate) and abs(rate) * years_to_expiry <= _MAX_RATE_TIMES_YEARS):
+        raise ValueError(
+            f"the rate must be finite, and small enough to compound to expiry; got {rate} over {years_to_expiry} years"
+        )
     if steps < 3 or steps % 2 == 0:
         raise ValueError(f"the tree takes an odd number of steps, three or more; got {steps}")
 
@@ -257,7 +271,10 @@ def _roll_back(
     up_moves = np.power(tree.up, moves)
 
     def stock_prices(step: int) -> np.ndarray:
-        escrow = _escrow(dividends, rate=rate, at_years=tree.step_years * step, expiry_years=years_to_expiry)
+        # The last layer is expiry itself. The step multiplied back can round to just under it, and a
+        # dividend going ex at expiry would then still be in escrow when the option is settled.
+        at_years = years_to_expiry if step == steps else tree.step_years * step
+        escrow = _escrow(dividends, rate=rate, at_years=at_years, expiry_years=years_to_expiry)
         return tree.escrowed_spot * down_moves[step::-1] * up_moves[: step + 1] + escrow
 
     probability_down = 1.0 - tree.probability_up

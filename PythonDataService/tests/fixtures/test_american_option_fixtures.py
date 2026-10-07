@@ -75,17 +75,18 @@ def test_price_and_delta_without_dividends_match_quantlibs_leisen_reimer_tree() 
 
 
 # AM-002 is a second engine's answer for the same model: QuantLib's finite-difference grid of 2,000
-# time steps by 2,000 price steps. That grid has converged: doubling it both ways moves its answers
-# by 2.6e-5 in price and 3.4e-6 in delta. So the gap below is this tree's own discretization error,
-# which is why the tolerance is the measured gap with headroom and not the strict default. No
-# engine pinned here builds this tree with cash dividends, so there is nothing to match bit for bit.
+# time steps by 2,000 price steps. That grid is good to about 5e-5: doubling it both ways moves its
+# answers by under 3e-5 in price and 3.4e-6 in delta, and on its 28 cases with no dividend it settles
+# about 4e-5 from this tree. So the gap below is this tree's own discretization error, which is why
+# the tolerance is the measured gap with headroom and not the strict default. No engine pinned here
+# builds this tree with cash dividends, so there is nothing to match bit for bit.
 # Largest gap over the 96 cases, as the tree's steps rise:
 #     401 steps: price 3.2e-3, delta 4.2e-4      1,001: 1.4e-3, 1.5e-4      2,001: 5.9e-4, 7.2e-5
-#     4,001: 1.8e-4, 3.9e-5                      8,001: 2.0e-4, 2.0e-5
-# The price gap stops falling near 2e-4: the tree's last step before an ex-date sits up to one
-# step's interest on the strike away from it. It is the tree's error, not another model: under
+#     4,001: 1.8e-4, 3.9e-5      8,001: 2.0e-4, 2.0e-5      16,001: 5.8e-5, 1.2e-5
+# The delta gap falls steadily. The price gap falls unevenly (1.3e-4 at 6,001, back up at 8,001)
+# until it reaches what the grid itself is good to. It is the tree's error, not another model: under
 # QuantLib's other cash-dividend model the same cases move by up to 8e-2 in price and 3e-3 in delta.
-# Five cases are worth under 1e-3 with a delta under 2e-4, so they pass at any step count.
+# Five cases are worth under 1e-3, four of them with a delta under 2e-4, so those pass at any step count.
 _FINE_TREE_STEPS = 2001
 _FINE_TREE_PRICE_ATOL = 1e-3
 _FINE_TREE_DELTA_ATOL = 2e-4

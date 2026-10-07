@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -64,6 +65,21 @@ _AT_THE_MONEY_PUT = {
         pytest.param({"price": 0.0}, AmericanIvStatus.INVALID_INPUT, id="no option price"),
         pytest.param({"price": float("nan")}, AmericanIvStatus.INVALID_INPUT, id="an option price that is no number"),
         pytest.param({"price": 2.0, "steps": 400}, AmericanIvStatus.INVALID_INPUT, id="an even number of steps"),
+        pytest.param(
+            {"price": 2.0, "rate": -9000.0},
+            AmericanIvStatus.INVALID_INPUT,
+            id="a rate no number can compound to expiry, with or without a dividend to discount",
+        ),
+        pytest.param(
+            {"price": 2.0, "rate": 9000.0, "dividends": (CashDividend(years_to_ex=10 / 365, cash=0.5),)},
+            AmericanIvStatus.INVALID_INPUT,
+            id="the same rate the other way, with a dividend",
+        ),
+        pytest.param(
+            {"right": "call", "spot": 1e-200, "strike": 1e200, "price": 2.0},
+            AmericanIvStatus.NO_CONVERGENCE,
+            id="a price and strike whose ratio is nothing",
+        ),
         pytest.param(
             {"price": 2.0, "right": "P"},
             AmericanIvStatus.INVALID_INPUT,
@@ -168,7 +184,7 @@ def test_an_implied_volatility_cannot_be_built_with_numbers_its_status_denies(re
 
 def test_exactly_a_minute_to_expiry_is_solved_and_a_millisecond_less_is_not() -> None:
     a_minute = years_from_ms(MIN_TIME_TO_EXPIRY_MS)
-    priced = american_value(**(_AT_THE_MONEY_PUT | {"years_to_expiry": a_minute}), volatility=0.3)
+    priced = american_value(**(_AT_THE_MONEY_PUT | {"years_to_expiry": a_minute}), volatility=0.25)
     assert priced is not None
 
     at_the_floor = american_implied_volatility(**(_AT_THE_MONEY_PUT | {"years_to_expiry": a_minute}), price=priced.price)
@@ -177,8 +193,7 @@ def test_exactly_a_minute_to_expiry_is_solved_and_a_millisecond_less_is_not() ->
     )
 
     assert at_the_floor.status is AmericanIvStatus.SOLVED
-    # This close to expiry the tree's probabilities keep about six digits, as the reference's do.
-    assert at_the_floor.volatility == pytest.approx(0.3, abs=1e-4, rel=0)
+    assert at_the_floor.volatility == pytest.approx(0.25, abs=1e-6, rel=0)
     assert under_it.status is AmericanIvStatus.TIME_TO_EXPIRY_BELOW_FLOOR
 
 
@@ -207,10 +222,14 @@ def test_a_strike_dozens_of_standard_deviations_away_is_not_priced() -> None:
         ),
         pytest.param({"volatility": 1e-170}, id="a volatility whose square is nothing"),
         pytest.param({"years_to_expiry": 200.0, "volatility": 5.0}, id="so much that the tree's prices overflow"),
+        pytest.param({"spot": 1e-200, "strike": 1e200}, id="a price and strike whose ratio is nothing"),
     ],
 )
 def test_inputs_too_extreme_for_the_tree_are_not_priced_and_never_come_back_as_a_nan(changes: dict) -> None:
-    assert american_value(**(_AT_THE_MONEY_PUT | {"volatility": 0.25} | changes)) is None
+    with warnings.catch_warnings():
+        # An overflow the tree expects is not left for the caller to see as a warning.
+        warnings.simplefilter("error")
+        assert american_value(**(_AT_THE_MONEY_PUT | {"volatility": 0.25} | changes)) is None
 
 
 def test_a_far_strike_is_still_solved_once_enough_volatility_resolves_it() -> None:
@@ -247,21 +266,29 @@ def test_a_dividend_outside_the_options_life_changes_nothing(dividend: CashDivid
     assert with_it == without
 
 
-def test_a_dividend_going_ex_at_the_moment_of_expiry_is_still_held_in_escrow() -> None:
+def test_a_dividend_going_ex_at_the_moment_of_expiry_has_gone_ex_when_the_option_settles() -> None:
     """With no interest a put is never exercised early, so one whose stock goes ex $1.75 as it expires
-    is worth what the same put is worth on a stock $1.75 lower that pays nothing."""
+    is worth what the same put is worth on a stock $1.75 lower that pays nothing.
+
+    Every whole-day expiry in a year is tried: on about one in twelve the tree's step, multiplied back
+    by the number of steps, rounds to just under the time to expiry."""
     no_interest = _AT_THE_MONEY_PUT | {"rate": 0.0}
+    off_by: dict[int, float] = {}
+    for days in range(1, 366):
+        expiry = days / 365
+        ex_at_expiry = american_value(
+            **(no_interest | {"years_to_expiry": expiry, "dividends": (CashDividend(years_to_ex=expiry, cash=1.75),)}),
+            volatility=0.25,
+        )
+        on_the_lower_stock = american_value(**(no_interest | {"years_to_expiry": expiry, "spot": 98.25}), volatility=0.25)
+        assert ex_at_expiry is not None and on_the_lower_stock is not None
+        gap = max(
+            abs(ex_at_expiry.price - on_the_lower_stock.price), abs(ex_at_expiry.delta - on_the_lower_stock.delta)
+        )
+        if gap > 1e-9:
+            off_by[days] = gap
 
-    ex_at_expiry = american_value(
-        **(no_interest | {"dividends": (CashDividend(years_to_ex=_THIRTY_DAYS, cash=1.75),)}), volatility=0.25
-    )
-    on_the_lower_stock = american_value(**(no_interest | {"spot": 98.25}), volatility=0.25)
-    as_if_it_paid_nothing = american_value(**no_interest, volatility=0.25)
-
-    assert ex_at_expiry is not None and on_the_lower_stock is not None and as_if_it_paid_nothing is not None
-    assert ex_at_expiry.price == pytest.approx(on_the_lower_stock.price, abs=1e-9, rel=0)
-    assert ex_at_expiry.delta == pytest.approx(on_the_lower_stock.delta, abs=1e-9, rel=0)
-    assert ex_at_expiry.price - as_if_it_paid_nothing.price > 0.9
+    assert off_by == {}
 
 
 def test_a_deep_call_is_exercised_just_before_the_stock_goes_ex() -> None:

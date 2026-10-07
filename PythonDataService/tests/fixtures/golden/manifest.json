@@ -1952,7 +1952,7 @@
       "tolerance": {
         "atol": 0.0002,
         "rtol": 0.0,
-        "note": "An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so it is checked against a converged finite-difference grid (2.6e-5 in price, 3.4e-6 in delta from its own doubling) and agrees to the tree's discretization error. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4 over 96 cases. At the default 401 steps: delta atol 1e-3, price atol 5e-3 (measured 4.2e-4, 3.2e-3). Implied volatility solved from these prices within one standard deviation of the money: atol 5e-4 (measured 3.0e-4). The test file states every tolerance."
+        "note": "An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so it is checked against a finite-difference grid good to about 5e-5 (under 3e-5 in price, 3.4e-6 in delta from its own doubling) and agrees to the tree's discretization error. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4 over 96 cases. At the default 401 steps: delta atol 1e-3, price atol 5e-3 (measured 4.2e-4, 3.2e-3). Implied volatility solved from these prices within one standard deviation of the money: atol 5e-4 (measured 3.0e-4). The test file states every tolerance."
       },
       "active_version": 1,
       "versions": {
@@ -1963,12 +1963,12 @@
           "content_sha256": {
             "input.json": "521356e030ff7053bd6a2ac65241b2053c2df2bdbbff90412096a1a7b989c164",
             "output.json": "16bfb43ca80fe017e43e446fa4eafbd74cee4daefb5b7ac6e4257855c467b0ea",
-            "attribution.md": "74bbaa126eaf83f34cb2e30c226a53b10f7da4e8d6f7b0df15567e8cb9b881a1"
+            "attribution.md": "eeaabd73ea856514588423418d95b545b8d1581613bf310151fdce24a60aba74"
           },
           "file_sha256": {
             "input.json": "5685917ddf1630b3123d5d37a98c20da9ff039e27b0f25e3f77828bcedd51da4",
             "output.json": "6ac8137d0122a4e3f7015fe467dd65d41a15bea004788c80a95cfc6e578fd9f3",
-            "attribution.md": "74bbaa126eaf83f34cb2e30c226a53b10f7da4e8d6f7b0df15567e8cb9b881a1"
+            "attribution.md": "eeaabd73ea856514588423418d95b545b8d1581613bf310151fdce24a60aba74"
           }
         }
       },
