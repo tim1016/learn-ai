@@ -35,8 +35,10 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     effective_fill_records,
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.fee_evidence import OPTION_FILL_FEES_NOT_ATTRIBUTED
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
+from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement, fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.simulated_account import _cash_after_fills
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
@@ -64,6 +66,7 @@ from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
     open_option_books,
     option_fold_registry,
 )
+from tests.broker.alpaca.clerk.sqlite.test_folds_execution import _append_slice, _coverage_conflict_transition
 
 # Fees known and nil: the money below is before fees.
 _NO_FEES = FeeAttribution(shares=(), unattributed=Decimal(0), unresolved=(), observed_total=Decimal(0), predicted_total=Decimal(0))
@@ -388,6 +391,160 @@ def test_a_fill_reported_in_lower_case_is_still_matched_to_its_orders_contract(t
         assert repo.attributed_positions_for_strategy("bot-a") == {AAPL_CALL.symbol: 1.0}
         (record,) = _records(repo)
         assert (record.symbol, record.multiplier) == (AAPL_CALL.symbol, 100)
+    finally:
+        repo.close()
+
+
+def _recover_total(
+    repo: ClerkSqliteRepository, accepted: EnterSubmission, *, symbol: str, wanted: float, filled: float, price: float
+) -> None:
+    """A REST read of a buy order's total so far: the fill the Clerk records when it holds no exact execution of it."""
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id or "",
+        order=_broker_order_fixture(
+            accepted.order_ref or "", order_id=f"b-{accepted.order_ref}", symbol=symbol,
+            status="filled" if filled == wanted else "partially_filled", side="buy",
+            quantity=wanted, filled_quantity=filled, filled_avg_price=price,
+        ).model_copy(update={"updated_at_ms": NOON, "observed_at_ms": NOON}),
+    )
+
+
+def test_a_fraction_of_a_contract_is_refused_on_an_order_that_trades_one(tmp_path: Path) -> None:
+    """Contracts are whole. One and a half is refused as an exact execution and as a recovered total alike."""
+    repo = open_option_books(tmp_path)
+    try:
+        order = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1")
+        with pytest.raises(ContractTermsConflict, match="whole contracts"):
+            fill(repo, order, execution_id="x1", symbol=AAPL_CALL.symbol, side="BUY", quantity=1.5, price=2.00)
+        with pytest.raises(ContractTermsConflict, match="whole contracts"):
+            _recover_total(repo, order, symbol=AAPL_CALL.symbol, wanted=2, filled=1.5, price=2.00)
+        assert _records(repo) == ()
+        assert repo.attributed_positions_by_subject() == {}
+
+        assert fill(repo, order, execution_id="x2", symbol=AAPL_CALL.symbol, side="BUY", quantity=2, price=2.00) == "appended"
+        assert repo.position("bot-a", AAPL_CALL.symbol) == 2.0
+    finally:
+        repo.close()
+
+
+def test_a_fraction_of_a_share_is_counted_on_a_stock_order_as_before(tmp_path: Path) -> None:
+    """Half a share as an exact execution. And half a share recovered as a total, then replaced by its exact execution."""
+    repo = open_option_books(tmp_path, bots={"bot-s": "SPY", "bot-q": "QQQ"})
+    try:
+        streamed = _accept_stock_order(repo, symbol="SPY", side="buy", shares=0.5, decision_id="d1", bot="bot-s")
+        assert fill(repo, streamed, execution_id="x1", symbol="SPY", side="BUY", quantity=0.5, price=2.00) == "appended"
+
+        recovered = _accept_stock_order(repo, symbol="QQQ", side="buy", shares=0.5, decision_id="d2", bot="bot-q")
+        _recover_total(repo, recovered, symbol="QQQ", wanted=0.5, filled=0.5, price=2.00)
+        assert fill(repo, recovered, execution_id="x2", symbol="QQQ", side="BUY", quantity=0.5, price=2.00) == "coverage_superseded"
+
+        assert repo.attributed_positions_by_subject() == {("bot:bot-s", "SPY"): 0.5, ("bot:bot-q", "QQQ"): 0.5}
+        assert {(record.symbol, record.event_key, record.quantity, record.multiplier, record.exact_notional) for record in _records(repo)} == {
+            ("SPY", "x1", 0.5, None, Decimal(1)),
+            ("QQQ", "x2", 0.5, None, Decimal(1)),
+        }
+    finally:
+        repo.close()
+
+
+# ── A coverage replacement writes a fill too, and moves no position ───────────
+
+
+def _hold_aside(repo: ClerkSqliteRepository, order: EnterSubmission, *, reported: str) -> str:
+    """An exact execution of 2 at $1.50, reported in ``reported``, held aside behind a coverage conflict.
+
+    The Clerk holds an exact execution aside when it cannot match it to the
+    total it already recovered for the order. Returns the conflict's id.
+    """
+    exact = ExecutionSliceFilledFacts(
+        execution_id="x1", symbol=reported, side="BUY", slice_qty=2.0, slice_price=1.50, fee=None,
+        fee_fidelity="not_reported", evidence_source="websocket", source_event_at_ms=NOON,
+    )
+    repo.append_transition(_coverage_conflict_transition(repo, accepted=order, facts=exact))
+    assert _append_slice(repo, accepted=order, facts=exact) == "coverage_conflict_quarantined"
+    (conflict,) = repo.active_uncertainties_for_admission(strategy_instance_id="bot-a")
+    return conflict["uncertainty_id"]
+
+
+def _put_in_the_recovered_fills_place(repo: ClerkSqliteRepository, conflict: str) -> ExecutionCoverageResolutionReceipt:
+    """The operator's replacement of a recovered fill by the one exact execution held aside for it."""
+    meta = repo.control_meta_snapshot()
+    return repo.resolve_execution_coverage_conflict(
+        uncertainty_id=conflict,
+        expected_authority_generation=meta.authority_generation,
+        expected_db_identity_token=meta.db_identity_token,
+        expected_control_revision=meta.control_revision,
+    )
+
+
+@pytest.mark.parametrize("reported", [AAPL_PUT.symbol, "AAPL"])
+def test_an_execution_in_another_symbol_cannot_take_the_place_of_a_contracts_recovered_fill(tmp_path: Path, reported: str) -> None:
+    """The order's 2 calls at $1.50 were recovered as a total. An exact execution of the same side, count and price,
+    reported in another symbol, is held aside.
+
+    Putting it in the recovered fill's place moves no position, so it never
+    meets the position write. The books would read it through its order, as
+    2 of the call.
+    """
+    repo = open_option_books(tmp_path)
+    try:
+        order = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1")
+        _recover_total(repo, order, symbol=AAPL_CALL.symbol, wanted=2, filled=2, price=1.50)
+        conflict = _hold_aside(repo, order, reported=reported)
+
+        with pytest.raises(ContractTermsConflict, match=f"which trades {AAPL_CALL.symbol}"):
+            _put_in_the_recovered_fills_place(repo, conflict)
+
+        (kept,) = repo.fills_for_order(order.order_ref or "")
+        assert (kept["evidence_source"], kept["execution_id"]) == ("cumulative_recovery", None)
+        assert repo.attributed_positions_for_strategy("bot-a") == {AAPL_CALL.symbol: 2.0}
+        assert [held["uncertainty_id"] for held in repo.active_uncertainties_for_admission(strategy_instance_id="bot-a")] == [conflict]
+    finally:
+        repo.close()
+
+
+def test_a_contracts_recovered_fill_gives_way_to_its_own_exact_execution(tmp_path: Path) -> None:
+    """The same replacement by an execution in the order's own contract goes through: 2 calls, $300.00, as before it."""
+    repo = open_option_books(tmp_path)
+    try:
+        order = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1")
+        _recover_total(repo, order, symbol=AAPL_CALL.symbol, wanted=2, filled=2, price=1.50)
+        conflict = _hold_aside(repo, order, reported=AAPL_CALL.symbol)
+
+        assert _put_in_the_recovered_fills_place(repo, conflict).applied
+
+        (exact,) = repo.fills_for_order(order.order_ref or "")
+        assert (exact["evidence_source"], exact["execution_id"]) == ("websocket", "x1")
+        (record,) = _records(repo)
+        assert (record.symbol, record.quantity, record.multiplier, record.exact_notional) == (AAPL_CALL.symbol, 2.0, 100, Decimal(300))
+        assert repo.attributed_positions_for_strategy("bot-a") == {AAPL_CALL.symbol: 2.0}
+        assert repo.active_uncertainties_for_admission(strategy_instance_id="bot-a") == []
+    finally:
+        repo.close()
+
+
+def test_an_execution_reported_as_the_bots_own_symbol_cannot_take_the_place_of_a_contracts_recovered_fill(tmp_path: Path) -> None:
+    """The bot is registered under AAPL and its order trades the call. The order's 2 calls at $1.50 were recovered as a total.
+
+    Then an exact execution arrives reported as 2 AAPL at $1.50. It has the
+    recovered fill's side, count and price, so it proves itself that fill's
+    replacement, and AAPL is the symbol the order's bot is known by. It is
+    not the order's contract, and the books keep the recovered fill.
+    """
+    repo = open_option_books(tmp_path)
+    try:
+        order = accept_option_order(repo, terms=AAPL_CALL, side="buy", contracts=2, decision_id="d1")
+        _recover_total(repo, order, symbol=AAPL_CALL.symbol, wanted=2, filled=2, price=1.50)
+
+        with pytest.raises(ContractTermsConflict, match=f"which trades {AAPL_CALL.symbol}"):
+            fill(repo, order, execution_id="x1", symbol="AAPL", side="BUY", quantity=2, price=1.50)
+
+        (kept,) = repo.fills_for_order(order.order_ref or "")
+        assert (kept["evidence_source"], kept["execution_id"]) == ("cumulative_recovery", None)
+        (record,) = _records(repo)
+        assert (record.symbol, record.quantity, record.multiplier, record.exact_notional) == (AAPL_CALL.symbol, 2.0, 100, Decimal(300))
+        assert repo.attributed_positions_for_strategy("bot-a") == {AAPL_CALL.symbol: 2.0}
     finally:
         repo.close()
 

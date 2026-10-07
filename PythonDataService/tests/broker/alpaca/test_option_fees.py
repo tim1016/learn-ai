@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 
 import pytest
 
@@ -57,6 +57,71 @@ def test_the_multiplier_is_the_contracts_own_and_never_assumed() -> None:
 def test_a_fill_is_whole_contracts_at_a_price_above_zero(contracts: str, premium: str) -> None:
     with pytest.raises(ValueError, match="whole number of contracts"):
         _fees(OrderSide.BUY, contracts=contracts, premium=premium)
+
+
+@pytest.mark.parametrize(
+    ("contracts", "premium"),
+    [
+        ("Infinity", "1"),
+        ("-Infinity", "1"),
+        ("1", "Infinity"),
+        ("NaN", "1"),
+        ("1", "NaN"),
+        ("sNaN", "1"),
+        ("1E+999999", "1"),  # finite, and past anything the arithmetic can hold
+        ("1", "1E-400"),
+    ],
+)
+def test_a_fill_that_is_no_finite_number_of_a_supported_size_is_refused_as_any_other_bad_fill_is(
+    contracts: str, premium: str
+) -> None:
+    """An infinity is above zero and "whole", so it used to be priced: an infinite fee. A NaN cannot be compared.
+
+    Each is refused as a bad fill, and none gets out as an arithmetic error.
+    """
+    for side in (OrderSide.BUY, OrderSide.SELL):
+        with pytest.raises(ValueError, match="whole number of contracts"):
+            _fees(side, contracts=contracts, premium=premium)
+
+
+def test_a_fee_is_the_same_whatever_decimal_context_the_caller_works_in() -> None:
+    """137 contracts sold at $2.10, twice in a day, worked out by a caller whose context keeps two digits.
+
+    ORF is 137 × 0.015 = $2.055 a sale; two digits would make it 2.1. The day:
+    SEC 2 × 0.592662 → $1.19, CAT 2 × 0.0411 → $0.09, ORF $4.11, OCC 2 × 3.425 = $6.85, the TAF
+    paused: $12.24, which two digits would make 12.
+    """
+
+    def priced() -> tuple[object, ...]:
+        sale = _fees(OrderSide.SELL, contracts="137", premium="2.10")
+        day = settle_option_session([sale, sale])
+        return sale, day, day.total, option_fee_provision_cents([sale, sale])
+
+    with localcontext(Context(prec=2)):
+        in_two_digits = priced()
+
+    assert in_two_digits == priced()
+    sale, day, total, cents = in_two_digits
+    assert (sale.sec, sale.cat, sale.orf, sale.occ) == (
+        Decimal("0.592662"), Decimal("0.0411"), Decimal("2.055"), Decimal("3.425"),
+    )
+    assert (day.sec, day.taf, day.cat, day.orf, day.occ) == (
+        Decimal("1.19"), Decimal("0.00"), Decimal("0.09"), Decimal("4.11"), Decimal("6.85"),
+    )
+    assert (total, cents) == (Decimal("12.24"), 1224)
+
+
+def test_a_premium_with_more_digits_than_the_callers_context_keeps_still_settles_to_the_right_cent() -> None:
+    """One contract sold at $500 and 1e-40 of a dollar, in the default context of 28 digits.
+
+    At $500 exactly the SEC fee is 500 × 100 × 0.0000206 = $1.03 to the cent. The 1e-40 puts it a hair
+    over, and a fee type rounds up: $1.04. Dropping the premium's digits past the 28th charges $1.03.
+    With CAT 1¢, ORF 2¢ and OCC 3¢ the entry sets aside $1.10.
+    """
+    sale = _fees(OrderSide.SELL, contracts="1", premium="500.0000000000000000000000000000000000000001")
+    assert sale.sec > Decimal("1.03")
+    assert settle_option_session([sale]).sec == Decimal("1.04")
+    assert option_fee_provision_cents([sale]) == 110
 
 
 def test_the_taf_is_paused_for_the_last_quarter_of_2026_and_resumes() -> None:

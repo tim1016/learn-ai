@@ -161,13 +161,21 @@ def order_contract_terms(conn: sqlite3.Connection, order_ref: str) -> ContractTe
     return None if row is None else ContractTerms(symbol=row[0], multiplier=row[1])
 
 
-def require_fill_in_its_orders_contract(conn: sqlite3.Connection, *, order_ref: str, symbol: str) -> None:
+def require_fill_in_its_orders_contract(
+    conn: sqlite3.Connection, *, order_ref: str, symbol: str, quantity: float
+) -> None:
     """Refuse a fill the books could not count: one whose symbol and whose order's contract disagree.
 
-    A fill of an order bound to a contract must be in that contract. A fill
-    whose symbol is spelled as an option contract must be of a bound order;
-    without the binding custody would read it as the bot's own symbol, in
-    shares. A fill in shares of an order in shares passes untouched.
+    A fill of an order bound to a contract must be in that contract, and a
+    whole number of contracts: a fraction of one is refused, never rounded. A
+    fill whose symbol is spelled as an option contract must be of a bound
+    order; without the binding custody would read it as the bot's own symbol,
+    in shares. A fill in shares of an order in shares passes untouched,
+    whatever its quantity.
+
+    Every write of a fill is held to this: the write that moves a position,
+    and a coverage replacement, which puts an exact execution into the books
+    without moving one.
     """
     bound = conn.execute("SELECT symbol FROM order_contracts WHERE order_ref = ?", (order_ref,)).fetchone()
     if bound is None:
@@ -179,6 +187,11 @@ def require_fill_in_its_orders_contract(conn: sqlite3.Connection, *, order_ref: 
     elif bound[0] != symbol.upper():
         raise ContractTermsConflict(
             f"a fill in {symbol.upper()} arrived on order {order_ref!r}, which trades {bound[0]}"
+        )
+    elif not float(quantity).is_integer():
+        raise ContractTermsConflict(
+            f"a fill of {quantity!r} arrived on order {order_ref!r}, which trades {bound[0]}: "
+            "an option contract fills in whole contracts"
         )
 
 

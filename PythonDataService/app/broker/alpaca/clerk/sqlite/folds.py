@@ -1007,8 +1007,9 @@ def _apply_attributed_position_delta(
       test_late_fill_after_residue_discharge.py.
 
     A position is held per instrument: a fill of an order that trades an
-    option contract moves that contract's position and no other, and an
-    option fill of an order bound to no contract is refused (ADR 0076 decision 13).
+    option contract moves that contract's position and no other, by a whole
+    number of contracts, and an option fill of an order bound to no contract
+    is refused (ADR 0076 decision 13).
     """
     owner = conn.execute(
         "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
@@ -1016,7 +1017,7 @@ def _apply_attributed_position_delta(
     ).fetchone()
     if owner is None:
         raise ValueError("execution fill requires its durable owning effect")
-    require_fill_in_its_orders_contract(conn, order_ref=payload["order_ref"], symbol=symbol)
+    require_fill_in_its_orders_contract(conn, order_ref=payload["order_ref"], symbol=symbol, quantity=quantity)
     if _fill_credit_is_withheld(conn, payload=payload, symbol=symbol):
         return
     signed_delta = quantity if side == "BUY" else -quantity
@@ -1179,6 +1180,9 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_coverage_resolution_replaces_one_cumulative_fill_once.
+
+    No position moves here, so the exact execution meets its order's
+    contract at this write and not at the position's (ADR 0076 decision 13).
     """
     facts = ExecutionCoverageResolvedFacts.from_facts_json(payload["facts_json"])
     exact = validate_execution_coverage_resolved_facts(facts)
@@ -1207,6 +1211,9 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
         raise ValueError("coverage resolution proof does not match immutable evidence")
     if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
         raise ValueError("coverage resolution exact execution already exists")
+    require_fill_in_its_orders_contract(
+        conn, order_ref=facts.order_ref, symbol=exact.symbol, quantity=exact.slice_qty
+    )
     conn.execute("DELETE FROM fills WHERE fill_id = ?", (facts.replaced_cumulative_fill_id,))
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "

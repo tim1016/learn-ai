@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.contract_terms import (
     is_option_contract_symbol,
     order_contract_terms,
     record_contract_terms,
+    require_fill_in_its_orders_contract,
 )
 from tests.broker.alpaca.clerk.sqlite.test_schema_parity import (
     _authority_built_up_to,
@@ -161,6 +162,27 @@ def test_a_binding_needs_an_order_the_books_hold() -> None:
     record_contract_terms(conn, ContractTerms(symbol=_CALL, multiplier=100), recorded_at_ms=5)
     with pytest.raises(sqlite3.IntegrityError):
         bind_order_contract(conn, order_ref="no-such-order", symbol=_CALL)
+
+
+# ── What a fill of an order may be ────────────────────────────────────────────
+
+
+def test_a_fill_of_an_order_that_trades_a_contract_is_a_whole_number_of_contracts() -> None:
+    conn = _books_with_one_order()
+    record_contract_terms(conn, ContractTerms(symbol=_CALL, multiplier=100), recorded_at_ms=5)
+    bind_order_contract(conn, order_ref="order-1", symbol=_CALL)
+    for whole in (1, 2.0, 250.0):
+        require_fill_in_its_orders_contract(conn, order_ref="order-1", symbol=_CALL, quantity=whole)
+    # A hair over two is not two: a count is refused, never rounded.
+    for part in (0.5, 1.5, 2.000000001, float("inf"), float("nan")):
+        with pytest.raises(ContractTermsConflict, match="whole contracts"):
+            require_fill_in_its_orders_contract(conn, order_ref="order-1", symbol=_CALL, quantity=part)
+
+
+def test_a_fill_of_an_order_in_shares_may_be_any_quantity() -> None:
+    conn = _books_with_one_order()
+    for shares in (1, 0.5, 0.000000001, 12.000000001):
+        require_fill_in_its_orders_contract(conn, order_ref="order-1", symbol="SPY", quantity=shares)
 
 
 # ── The migration ─────────────────────────────────────────────────────────────
