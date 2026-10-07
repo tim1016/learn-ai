@@ -400,17 +400,14 @@ def documented_option_listing(contract: OptionContract, **changes: Any) -> Broke
 
 
 class _ScriptedNonTradeActivities:
-    """The Alpaca client seam for the account's non-trade activities: raw rows, the newest first, in pages."""
+    """The Alpaca client seam for the account's non-trade activities: raw rows, the newest first, in one page."""
 
-    def __init__(self, rows: list[dict[str, Any]], *, page_size: int) -> None:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._rows = sorted(rows, key=lambda row: row.get("date", ""), reverse=True)
-        self._page_size = page_size
 
     async def list_non_trade_activities(self, *, limit: int, page_token: str | None = None) -> list[Any]:
-        start = 0 if page_token is None else next(
-            index + 1 for index, row in enumerate(self._rows) if row["id"] == page_token
-        )
-        return self._rows[start : start + min(limit, self._page_size)]
+        assert page_token is None and len(self._rows) < limit, "a test's rows fit one page"
+        return self._rows
 
 
 class ScriptedOptionEvents:
@@ -428,7 +425,8 @@ class ScriptedOptionEvents:
         self.error: Exception | None = None
         # The window each read asked for.
         self.reads: list[int] = []
-        self.page_size = 100
+        # Alpaca's walk stops before the window's start: what it read is true, and it is not all of it.
+        self.cut_short = False
 
     async def read_option_event_activities(
         self, *, after_ms: int, resume: BrokerOptionEventResume | None = None
@@ -439,10 +437,11 @@ class ScriptedOptionEvents:
             self.reads.append(after_ms)
         if self.error is not None:
             raise self.error
-        client = _ScriptedNonTradeActivities(self.rows, page_size=self.page_size)
-        return await AlpacaBroker(client=client).read_option_event_activities(  # type: ignore[arg-type]
+        client = _ScriptedNonTradeActivities(self.rows)
+        evidence = await AlpacaBroker(client=client).read_option_event_activities(  # type: ignore[arg-type]
             after_ms=after_ms, resume=resume
         )
+        return evidence.model_copy(update={"history_complete": False}) if self.cut_short else evidence
 
 
 def documented_option_activity(product: str, heading: str, index: int = 0, **changes: Any) -> dict[str, Any]:
