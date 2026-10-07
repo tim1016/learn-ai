@@ -164,6 +164,24 @@ def test_fill_anchors_name_how_each_filled_order_was_priced_and_follow_the_ledge
     assert set(ledger.fill_anchors()) == {"learn-ai/ema-1/v1:a", "learn-ai/ema-1/v1:b"}
 
 
+def test_only_a_record_that_restates_a_price_carries_the_time_it_last_traded(tmp_path: Path) -> None:
+    """A build from before the field existed refuses a key it does not know, so every other row is written without it."""
+    ledger, bars = _ledger(tmp_path)
+    anchor = _anchor(bars)
+    restated = anchor.model_copy(update={"restated_bar_end_ms": anchor.decision_bar_end_ms - 30_000})
+
+    with ledger.transaction() as records:
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:a"), anchor=anchor)
+    assert "restated_bar_end_ms" not in ledger.path.read_text(encoding="utf-8")
+
+    with ledger.transaction() as records:
+        ledger.append_locked(records, order=_order("learn-ai/ema-1/v1:close", side="sell"), anchor=restated)
+
+    priced = ledger.fill_anchors()
+    assert priced["learn-ai/ema-1/v1:close"].restated_bar_end_ms == anchor.decision_bar_end_ms - 30_000
+    assert priced["learn-ai/ema-1/v1:a"].restated_bar_end_ms is None
+
+
 def test_an_append_outside_the_transaction_is_refused(tmp_path: Path) -> None:
     """The ``records`` list is only the transaction's read while the lock is held."""
     ledger, _bars = _ledger(tmp_path)

@@ -359,30 +359,10 @@ class StrategyRegistration:
     # ticker / strategy combination. Each entry is one short paragraph
     # or bullet; render as a list on the frontend.
     gotchas: list[str] = dc_field(default_factory=list)
-    # Fields accepted only by non-Engine-Lab construction paths. They remain in
-    # ``param_schema`` so the live runner can validate its internal injection,
-    # but are hidden from ``GET /strategies`` and rejected by normal backtests.
+    # Fields of ``param_schema`` no caller may set: hidden from
+    # ``GET /strategies`` and refused by a backtest, a chart and a Deploy. No
+    # registered strategy declares one today.
     hidden_params: set[str] = dc_field(default_factory=set)
-    # ADR 0012 / PRD #593 Slice 1A — which boundary chooses the
-    # *instrument* this strategy trades. ``"explicit"`` means the strategy code
-    # itself names the instrument (e.g. ``set_holdings("SPY", 1.0)``),
-    # and ``live_config.action`` is informational only. ``"policy"``
-    # is active for strategies that emit a generic ``SignalIntent`` and let the
-    # deploy-time Action Plan resolve concrete instruments. The deploy boundary
-    # stores this field in the run ledger and rejects unsupported Action Plans
-    # for policy strategies.
-    instrument_surface: Literal["policy", "explicit"] = "explicit"
-    # The live Action Plan shape this strategy requires to start. This is
-    # intentionally independent from ``instrument_surface``: a legacy explicit
-    # strategy may still receive its trade symbol from a stock Action Plan.
-    # ``"single_long_stock"`` means exactly one long stock entry and a
-    # matching close-leg exit; ``"none"`` means no deploy/start requirement.
-    action_plan_contract: Literal["none", "single_long_stock"] = "none"
-    # Signal-only strategies must declare how the live runner binds their
-    # asset-free ENTER/EXIT intents. ``signal_symbol`` preserves the original
-    # same-symbol behavior for legacy ledgers; ``action_plan_stock`` delegates
-    # the asset selection to the validated Action Plan contract.
-    signal_intent_binding: Literal["none", "signal_symbol", "action_plan_stock"] = "none"
     # Compatibility registrations remain runnable for existing ledgers but
     # must not appear as duplicate choices in the Engine Lab strategy picker.
     catalog_visible: bool = True
@@ -1227,9 +1207,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: build_ema_crossover_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_ema_crossover_signal_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
         lean_twin="ema_crossover_signal",
         # The twin hardcodes EMA 5/10 and the five-bar hold, so those three are
         # deliberately absent: a non-default value makes the companion
@@ -1444,9 +1421,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: build_ema_previous_crossover_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_ema_previous_crossover_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
         lean_twin="ema_previous_crossover",
         # The twin reads every setting, so the parity companion is available
         # at any configuration.
@@ -1625,9 +1599,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_sma_crossover_signal_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
@@ -1784,9 +1755,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_rsi_mean_reversion_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_rsi_mean_reversion_signal_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
         # No lean_parameter_names: the twin hardcodes 14/30/70, so a run
         # overriding window/oversold/overbought is honestly reported as
         # parameters_unrepresentable_by_twin rather than compared against a
@@ -1809,7 +1777,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             program_version=DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=DeploymentValidationParams.PARAMETER_SCHEMA_VERSION,
-            golden_trace_root="5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
+            golden_trace_root="f2427abee699b896822b2180b86b5c56f8af45eebe84e98e21251aaba4028dcc",
             provider="polygon",
             base_timeframe_ms=60_000,
             # This program's decision clock IS the raw minute bar -- there is
@@ -1911,10 +1879,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # this promotion.
                 equivalence_level="bit_exact",
             ),
-            parameter_units={
-                "symbol": "ticker",
-                "trade_symbol": "ticker",
-            },
+            parameter_units={"symbol": "ticker"},
             # Not indicator-driven: beyond the always-injected symbol, there
             # is no additional tunable this contract pins as validated.
             validated_settings={},
@@ -1934,8 +1899,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         algorithm_pseudocode=(
             "Universe\n"
-            "    signal symbol = configurable (default SPY)\n"
-            "    trade symbol  = configurable (defaults to signal symbol)\n"
+            "    symbol     = configurable (default SPY)\n"
             "    resolution = 1-minute bars\n"
             "    session    = regular session data; strategy starts at 09:45 ET\n"
             "\n"
@@ -1981,8 +1945,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         param_schema=DeploymentValidationParams,
         strategy_view=_DEPLOYMENT_VALIDATION_VIEW,
         strategy_bars=StrategyBarCadence("minute", 1),
-        hidden_params={"trade_symbol"},
-        action_plan_contract="single_long_stock",
         build=lambda p: build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_deployment_validation_signal_program,
     ),
@@ -2190,9 +2152,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_a_signal_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
     ),
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
@@ -2393,9 +2352,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_b_signal_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
     ),
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
@@ -2538,9 +2494,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_c_signal_program,
-        instrument_surface="policy",
-        action_plan_contract="single_long_stock",
-        signal_intent_binding="action_plan_stock",
     ),
 }
 

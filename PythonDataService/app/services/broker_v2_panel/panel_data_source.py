@@ -249,7 +249,7 @@ def _explanation_renderer(binding: BrokerBotBinding) -> ExplanationRenderer | No
     must never take it down.
     """
     try:
-        view = ResolvedStrategyView.for_settings(
+        view = ResolvedStrategyView.for_saved_settings(
             binding.strategy_key, binding.strategy_params, symbol=binding.symbol
         )
     except StrategyViewUnavailableError as exc:

@@ -67,7 +67,7 @@ async def test_search_option_contracts_returns_qualified_match() -> None:
     result = await search_option_contracts(
         client,
         symbol="SPY",
-        expiry_ms=1_766_188_800_000,
+        expiry_ms=1_766_178_000_000,
         strike=650.0,
         right="C",
     )
@@ -92,7 +92,7 @@ async def test_search_option_contracts_strips_none_placeholders() -> None:
     result = await search_option_contracts(
         client,
         symbol="SPY",
-        expiry_ms=1_766_188_800_000,
+        expiry_ms=1_766_178_000_000,
         strike=650.0,
         right="C",
     )
@@ -107,7 +107,7 @@ async def test_search_option_contracts_empty_when_nothing_qualifies() -> None:
     result = await search_option_contracts(
         client,
         symbol="SPY",
-        expiry_ms=1_766_188_800_000,
+        expiry_ms=1_766_178_000_000,
         strike=650.0,
         right="C",
     )
@@ -122,7 +122,7 @@ async def test_search_option_contracts_raises_when_disconnected() -> None:
         await search_option_contracts(
             client,
             symbol="SPY",
-            expiry_ms=1_766_188_800_000,
+            expiry_ms=1_766_178_000_000,
             strike=650.0,
             right="C",
         )

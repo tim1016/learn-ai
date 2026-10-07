@@ -43,10 +43,10 @@ sealed program can reach, because the promoted programs do not share one:
   execution boundary (``StrategyContext.set_signal_intent_executor`` -- the
   same seam ``SignalSymbolExecutor``/Backtest binds, and the one
   ``test_signal_program_discard_safety.py`` uses for the same reason), which
-  is what every ``instrument_surface="policy"`` program commits through
+  is what every program but one commits through
   (``ctx.emit_signal_intent``);
-* the portfolio's own submitted-order list, which is where an
-  ``instrument_surface="explicit"`` program lands instead --
+* the portfolio's own submitted-order list, which is where the one that
+  names its own instrument lands instead --
   ``deployment_validation``'s ``commit_signal_decision`` calls
   ``ctx.set_holdings``/``ctx.liquidate``, which go straight to
   ``Portfolio`` and never touch the intent executor at all. Asserting only
@@ -326,9 +326,8 @@ def _broker_contacts(executor: RecordingExecutor, context: StrategyContext) -> l
     """Every execution-boundary contact a run made, keyed by its decision clock.
 
     Both seams, because the sealed programs do not share one (see the module
-    docstring): ``ctx.emit_signal_intent`` for the ``instrument_surface=
-    "policy"`` programs, and ``Portfolio``'s submitted orders for an
-    ``instrument_surface="explicit"`` one that calls ``ctx.set_holdings`` /
+    docstring): ``ctx.emit_signal_intent`` for most programs, and
+    ``Portfolio``'s submitted orders for the one that calls ``ctx.set_holdings`` /
     ``ctx.liquidate`` directly and never reaches the intent executor at all.
 
     Both keys are the ``int64 ms UTC`` instant of the decision that produced

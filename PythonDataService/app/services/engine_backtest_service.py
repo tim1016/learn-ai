@@ -1027,6 +1027,15 @@ def equity_day_ends(curve: Sequence[EquitySnapshot]) -> list[dict[str, Any]]:
     return ends
 
 
+def _day_ends_or_none(curve: Sequence[EquitySnapshot]) -> list[dict[str, Any]]:
+    """The run's day ends, or none when its samples are out of order: the run keeps its numbers and loses only the daily curve."""
+    try:
+        return equity_day_ends(curve)
+    except ValueError:
+        logger.exception("[ENGINE] Equity samples out of time order — returning without the daily curve")
+        return []
+
+
 @dataclass(frozen=True)
 class _PerBarArtifacts:
     """The response's per-bar evidence — everything a summary run omits (#1941).
@@ -1258,7 +1267,7 @@ def _aggregate_backtest_response(
         trades=formatted,
         log_lines=result.log_lines,
         equity_curve=artifacts.equity_curve,
-        equity_day_ends=equity_day_ends(result.equity_curve),
+        equity_day_ends=_day_ends_or_none(result.equity_curve),
         bars_consumed=len(result.equity_curve),
         chart_bars=artifacts.chart_bars,
         insights=artifacts.insights,

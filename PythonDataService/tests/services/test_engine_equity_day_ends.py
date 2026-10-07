@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.engine.engine import EquitySnapshot
-from app.services.engine_backtest_service import equity_day_ends
+from app.services.engine_backtest_service import _day_ends_or_none, equity_day_ends
 
 _NY = ZoneInfo("America/New_York")
 
@@ -75,3 +75,11 @@ def test_samples_out_of_time_order_are_refused_never_searched() -> None:
     for curve in (late_first, repeated):
         with pytest.raises(ValueError, match="strictly increasing"):
             equity_day_ends(curve)
+
+
+def test_a_run_whose_samples_are_out_of_order_keeps_no_day_ends_and_does_not_fail() -> None:
+    late_first = [_sample(_at(2025, 3, 7, 16, 0), "10"), _sample(_at(2025, 3, 6, 16, 0), "11")]
+    in_order = [_sample(_at(2025, 3, 6, 16, 0), "10"), _sample(_at(2025, 3, 7, 16, 0), "11")]
+
+    assert _day_ends_or_none(late_first) == []
+    assert _day_ends_or_none(in_order) == equity_day_ends(in_order)

@@ -20,7 +20,7 @@ import io
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from app.models.requests import OptionsCompanionConfig
+from app.options.expiry import option_expiry_anchor_ms
 from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
 from app.volatility.solver import implied_volatility
@@ -63,12 +64,6 @@ def _slot_label(offset: int) -> str:
         return "atm"
     sign = "+" if offset > 0 else "-"
     return f"atm{sign}{abs(offset):02d}"
-
-
-def _utc_ms_for_et_close(d: date, hour: int = 16, minute: int = 0) -> int:
-    """Return the `int64 ms UTC` timestamp for a given ET wall-clock close on date `d`."""
-    et_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=_ET)
-    return int(et_dt.timestamp() * 1000)
 
 
 def _prior_day_close_map(bars_df: pd.DataFrame) -> dict[date, float]:
@@ -390,7 +385,7 @@ def _process_contract(
         return [], counters
 
     counters["option_bars_raw"] = len(bars)
-    expiry_close_ms = _utc_ms_for_et_close(contract.expiration, hour=16, minute=0)
+    expiry_close_ms = option_expiry_anchor_ms(contract.expiration)
     is_call = contract.contract_type == "call"
     iso_expiration = contract.expiration.isoformat()
     needs_greeks = (

@@ -7,10 +7,6 @@ import {
 } from './format';
 
 describe('fmtBrokerExpiryDate', () => {
-  it('preserves midnight-UTC broker expiry markers on their UTC date', () => {
-    expect(fmtBrokerExpiryDate(Date.UTC(2025, 11, 19, 0, 0, 0))).toBe('2025-12-19');
-  });
-
   it('returns a dash for absent expiry markers', () => {
     expect(fmtBrokerExpiryDate(null)).toBe('—');
   });

@@ -8,7 +8,7 @@ mapping, and discontinuity tagging.
 
 from __future__ import annotations
 
-from datetime import UTC, date
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -22,7 +22,6 @@ from app.services.options_companion_service import (
     _select_strikes_with_slots,
     _slot_label,
     _underlying_close_map,
-    _utc_ms_for_et_close,
 )
 
 
@@ -199,25 +198,6 @@ class TestMarkDiscontinuity:
         rows: list[dict] = []
         _mark_discontinuity(rows)
         assert rows == []
-
-
-class TestEtCloseConversion:
-    def test_summer_close_is_20_00_utc(self):
-        from datetime import date, datetime
-
-        # July 15 2025 is EDT (UTC-4) → 16:00 ET == 20:00 UTC
-        ts_ms = _utc_ms_for_et_close(date(2025, 7, 15))
-        dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
-        assert dt.hour == 20
-        assert dt.minute == 0
-
-    def test_winter_close_is_21_00_utc(self):
-        from datetime import date, datetime
-
-        # January 15 2025 is EST (UTC-5) → 16:00 ET == 21:00 UTC
-        ts_ms = _utc_ms_for_et_close(date(2025, 1, 15))
-        dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
-        assert dt.hour == 21
 
 
 class TestPriorDayCloseMap:

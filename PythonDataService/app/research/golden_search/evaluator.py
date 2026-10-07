@@ -275,13 +275,13 @@ def project_response(request: EvaluationRequest, response: EngineBacktestRespons
 
 
 def daily_curve(response: EngineBacktestResponse) -> list[tuple[int, float]] | None:
-    """The run's equity at each session close, or ``None`` when its day ends cannot be anchored to sessions.
+    """The run's equity at each session close, or ``None`` when the engine kept no day ends or they cannot be anchored to sessions.
 
     The curve only draws the run; its metrics stand without it, so a day end
     the calendar refuses loses the curve and never the result.
     """
     try:
-        return daily_equity(response.equity_day_ends)
+        return daily_equity(response.equity_day_ends) or None
     except ValueError:
         logger.warning("golden search run kept no daily curve", extra={"action": "golden_search_curve_unanchored"}, exc_info=True)
         return None

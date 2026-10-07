@@ -10,6 +10,8 @@
 
 **Note (2026-09-30):** three names this ADR cites no longer exist. The `LIVE_CONFIG_LEDGER_KEYS` allow-list went with #1678. The `OrderSizer` quantity authority and the `sizing_surface` registry flag that `instrument_surface` parallels went with #2602.
 
+**Note (2026-10-06):** the `instrument_surface` flag of decision 6 went with #2912, and so did the `action_plan_contract` and `signal_intent_binding` fields added beside it. Nothing read them: the enforcement decision 6 planned was never built, and the traded instrument now comes from the Action Plan for every strategy.
+
 ## Context
 
 Today's surfaces (verified against repo state at this commit):

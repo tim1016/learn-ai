@@ -362,11 +362,9 @@ def _drive_to_first_exit(
 
     ``symbol`` is the registration's own ``param_schema().symbol`` rather
     than a private attribute read off the strategy: the sealed programs do
-    NOT share one such attribute (``deployment_validation`` names its two
-    ``_signal_symbol_name``/``_trade_symbol_name``, because it is the one
-    program that can trade a different instrument than it signals on), so
-    reaching for ``strategy._symbol_name`` broke the moment a seventh
-    program was promoted.
+    NOT share one such attribute (``deployment_validation`` names its
+    ``_signal_symbol_name``), so reaching for ``strategy._symbol_name``
+    broke the moment a seventh program was promoted.
     """
     strategy = program.strategy
     session = program.session

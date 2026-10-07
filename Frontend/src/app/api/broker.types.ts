@@ -26476,7 +26476,7 @@ export interface operations {
     option_chain_stream_api_broker_option_chain__symbol__get: {
         parameters: {
             query: {
-                /** @description Expiry timestamp in int64 ms UTC. */
+                /** @description An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC. */
                 expiry_ms: number;
                 /** @description Strikes to subscribe. Pick from /api/broker/strikes/{symbol} so every value is one IBKR can actually qualify. */
                 strikes?: number[] | null;
@@ -26515,7 +26515,7 @@ export interface operations {
     option_contracts_endpoint_api_broker_option_contracts__symbol__get: {
         parameters: {
             query: {
-                /** @description Expiry timestamp in int64 ms UTC. */
+                /** @description An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC. */
                 expiry_ms: number;
                 /** @description Option strike. */
                 strike: number;
@@ -26555,7 +26555,7 @@ export interface operations {
     option_surface_stream_api_broker_option_surface__symbol__get: {
         parameters: {
             query?: {
-                /** @description Expirations to fan over (repeated). Each value is an int64 ms UTC timestamp from /api/broker/expirations/{symbol}. */
+                /** @description Expirations to fan over (repeated). Each value is an option expiry from /api/broker/expirations/{symbol}: 16:00 New York time on the expiry date, as int64 ms UTC. */
                 expiry_ms?: number[] | null;
                 /** @description Strike band applied at every expiry (repeated). Pick from /api/broker/strikes/{symbol} so every value qualifies. */
                 strikes?: number[] | null;
@@ -26627,7 +26627,7 @@ export interface operations {
     list_strikes_endpoint_api_broker_strikes__symbol__get: {
         parameters: {
             query: {
-                /** @description Expiry timestamp in int64 ms UTC. */
+                /** @description An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC. */
                 expiry_ms: number;
             };
             header?: {

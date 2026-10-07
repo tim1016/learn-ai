@@ -7,7 +7,7 @@ stop/flatten barrier sits 15 minutes before the session's scheduled close —
 the barrier is always reachable (see #1672; a fixed 15:45 ET literal is never
 reached on a 13:00 ET half-day close, so the flatten safety net silently
 never fires). Detect two consecutive green minute bars (close > open). After
-the second green bar, submit an entry order for the configured trade symbol
+the second green bar, submit an entry order for the symbol
 intended to fill with Engine Lab's ``next_bar_open`` mode on the third bar.
 Hold through the third, fourth, and fifth signal-bar closes, then submit
 ``Liquidate`` on the fifth bar. Reset detection state after each exit cycle.
@@ -70,12 +70,10 @@ class _OpenTrade:
 class DeploymentValidationConsecutiveGreen(Strategy):
     """Deterministic minute-bar strategy for validating deployment plumbing."""
 
-    def __init__(self, symbol: str = "SPY", trade_symbol: str | None = None) -> None:
+    def __init__(self, symbol: str = "SPY") -> None:
         super().__init__()
         self._signal_symbol_name = symbol.upper()
-        self._trade_symbol_name = (trade_symbol or symbol).upper()
         self._signal_symbol: str = ""
-        self._trade_symbol: str = ""
 
         self._current_date = None
         self._green_streak = 0
@@ -95,11 +93,8 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         self.signal_program: SignalProgram | None = None
 
     def signal_program_settings(self) -> dict[str, str]:
-        """Stable signal/trade-symbol settings which participate in evaluation identity."""
-        return {
-            "symbol": self._signal_symbol_name,
-            "trade_symbol": self._trade_symbol_name,
-        }
+        """Stable settings which participate in evaluation identity."""
+        return {"symbol": self._signal_symbol_name}
 
     def initialize(self) -> None:
         self.set_start_date(2024, 3, 28)
@@ -108,7 +103,6 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
         assert self.ctx is not None
         self._signal_symbol = self.ctx.add_equity(self._signal_symbol_name)
-        self._trade_symbol = self._trade_symbol_name
         # A passthrough 1-minute consolidator keeps this strategy on the same
         # charting/order-drain path as other Engine Lab strategies. Decisions
         # are made in on_minute_bar so next_bar_open fills land on the third
@@ -351,11 +345,9 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:
         """Apply one session-committed signal through direct custody calls.
 
-        Unlike ema_crossover_signal/sma_crossover (``instrument_surface=
-        "policy"``), this strategy self-selects its traded instrument
-        (``instrument_surface="explicit"``, the registry default), so it
-        calls ``ctx.set_holdings``/``ctx.liquidate`` directly rather than
-        ``ctx.emit_signal_intent``.
+        Unlike ema_crossover_signal/sma_crossover, this strategy calls
+        ``ctx.set_holdings``/``ctx.liquidate`` on its own symbol directly
+        rather than ``ctx.emit_signal_intent``.
 
         Position-lifecycle custody (``_in_position``, the
         ``_bars_until_exit_signal`` countdown) is fully owned here, not by
@@ -381,7 +373,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         end_time = ny_datetime(bar.end_ms)
 
         if intent.kind is SignalIntentKind.EXIT:
-            self.ctx.liquidate(self._trade_symbol)
+            self.ctx.liquidate(self._signal_symbol)
             if self._stopped_for_day:
                 self.ctx.log(f"SESSION FLATTEN SIGNAL: {end_time.strftime('%Y-%m-%d %H:%M')}")
             else:
@@ -394,10 +386,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
         assert intent.kind is SignalIntentKind.ENTER
         self._pending_signal_time_ms = bar.end_ms
-        # Cross-asset ``trade_symbol`` is legacy deployment metadata. Engine
-        # Lab hides/rejects it because the backtest engine has one price
-        # stream; the retired IBKR runner was its only execution consumer.
-        self.ctx.set_holdings(self._trade_symbol, Decimal(1))
+        self.ctx.set_holdings(self._signal_symbol, Decimal(1))
         self._entry_pending = True
         self._in_position = True
         self._bars_until_exit_signal = _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL
@@ -494,6 +483,6 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     def on_end_of_algorithm(self) -> None:
         if self._in_position or self._entry_pending:
             assert self.ctx is not None
-            self.ctx.liquidate(self._trade_symbol)
+            self.ctx.liquidate(self._signal_symbol)
             self._in_position = False
             self._entry_pending = False

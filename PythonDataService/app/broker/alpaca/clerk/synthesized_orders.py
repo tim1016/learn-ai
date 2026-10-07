@@ -36,7 +36,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, NamedTuple, TypeGuard
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import ExtendedHoursWindow
@@ -75,6 +75,14 @@ class SynthesizedAnchor(BaseModel):
     bar that priced the order. Under ``older_bar_close`` that bar closed
     before the order was decided (#2912): the order's own fill instant minus
     ``decision_bar_end_ms`` is the age of its price.
+
+    ``restated_bar_end_ms`` is set when the pricing bar is not the market's
+    own but re-states an earlier price at the instant it was used, as a Dry
+    Run's run-end close does (ADR 0045): the close of the market bar that
+    price last traded in. The re-stated bar's own times are the sale's, so
+    this is the only place the price's age survives. It is left out of a
+    record that has none, so a ledger with no such record still reads on a
+    build from before the field existed.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -89,15 +97,26 @@ class SynthesizedAnchor(BaseModel):
     cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     fill_bar_ref: str | None = None
     unfilled_reason: Literal["untouched", "no_evidence"] | None = None
+    restated_bar_end_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+
+    @model_serializer(mode="wrap")
+    def _leave_out_an_absent_restated_time(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("restated_bar_end_ms") is None:
+            data.pop("restated_bar_end_ms", None)
+        return data
 
 
 class BoundBar(NamedTuple):
-    """The retained bar that prices one order, and when its fill is stamped if the bar is an older one."""
+    """The retained bar that prices one order, with what its record must say beyond the bar itself."""
 
     bar: RetainedSourceBar
     # Set only for a bar that closed before the order was decided: the
     # instant of that decision. ``None`` stamps the fill at the bar's close.
     older_fill_at_ms: int | None
+    # Set only for a bar that re-states an earlier price: when that price
+    # last traded (``SynthesizedAnchor.restated_bar_end_ms``).
+    restated_bar_end_ms: int | None
 
     @property
     def fill_model(self) -> FillModel:
@@ -244,7 +263,12 @@ class SynthesizedOrderLedger:
     # ── pricing-bar binding ─────────────────────────────────────────────
 
     def bind_evaluated_bar(
-        self, client_order_id: str, retained_bar: RetainedSourceBar, *, fill_at_ms: int | None = None
+        self,
+        client_order_id: str,
+        retained_bar: RetainedSourceBar,
+        *,
+        fill_at_ms: int | None = None,
+        restated_bar_end_ms: int | None = None,
     ) -> None:
         """Bind one minted Clerk order identity to the one exact retained bar that prices it.
 
@@ -257,6 +281,11 @@ class SynthesizedOrderLedger:
         fills at the newest earlier one, stamped when it was decided, not
         when that price traded (#2912). A bar that closes at that instant, or
         one bound with no instant, fills at its own close.
+
+        ``restated_bar_end_ms`` is when the price ``retained_bar`` re-states
+        last traded. It is the feed's time and ``retained_bar``'s is this
+        process's clock, so the two are not compared: a clock running behind
+        the feed must not stop a close.
         """
         if not client_order_id:
             raise SynthesizedBarBindingError("Synthetic bar binding requires a client order id.")
@@ -267,10 +296,12 @@ class SynthesizedOrderLedger:
             )
         older = fill_at_ms is not None and fill_at_ms > canonical.end_ms
         with self._binding_lock:
-            self._bound_bars[client_order_id] = BoundBar(canonical, fill_at_ms if older else None)
+            self._bound_bars[client_order_id] = BoundBar(
+                canonical, fill_at_ms if older else None, restated_bar_end_ms
+            )
 
     def consume_binding(self, client_order_id: str) -> BoundBar | None:
-        """The bar bound to this order, with the instant its fill is stamped at when the bar is an older one."""
+        """The bar bound to this order, with the fill instant and the re-stated price's time it was bound with."""
         with self._binding_lock:
             return self._bound_bars.pop(client_order_id, None)
 
