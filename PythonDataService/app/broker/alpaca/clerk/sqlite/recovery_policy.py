@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
+    END_EXPIRED_OPTION_LABEL,
     expired_contract_hold_ref,
     owner_ending_offered_from_ms,
 )
@@ -269,8 +270,6 @@ def _stop_confirmation(ctx: RecoveryPolicyContext) -> RecoveryConfirmation:
 #: The settle action's name: its descriptor's label, and what every text that
 #: sends the operator to the action quotes (#2854).
 SETTLE_UNKNOWN_EXIT_ORDER_LABEL = "Settle the uncertain order"
-#: The name of the owner's ending of an expired option contract nothing will settle (ADR 0076 decision 22).
-END_EXPIRED_OPTION_LABEL = "End the expired contract"
 
 _DESCRIPTORS: tuple[_Descriptor, ...] = (
     _Descriptor(

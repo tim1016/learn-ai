@@ -54,6 +54,9 @@ from app.lean_sidecar.trading_calendar import next_trading_day, session_close_ms
 from app.options.deadlines import last_session_close_ms
 from app.utils.session_anchors import et_date_at_ms
 
+# What the action is called: its label where it is offered, and what a notice that sends the owner to it quotes.
+END_EXPIRED_OPTION_LABEL = "End the expired contract"
+
 # How many whole sessions after a contract's last one the broker's record of its end is waited for,
 # before the owner may end the contract at their word on a real account. Until the timing of
 # Alpaca's row has been seen on an account, one full business day.
@@ -172,6 +175,7 @@ def recent_owner_endings(conn: sqlite3.Connection, *, since_ms: int) -> list[int
 
 
 __all__ = [
+    "END_EXPIRED_OPTION_LABEL",
     "OWNER_ENDING_KEY_PREFIX",
     "OWNER_ENDING_LATE_ROW_DAYS",
     "OWNER_ENDING_SOURCE",

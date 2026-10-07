@@ -149,6 +149,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     closed_by_an_option_event,
 )
 from app.broker.alpaca.clerk.sqlite.option_owner_ending import (
+    END_EXPIRED_OPTION_LABEL,
     OWNER_ENDING_SOURCE,
     OwnerEndingOutcome,
     OwnerEndingRequest,
@@ -337,15 +338,15 @@ _NEXT_STEPS: dict[str, str] = {
     OPTION_EVENTS_NOT_READ_REASON_CODE: "Nothing to do: the Clerk reads them once more within a minute.",
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
         "Nothing to send. The Clerk books the contract's end when the broker's record of it is read. If none has "
-        "come by the close of the next session, you can end the contract at your word from this bot's page: it "
-        "is then counted as worth nothing, and what it cost is booked as a loss."
+        f'come by the close of the next session, you can end the contract at your word with "{END_EXPIRED_OPTION_LABEL}": '
+        "it is then counted as worth nothing, and what it cost is booked as a loss."
     ),
 }
 # The same hold on a simulated account, which has no broker to send a record.
 _SIMULATED_NEXT_STEPS: dict[str, str] = {
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE: (
-        "Nothing to send, and no price will come by itself. You can end the contract at your word from this "
-        "bot's page: it is then counted as worth nothing, and what it cost is booked as a loss."
+        "Nothing to send, and no price will come by itself. You can end the contract at your word with "
+        f'"{END_EXPIRED_OPTION_LABEL}": it is then counted as worth nothing, and what it cost is booked as a loss.'
     ),
 }
 # What a hold means for the bot, where the family's own sentence would not be true.
