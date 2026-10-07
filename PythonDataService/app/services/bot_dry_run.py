@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.options.entry_came_to import BOUGHT_NOTHING, EntryCameTo
 from app.services.jsonl_wal import JsonlWal
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -60,8 +61,8 @@ class DryRunActivity(BaseModel):
     # On an entry: where the contract's listing was read. A simulation has no broker reference to ask.
     contract_reference: Literal["ibkr_listing"] | None = None
     # On an entry's fill: what the entry came to when the strategy was settled on it, as the Clerk
-    # answered. An entry that filled nothing has no row.
-    entry_outcome: Literal["filled", "part_filled_then_cancelled", "resting"] | None = None
+    # answered, in the runner's one closed set. An entry that filled nothing has no row.
+    entry_outcome: EntryCameTo | None = None
     simulated: Literal[True] = True
 
     @model_serializer(mode="wrap")
@@ -111,6 +112,8 @@ class DryRunActivity(BaseModel):
             raise ValueError("only a fill in an option contract says how its quote priced it")
         if self.entry_outcome is not None and self.intent != "ENTER":
             raise ValueError("only an entry's fill says what its entry came to")
+        if self.entry_outcome in BOUGHT_NOTHING:
+            raise ValueError("a fill's row never says its entry bought nothing")
         return self
 
 

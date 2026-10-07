@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
-    from app.broker.alpaca.clerk.sqlite.entry_outcome import SettledEntry
+    from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOnTheBooks, SettledEntry
     from app.broker.alpaca.clerk.sqlite.lane_quiet import AccountQuietObservation
     from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill
     from app.broker.alpaca.clerk.sqlite.run_ownership import RunOwner
@@ -155,7 +155,13 @@ class ActiveAlpacaClerk(Protocol):
         ...
 
     def option_contracts_to_watch(self) -> tuple[str, ...]:
-        """The option contracts this account must have quoted, by OCC symbol: held, or an order working (ADR 0076)."""
+        """The option contracts a bot's run on this account must ask to have quoted, by OCC symbol: held, or an
+        order working. None where the authority's own keeping asks for them (ADR 0076)."""
+        ...
+
+    def option_entry_of_decision(self, strategy_instance_id: str, decision_id: str) -> EntryOnTheBooks | None:
+        """Where the option entry one decision made stands on the books now, or ``None`` when it made none: a
+        read, which waits for nothing and records nothing (ADR 0076)."""
         ...
 
     def held_option_contracts(self, strategy_instance_id: str) -> tuple[str, ...]:

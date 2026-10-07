@@ -9,7 +9,8 @@ calls at the money, expiring on Friday: the 585 call, quoted 4.08 bid and
 On a Paper account that order rests at Alpaca. The runner waits for what it
 came to, no longer than fifty seconds after the bar it decided on closed. The
 bot's order terms are the ones a Deploy starts from: the Clerk cancels what
-has not filled twenty seconds after it took the entry.
+has not filled twenty seconds after it took the entry. An entry is taken only
+while that cancel could still be proven inside the runner's wait.
 
 Everything but the IBKR connection, the bar feed, the vendors and Alpaca is
 the real thing (``_paper_option_floor``). Alpaca is the double the Clerk's
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from decimal import Decimal
@@ -34,26 +36,35 @@ from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_s
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes
 from app.broker.alpaca.clerk.held_option_quotes import reset_held_option_quotes_for_testing
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionPlanRefused
 from app.broker.alpaca.clerk.sqlite import decision_receipts as decision_receipts_module
 from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
-from app.broker.alpaca.clerk.sqlite.entry_outcome import EntrySettlement, EntryStanding
+from app.broker.alpaca.clerk.sqlite.entry_outcome import (
+    ENTRY_OUTCOME_LIMIT_PAST,
+    EntryOutcomeWaitRefused,
+    EntrySettlement,
+    EntryStanding,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import CONTRACT_REFERENCE_READ_BOUND_MS, SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.ibkr.bars import REALTIME_BAR_STALL_TIMEOUT_S
 from app.broker.ibkr.config import reset_settings_for_testing
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.marketdata.feed import DELIVERY_ALLOWANCE_MS, FeedHealth, MarketDataBar
 from app.options.contract import OptionContract
 from app.options.deadlines import CloseTerms
 from app.services import bot_option_run, market_liveness
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
 from app.services.bot_option_run import (
+    CANCEL_PROOF_ROOM_MS,
+    ENTRY_OUTCOME_SHORTEST_WAIT_MS,
     ENTRY_OUTCOME_WAIT_MS,
     EntryCameTo,
+    OptionEntryRefusal,
     OptionOrderTerms,
     OptionRun,
     entry_came_to,
@@ -169,6 +180,43 @@ def _decision(ran: Ran, close_ms: int) -> str:
     """The id of the decision taken on the bar that closed at ``close_ms``, as the runner named it to the Clerk."""
     (found,) = [facts["evaluation_id"] for _, facts in ran.receipts if facts["decision_bar_close_ms"] == close_ms]
     return found
+
+
+def _said(caplog: pytest.LogCaptureFixture, action: str) -> list[logging.LogRecord]:
+    """The runner's own log lines of one kind, oldest first."""
+    return [record for record in caplog.records if getattr(record, "action", None) == action]
+
+
+@pytest.fixture
+def the_runner_is_heard(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    caplog.set_level(logging.INFO, logger="app.services.bot_trade_strategy")
+    return caplog
+
+
+def _a_send_that_takes_54_seconds(paper: PaperFloor) -> Callable[[], None]:
+    """Alpaca takes fifty-four seconds to answer the send of an option order. Returns what ends that."""
+    send = paper.venue.submit_option_order
+
+    async def slow(order: Any, *, client_order_id: str) -> Any:
+        for _ in range(6):
+            paper.clock.value += 9_000
+            paper.repo.renew_execution_lease()
+        return await send(order, client_order_id=client_order_id)
+
+    def answers_at_once_again() -> None:
+        paper.venue.submit_option_order = send  # type: ignore[method-assign]
+
+    paper.venue.submit_option_order = slow  # type: ignore[method-assign]
+    return answers_at_once_again
+
+
+def _alpaca_answers_nothing(paper: PaperFloor) -> None:
+    paper.venue.cancel_error = BrokerUnavailable("cancel timed out", broker="alpaca")
+    paper.venue.option_lookup_error = BrokerUnavailable("lookup timed out", broker="alpaca")
+
+
+def _alpaca_answers_again(paper: PaperFloor) -> None:
+    paper.venue.cancel_error = paper.venue.option_lookup_error = None
 
 
 # ---- On Paper: the entry rests, and the strategy follows what it came to -----------------------------
@@ -314,9 +362,12 @@ async def test_an_entry_that_fills_in_part_is_settled_as_entered_and_the_exit_se
     assert paper.replayed_dispositions().outcomes[_decision(ran, ENTER_MS)] == "enter_intent"
 
 
-async def test_an_order_alpaca_rejects_is_a_refused_entry_and_the_next_signal_enters(paper: PaperFloor) -> None:
+async def test_an_order_alpaca_rejects_is_a_refused_entry_and_the_next_signal_enters(
+    paper: PaperFloor, the_runner_is_heard: pytest.LogCaptureFixture
+) -> None:
     """Alpaca answers the send with a refusal. Nothing rests, so nothing is waited for: the decision is
-    dropped at once, and the next green bar is an ENTER again."""
+    dropped at once, and the next green bar is an ENTER again. The Clerk had taken the entry first, so its
+    receipt reads accepted: the runner says, once, that it came to a rejection and the code on the books."""
     paper.venue.option_submit_error = BrokerOrderRejected("insufficient options buying power", broker="alpaca")
 
     async def alpaca_takes_orders_again(floor: Floor) -> None:
@@ -335,10 +386,36 @@ async def test_an_order_alpaca_rejects_is_a_refused_entry_and_the_next_signal_en
     assert second is not None and second.settlement is EntrySettlement.ENTERED
     assert paper.holds() == {CALL: 1.0}
     assert paper.replayed_dispositions().outcomes[_decision(ran, ENTER_MS)] == ENTRY_DISCARDED
+    (refused,) = _said(the_runner_is_heard, "bot_option_entry_refused_at_the_send")
+    assert (refused.evaluation_id, refused.came_to) == (_decision(ran, ENTER_MS), EntryCameTo.REJECTED.value)
+    assert refused.reason_code == "ORDER_SUBMIT_FAILED"
+    # The entry that filled was settled, and is said in the same words.
+    assert [said.came_to for said in _said(the_runner_is_heard, "bot_option_entry_settled")] == ["filled"]
+
+
+async def test_an_order_alpaca_rejects_after_taking_it_reads_as_cancelled_unfilled_to_the_runner(
+    paper: PaperFloor, the_runner_is_heard: pytest.LogCaptureFixture
+) -> None:
+    """Alpaca takes the order, and three seconds on ends it as rejected, with nothing filled. The Clerk's
+    order row keeps Alpaca's own word. The entry's standing does not: it ended with nothing filled, like
+    one cancelled at its deadline, and the standing is all the runner is told. So the runner's word for it
+    is "cancelled unfilled", and the decision is dropped."""
+    paper.while_it_rests(3_000, lambda: paper.venue.option_order_ends(paper.order_ref(0), "rejected"))
+
+    ran = await paper.run([*_two_greens(), Step(red(ENTER_MS + MINUTE))])
+
+    settled = paper.settled()
+    assert settled is not None
+    assert (settled.settlement, settled.standing) == (EntrySettlement.DISCARDED, EntryStanding.UNFILLED)
+    order = paper.repo.order(paper.venue_entry_refs()[0])
+    assert order is not None and order.broker_state == "rejected"
+    (said,) = _said(the_runner_is_heard, "bot_option_entry_settled")
+    assert said.came_to == EntryCameTo.CANCELLED_UNFILLED.value
+    assert paper.replayed_dispositions().outcomes[_decision(ran, ENTER_MS)] == ENTRY_DISCARDED
 
 
 async def test_an_entry_still_unproven_when_its_wait_ends_is_settled_as_entered_and_no_second_entry_is_made(
-    paper: PaperFloor,
+    paper: PaperFloor, the_runner_is_heard: pytest.LogCaptureFixture
 ) -> None:
     """Alpaca stops answering: the cancel at the deadline fails and so does every lookup. Nothing proves what
     the order came to. Until the wait ends the decision stays open, and the run asks its stream for no
@@ -360,6 +437,8 @@ async def test_an_entry_still_unproven_when_its_wait_ends_is_settled_as_entered_
     assert (settled.settlement, settled.standing) == (EntrySettlement.ENTERED, EntryStanding.OUTCOME_UNKNOWN)
     assert (settled.units_filled, settled.until_ms) == (0, WAITED_UNTIL_MS)
     assert WAITED_UNTIL_MS <= settled.settled_at_ms < WAITED_UNTIL_MS + 400
+    # Nobody knows where the order is. The runner does not call that resting.
+    assert [said.came_to for said in _said(the_runner_is_heard, "bot_option_entry_settled")] == ["unproven"]
     # Forty seconds in nothing was settled, the decision was still open, and the stream had been asked for
     # no bar after the one decided on.
     recorded, asked_after, run = seen["forty seconds in"]
@@ -385,31 +464,208 @@ def test_the_wait_for_an_entry_ends_well_inside_the_bar_streams_stall_timer_and_
     told its line has stalled, and the line is replaced for every bot on the symbol."""
     assert ENTRY_OUTCOME_WAIT_MS + 10_000 <= REALTIME_BAR_STALL_TIMEOUT_S * 1000
     assert ENTRY_OUTCOME_WAIT_MS < MINUTE
+    # A limit asked a moment from now gives the Clerk one more read of its books before it judges.
+    assert ENTRY_OUTCOME_SHORTEST_WAIT_MS > clerk_runtime._ENTRY_OUTCOME_POLL_S * 1000
 
 
-async def test_an_entry_whose_send_outran_its_wait_is_settled_as_entered_with_nothing_recorded(
-    paper: PaperFloor,
+@pytest.mark.parametrize(
+    ("alpaca_answers", "came_to", "the_next_green_bar", "replayed_as"),
+    [
+        pytest.param(
+            True, (EntrySettlement.DISCARDED, EntryStanding.UNFILLED), "enter_intent", ENTRY_DISCARDED,
+            id="its cancel is proven in the last look",
+        ),
+        pytest.param(
+            False, (EntrySettlement.ENTERED, EntryStanding.OUTCOME_UNKNOWN), "no_action", "enter_intent",
+            id="alpaca answers nothing",
+        ),
+    ],
+)
+async def test_an_entry_whose_send_outran_its_wait_is_still_settled_by_the_clerk_and_a_replay_agrees(
+    paper: PaperFloor, alpaca_answers: bool, came_to: tuple[Any, Any], the_next_green_bar: str, replayed_as: str
 ) -> None:
-    """Alpaca takes fifty-four seconds to answer the send. By then the wait for the entry's outcome is over
-    before it could be asked for, and the Clerk gives no answer. The entry is unproven at the end of its
-    wait like any other: the strategy is in, and nothing is recorded."""
-    send = paper.venue.submit_option_order
-
-    async def a_send_that_takes_nearly_a_minute(order: Any, *, client_order_id: str) -> Any:
-        for _ in range(6):
-            paper.clock.value += 9_000
-            paper.repo.renew_execution_lease()
-        return await send(order, client_order_id=client_order_id)
-
-    paper.venue.submit_option_order = a_send_that_takes_nearly_a_minute  # type: ignore[method-assign]
+    """Alpaca takes fifty-four seconds to answer the send, so the fifty the runner waits are over before it
+    can ask what the entry came to. It asks all the same, with a limit a moment from now and not one already
+    past. The Clerk looks once more, judges, and records its answer, so the settlement is the Clerk's and
+    never the runner's own. What the live run did on the next bar and what a later Start replays are then
+    one answer."""
+    _a_send_that_takes_54_seconds(paper)
+    if not alpaca_answers:
+        _alpaca_answers_nothing(paper)
+    sent_by_ms = TAKEN_MS + 54_000
 
     ran = await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
 
-    assert paper.settled() is None and paper.outcome_reads_paused == 0
-    assert paper.waits_asked_until == [WAITED_UNTIL_MS]
-    # The strategy is in: the green bar after is no second ENTER.
-    assert [outcome for outcome, _ in ran.outcomes()] == ["no_action", "enter_intent", "no_action"]
+    assert paper.waits_asked_until[0] == sent_by_ms + ENTRY_OUTCOME_SHORTEST_WAIT_MS
+    settled = paper.settled()
+    assert settled is not None and settled.recorded
+    assert (settled.settlement, settled.standing) == came_to
+    assert sent_by_ms < settled.settled_at_ms <= sent_by_ms + 2 * ENTRY_OUTCOME_SHORTEST_WAIT_MS
+    # Live: in the strategy, the next green bar is no second ENTER; dropped, it is an ENTER again.
+    assert ran.outcomes()[2] == (the_next_green_bar, ENTER_MS + MINUTE)
+    # Whatever is proven afterwards, a later Start replays the decision as the live run settled it.
+    _alpaca_answers_again(paper)
+    await paper.keeper.tick()
+    assert paper.entry(0).standing is EntryStanding.UNFILLED
+    assert paper.replayed_dispositions().outcomes[_decision(ran, ENTER_MS)] == replayed_as
+
+
+async def test_a_later_start_after_a_send_that_outran_its_wait_names_no_decision_the_live_run_never_staged(
+    paper: PaperFloor,
+) -> None:
+    """The send outran the wait and Alpaca answered nothing more, so the Clerk settled the entry as entered
+    while unproven. The live run was in from 10:31: the green bar at 10:32 was no action, and the process
+    died as the green bar at 10:33 was retained. The Clerk came back, cancelled the order and proved it
+    unfilled.
+
+    The owner starts the bot again, through the trade runner. Its warm-up replays the 10:31 entry as the
+    live run settled it, as an entry. So the green bar at 10:33 stages nothing, and no decision is written
+    down as one a crash left undecided. Replayed from the books, as unfilled, that bar would stage an ENTER
+    the live run never staged."""
+    answers_at_once_again = _a_send_that_takes_54_seconds(paper)
+    _alpaca_answers_nothing(paper)
+    first = await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
+    assert [outcome for outcome, _ in first.outcomes()] == ["no_action", "enter_intent", "no_action"]
+    answers_at_once_again()
+    _alpaca_answers_again(paper)
+    paper.ledger().append(green(ENTER_MS + 2 * MINUTE), run_id=paper.binding.run_id)
+    await paper.the_clerk_restarts()
+    assert paper.entry().standing is EntryStanding.UNFILLED
+
+    later = await paper.run([Step(red(EXIT_MS))], as_a_later_run="run-later")
+
+    assert later.outcomes() == [
+        ("no_action", FIRST_GREEN_MS), ("enter_intent", ENTER_MS), ("no_action", ENTER_MS + MINUTE),
+        ("no_action", EXIT_MS),
+    ]
     assert len(paper.venue.option_submit_calls) == 1
+
+
+async def test_a_wait_the_clerk_refuses_ends_the_run_and_the_runner_settles_nothing_of_its_own(
+    paper: PaperFloor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no moment kept, a send that outran the wait is asked about with a limit already past. The Clerk
+    refuses that by name and records nothing. The runner does not make up an answer in its place: the run
+    ends on the refusal."""
+    monkeypatch.setattr(bot_option_run, "ENTRY_OUTCOME_SHORTEST_WAIT_MS", 0)
+    _a_send_that_takes_54_seconds(paper)
+
+    with pytest.raises(EntryOutcomeWaitRefused) as refused:
+        await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
+
+    assert refused.value.reason_code == ENTRY_OUTCOME_LIMIT_PAST
+    assert paper.settled() is None
+    assert [outcome for outcome, _ in paper.receipts()] == ["no_action", "enter_intent"]
+
+
+async def test_an_accepted_entry_with_no_entry_on_the_books_ends_the_run(
+    paper: PaperFloor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Clerk's receipt says it took the ENTER, and its books hold no option entry for that decision. The
+    two contradict each other. The runner settles nothing on a guess: the run ends on the Clerk's own
+    error, with nothing sent."""
+    real = paper.clerk.execute_for_instance
+
+    async def a_receipt_with_nothing_behind_it(**effect: Any) -> Any:
+        refused = await real(**{**effect, "option_entry": None})
+        return refused.model_copy(update={"state": EffectOperationState.SUBMITTED})
+
+    monkeypatch.setattr(paper.clerk, "execute_for_instance", a_receipt_with_nothing_behind_it)
+
+    with pytest.raises(LookupError, match="no entry in an option contract"):
+        await paper.run([*_two_greens(), Step(green(ENTER_MS + MINUTE))])
+
+    assert paper.venue.option_submit_calls == [] and paper.venue_entry_refs() == []
+    assert paper.transitions("ENTRY_SETTLED") == 0
+
+
+# ---- Settled as entered before it was proven: the exit clears it ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("road", "stood_at_the_settle", "the_word"),
+    [
+        pytest.param("alpaca is silent, then answers", EntryStanding.OUTCOME_UNKNOWN, "unproven", id="silent, then proven unfilled"),
+        pytest.param("it still rests at the exit", EntryStanding.CANCELLATION_REQUESTED, "resting", id="still resting at the exit"),
+        pytest.param("it ends before the exit", EntryStanding.CANCELLATION_REQUESTED, "resting", id="ended unfilled before the exit"),
+    ],
+)
+async def test_an_entry_settled_as_entered_before_it_was_proven_is_cleared_by_its_exit_and_the_next_signal_enters(
+    paper: PaperFloor, the_runner_is_heard: pytest.LogCaptureFixture, road: str, stood_at_the_settle: EntryStanding,
+    the_word: str,
+) -> None:
+    """The wait ends with the order's outcome unproven, so the strategy counts itself in. The order never
+    fills. Three ways it goes from there, and one ending:
+
+    - Alpaca answers nothing until 10:33, then shows the order cancelled;
+    - Alpaca takes the cancel and goes on showing the order working, so it still rests when the exit comes;
+    - the same, and the order ends by itself a minute before the exit.
+
+    The strategy's own EXIT at 10:34 is what clears it. The Clerk cancels the entry if it still rests,
+    proves that nothing was bought, and sends no sale. The strategy is flat again, and its next signal is
+    a second limit order, sent only after the first had ended. A later Start replays every decision as
+    the live run settled it."""
+    if road == "alpaca is silent, then answers":
+        _alpaca_answers_nothing(paper)
+    else:
+        paper.venue.cancel_is_slow = True
+    seen: dict[str, Any] = {}
+
+    async def a_minute_before_the_exit(floor: Floor) -> None:
+        if road == "alpaca is silent, then answers":
+            _alpaca_answers_again(paper)
+        elif road == "it ends before the exit":
+            paper.venue.cancel_is_slow = False
+            paper.venue.option_order_ends(paper.order_ref(0))
+        if road != "it still rests at the exit":
+            # The keeper's next round finds out, with no runner waiting on it.
+            await paper.keeper.tick()
+        await floor.bar_arrives(ENTER_MS + 2 * MINUTE + DELIVERY_MS)
+
+    async def the_exit_bar(floor: Floor) -> None:
+        paper.venue.cancel_is_slow = False
+        seen["at the exit"] = (paper.entry(0).standing, paper.holds(), paper.venue.option_orders[paper.order_ref(0)]["status"])
+        seen["cancels asked before the exit"] = len(paper.venue.cancel_calls)
+        await floor.bar_arrives(EXIT_MS + DELIVERY_MS)
+
+    paper.while_it_rests(0, lambda: paper.alpaca_fills(1), entry=1)
+    script = [
+        *_two_greens(),
+        Step(green(ENTER_MS + MINUTE)),
+        Step(red(ENTER_MS + 2 * MINUTE), before=a_minute_before_the_exit),
+        Step(red(EXIT_MS), before=the_exit_bar),
+        Step(green(EXIT_MS + MINUTE)),
+        Step(green(EXIT_MS + 2 * MINUTE)),
+        Step(red(EXIT_MS + 3 * MINUTE)),
+    ]
+
+    ran = await paper.run(script)
+
+    first = paper.settled(0)
+    assert first is not None and first.recorded
+    assert (first.settlement, first.standing, first.units_filled) == (EntrySettlement.ENTERED, stood_at_the_settle, 0)
+    assert _said(the_runner_is_heard, "bot_option_entry_settled")[0].came_to == the_word
+    # In the strategy from 10:31, though it holds nothing: the green bar at 10:32 is no second entry.
+    lived = [outcome for outcome, _ in ran.outcomes()]
+    assert lived == [
+        "no_action", "enter_intent", "no_action", "no_action", "exit_intent", "no_action", "enter_intent", "no_action",
+    ]
+    stood, held, at_alpaca = seen["at the exit"]
+    assert held == {}
+    still_resting = road == "it still rests at the exit"
+    assert (stood, at_alpaca) == (
+        (EntryStanding.CANCELLATION_REQUESTED, "new") if still_resting else (EntryStanding.UNFILLED, "canceled")
+    )
+    # The exit cancels the entry when it still rests, and asks for no cancel of one that has ended.
+    assert len(paper.venue.cancel_calls) - seen["cancels asked before the exit"] == (1 if still_resting else 0)
+    assert paper.entry(0).standing is EntryStanding.UNFILLED
+    # No sale was ever sent: there was nothing to sell. The second order is the next signal's entry.
+    assert paper.asked_of_the_clerk == ["ENTER", "EXIT", "ENTER"]
+    assert paper.sent() == [(CALL, "buy", 1, "limit", "4.12"), (CALL, "buy", 1, "limit", "4.12")]
+    assert paper.holds() == {CALL: 1.0}
+    # A later Start replays what the live run lived, decision for decision.
+    replayed = paper.replayed_dispositions().outcomes
+    assert [replayed[facts["evaluation_id"]] for _, facts in ran.receipts] == lived
 
 
 # ---- The run ends while an entry rests ---------------------------------------------------------------
@@ -571,11 +827,11 @@ async def test_a_later_run_on_paper_writes_down_no_exit_of_a_position_its_unfill
 
 
 async def test_a_later_dry_run_writes_down_no_exit_of_a_position_an_entry_refused_at_the_send_never_opened(
-    dry_run: Floor, monkeypatch: pytest.MonkeyPatch
+    dry_run: Floor, monkeypatch: pytest.MonkeyPatch, the_runner_is_heard: pytest.LogCaptureFixture
 ) -> None:
     """A Dry Run's Clerk took the entry and then refused it as its order was sent: its quote had grown old.
-    The receipt reads accepted, and the run went on flat. A later run of the Dry Run replays that entry as
-    discarded too."""
+    The receipt reads accepted, and the run went on flat. The runner says once what the entry came to, with
+    the code the books recorded. A later run of the Dry Run replays that entry as discarded too."""
     take = clerk_runtime.accept_option_enter
 
     def take_and_stand_still(*args: Any, **kwargs: Any) -> Any:
@@ -586,6 +842,12 @@ async def test_a_later_dry_run_writes_down_no_exit_of_a_position_an_entry_refuse
     monkeypatch.setattr(clerk_runtime, "accept_option_enter", take_and_stand_still)
     await dry_run.run([*_two_greens(), Step(red(ENTER_MS + MINUTE)), Step(red(ENTER_MS + 2 * MINUTE))])
     assert dry_run.transitions("ENTER_SUBMISSION_REFUSED") == 1 and dry_run.holds() == {}
+    on_the_books = dry_run.repo.last_strategy_transition(
+        strategy_instance_id=SID, transition_kind="ENTER_SUBMISSION_REFUSED"
+    )
+    (refused,) = _said(the_runner_is_heard, "bot_option_entry_refused_at_the_send")
+    assert (refused.came_to, refused.reason_code) == (EntryCameTo.REJECTED.value, on_the_books["summary_code"])
+    assert _said(the_runner_is_heard, "bot_option_entry_settled") == [], "nothing was asked about its outcome"
     retained = dry_run.authority.source_bars()
     try:
         retained.append(red(EXIT_MS), run_id=dry_run.binding.run_id)
@@ -659,6 +921,106 @@ async def test_the_bots_own_order_terms_reach_the_clerk_and_set_when_it_cancels(
     assert TAKEN_MS + 7_000 <= settled.settled_at_ms <= TAKEN_MS + 9_000
 
 
+# The longest entry wait a run starts with, and how late an entry may be taken under a thirty-second one.
+LONGEST_ENTRY_WAIT_MS = ENTRY_OUTCOME_WAIT_MS - CANCEL_PROOF_ROOM_MS
+THIRTY_SECOND_WAIT_MS = 30_000
+LATEST_TAKE_MS = ENTRY_OUTCOME_WAIT_MS - THIRTY_SECOND_WAIT_MS - CANCEL_PROOF_ROOM_MS
+
+
+def _the_bot_waits(monkeypatch: pytest.MonkeyPatch, entry_wait_ms: int) -> None:
+    terms = CloseTerms(entry_wait_ms=entry_wait_ms)
+    monkeypatch.setattr(bot_option_run, "option_order_terms", lambda _binding: OptionOrderTerms(close=terms))
+
+
+@pytest.mark.parametrize(
+    ("entry_wait_ms", "starts"),
+    [
+        pytest.param(LONGEST_ENTRY_WAIT_MS - 1, True, id="a millisecond inside"),
+        pytest.param(LONGEST_ENTRY_WAIT_MS, True, id="the longest that fits"),
+        pytest.param(LONGEST_ENTRY_WAIT_MS + 1, False, id="a millisecond over"),
+    ],
+)
+async def test_a_bot_whose_entry_wait_can_never_be_seen_through_is_refused_as_its_run_starts(
+    paper: PaperFloor, monkeypatch: pytest.MonkeyPatch, entry_wait_ms: int, starts: bool
+) -> None:
+    """The runner waits fifty seconds for what an entry came to, and keeps seven of them to prove a cancel.
+    An entry wait of forty-three seconds can still fit. A longer one never can: every entry would be
+    refused, so the run is, once, by name, before it asks for a quote line."""
+    _the_bot_waits(monkeypatch, entry_wait_ms)
+    run = OptionRun(paper.binding, paper.market(), held_contracts=tuple, contracts_to_watch=tuple)
+
+    if starts:
+        async with run:
+            assert len(paper.watch.requests()) == 1
+        return
+    with pytest.raises(OptionPlanRefused) as refused:
+        async with run:
+            pytest.fail("the run started")
+    assert refused.value.reason is OptionEffectRefusal.ENTRY_WAIT_OVER_OUTCOME_WAIT
+    assert paper.watch.requests() == ()
+
+
+@pytest.mark.parametrize(
+    ("taken_after_ms", "taken"),
+    [
+        pytest.param(LATEST_TAKE_MS - 1, True, id="a millisecond inside"),
+        pytest.param(LATEST_TAKE_MS, True, id="the last moment"),
+        pytest.param(LATEST_TAKE_MS + 1, False, id="a millisecond late"),
+    ],
+)
+async def test_an_entry_taken_too_late_for_its_cancel_to_be_proven_in_the_wait_is_refused_and_nothing_is_sent(
+    on_paper: Callable[..., PaperFloor], monkeypatch: pytest.MonkeyPatch, taken_after_ms: int, taken: bool
+) -> None:
+    """A bot whose entries wait thirty seconds. Its bar reaches it thirteen seconds after it closed, which
+    is on time. Taken then, the order is cancelled at forty-three seconds and proven ended inside the fifty
+    the runner waits. A millisecond later it could still be resting when the runner had to settle, so the
+    entry is refused by name: one blocked decision, the Clerk is not asked, and nothing is sent."""
+    _the_bot_waits(monkeypatch, THIRTY_SECOND_WAIT_MS)
+    paper = await on_paper().open()
+
+    async def late_but_on_time(floor: Floor) -> None:
+        await floor.bar_arrives(ENTER_MS + taken_after_ms)
+
+    ran = await paper.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS), before=late_but_on_time)])
+
+    if not taken:
+        assert [code for code, _ in ran.blocked()] == [OptionEntryRefusal.TAKEN_TOO_LATE.value]
+        assert [outcome for outcome, _ in ran.outcomes()] == ["no_action", "blocked"]
+        assert paper.asked_of_the_clerk == [] and paper.sent() == [] and paper.venue_entry_refs() == []
+        return
+    assert ran.blocked() == [] and paper.sent() == [(CALL, "buy", 1, "limit", "4.12")]
+    # What the guard keeps room for: nobody filled it, and its cancel was proven before the wait ended.
+    settled = paper.settled()
+    assert settled is not None
+    assert (settled.settlement, settled.standing) == (EntrySettlement.DISCARDED, EntryStanding.UNFILLED)
+    assert paper.entry_as_the_clerk_kept_it().cancel_at_ms == ENTER_MS + taken_after_ms + THIRTY_SECOND_WAIT_MS
+    assert settled.settled_at_ms <= WAITED_UNTIL_MS
+
+
+@pytest.mark.parametrize(
+    "taken_after_ms",
+    [0, DELIVERY_ALLOWANCE_MS, DELIVERY_ALLOWANCE_MS + CONTRACT_REFERENCE_READ_BOUND_MS],
+    ids=["as its bar closes", "the last moment a decision is on time", "that, and the Clerk's listing read"],
+)
+def test_under_the_terms_a_deploy_starts_from_no_entry_the_runner_takes_is_refused_as_too_late(
+    paper: PaperFloor, taken_after_ms: int
+) -> None:
+    """A decision is on time for twenty seconds from its bar's close, and the lateness gate refuses a later
+    one first. The Clerk's read of Alpaca's listing can add three. Under a twenty-second entry wait that
+    still leaves the seven seconds kept to prove a cancel, so the guard never refuses an entry the runner
+    takes today."""
+    assert (
+        DELIVERY_ALLOWANCE_MS + CONTRACT_REFERENCE_READ_BOUND_MS + WAIT_MS + CANCEL_PROOF_ROOM_MS
+        <= ENTRY_OUTCOME_WAIT_MS
+    )
+    run = OptionRun(
+        paper.binding, paper.market(clock=lambda: ENTER_MS + taken_after_ms), held_contracts=tuple,
+        contracts_to_watch=tuple,
+    )
+
+    assert run.too_late_to_see_through(ENTER_MS) is None
+
+
 async def test_a_dry_runs_entry_is_handed_the_bots_own_order_terms_too(
     on_the_floor: Callable[..., Floor], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -696,6 +1058,76 @@ async def test_a_paper_run_asks_for_a_held_contract_on_its_underlying_until_its_
         assert paper.watched_as_held() == named
 
     assert paper.watch.requests() == ()
+
+
+# ---- A real account's close needs no quote --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "at_the_exit",
+    ["this process has no option quote source", "the held contract's quote is three minutes old", "reading the quotes fails"],
+)
+async def test_on_paper_the_exit_is_sent_whatever_has_become_of_the_quotes_and_the_run_goes_on(
+    paper: PaperFloor, at_the_exit: str
+) -> None:
+    """A Paper account's close is a market order. No quote prices it, so the runner reads none and hands
+    none over: a quote source that is gone, a quote that is old, and a read that fails each leave the sale
+    exactly as it was, and the run decides its next bar."""
+    paper.while_it_rests(0, lambda: paper.alpaca_fills(1))
+    quotes_stop_after_the_entry = at_the_exit == "the held contract's quote is three minutes old"
+
+    def a_bar(close_ms: int) -> Step:
+        async def arrives(floor: Floor) -> None:
+            await floor.bar_arrives(close_ms + DELIVERY_MS, quotes=not quotes_stop_after_the_entry)
+            if close_ms == EXIT_MS and at_the_exit == "this process has no option quote source":
+                paper.quote_source = lambda: None
+            if close_ms == EXIT_MS and at_the_exit == "reading the quotes fails":
+                paper.quote_source = _a_read_that_fails
+
+        return Step(red(close_ms), before=arrives)
+
+    ran = await paper.run([*_two_greens(), *(a_bar(ENTER_MS + minutes * MINUTE) for minutes in (1, 2, 3, 4))])
+
+    assert ran.outcomes()[-2:] == [("exit_intent", EXIT_MS), ("no_action", EXIT_MS + MINUTE)]
+    assert paper.sent() == [(CALL, "buy", 1, "limit", "4.12"), (CALL, "sell", 1, "market", None)]
+
+
+def _a_read_that_fails() -> Any:
+    raise RuntimeError("the supervisor's read failed")
+
+
+# ---- A bot that listens to one symbol and trades options on another ------------------------------------
+
+
+async def test_on_paper_options_on_another_symbol_take_the_money_and_the_window_from_that_symbols_own_bars(
+    on_paper: Callable[..., PaperFloor],
+) -> None:
+    """The bot listens to QQQ and buys SPY calls on a Paper account. QQQ's bar decides. SPY's bar for the same
+    minute, on the run's second stream, is the money the strike is counted from, and each SPY bar moves the
+    window the run asks to have quoted: no bar of QQQ could."""
+    paper = await on_paper(plan=one_call(underlying="SPY"), listens_to="QQQ").open()
+    paper.while_it_rests(0, lambda: paper.alpaca_fills(1))
+    seen: dict[str, Any] = {}
+
+    async def a_minute_on(floor: Floor) -> None:
+        await floor.bar_arrives(ENTER_MS + MINUTE + DELIVERY_MS)
+        (seen["asked for"],) = paper.watch.requests()
+
+    ran = await paper.run(
+        [
+            Step(green(FIRST_GREEN_MS, "480.00", symbol="QQQ")),
+            Step(green(ENTER_MS, "585.00", symbol="SPY")),
+            Step(green(ENTER_MS, "480.40", symbol="QQQ")),
+            Step(red(ENTER_MS + MINUTE, "480.00", symbol="QQQ"), before=a_minute_on),
+        ]
+    )
+
+    assert sorted(ran.feed.symbols_asked_for) == ["QQQ", "SPY"]
+    (search,) = paper.worker.asked
+    assert search.underlying.pricing_bar_close == Decimal("585.00")
+    assert paper.sent() == [(CALL, "buy", 1, "limit", "4.12")] and paper.holds() == {CALL: 1.0}
+    assert (seen["asked for"].underlying, seen["asked for"].money) == ("SPY", Decimal("585.00"))
+    assert seen["asked for"].held == (CALL_585,)
 
 
 # ---- Which accounts run an option bot ----------------------------------------------------------------
@@ -896,16 +1328,17 @@ class _Accepted:
         (EntryStanding.NOT_SENT, EntryCameTo.REJECTED),
         (EntryStanding.WORKING, EntryCameTo.RESTING),
         (EntryStanding.CANCELLATION_REQUESTED, EntryCameTo.RESTING),
-        (EntryStanding.OUTCOME_UNKNOWN, EntryCameTo.RESTING),
+        (EntryStanding.OUTCOME_UNKNOWN, EntryCameTo.UNPROVEN),
     ],
 )
-def test_every_standing_the_clerk_can_answer_comes_to_one_of_the_runners_five_words(
+def test_every_standing_the_clerk_can_answer_comes_to_one_of_the_runners_six_words(
     standing: EntryStanding, came_to: EntryCameTo
 ) -> None:
+    """An order the books show at the broker is resting. One whose outcome nobody knows is never called that."""
     assert entry_came_to(standing) is came_to
 
 
-def test_the_runners_five_words_cover_every_standing_the_clerk_has() -> None:
+def test_the_runners_six_words_cover_every_standing_the_clerk_has() -> None:
     assert {entry_came_to(standing) for standing in EntryStanding} == set(EntryCameTo)
 
 
@@ -948,6 +1381,13 @@ def test_only_an_entrys_fill_in_a_contract_says_what_its_entry_came_to(
         _row(entry_outcome="filled", **not_an_entrys_fill_in_a_contract)
 
 
-def test_a_journal_row_never_says_an_entry_with_a_fill_bought_nothing() -> None:
+@pytest.mark.parametrize("word", ["cancelled_unfilled", "rejected", "bought"])
+def test_a_journal_row_never_says_an_entry_with_a_fill_bought_nothing_nor_a_word_outside_the_set(word: str) -> None:
     with pytest.raises(ValueError):
-        _row(entry_outcome="cancelled_unfilled")
+        _row(entry_outcome=word)
+
+
+@pytest.mark.parametrize("word", ["filled", "part_filled_then_cancelled", "resting", "unproven"])
+def test_a_journal_row_says_what_its_entry_came_to_in_the_runners_own_words(word: str) -> None:
+    """The journal spells no words of its own: each is one of the runner's set, read back as that."""
+    assert _row(entry_outcome=word).entry_outcome is EntryCameTo(word)
