@@ -13,18 +13,21 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+import httpx
 import numpy as np
 import pytest
 
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.broker.ibkr.option_quotes import OptionQuoteLines, WatchRequest
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
-from app.options.american import american_implied_volatility, years_from_ms
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
+from app.options.american import CashDividend, american_implied_volatility, years_from_ms
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA
+from app.options.resolver import DividendOn
 from app.options.watch import LineClass
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
 from app.services import option_structure_preview
+from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_model_inputs import ModelInputsBeingRead, ModelInputsRead
 from app.services.option_structure_preview import (
     ARRIVAL_GRACE_MS,
@@ -37,6 +40,9 @@ from app.services.option_watch import OptionWatchList
 # The stand-in Gateway, and the resolver's own scenes: SPY at 585 on a dollar-wide ladder, a Tuesday at 10:31:02.
 from tests.broker.ibkr import test_option_quotes as feed
 from tests.options import test_resolver as scenes
+
+# The stand-in coordinator a fleet Clerk asks for the rate and the dividends.
+from tests.services import test_option_model_inputs_coordinator as fleet
 
 NOW = feed.NOW
 FRIDAY = scenes._FRIDAY
@@ -142,7 +148,9 @@ class Desk:
         return await self.preview(request)
 
 
-def _our_delta(right: str, strike: int, bid: str, ask: str, *, at_ms: int) -> float:
+def _our_delta(
+    right: str, strike: int, bid: str, ask: str, *, at_ms: int, dividends: tuple[DividendOn, ...] = ()
+) -> float:
     """The model's delta for a Friday contract's mid quote against SPY's mid of 585.11, worked out apart."""
     solved = american_implied_volatility(
         price=float((Decimal(bid) + Decimal(ask)) / 2),
@@ -151,7 +159,7 @@ def _our_delta(right: str, strike: int, bid: str, ask: str, *, at_ms: int) -> fl
         years_to_expiry=years_from_ms(session_close_ms_utc(FRIDAY) - at_ms),
         rate=0.045,
         right=right,
-        dividends=(),
+        dividends=tuple(CashDividend(years_to_ex=years_from_ms(paid.ex_ms - at_ms), cash=paid.cash) for paid in dividends),
     )
     assert solved.delta is not None
     return solved.delta
@@ -658,6 +666,61 @@ async def test_with_dividends_unknown_other_rules_still_pick_and_no_delta_or_lea
     assert [(leg.delta, leg.implied_volatility, leg.delta_status) for leg in seen.legs] == [(None, None, "inputs_not_known")] * 2
     assert seen.lean is None and seen.lean_unknown_sentence
     assert seen.pricing_inputs.dividends_known is False
+
+
+async def test_on_a_fleet_clerk_a_rule_by_delta_is_previewed_with_the_dividends_the_coordinator_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Clerk holds no Polygon key. It asks the coordinator, and the dividend it is told of moves the delta."""
+    desk = Desk(monkeypatch, reach=10)
+    going_ex_thursday = DividendOn(ex_ms=session_open_ms_utc(date(2026, 10, 8)), cash=1.80)
+    read = replace(fleet.READ, rate=0.045, dividends=(going_ex_thursday,))
+    coordinator = fleet.Coordinator(monkeypatch, read)
+    # The reader the Clerk's own route hands a preview.
+    monkeypatch.setattr(desk, "_model_inputs", option_structure_panel._model_inputs)
+
+    seen = await desk.quoted(_CALL_NEAR_30_DELTA)
+
+    (leg,) = seen.legs
+    assert (seen.state, seen.reason_code) == ("resolved", None)
+    inputs = seen.pricing_inputs
+    assert (inputs.rate, inputs.rate_is_default, inputs.dividends_known) == (0.045, False, True)
+    assert [(paid.ex_ms, paid.cash_per_share) for paid in inputs.dividends] == [(going_ex_thursday.ex_ms, 1.80)]
+    assert (inputs.dividends_source, inputs.dividends_read_ms) == (read.dividends_source, read.dividends_read_ms)
+    quoted = (leg.contract.right, int(leg.contract.strike), str(leg.quote.bid), str(leg.quote.ask))
+    with_the_dividend = _our_delta(*quoted, at_ms=NOW + 400, dividends=(going_ex_thursday,))
+    assert leg.delta == with_the_dividend
+    assert abs(with_the_dividend - _our_delta(*quoted, at_ms=NOW + 400)) > 1e-3
+    # One ask of the coordinator, by a reader that does not wait, and no vendor asked from the Clerk.
+    assert coordinator.asked == [("SPY", NOW + 400, FRIDAY, False)]
+    assert coordinator.vendors_asked == []
+
+
+async def test_on_a_fleet_clerk_that_cannot_reach_the_coordinator_a_rule_by_delta_picks_nothing_and_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desk = Desk(monkeypatch, reach=10)
+    coordinator = fleet.Coordinator(monkeypatch)
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    coordinator.answer = unreachable
+    monkeypatch.setattr(desk, "_model_inputs", option_structure_panel._model_inputs)
+
+    seen = await desk.quoted(_CALL_NEAR_30_DELTA)
+
+    assert (seen.state, seen.reason_code) == ("pricing_inputs_unknown", "OPTION_PREVIEW_DIVIDENDS_UNKNOWN")
+    assert _shows_no_figure(seen)
+    inputs = seen.pricing_inputs
+    # Unknown, never none declared; and the rate is the default, marked as the default.
+    assert (inputs.dividends_known, inputs.dividends, inputs.rate_is_default) == (False, [], True)
+    # The reason is the one the Clerk's own read gives for a coordinator it could not reach, and the notice says it.
+    as_read = option_structure_panel._model_inputs("SPY", NOW + 400, FRIDAY)
+    assert as_read.dividends_unknown_why == "coordinator_unreachable"
+    assert inputs.dividends_source == as_read.dividends_source
+    assert as_read.dividends_source in seen.notice
+    assert coordinator.vendors_asked == []
 
 
 async def test_while_another_ask_is_looking_the_rate_and_dividends_up_this_one_says_so_and_does_not_wait(

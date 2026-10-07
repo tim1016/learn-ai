@@ -21,8 +21,10 @@ from httpx._transports.asgi import ASGITransport
 
 from app.broker.fleet import internal_http
 from app.broker.fleet.internal_http import (
+    DEFAULT_INTERNAL_TIMEOUT_S,
     FleetStreamError,
     build_internal_client,
+    build_internal_sync_client,
     iter_sse_from_response,
 )
 from app.utils.throttle import TtlCache
@@ -194,6 +196,16 @@ async def test_internal_clients_refuse_redirects_and_proxies() -> None:
         assert client.trust_env is False
     finally:
         await client.aclose()
+
+
+def test_the_client_for_a_worker_thread_holds_the_same_posture_and_bounds_every_phase() -> None:
+    """The synchronous twin (#2913): no redirects, no environment proxies, no phase left unbounded."""
+    client = build_internal_sync_client(read_timeout_s=20.0)
+    try:
+        assert (client.follow_redirects, client.trust_env) == (False, False)
+        assert client.timeout == httpx.Timeout(DEFAULT_INTERNAL_TIMEOUT_S, read=20.0)
+    finally:
+        client.close()
 
 
 async def test_redirects_are_not_followed_on_internal_traffic(

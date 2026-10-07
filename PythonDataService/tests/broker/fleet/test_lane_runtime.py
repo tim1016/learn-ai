@@ -225,8 +225,9 @@ async def test_every_read_slot_held_a_command_is_admitted_without_the_queue_dead
         assert _status(status) == 200
 
 
+@pytest.mark.parametrize("path", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs"])
 async def test_internal_history_batch_read_draws_read_not_command_capacity(
-    tmp_path: Path,
+    tmp_path: Path, path: str
 ) -> None:
     """The coordinator's history-batch POST is a read for capacity purposes.
 
@@ -234,9 +235,13 @@ async def test_internal_history_batch_read_draws_read_not_command_capacity(
     mounts both the coordinator's internal surface and the clerk lane
     runtime (issue #2204). It must not compete with real commands for the
     (typically much smaller) command pool merely because it is spelled POST.
+    The read of the rate and the dividends an option is priced with (#2913)
+    is the same kind of POST.
     """
     from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
+    from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
 
+    assert path in (INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH)
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -251,15 +256,13 @@ async def test_internal_history_batch_read_draws_read_not_command_capacity(
         config=_config(requests=1, commands=1, queue=0, timeout_ms=0),
         evidence=CompatibilityReadEvidence(tmp_path, clock=lambda: 1),
     )
-    held = asyncio.create_task(
-        _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
-    )
+    held = asyncio.create_task(_invoke(runtime, method="POST", path=path))
     await entered.wait()
 
     # The one read slot is held by the internal history-batch call above, so
     # a second one of the same shape must be refused -- proving it drew from
     # the read pool, not the untouched command pool.
-    refused = await _invoke(runtime, method="POST", path=INTERNAL_HISTORY_BATCH_PATH)
+    refused = await _invoke(runtime, method="POST", path=path)
     assert _status(refused) == 503
 
     release.set()
