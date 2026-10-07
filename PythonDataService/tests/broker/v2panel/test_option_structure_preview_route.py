@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport
 from pydantic import TypeAdapter
 
+from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal
 from app.options import order_terms
 from app.options.bounds import Bounds
 from app.options.deadlines import CloseTerms
@@ -31,6 +32,9 @@ from app.services.broker_v2_panel import option_structure_panel
 from app.services.option_search import get_option_searches
 from app.utils.error_handlers import request_validation_exception_handler
 from tests.broker.v2panel.fixtures import ACCT
+
+# The resolver's own scenes, for a moment on its Tuesday.
+from tests.options import test_resolver as scenes
 
 # A Clerk's option quotes on a stand-in Gateway, and a bull call spread to ask about.
 from tests.services.test_option_structure_preview import _BULL_CALL_SPREAD, _KNOWN, FRIDAY, Desk
@@ -332,6 +336,35 @@ async def test_a_cost_limit_of_nothing_is_carried_back_and_said_as_zero_whatever
 
     assert (seen["state"], seen["cost_limit_percent"], seen["money"]["cost_limit_percent"]) == ("resolved", "0", "0")
     assert "-0" not in seen["money"]["cost_sentence"]
+
+
+async def test_a_spread_asked_about_too_late_in_the_session_is_answered_with_its_figures_and_the_clerks_own_refusal(
+    deploy_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bull call spread has a sold leg, which is closed 10 minutes before Tuesday's 16:00 close. With the
+    terms a request starts from, the Clerk opens no entry on it from 15:48:40. The route's own clock is asked."""
+    app, _registry = deploy_app
+    cutoff = scenes._at(scenes._TUESDAY, 15, 48, 40)
+    answers = []
+    for read_at in (cutoff - 1, cutoff):
+        desk = Desk(monkeypatch)
+        _on(desk, monkeypatch)
+        # The answer with figures is read 400 ms after the first ask.
+        desk.ibkr.now = read_at - 400
+        answers.append(await _resolved(app, desk, _SPREAD))
+    in_time, too_late = answers
+
+    assert (in_time["quotes_read_ms"], in_time["entry_refusals"]) == (cutoff - 1, [])
+    assert too_late["quotes_read_ms"] == cutoff
+    (refused,) = too_late["entry_refusals"]
+    assert set(refused) == {"reason_code", "leg_ids", "sentence"}
+    assert (refused["reason_code"], refused["leg_ids"]) == (OptionEffectRefusal.PAST_ENTRY_CUTOFF.value, [])
+    assert "10 minutes" in refused["sentence"] and "SPY26" not in refused["sentence"]
+    # Flagged and not red, with every figure still on the wire.
+    assert (too_late["state"], too_late["verdict"]["red"], too_late["verdict"]["resolves_as_built"]) == ("resolved", False, True)
+    assert "skipped" in too_late["verdict"]["resolves_sentence"] and "skipped" in too_late["entry_sentence"]
+    assert too_late["money"] == in_time["money"] and too_late["money"]["net_entry_premium_cents"] == 19_400
+    assert OptionStructurePreview.model_validate(too_late).entry_refusals[0].reason_code == refused["reason_code"]
 
 
 async def test_on_a_process_with_no_option_quote_source_the_preview_says_so_and_shows_no_figure(deploy_app) -> None:

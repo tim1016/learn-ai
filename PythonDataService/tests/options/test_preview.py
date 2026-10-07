@@ -7,6 +7,7 @@ that matter set by hand so that every expected figure can be worked out.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 from fractions import Fraction
 
@@ -14,6 +15,7 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options.american import AmericanIvStatus
+from app.options.deadlines import CloseKind, CloseTerms
 from app.options.decay import DecayNotEstimated, LegDecay, picks_daily_decay
 from app.options.entry import prepare_entry
 from app.options.lean import LeanDirection
@@ -21,12 +23,13 @@ from app.options.named_structures import NamedStructure
 from app.options.preview import (
     FEE_RATE_NOT_PINNED,
     StructureFigures,
+    TooLateToEnter,
     bid_ask_gap_percent_of_mid,
     percent_of,
     structure_figures,
 )
 from app.options.requirement import StructureMoneyRefusal, StructureMoneyRefused
-from app.options.resolver import DividendOn
+from app.options.resolver import DividendOn, ResolverRefusal
 from app.options.structure_check import StructureRefusal
 from app.schemas.action_plan import ActionPlan
 
@@ -34,6 +37,9 @@ from app.schemas.action_plan import ActionPlan
 from tests.options import test_resolver as scenes
 
 _AT_THE_MONEY = {"selector": "atm"}
+# When the scene's contracts are picked: a Tuesday at 10:31:02, hours before any entry cutoff.
+_PICKED_AT = scenes._at(scenes._TUESDAY, 10, 31, 2)
+_TERMS = CloseTerms()
 
 
 def _spread(*, sold_from_bought: float = 5.0, name: NamedStructure | None = None) -> ActionPlan:
@@ -64,6 +70,8 @@ def _figures(
     cost_limit: str = "10",
     gap_limit: str = "8",
     with_decay: bool = False,
+    at_ms: int = _PICKED_AT,
+    terms: CloseTerms = _TERMS,
     **markets: tuple[str, str],
 ) -> StructureFigures:
     resolution = _resolved(plan, **markets)
@@ -76,6 +84,8 @@ def _figures(
         cost_limit_percent=Decimal(cost_limit),
         fee_provision=lambda _structure, _markets, _size: fees,
         model_is_known=model_is_known,
+        at_ms=at_ms,
+        close_terms=terms,
     )
 
 
@@ -254,6 +264,88 @@ def test_a_wide_leg_is_told_ahead_of_a_day_with_no_fee_rate_as_an_entry_would_as
     assert [leg.over_gap_limit for leg in shown.legs] == [True, False]
 
 
+# ---- Too late for an entry to be seen through --------------------------------------------------
+
+# A sold leg is closed 10 minutes before Tuesday's 16:00 close. An entry needs its 20 second wait, 30 seconds
+# to prove a cancel and 30 of margin before that: none is opened from 15:48:40.
+_SOLD_LEG_CUTOFF = scenes._at(scenes._TUESDAY, 15, 48, 40)
+_MARKETS = {"c585": ("4.08", "4.12"), "c590": ("2.18", "2.22")}
+
+
+def test_a_structure_with_a_sold_leg_is_too_late_to_enter_from_its_cutoff_on_and_keeps_every_figure() -> None:
+    """The spread expires on Friday. It owes a close on Tuesday all the same, for its sold leg."""
+    in_time = _figures(_spread(), at_ms=_SOLD_LEG_CUTOFF - 1, **_MARKETS)
+    too_late = _figures(_spread(), at_ms=_SOLD_LEG_CUTOFF, **_MARKETS)
+
+    assert (in_time.too_late_to_enter, in_time.entry_refusals) == (None, ())
+    assert too_late.too_late_to_enter == TooLateToEnter(CloseKind.SOLD_LEG, close_lead_ms=10 * 60_000)
+    (refusal,) = too_late.entry_refusals
+    assert (refusal.reason, refusal.leg_ids) == (ResolverRefusal.PAST_ENTRY_CUTOFF, ())
+    # The time passes by itself: the picks are still the structure built, and every figure stands.
+    assert too_late.not_as_built is None
+    assert (too_late.money, too_late.net_price, too_late.at_expiry) == (in_time.money, in_time.net_price, in_time.at_expiry)
+    assert too_late.money.net_entry_premium_cents == 19_400
+
+
+def test_the_sold_legs_close_is_counted_back_by_the_terms_handed_in() -> None:
+    """Closed an hour before the close, with a wait of 5 seconds: no entry from 14:58:55."""
+    terms = replace(_TERMS, sold_leg_close_lead_ms=60 * 60_000, entry_wait_ms=5_000)
+    cutoff = scenes._at(scenes._TUESDAY, 14, 58, 55)
+
+    assert _figures(_spread(), at_ms=cutoff - 1, terms=terms, **_MARKETS).too_late_to_enter is None
+    assert _figures(_spread(), at_ms=cutoff, terms=terms, **_MARKETS).too_late_to_enter == TooLateToEnter(
+        CloseKind.SOLD_LEG, close_lead_ms=60 * 60_000
+    )
+
+
+def test_a_bought_contract_owes_a_close_only_on_its_expiry_day() -> None:
+    """A call bought for Friday. On Tuesday nothing is owed, however late. On Friday it is closed 45 minutes
+    before the close, and no entry is opened from 15:13:40."""
+    bought = scenes._one("call", _AT_THE_MONEY)
+    on_its_expiry_day = scenes._at(scenes._FRIDAY, 15, 13, 40)
+
+    assert _figures(bought, at_ms=scenes._at(scenes._TUESDAY, 15, 59, 59)).entry_refusals == ()
+    assert _figures(bought, at_ms=on_its_expiry_day - 1).too_late_to_enter is None
+    late = _figures(bought, at_ms=on_its_expiry_day)
+    assert late.too_late_to_enter == TooLateToEnter(CloseKind.EXPIRY_DAY, close_lead_ms=45 * 60_000)
+    assert [refusal.reason for refusal in late.entry_refusals] == [ResolverRefusal.PAST_ENTRY_CUTOFF]
+
+
+def test_the_day_a_close_is_owed_on_is_new_yorks_own() -> None:
+    """Tuesday at 20:30 in New York is Wednesday already by the UTC clock. It is Tuesday's close the entry is
+    too late for. Before Wednesday's open there is time again."""
+    that_evening = _figures(_spread(), at_ms=scenes._at(scenes._TUESDAY, 20, 30), **_MARKETS)
+    next_morning = _figures(_spread(), at_ms=scenes._at(scenes._WEDNESDAY, 8, 0), **_MARKETS)
+
+    assert that_evening.too_late_to_enter == TooLateToEnter(CloseKind.SOLD_LEG, close_lead_ms=10 * 60_000)
+    assert (next_morning.too_late_to_enter, next_morning.entry_refusals) == (None, ())
+
+
+def test_too_late_is_told_last_as_the_clerk_asks_it_after_the_entrys_own_questions() -> None:
+    """A wide leg and a cost over its limit, then a wide leg on a day with no fee rate, each past the cutoff."""
+    wide = {"c585": ("3.90", "4.30"), "c590": ("2.18", "2.22")}
+
+    costly = _figures(_spread(), at_ms=_SOLD_LEG_CUTOFF, **wide)
+    no_rate = _figures(_spread(), fees=None, at_ms=_SOLD_LEG_CUTOFF, **wide)
+
+    assert [refusal.reason for refusal in costly.entry_refusals] == [
+        StructureMoneyRefusal.LEG_GAP_OVER_LIMIT, StructureMoneyRefusal.COST_OVER_LIMIT, ResolverRefusal.PAST_ENTRY_CUTOFF,
+    ]
+    # Each of the three passes by itself: none says the picks are another structure.
+    assert costly.not_as_built is None
+    assert [refusal.reason for refusal in no_rate.entry_refusals] == [
+        StructureMoneyRefusal.LEG_GAP_OVER_LIMIT, FEE_RATE_NOT_PINNED, ResolverRefusal.PAST_ENTRY_CUTOFF,
+    ]
+    assert no_rate.not_as_built.reason == FEE_RATE_NOT_PINNED
+
+
+def test_on_a_day_with_no_session_no_close_is_owed_and_none_is_asked() -> None:
+    """A Saturday at noon. The calendar has no close to count back from, and that is no error."""
+    shown = _figures(_spread(), at_ms=scenes._at(date(2026, 10, 10), 12, 0), **_MARKETS)
+
+    assert (shown.too_late_to_enter, shown.entry_refusals) == (None, ())
+
+
 def test_inputs_that_are_not_known_show_no_delta_and_no_lean() -> None:
     shown = _figures(_spread(), model_is_known=False, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
 
@@ -330,7 +422,8 @@ def test_a_decay_handed_in_for_the_wrong_legs_is_the_callers_mistake() -> None:
     with pytest.raises(ValueError, match="one decay for each of the legs"):
         structure_figures(
             plan, resolution, units=1, leg_gap_limit_percent=Decimal(8), cost_limit_percent=Decimal(10),
-            fee_provision=lambda *_: 0, model_is_known=True, daily_decay=one_leg_only,
+            fee_provision=lambda *_: 0, model_is_known=True, at_ms=_PICKED_AT, close_terms=_TERMS,
+            daily_decay=one_leg_only,
         )
 
 
@@ -355,7 +448,8 @@ def test_a_sold_call_is_named_at_an_ex_date_by_the_price_the_picks_were_priced_a
 
     shown = structure_figures(
         plan, resolution, units=1, leg_gap_limit_percent=Decimal(8), cost_limit_percent=Decimal(10),
-        fee_provision=lambda *_: 0, model_is_known=True, daily_decay=picks_daily_decay(resolution),
+        fee_provision=lambda *_: 0, model_is_known=True, at_ms=_PICKED_AT, close_terms=_TERMS,
+        daily_decay=picks_daily_decay(resolution),
     )
 
     assert resolution.evidence.model_spot == 585.11

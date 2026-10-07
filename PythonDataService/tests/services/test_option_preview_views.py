@@ -8,12 +8,15 @@ from fractions import Fraction
 import pytest
 
 from app.options.at_expiry import AtExpiry, PriceRange, ResultAt
+from app.options.deadlines import CloseKind
 from app.options.decay import DecayNotEstimated, StructureDecay
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA, Lean, LeanDirection
 from app.options.named_structures import NamedStructure
-from app.options.preview import FEE_RATE_NOT_PINNED, NotAsBuilt, PickedLeg, StructureFigures
+from app.options.preview import FEE_RATE_NOT_PINNED, NotAsBuilt, PickedLeg, StructureFigures, TooLateToEnter
 from app.options.requirement import EntryMoney, EntrySize, StructureMoneyRefusal
+from app.options.resolver import ResolverRefusal
 from app.options.structure_catalogue import in_a_sentence, label, with_its_article
+from app.schemas.option_preview import OptionPreviewEntryRefusal
 from app.services.option_preview_views import (
     at_expiry_view,
     decay_view,
@@ -353,6 +356,29 @@ def test_money_that_cannot_be_set_aside_is_refused_in_dollars_and_never_in_cents
 
     assert told.reason_code == StructureMoneyRefusal.COMMITMENT_NOT_POSITIVE
     assert "-$39,588.00" in told.sentence and "$0.00" in told.sentence and "cents" not in told.sentence
+
+
+def test_an_entry_that_is_too_late_is_told_which_close_it_is_too_late_for_and_how_long_before_the_sessions_it_comes() -> None:
+    refused = NotAsBuilt(str(ResolverRefusal.PAST_ENTRY_CUTOFF), (), "the figures' own words, never shown beside a close")
+
+    def said(late: TooLateToEnter) -> OptionPreviewEntryRefusal:
+        figures = _figures(entry_refusals=(refused,), too_late_to_enter=late)
+        (told,) = entry_refusal_views(figures, ["first"], gap_limit_percent=Decimal(8), cost_sentence=None)
+        return told
+
+    sold = said(TooLateToEnter(CloseKind.SOLD_LEG, close_lead_ms=10 * 60_000))
+    expiring = said(TooLateToEnter(CloseKind.EXPIRY_DAY, close_lead_ms=45 * 60_000))
+    at_the_close = said(TooLateToEnter(CloseKind.EXPIRY_DAY, close_lead_ms=0))
+
+    assert (sold.reason_code, sold.leg_ids) == (ResolverRefusal.PAST_ENTRY_CUTOFF, [])
+    # A sold leg's close comes every session. An expiring contract's comes on its last day.
+    assert "sold leg" in sold.sentence and "10 minutes" in sold.sentence and "every session" in sold.sentence
+    assert "expires today" in expiring.sentence and "45 minutes" in expiring.sentence
+    assert "sold leg" not in expiring.sentence and "every session" not in expiring.sentence
+    # A close set at the session's own close is not said to come any length of time before it.
+    assert "before the session closes" not in at_the_close.sentence and "second" not in at_the_close.sentence
+    # Each says that nothing would be opened, and none says the figures' own words.
+    assert all("opened" in told.sentence and refused.detail not in told.sentence for told in (sold, expiring, at_the_close))
 
 
 def test_whether_an_entry_would_be_skipped_is_said_three_ways() -> None:

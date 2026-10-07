@@ -19,16 +19,20 @@ import httpx
 import numpy as np
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.option_admission import entry_past_cutoff
 from app.broker.ibkr.market_liveness import IbkrMarketStatusSource
 from app.broker.ibkr.market_subscription import DECISION_DATA_MAX_AGE_MS
 from app.broker.ibkr.option_quotes import CEILING_PROBE_MS, OptionQuoteLines, WatchRequest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.options.american import CashDividend, american_daily_decay, american_implied_volatility, years_from_ms
+from app.options.contract import OptionContract
 from app.options.decay import DecayNotEstimated
 from app.options.expiry import option_expiry_anchor_ms
 from app.options.lean import ABOUT_FLAT_BELOW_DELTA
 from app.options.named_structures import NamedStructure
+from app.options.order_terms import close_terms_with
 from app.options.resolver import DividendOn
+from app.options.structure import ResolvedLeg, ResolvedStructure
 from app.options.structure_catalogue import starting_plan
 from app.options.watch import LineClass
 from app.schemas.option_preview import OptionStructurePreview, OptionStructurePreviewRequest
@@ -975,6 +979,219 @@ async def test_the_entry_wait_counts_toward_that_cutoff_too(monkeypatch: pytest.
     assert [answer.state for answer in seen] == ["resolved", "not_resolved", "not_resolved"]
     assert [answer.reason_code for answer in seen[1:]] == ["OPTION_CONTRACT_PAST_ENTRY_CUTOFF"] * 2
     assert [answer.order_terms.entry_wait_seconds for answer in seen] == [1, 30, 1]
+
+
+# ---- Too late in a session for an entry to be seen through -----------------------------------
+
+_PAST_CUTOFF = "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
+TUESDAY = scenes._TUESDAY
+# The day after Thanksgiving: the session closes at 13:00 New York time.
+_HALF_DAY = date(2026, 11, 27)
+_DECEMBER = date(2026, 12, 18)
+# The 585 call sold at 5.00 and the 590 bought at 1.93: a spread that pays, and that nothing else refuses.
+_PAYS = {"c585": ("5.00", "5.04"), "c590": ("1.89", "1.93")}
+
+
+def _credit_spread(expiry: date = FRIDAY, **request: Any) -> OptionStructurePreviewRequest:
+    """A call sold at the money and one bought five dollars above it, both expiring on ``expiry``."""
+    on = {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(expiry)}
+    return _asking(
+        _leg("short_call", "short", "call", _AT_THE_MONEY, on),
+        _leg("long_call", "long", "call", _from("short_call", 5.0), on),
+        **request,
+    )
+
+
+async def _read_at(
+    monkeypatch: pytest.MonkeyPatch,
+    at_ms: int,
+    asked: OptionStructurePreviewRequest,
+    *,
+    expiry: date = FRIDAY,
+    **markets: tuple[str, str],
+) -> OptionStructurePreview:
+    """The preview of ``asked`` on quotes read at ``at_ms``, with ``expiry`` the one date listed. ``markets``
+    sets a call's bid and ask by its strike. Every other line is a dollar bid."""
+    desk = Desk(monkeypatch)
+    desk.ibkr.expiries = [expiry]
+    desk.ibkr.now = at_ms - 400
+    await desk.watching(asked)
+    desk.ibkr.keep_alive()
+    for named, (bid, ask) in markets.items():
+        desk.quote("call", int(named[1:]), bid, ask, expiry)
+    desk.ibkr.now += 400
+    seen = await desk.preview(asked)
+    assert (seen.state, seen.quotes_read_ms) == ("resolved", at_ms), (seen.state, seen.reason_code, seen.notice)
+    return seen
+
+
+def _cutoff_refusals(seen: OptionStructurePreview) -> list[str]:
+    return [refused.reason_code for refused in seen.entry_refusals if refused.reason_code == _PAST_CUTOFF]
+
+
+@pytest.mark.parametrize("structure", ["bear_call_spread", None], ids=["named", "custom"])
+async def test_a_structure_with_a_sold_leg_previewed_too_late_in_the_session_is_said_to_be_skipped_with_its_figures(
+    monkeypatch: pytest.MonkeyPatch, structure: str | None
+) -> None:
+    """A call spread that pays, expiring Friday, previewed on Tuesday. A position with a sold leg is closed 10
+    minutes before the 16:00 close. An entry needs its 20 second wait, 30 seconds to prove a cancel and 30 of
+    margin before that, so the Clerk opens none from 15:48:40. The resolver knows only the expiry day."""
+    asked = _credit_spread(structure=structure)
+    cutoff = scenes._at(TUESDAY, 15, 48, 40)
+
+    in_time = await _read_at(monkeypatch, cutoff - 1, asked, **_PAYS)
+    too_late = await _read_at(monkeypatch, cutoff, asked, **_PAYS)
+
+    assert in_time.entry_refusals == []
+    assert "skipped" not in in_time.verdict.resolves_sentence and "skipped" not in in_time.entry_sentence
+    (refused,) = too_late.entry_refusals
+    assert (refused.reason_code, refused.leg_ids) == (_PAST_CUTOFF, [])
+    # In the builder's words: the sold leg's close by how long before the session's it comes, and that nothing
+    # would be opened. No contract code, no date, no leg id.
+    assert "sold leg" in refused.sentence and "10 minutes" in refused.sentence and "opened" in refused.sentence
+    assert not any(named in refused.sentence for named in ("SPY26", "2026", "short_call", "long_call"))
+    assert _names_no_leg_by_its_id(too_late, "short_call", "long_call")
+    # Flagged, not red: the picks are the structure built, and the time passes by itself.
+    verdict = too_late.verdict
+    assert (verdict.resolves_as_built, verdict.red, verdict.resolves_reason_code, verdict.leg_ids) == (True, False, None, [])
+    assert "would be skipped" in verdict.resolves_sentence and "can be entered" not in verdict.resolves_sentence
+    assert "skipped" in too_late.entry_sentence
+    # Every figure is still shown, and the money is what it was a millisecond earlier.
+    assert too_late.money == in_time.money and too_late.money.net_entry_premium_cents == -30_700
+    assert too_late.at_expiry == in_time.at_expiry and too_late.at_expiry.loss_cents == 19_300
+    assert too_late.lean is not None and too_late.decay is not None and len(too_late.legs) == 2
+    assert too_late.figures_good_until_ms == cutoff + FIGURES_GOOD_FOR_MS
+
+
+@pytest.mark.parametrize(
+    ("wait_seconds", "no_entry_from"),
+    [
+        pytest.param(1, (15, 48, 59), id="the shortest wait an owner may choose"),
+        pytest.param(30, (15, 48, 30), id="the longest"),
+    ],
+)
+async def test_the_moment_an_entry_is_too_late_moves_with_the_owners_own_entry_wait(
+    monkeypatch: pytest.MonkeyPatch, wait_seconds: int, no_entry_from: tuple[int, int, int]
+) -> None:
+    """The sold leg's close at 15:50, less the owner's wait, 30 seconds to prove a cancel and 30 of margin."""
+    asked = _credit_spread(entry_wait_seconds=wait_seconds)
+    cutoff = scenes._at(TUESDAY, *no_entry_from)
+
+    in_time = await _read_at(monkeypatch, cutoff - 1, asked, **_PAYS)
+    too_late = await _read_at(monkeypatch, cutoff, asked, **_PAYS)
+
+    assert (_cutoff_refusals(in_time), _cutoff_refusals(too_late)) == ([], [_PAST_CUTOFF])
+    assert too_late.order_terms.entry_wait_seconds == wait_seconds
+
+
+async def test_a_bought_structure_expiring_another_day_owes_no_close_today_and_is_never_too_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call bought for Friday, read on Tuesday at the moment a spread with a sold leg is cut off, and again a
+    second before the close. The spread is read at that first moment beside it."""
+    bought = _asking(_leg("long_call", "long", "call", _AT_THE_MONEY), structure="long_call")
+    cutoff = scenes._at(TUESDAY, 15, 48, 40)
+
+    with_a_sold_leg = await _read_at(monkeypatch, cutoff, _credit_spread(), **_PAYS)
+    bought_only = [
+        await _read_at(monkeypatch, at_ms, bought, c585=("4.08", "4.12"))
+        for at_ms in (cutoff, scenes._at(TUESDAY, 15, 59, 59))
+    ]
+
+    assert _cutoff_refusals(with_a_sold_leg) == [_PAST_CUTOFF]
+    for seen in bought_only:
+        assert seen.entry_refusals == [] and "skipped" not in seen.entry_sentence
+        assert seen.verdict.resolves_as_built is True and "skipped" not in seen.verdict.resolves_sentence
+
+
+async def test_on_a_half_day_an_entry_is_too_late_counted_from_the_half_days_own_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session closes at 13:00, so a sold leg is closed at 12:50 and no entry is opened from 12:48:40. On a
+    full day the same time on the clock is three hours early."""
+    asked = _credit_spread(_DECEMBER)
+    cutoff = scenes._at(_HALF_DAY, 12, 48, 40)
+
+    in_time = await _read_at(monkeypatch, cutoff - 1, asked, expiry=_DECEMBER, **_PAYS)
+    too_late = await _read_at(monkeypatch, cutoff, asked, expiry=_DECEMBER, **_PAYS)
+    on_a_full_day = await _read_at(monkeypatch, scenes._at(TUESDAY, 12, 48, 40), _credit_spread(), **_PAYS)
+
+    assert (_cutoff_refusals(in_time), _cutoff_refusals(too_late)) == ([], [_PAST_CUTOFF])
+    assert in_time.entry_refusals == [] and on_a_full_day.entry_refusals == []
+    # The lead is the same ten minutes. Only the close it is counted back from moved.
+    assert "10 minutes" in too_late.entry_refusals[0].sentence
+
+
+async def test_too_late_is_asked_of_the_moment_the_quotes_were_read_and_not_of_the_ask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asked two seconds before the cutoff. The rate and the dividends take three seconds to look up, so the
+    quotes the figures stand on are read a second after it, which is when an entry on them could first be made."""
+    cutoff = scenes._at(TUESDAY, 15, 48, 40)
+    desk = Desk(monkeypatch)
+    desk.ibkr.now = cutoff - 2_400
+    in_time = await desk.quoted(_credit_spread(), **_PAYS)
+
+    def three_seconds(_underlying: str, _at_ms: int, _latest_expiry: date) -> ModelInputsRead:
+        desk.ibkr.now += 3_000
+        return _KNOWN
+
+    desk._model_inputs = three_seconds
+    too_late = await desk.preview(_credit_spread())
+
+    assert (in_time.quotes_read_ms, in_time.entry_refusals) == (cutoff - 2_000, [])
+    assert (too_late.state, too_late.quotes_read_ms) == ("resolved", cutoff + 1_000)
+    assert _cutoff_refusals(too_late) == [_PAST_CUTOFF]
+
+
+def _as_the_clerk_would_hold_it(seen: OptionStructurePreview) -> ResolvedStructure:
+    """The served picks as the structure an entry on them would open."""
+    return ResolvedStructure(
+        legs=tuple(
+            ResolvedLeg(
+                leg_id=leg.leg_id,
+                contract=OptionContract.from_occ_symbol(leg.contract.occ_symbol),
+                position=leg.position,
+                ratio=leg.ratio,
+            )
+            for leg in seen.legs
+        )
+    )
+
+
+# A spread expiring today whose expiry-day close the owner set 5 minutes before the session's. The sold leg's
+# close, 10 minutes before, comes first: the resolver's cutoff is 15:53:40 and the Clerk's is 15:48:40.
+_EXPIRING_TODAY_CLOSED_LATE = _credit_spread(TUESDAY, expiry_close_lead_minutes=5)
+
+
+@pytest.mark.parametrize(
+    ("asked", "expiry", "cut_off_at"),
+    [
+        pytest.param(_credit_spread(), FRIDAY, (15, 48, 40), id="a sold leg, expiring another day"),
+        pytest.param(_credit_spread(entry_wait_seconds=7), FRIDAY, (15, 48, 53), id="a wait of the owner's own"),
+        pytest.param(_EXPIRING_TODAY_CLOSED_LATE, TUESDAY, (15, 48, 40), id="a sold leg, expiring today"),
+    ],
+)
+async def test_the_preview_says_an_entry_is_too_late_at_exactly_the_moments_the_clerk_would_refuse_it(
+    monkeypatch: pytest.MonkeyPatch, asked: OptionStructurePreviewRequest, expiry: date, cut_off_at: tuple[int, int, int]
+) -> None:
+    """The Clerk's own function is asked beside each answer, of the picks served, at the moment their quotes
+    were read, under the close terms the request makes. The two never differ, and refuse under one code."""
+    terms = close_terms_with(
+        entry_wait_seconds=asked.entry_wait_seconds, expiry_close_lead_minutes=asked.expiry_close_lead_minutes
+    )
+    around = scenes._at(TUESDAY, *cut_off_at)
+    refused_at = []
+
+    for at_ms in (scenes._at(TUESDAY, 10, 31, 2), around - 1_000, around - 1, around, around + 1, around + 30_000):
+        seen = await _read_at(monkeypatch, at_ms, asked, expiry=expiry, **_PAYS)
+        by_the_clerk = entry_past_cutoff(_as_the_clerk_would_hold_it(seen), now_ms=seen.quotes_read_ms, terms=terms)
+
+        assert _cutoff_refusals(seen) == ([] if by_the_clerk is None else [by_the_clerk.reason_code]), at_ms
+        refused_at.append(by_the_clerk is not None)
+
+    # The moments straddle the cutoff, so that agreeing is not agreeing about nothing.
+    assert refused_at == [False, False, False, True, True, True]
 
 
 async def test_where_the_owners_close_falls_against_alpacas_hour_is_said_three_ways(monkeypatch: pytest.MonkeyPatch) -> None:
