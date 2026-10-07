@@ -47,8 +47,8 @@ The gap is the tree's own discretization error. The reference is good to about 5
 
 **Implied volatility.** A third test gives the solver each price here and asks for the volatility back, for the 52 cases within one standard deviation of the money: volatility `atol=5e-4`, delta `atol=1e-3`, at the default steps. Largest gaps measured: 3.0e-4 and 5.0e-4. The volatility gap is the price gap divided by vega, so farther from the money, where vega is small, it reaches 0.1 and those cases are left to the price test. Solving the dividend cases as if the stock paid nothing misses by 2e-2 or more.
 
-The manifest's tolerance records the delta figure at 2,001 steps; the test file states all of them.
+The manifest holds one tolerance figure for a fixture. Here it is the loosest of these, price at the default 401 steps (`atol=5e-3`), so it is never tighter than a test; the test file states each.
 
 ## Regeneration
 
-`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.american_options`
+`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.american_options` It needs QuantLib 1.42.1 (`.venv/bin/pip install QuantLib==1.42.1`): the service's own requirement allows newer releases, and the generator refuses to write these fixtures from any other.

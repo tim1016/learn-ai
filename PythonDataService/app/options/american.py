@@ -88,13 +88,22 @@ _MAX_RATE_TIMES_YEARS = 700.0
 
 
 def years_from_ms(duration_ms: int) -> float:
-    """A span in milliseconds as the fraction of a 365-day year the model counts time in."""
+    """A span in milliseconds as the fraction of a 365-day year the model counts time in.
+
+    The one conversion from instants to model time. Two spans equal in
+    milliseconds are the same float, so a dividend going ex at the instant an
+    option expires is at its expiry in the model too.
+    """
     return duration_ms / MS_PER_YEAR
 
 
 @dataclass(frozen=True, slots=True)
 class CashDividend:
-    """One cash dividend: when the stock goes ex, in years from the valuation instant, and the amount per share."""
+    """One cash dividend: when the stock goes ex, in years from the valuation instant, and the amount per share.
+
+    The model's time, as ``years_to_expiry`` is: a span, not an instant. A
+    caller holding instants converts each with ``years_from_ms``.
+    """
 
     years_to_ex: float
     cash: float

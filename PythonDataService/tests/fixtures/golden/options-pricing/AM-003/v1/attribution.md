@@ -24,4 +24,4 @@ Volatility `atol=1e-6`, delta `atol=1e-9`, `rtol=0`. The canonical tree and Quan
 
 ## Regeneration
 
-`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.american_options`
+`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.american_options` It needs QuantLib 1.42.1 (`.venv/bin/pip install QuantLib==1.42.1`): the service's own requirement allows newer releases, and the generator refuses to write these fixtures from any other.

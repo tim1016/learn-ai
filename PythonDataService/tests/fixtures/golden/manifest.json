@@ -1918,12 +1918,12 @@
           "content_sha256": {
             "input.json": "70f5e9db411e3a15cd7f266f24388a1ebe3c28d5984bf08d06861a14e05fdfb4",
             "output.json": "f3af23d0a5a8633c4ba130758995de39598eeb2ddc36c95d1ed45cc3afa4c5c3",
-            "attribution.md": "84441221592353ff33221aef771a4f8ffb64defac9bee5883ef5522a0a8bce51"
+            "attribution.md": "9aaadd6b84b2926b668cf748dbc99de8d628bbd8d6acc59df9feb0f57a0817e5"
           },
           "file_sha256": {
             "input.json": "23eab1b4bce4a5d7c787f45dbdf71b9fb713b3732abce956b114618380bb1688",
             "output.json": "d0efc878428548e4e1e20cedc2485491e84027181cd5f84f2903346196c8a19f",
-            "attribution.md": "84441221592353ff33221aef771a4f8ffb64defac9bee5883ef5522a0a8bce51"
+            "attribution.md": "9aaadd6b84b2926b668cf748dbc99de8d628bbd8d6acc59df9feb0f57a0817e5"
           }
         }
       },
@@ -1950,9 +1950,9 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 0.0002,
+        "atol": 0.005,
         "rtol": 0.0,
-        "note": "An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so it is checked against a finite-difference grid good to about 5e-5 (under 3e-5 in price, 3.4e-6 in delta from its own doubling) and agrees to the tree's discretization error. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4 over 96 cases. At the default 401 steps: delta atol 1e-3, price atol 5e-3 (measured 4.2e-4, 3.2e-3). Implied volatility solved from these prices within one standard deviation of the money: atol 5e-4 (measured 3.0e-4). The test file states every tolerance."
+        "note": "The one figure here is the loosest any test of this fixture accepts (price at the default 401 steps); each output has its own, listed below. An accepted divergence, looser than the strict default: no pinned engine builds this tree with cash dividends, so it is checked against a finite-difference grid good to about 5e-5 (under 3e-5 in price, 3.4e-6 in delta from its own doubling) and agrees to the tree's discretization error. Delta atol 2e-4 and price atol 1e-3 with the canonical tree at 2,001 steps; measured maxima 7.2e-5 and 5.9e-4 over 96 cases. At the default 401 steps: delta atol 1e-3, price atol 5e-3 (measured 4.2e-4, 3.2e-3). Implied volatility solved from these prices within one standard deviation of the money: atol 5e-4 (measured 3.0e-4). The test file states every tolerance."
       },
       "active_version": 1,
       "versions": {
@@ -1963,12 +1963,12 @@
           "content_sha256": {
             "input.json": "521356e030ff7053bd6a2ac65241b2053c2df2bdbbff90412096a1a7b989c164",
             "output.json": "16bfb43ca80fe017e43e446fa4eafbd74cee4daefb5b7ac6e4257855c467b0ea",
-            "attribution.md": "eeaabd73ea856514588423418d95b545b8d1581613bf310151fdce24a60aba74"
+            "attribution.md": "2c703ba6f89d63c072f6d7e034ab9a37275a2b0fdf81eca8de3edb76d93a74b1"
           },
           "file_sha256": {
             "input.json": "5685917ddf1630b3123d5d37a98c20da9ff039e27b0f25e3f77828bcedd51da4",
             "output.json": "6ac8137d0122a4e3f7015fe467dd65d41a15bea004788c80a95cfc6e578fd9f3",
-            "attribution.md": "eeaabd73ea856514588423418d95b545b8d1581613bf310151fdce24a60aba74"
+            "attribution.md": "2c703ba6f89d63c072f6d7e034ab9a37275a2b0fdf81eca8de3edb76d93a74b1"
           }
         }
       },
@@ -2010,12 +2010,12 @@
           "content_sha256": {
             "input.json": "b5a8bf53739c69520b9feb26f0c715e5e8de4413375306b0e2958a3310871aa1",
             "output.json": "d98707f65bc3a9991aaa4dd3b800da340b794f90bd525527a168d062555f661b",
-            "attribution.md": "07aa1d444d7e4b166439fc2a4f561e54d4e0325b8929cabc7ed3de619ca77b8a"
+            "attribution.md": "97c12c0a3c081f0049b2cb4692720b3858e7d5cd6170aadbfec83a5dd893d807"
           },
           "file_sha256": {
             "input.json": "0280e0d01913045682e9e949b245fe7c63c28c9d59e92517012174ed55ced82d",
             "output.json": "d35a87f1fbc3938e739d05074bd61406499ebc481258579abde4178ede7dd603",
-            "attribution.md": "07aa1d444d7e4b166439fc2a4f561e54d4e0325b8929cabc7ed3de619ca77b8a"
+            "attribution.md": "97c12c0a3c081f0049b2cb4692720b3858e7d5cd6170aadbfec83a5dd893d807"
           }
         }
       },

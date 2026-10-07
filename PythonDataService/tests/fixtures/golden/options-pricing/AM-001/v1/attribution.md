@@ -27,4 +27,4 @@ The cases a day or less from expiry are the sensitive ones. The tree takes `1 - 
 
 ## Regeneration
 
-`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.american_options` (writes AM-001, AM-002 and AM-003; refuses to run on any QuantLib but 1.42.1).
+`cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.american_options` (writes AM-001, AM-002 and AM-003). It needs QuantLib 1.42.1 (`.venv/bin/pip install QuantLib==1.42.1`): the service's own requirement allows newer releases, and the generator refuses to write these fixtures from any other.
