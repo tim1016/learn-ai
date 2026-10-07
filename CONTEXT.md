@@ -1636,6 +1636,7 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Loss at expiry (estimate)** — the most a structure loses if every leg shares one expiry, is held to it, is never exercised or assigned early, and settles at its exercise value, before fees. "Not estimated" when the legs do not share an expiry.
   _Avoid_: maximum loss, risk.
 - **Round-trip cost** — what opening a structure and closing it at once would cost: every leg's bid-ask gap, by its ratio.
+- **Daily time decay** — what the next 24 hours take from one contract's model price, per share, with the stock price held. Negative for a contract that loses value with time. Over a weekend three such days pass before the next session.
 - **Structure cost limit** — the most round-trip cost an entry may carry, as a percent of its entry commitment.
 - **Multi-leg order** — one order that carries two to four option legs and fills them together. A structure of one leg is a plain option order, never a multi-leg order of one.
   _Avoid_: combo, spread order, mleg (Alpaca's word, kept to the wire).
